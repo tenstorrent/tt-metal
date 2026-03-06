@@ -63,7 +63,6 @@ struct Core {
 };
 
 void kernel_main() {
-    DPRINT << "Starting LM Head Sampling kernel_main" << ENDL();
 // ============================================================================
 // Per-RISC compile-time arg setup
 // Each RISC receives different named compile-time args from op.py and

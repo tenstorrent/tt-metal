@@ -100,12 +100,6 @@ def _is_persistent_mode_enabled():
     return os.getenv("RUN_PERSISTENT_MODE", "0") == "1"
 
 
-def _has_distributed_context_size(expected_size: int) -> bool:
-    if not ttnn.distributed_context_is_initialized():
-        return False
-    return int(ttnn.distributed_context_get_size()) == int(expected_size)
-
-
 @pytest.mark.skipif(not _is_lm_head_sampling_perf_enabled(), reason="Set RUN_LM_HEAD_SAMPLING_PERF=1 to run perf test")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("use_fp32", [True])
@@ -218,7 +212,8 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         layout=ttnn.TILE_LAYOUT,
         input_dtype=ttnn.bfloat16,
         bcast_core=mcast_core,
-        create_semaphores=False,
+        create_semaphores=True,
+        num_links=1,
         tile=a_tile,
         output_mesh_mapper="shard_dim0",
         input_tensor_torch=torch_a,
@@ -1829,10 +1824,6 @@ def test_4stage_galaxy_1_iteration(
     ],
     indirect=True,
 )
-@pytest.mark.skipif(
-    not _has_distributed_context_size(4),
-    reason="This test requires exactly 4 distributed pipeline processes (P1..P4)",
-)
 def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
@@ -1843,14 +1834,17 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
     torch_expected_idx = torch_expected_indices[0]
 
     config = create_single_galaxy_pipeline_configuration(
         _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-        persistent_mode=False,
+        lm_head_fp32_dest_acc_en=use_fp32,
+        lm_head_persistent_mode=False,
     )
     pipeline = config.build_pipeline(mesh_device)
     try:
@@ -1895,10 +1889,6 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
     ],
     indirect=True,
 )
-@pytest.mark.skipif(
-    not _has_distributed_context_size(4),
-    reason="This test requires exactly 4 distributed pipeline processes (P1..P4)",
-)
 def test_persistent_mode(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
@@ -1908,12 +1898,15 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_galaxy_pipeline_configuration(
         _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
+        lm_head_fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
     pipeline.setup_and_run()
@@ -1961,10 +1954,6 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
     ],
     indirect=True,
 )
-@pytest.mark.skipif(
-    not _has_distributed_context_size(16),
-    reason="This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)",
-)
 def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     """
     16-stage 4x2 pod pipeline (4 galaxies):
@@ -1974,12 +1963,15 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 16:
+        pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
 
     iterations = 100
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_pod_pipeline_configuration(
         _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
+        lm_head_fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
     pipeline.setup_and_run()

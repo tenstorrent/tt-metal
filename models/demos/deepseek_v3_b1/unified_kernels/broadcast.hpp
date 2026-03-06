@@ -210,8 +210,14 @@ struct Broadcast {
 
                         if (++current_link == CTArgs::num_links) {
                             current_link = 0;
+                            // flush only when about to reuse a packet header
+                            noc_async_writes_flushed();
                         }
                     }
+
+                    // final flush to account for the last few chunks that may not have triggered a flush inside the
+                    // loop
+                    noc_async_writes_flushed();
                 };
 
                 // Roles:
@@ -230,7 +236,6 @@ struct Broadcast {
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);
-                    noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 } else {
                     const uint32_t src = args.tensor_address0;
@@ -238,7 +243,6 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
                     };
                     forward_chunks(src, sem_wait);
-                    noc_async_writes_flushed();
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
