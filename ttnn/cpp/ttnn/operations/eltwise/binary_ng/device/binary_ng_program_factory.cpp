@@ -89,11 +89,21 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
-    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
-    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
-        // treat as interleaved
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
         return std::nullopt;
+    }
+
+    // If the output is unevenly sharded, only allow when all tensors share the same shard spec
+    // (each core sees identical tile counts for a, b, c -- no deadlock risk).
+    if (is_uneven(c)) {
+        bool all_specs_match =
+            b.has_value() && a_sharded && b_sharded && c_sharded && a.memory_config().shard_spec().has_value() &&
+            b->memory_config().shard_spec().has_value() && c.memory_config().shard_spec().has_value() &&
+            *a.memory_config().shard_spec() == *b->memory_config().shard_spec() &&
+            *a.memory_config().shard_spec() == *c.memory_config().shard_spec();
+        if (!all_specs_match) {
+            return std::nullopt;
+        }
     }
 
     const auto& a_shape = a.padded_shape();
@@ -347,6 +357,14 @@ void set_or_update_runtime_arguments(
     ShardShapeGenerator b_shard_shape_generator;
     ShardShapeGenerator c_shard_shape_generator;
 
+    // When all tensors share the same shard spec, use the full shard tile count on every core
+    // (including edge cores with uneven shards). This matches legacy binary behavior: garbage
+    // tiles on edge cores land in the output's padding area and are never read back.
+    bool all_same_shard_spec = has_sharding && a.memory_config().is_sharded() && b.has_value() &&
+                               b->memory_config().is_sharded() && c.memory_config().is_sharded() &&
+                               shard_specs->a_shard_spec == shard_specs->b_shard_spec &&
+                               shard_specs->a_shard_spec == shard_specs->c_shard_spec;
+
     if (has_sharding) {
         core_group_1 = grid;
         a_shard_shape_generator = ShardShapeGenerator(shard_specs->a_shard_spec, a);
@@ -412,11 +430,17 @@ void set_or_update_runtime_arguments(
         uint32_t c_start_id = 0;
         uint32_t c_current_shard_width = 0;
         if (has_sharding) {
-            auto c_shard_shape = c_shard_shape_generator(core);
-            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];  // actual
-            c_current_shard_width = c_shard_shape[1];           // actual
-            auto a_shard_shape = a_shard_shape_generator(core);
-            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];  // actual
+            if (all_same_shard_spec) {
+                c_num_tiles = c_shard_height * c_shard_width;
+                c_current_shard_width = c_shard_width;
+                a_num_tiles = c_shard_height * c_shard_width;
+            } else {
+                auto c_shard_shape = c_shard_shape_generator(core);
+                c_num_tiles = c_shard_shape[0] * c_shard_shape[1];
+                c_current_shard_width = c_shard_shape[1];
+                auto a_shard_shape = a_shard_shape_generator(core);
+                a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
+            }
             c_start_id =
                 (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
         } else {
@@ -443,8 +467,12 @@ void set_or_update_runtime_arguments(
         uint32_t packed_scalar_for_reader = 0u;
         if (b.has_value()) {
             if (has_sharding) {
-                auto b_shard_shape = b_shard_shape_generator(core);
-                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
+                if (all_same_shard_spec) {
+                    b_num_tiles = c_shard_height * c_shard_width;
+                } else {
+                    auto b_shard_shape = b_shard_shape_generator(core);
+                    b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+                }
             }
             std::vector<uint32_t> writer_runtime_args;
             if (row_major_inputs) {
