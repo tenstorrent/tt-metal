@@ -126,8 +126,8 @@ class LMHeadSampling:
         global_semaphore=None,
         global_stage2_semaphore=None,
         fabric_scratch_tensor=None,
-        semaphores=None,
-        num_links=1,
+        bcast_semaphores=None,
+        bcast_num_links=1,
         fp32_dest_acc_en=False,
         epsilon=1e-6,
         rsqrt_fast_approx=False,
@@ -157,9 +157,9 @@ class LMHeadSampling:
             output_index_tensor: Optional pre-allocated [1, 1] uint32 tensor for fused argmax output
             argmax_final_core_coord: Optional final core for fused argmax reduction (defaults to first matmul core)
             sender_coord: Tuple (row, col) of sender device in mesh
-            semaphores: Per-link global semaphores for neighbor-exchange CCL broadcast.
-                In CCL mode, first `num_links` entries are consumed by broadcast.
-            num_links: Number of fabric links for CCL
+            bcast_semaphores: Per-link global semaphores for neighbor-exchange CCL broadcast.
+                Must contain exactly `bcast_num_links` entries in CCL mode.
+            bcast_num_links: Number of fabric links for CCL broadcast
             fp32_dest_acc_en: Whether to enable FP32 accumulation
             skip_ccl: Whether to skip CCL broadcast. If None, defaults to True for single-device meshes.
             socket_input: Optional socket input endpoint. Supports ttnn.MeshSocket receiver endpoint (D2D input).
@@ -253,13 +253,12 @@ class LMHeadSampling:
                 )
             if argmax_final_mesh_coord is None:
                 raise ValueError("argmax_final_mesh_coord is required for mesh argmax")
-        bcast_semaphores = []
-        if not skip_ccl:
-            if semaphores is None:
-                raise ValueError("Expected broadcast semaphore(s) via `semaphores`")
-            # Backward compatible with legacy call sites that still pass a larger
-            # semaphore list from the prior LM-head broadcast protocol.
-            bcast_semaphores = list(semaphores[:num_links])
+        if bcast_semaphores is None:
+            bcast_semaphores = []
+        else:
+            bcast_semaphores = list(bcast_semaphores)
+        if not skip_ccl and len(bcast_semaphores) != bcast_num_links:
+            raise ValueError(f"Expected exactly {bcast_num_links} broadcast semaphore(s), got {len(bcast_semaphores)}")
         if persistent_mode and persistent_next_iter_semaphore is None:
             raise ValueError(
                 "persistent_next_iter_semaphore is required when persistent_mode=True "
@@ -339,7 +338,7 @@ class LMHeadSampling:
             skip_ccl=skip_ccl,
             chunk_size_bytes=None,
             bcast_cb_id=bcast_pkt_cb,
-            num_links=num_links,
+            num_links=bcast_num_links,
             fabric_config=fabric_config,
         )
         # Create mesh program descriptor

@@ -63,6 +63,7 @@ struct Core {
 };
 
 void kernel_main() {
+    DPRINT << "Starting LM Head Sampling kernel_main" << ENDL();
 // ============================================================================
 // Per-RISC compile-time arg setup
 // Each RISC receives different named compile-time args from op.py and
@@ -194,23 +195,22 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     uint32_t brisc_rt_arg_idx = 0;
     // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
+#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_use_socket")>;
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
-    if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_config_addr
-            get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_page_size
-            get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_num_pages
-        };
-    }
-    if constexpr (Core::skip_ccl && !Core::bcast_use_socket_input) {
-        // Keep downstream arg offsets stable when reader socket path is inactive.
-        brisc_rt_arg_idx = 3;
-    }
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_config_addr
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_page_size
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_num_pages
+    };
+#else
+    // Keep BRISC common-arg offsets stable when broadcast reader is compiled out
+    // (SKIP_CCL without socket-reader). Host still prefixes 3 reader-common slots.
+    brisc_rt_arg_idx = 3;
+#endif
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
 
@@ -324,19 +324,21 @@ void kernel_main() {
         // ====================================================================
         // Phase 0: broadcast_rms-style combined path.
         // ====================================================================
+#if defined(COMPILE_FOR_BRISC) && !defined(SKIP_CCL)
+        // Persistent-mode sender/input core waits for host signal before each iteration.
+        constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
+        if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
+            auto next_iteration_semaphore =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
+            noc_semaphore_wait(next_iteration_semaphore, 1);
+            noc_semaphore_set(next_iteration_semaphore, 0);
+        }
+#endif
+
         // Keep broadcast symbol usage out of SKIP_CCL builds unless BRISC
         // socket-reader mode is compiled in.
 #if !defined(SKIP_CCL) || (defined(ENABLE_SOCKET_READER) && defined(COMPILE_FOR_BRISC))
         if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
-#if defined(COMPILE_FOR_BRISC)
-            constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
-            if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
-                auto next_iteration_semaphore =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
-                noc_semaphore_wait(next_iteration_semaphore, 1);
-                noc_semaphore_set(next_iteration_semaphore, 0);
-            }
-#endif
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
