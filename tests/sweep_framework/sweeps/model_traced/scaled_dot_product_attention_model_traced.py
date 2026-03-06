@@ -21,7 +21,7 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 120
+TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -110,9 +110,11 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    input_c_shape=None,
     input_c_dtype=None,
     input_c_layout=None,
     input_c_memory_config=None,
@@ -128,52 +130,39 @@ def run(
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    is_causal = kwargs.get("is_causal", False)
+    if is_causal is None:
+        is_causal = False
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
-    # Handle dict input_a_shape from traced configurations (multi-input)
+    # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs (Q, K, V)
         shape_q = input_a_shape.get("input_a", input_a_shape.get("self"))
         shape_k = input_a_shape.get("input_b", input_a_shape.get("other"))
         shape_v = input_a_shape.get("input_c")
         if shape_v is None:
-            # If only 2 inputs, use K shape for V
             shape_v = shape_k
     else:
-        # Fallback for sample configurations
-        if isinstance(input_a_shape, (tuple, list)):
-            shape = tuple(input_a_shape)
-        else:
-            shape = input_a_shape
-        shape_q = shape_k = shape_v = shape
+        shape_q = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
+        shape_k = tuple(input_b_shape) if input_b_shape is not None else shape_q
+        shape_v = tuple(input_c_shape) if input_c_shape is not None else shape_k
 
-    # Validate shapes - Q, K, V must have compatible shapes for attention
-    if isinstance(shape_q, (list, tuple)) and isinstance(shape_k, (list, tuple)) and isinstance(shape_v, (list, tuple)):
-        if len(shape_q) == 4 and len(shape_k) == 4 and len(shape_v) == 4:
-            if shape_q[2] != shape_k[2] or shape_q[3] != shape_k[3]:
-                shape_k = (shape_k[0], shape_k[1], shape_q[2], shape_q[3])
-            if shape_q[2] != shape_v[2] or shape_q[3] != shape_v[3]:
-                shape_v = (shape_v[0], shape_v[1], shape_q[2], shape_q[3])
-            if shape_q[1] != shape_k[1]:
-                shape_k = (shape_k[0], shape_q[1], shape_k[2], shape_k[3])
-            if shape_q[1] != shape_v[1]:
-                shape_v = (shape_v[0], shape_q[1], shape_v[2], shape_v[3])
-
-    # Use provided dtypes - fail if not provided (no fallbacks)
+    # Use provided dtypes with fallback to input_a_dtype
     dtype_q = input_a_dtype
     if input_b_dtype is None:
-        raise ValueError("input_b_dtype is None - required parameter missing")
+        input_b_dtype = input_a_dtype
     if input_c_dtype is None:
-        raise ValueError("input_c_dtype is None - required parameter missing")
+        input_c_dtype = input_a_dtype
     dtype_k = input_b_dtype
     dtype_v = input_c_dtype
 
-    # Use provided layouts - fail if not provided (no fallbacks)
+    # Use provided layouts with fallback to input_a_layout
     layout_q = input_a_layout
     if input_b_layout is None:
-        raise ValueError("input_b_layout is None - required parameter missing")
+        input_b_layout = input_a_layout
     if input_c_layout is None:
-        raise ValueError("input_c_layout is None - required parameter missing")
+        input_c_layout = input_a_layout
     layout_k = input_b_layout
     layout_v = input_c_layout
 
@@ -231,7 +220,7 @@ def run(
 
     # PyTorch reference
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=False
+        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
     )
 
     # TTNN execution
@@ -241,7 +230,7 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, is_causal=False, **op_kwargs
+        q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
     )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

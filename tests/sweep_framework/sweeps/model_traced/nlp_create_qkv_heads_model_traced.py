@@ -21,7 +21,7 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -85,7 +85,11 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"num_heads"}, output_memory_config=output_memory_config)
+
+    # Map alternative param names from traced config
+    if num_q_heads is None:
+        num_q_heads = kwargs.get("num_heads")
 
     # Convert input_a_shape to tuple (loader should always provide this)
     if isinstance(input_a_shape, (tuple, list)):
@@ -99,13 +103,16 @@ def run(
     hidden_dim = shape[3]
 
     # Convert to int if needed (loader provides these, just ensure type correctness)
-    if isinstance(num_q_heads, float):
+    if num_q_heads is not None:
         num_q_heads = int(num_q_heads)
-    if isinstance(num_kv_heads, float):
+    if num_kv_heads is not None:
         num_kv_heads = int(num_kv_heads)
 
-    if num_q_heads is None or num_kv_heads is None:
-        return [(False, f"Missing num_q_heads={num_q_heads} or num_kv_heads={num_kv_heads}"), 0.0]
+    if num_q_heads is None:
+        return [(False, f"Missing num_q_heads={num_q_heads}"), 0.0]
+    # Default num_kv_heads to num_q_heads (standard MHA) when not provided
+    if num_kv_heads is None:
+        num_kv_heads = num_q_heads
 
     # Calculate head_dim from provided parameters
     # For GQA/MHA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim

@@ -40,6 +40,7 @@ _INFRA_KEYS = frozenset(
         "status",
         "sweep_name",
         "storage_type",
+        "mesh_coords",
     }
 )
 
@@ -58,6 +59,11 @@ _TENSOR_PREFIXES = (
     "input_tensor_b",
     "input_tensor_c",
     "input_tensor_d",
+    # Named tensor kwargs from specific ops
+    "input_tensor_q",
+    "input_tensor_k",
+    "input_tensor_v",
+    "page_table_tensor",
 )
 
 
@@ -75,6 +81,9 @@ def _is_infrastructure_key(key: str) -> bool:
         return True
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
+        return True
+    # Any key ending with _tensor_placement is tensor placement metadata
+    if key.endswith("_tensor_placement"):
         return True
     return False
 

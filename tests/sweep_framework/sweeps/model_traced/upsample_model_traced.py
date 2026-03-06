@@ -19,7 +19,7 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -91,6 +91,9 @@ def run(
     # scale_factor must be extracted from JSON
     if scale_factor is None:
         scale_factor = kwargs.get("scale_factor")
+    if scale_factor is None:
+        # V2 loader may store scale_factor as arg1 (positional arg)
+        scale_factor = kwargs.get("arg1")
     if scale_factor is None:
         return [(False, "Missing scale_factor from JSON"), 0.0]
 

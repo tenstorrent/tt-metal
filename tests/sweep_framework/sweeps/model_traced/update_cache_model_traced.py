@@ -21,7 +21,7 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()

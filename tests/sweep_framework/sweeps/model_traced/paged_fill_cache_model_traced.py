@@ -72,9 +72,11 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    input_c_shape=None,
     input_c_dtype=None,
     input_c_layout=None,
     input_c_memory_config=None,
@@ -126,8 +128,16 @@ def run(
             shape = tuple(input_a_shape)
         else:
             shape = input_a_shape
-        shape_a = shape_b = shape
-        shape_c = page_table_kwargs["shape"] if page_table_kwargs else kwargs.get("page_table_shape", shape)
+        shape_a = shape
+        shape_b = tuple(input_b_shape) if input_b_shape is not None else shape
+        # Use input_c_shape (3rd positional tensor) for page table, falling back to page_table_shape
+        if input_c_shape is not None:
+            shape_c = tuple(input_c_shape)
+        elif page_table_kwargs and page_table_kwargs.get("shape") is not None:
+            shape_c = page_table_kwargs["shape"]
+        else:
+            pt_shape = kwargs.get("page_table_shape")
+            shape_c = tuple(pt_shape) if pt_shape is not None else shape
 
     dtype_a = input_a_dtype
     dtype_b = input_b_dtype

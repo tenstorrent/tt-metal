@@ -1174,7 +1174,8 @@ class MasterConfigLoader:
                     seen_keys.add(k)
 
         # Build tuples with all parameters
-        param_values = [[cfg.get(k) for k in all_keys] for cfg in traced_config_list]
+        # Use "__ABSENT__" sentinel for keys missing from a config (vs explicit None)
+        param_values = [[cfg.get(k, "__ABSENT__") for k in all_keys] for cfg in traced_config_list]
         return {",".join(all_keys): [tuple(v) for v in param_values]}
 
     def get_suite_parameters(

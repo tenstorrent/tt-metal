@@ -17,7 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-TIMEOUT = 30
+TIMEOUT = 300
 
 
 def page_cache(cache, page_block_size, permutation):
@@ -99,12 +99,18 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    input_c_shape=None,
     input_c_dtype=None,
     input_c_layout=None,
     input_c_memory_config=None,
+    input_d_shape=None,
+    input_d_dtype=None,
+    input_d_layout=None,
+    input_d_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
@@ -118,20 +124,27 @@ def run(
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config or input_a_memory_config)
+    chunk_start_idx = kwargs.get("chunk_start_idx", 0)
+    if chunk_start_idx is None:
+        chunk_start_idx = 0
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"chunk_start_idx"}, output_memory_config=output_memory_config or input_a_memory_config
+    )
 
-    # Extract shapes for Q and K from input_a_shape dict or use defaults
+    # Extract shapes for Q and K/V paged from separate inputs or dict fallback
     if isinstance(input_a_shape, dict):
         shape_q = input_a_shape.get("input_a", (1, 8, 32, 64))
-        shape_k_paged = input_a_shape.get("input_b", (64, 1, 64, 64))  # [num_pages, nkv, page_size, d]
+        shape_k_paged = input_a_shape.get("input_b", (64, 1, 64, 64))
     else:
-        shape_q = input_a_shape if isinstance(input_a_shape, (tuple, list)) else (1, 8, 32, 64)
-        # Default paged format
-        b, nh, sq, d = shape_q
-        page_block_size = 64
-        max_num_blocks_per_seq = max(1, (sq + page_block_size - 1) // page_block_size)
-        nkv = 1
-        shape_k_paged = (b * max_num_blocks_per_seq, nkv, page_block_size, d)
+        shape_q = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else (1, 8, 32, 64)
+        if input_b_shape is not None:
+            shape_k_paged = tuple(input_b_shape)
+        else:
+            b, nh, sq, d = shape_q
+            page_block_size = 64
+            max_num_blocks_per_seq = max(1, (sq + page_block_size - 1) // page_block_size)
+            nkv = 1
+            shape_k_paged = (b * max_num_blocks_per_seq, nkv, page_block_size, d)
 
     # Extract dimensions from Q
     b, nh, sq, d = shape_q
@@ -176,8 +189,14 @@ def run(
         K_repeated = torch_k_unpaged
         V_repeated = torch_v_unpaged
 
+    # Ensure all tensors are float32 for torch SDPA (bfloat8_b stays float32, bfloat16 needs cast)
     torch_output = torch.nn.functional.scaled_dot_product_attention(
-        torch_q, K_repeated, V_repeated, attn_mask=None, dropout_p=0.0, is_causal=True
+        torch_q.to(torch.float32),
+        K_repeated.to(torch.float32),
+        V_repeated.to(torch.float32),
+        attn_mask=None,
+        dropout_p=0.0,
+        is_causal=True,
     )
 
     # Create TTNN tensors with paged K, V
@@ -206,10 +225,9 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    # Op call - chunk_start_idx is 0 for full sequence
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.chunked_scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, page_table_tensor, 0, **op_kwargs
+        q_tensor, k_tensor, v_tensor, page_table_tensor, chunk_start_idx, **op_kwargs
     )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

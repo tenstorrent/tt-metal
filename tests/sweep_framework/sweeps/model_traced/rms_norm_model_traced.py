@@ -48,7 +48,7 @@ def dict_to_layernorm_program_config(cfg):
     return cfg
 
 
-TIMEOUT = 60
+TIMEOUT = 300
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm")

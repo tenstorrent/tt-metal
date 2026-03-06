@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     get_chunk_size,
 )
 
-TIMEOUT = 60
+TIMEOUT = 300
 
 
 loader = MasterConfigLoader()

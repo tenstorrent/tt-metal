@@ -142,6 +142,7 @@ def _normalize_tensor_keys(test_vector: dict) -> dict:
         "input_tensor_q": "input_a",
         "input_tensor_k": "input_b",
         "input_tensor_v": "input_c",
+        "page_table_tensor": "input_d",
     }
     normalized = {}
     for key, value in test_vector.items():
@@ -166,6 +167,8 @@ def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Opt
     # Filter 'device' from test_vector to avoid conflict with explicit device param
     if "device" in test_vector:
         test_vector = {k: v for k, v in test_vector.items() if k != "device"}
+    # Convert "__ABSENT__" sentinel values to None (missing columns in multi-config suites)
+    test_vector = {k: (None if v == "__ABSENT__" else v) for k, v in test_vector.items()}
     # Normalize alternative tensor naming conventions
     test_vector = _normalize_tensor_keys(test_vector)
     results = test_module.run(**test_vector, device=device)

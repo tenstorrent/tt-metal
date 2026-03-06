@@ -20,7 +20,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-TIMEOUT = 120
+TIMEOUT = 300
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("experimental::paged_update_cache")

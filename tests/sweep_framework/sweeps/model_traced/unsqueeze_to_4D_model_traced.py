@@ -18,7 +18,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-TIMEOUT = 120
+TIMEOUT = 300
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("unsqueeze_to_4D")

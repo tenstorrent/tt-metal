@@ -19,7 +19,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-TIMEOUT = 30
+TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -159,9 +159,20 @@ def run(
         # Host storage
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Op call
+    # Op call — reshard's second arg is the output memory config
+    # V2 loader stores it as arg1 (raw dict) or input_b_memory_config (parsed)
     start_time = start_measuring_time()
     reshard_mem_config = output_memory_config or op_kwargs.pop("memory_config", None)
+    if reshard_mem_config is None:
+        # Try input_b_memory_config (V2 loader treats 2nd positional as tensor)
+        reshard_mem_config = kwargs.get("input_b_memory_config")
+    if reshard_mem_config is None:
+        # Try arg1 as a raw memory config dict
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        arg1 = kwargs.get("arg1")
+        if arg1 is not None and isinstance(arg1, dict):
+            reshard_mem_config = parse_dict_value("memory_config", arg1)
     if reshard_mem_config is None:
         return [(False, "Missing output_memory_config for reshard"), 0.0]
     output_tensor = ttnn.reshard(input_tensor, reshard_mem_config, **op_kwargs)

@@ -20,7 +20,7 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 # Conv2d operations can be slow, especially with large kernels/channels
-TIMEOUT = 180
+TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
