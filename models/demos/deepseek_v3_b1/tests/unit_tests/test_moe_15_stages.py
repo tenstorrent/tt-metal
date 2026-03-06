@@ -393,7 +393,7 @@ def test_bcast_moe_two_stage_pipeline(
 
     # ── Stage 0: D2H loopback read + golden validation ───────────────────────
     if is_stage0:
-        logger.info("[rank=0] waiting for D2H result from pipeline loopback")
+        logger.info(f"[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
         received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
         d2h_output_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -434,8 +434,8 @@ def test_bcast_moe_two_stage_pipeline(
     indirect=True,
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
-@pytest.mark.parametrize("iterations", [1024])
-@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("iterations", [131072])
+@pytest.mark.timeout(120000)
 def test_persistent_moe_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
 ):
@@ -484,7 +484,9 @@ def test_persistent_moe_15_stages(
     embedding_fifo_size = embedding_size_bytes * 2
 
     torch.manual_seed(42)
-    torch_embedding = torch.randn(1, 1, 1, K, dtype=torch.bfloat16)
+    print("Create torch embedding")
+    torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
+    print("Torch embedding created")
 
     reduce_root_coord = ttnn.MeshCoordinate(0, 0)
 
@@ -506,12 +508,14 @@ def test_persistent_moe_15_stages(
     try:
         # ── Pipeline block setup (collective — all hosts must participate simultaneously) ────
         if is_stage0:
+            print("Write embedding to tensor")
             embedding_tensor = ttnn.from_torch(
                 torch_embedding,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            print("Embedding tensor written to device")
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core,
@@ -744,24 +748,26 @@ def test_persistent_moe_15_stages(
             token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
             num_elements = embedding_size_bytes // 2
             for iteration in range(iterations):
-                print(f"[rank={my_mesh_id}] iteration {iteration} start")
                 torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-                torch_token[0, 0] = 0
+                torch_token[0, 0] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 pipeline_block.write_token(token_tensor)
-                print(f"[rank={my_mesh_id}] iteration {iteration} token written")
-                print(f"[rank={my_mesh_id}] iteration {iteration} waiting for D2H result")
+                logger.info(f"[rank=0] token {iteration} injected")
+
                 d2h_output_tensor = ttnn.from_torch(
                     torch.zeros(1, num_elements, dtype=torch.bfloat16),
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+
+                print(f"[rank={my_mesh_id}] iteration {iteration} waiting for D2H result")
                 pipeline_block.read_output(d2h_output_tensor)
+                print(f"[rank={my_mesh_id}] iteration {iteration} D2H result read")
                 d2h_result = ttnn.to_torch(d2h_output_tensor)
 
                 d2h_nonzero = torch.count_nonzero(d2h_result)
                 logger.info(
-                    f"[rank=0] iteration {iteration}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
+                    f"[rank={my_mesh_id}] iteration {iteration}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
                     f"first 5={d2h_result[0, :5]}"
                 )
                 assert (
@@ -769,7 +775,13 @@ def test_persistent_moe_15_stages(
                 ), f"D2H output is all zeros at iteration {iteration} — persistent MoE 15-stage pipeline failed"
                 ttnn.distributed_context_barrier()
 
-            logger.info(f"[rank=0] all {iterations} iterations passed")
+            logger.info(f"[rank={my_mesh_id}] all {iterations} iterations passed")
+
+        else:
+            for iteration in range(iterations):
+                logger.info(f"[rank={my_mesh_id}] Issuing Dummy Barrier at iteration {iteration}")
+                ttnn.distributed_context_barrier()
+                logger.info(f"[rank={my_mesh_id}] Dummy Barrier issued at iteration {iteration}")
 
         logger.info(f"[rank={my_mesh_id}] waiting for barrier")
         ttnn.distributed_context_barrier()
