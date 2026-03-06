@@ -722,6 +722,9 @@ static void sdpa_inner_loop_step(
         // Skipped when runtime k-padding skip is active (runtime_has_partial = false).
         if constexpr (has_partial_subblock) {
             if (runtime_has_partial) {
+#ifdef ARCH_BLACKHOLE
+                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
+#endif
                 if (q_subblock > 0) {
                     uint32_t prev_q_subblock = q_subblock - 1;
                     if constexpr (!uniform_unpack_format) {
@@ -745,7 +748,6 @@ static void sdpa_inner_loop_step(
                 {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack (partial)");
 #ifdef ARCH_BLACKHOLE
-                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
                     mm_no_mop_init_short(cb_q_in, cb_kt_in, true, kt_remainder, sbh, in0_block_w);
 #else
                 mm_block_init_short(cb_q_in, cb_kt_in, true, kt_remainder, sbh, in0_block_w);
@@ -801,7 +803,15 @@ static void sdpa_inner_loop_step(
                 cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/);
             cb_push_back(cur_max, sbh);
 #ifdef ARCH_BLACKHOLE
-            PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
+            if (has_partial_subblock) {
+                if (runtime_has_partial) {
+                    PACK((llk_pack_mop_config<false, false, false>(cur_max, kt_remainder)));
+                } else {
+                    PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
+                }
+            } else {
+                PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
+            }
 #endif
         }
 
