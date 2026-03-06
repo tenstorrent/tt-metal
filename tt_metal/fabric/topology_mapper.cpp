@@ -12,6 +12,7 @@
 #include <optional>
 #include <tuple>
 #include <map>
+#include <set>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -47,6 +48,37 @@ std::tuple<int, MeshId, MeshHostRankId> decode_mpi_rank_mesh_id_and_rank(std::ui
         static_cast<int>((encoded_value >> 48) & 0xFFFF),
         MeshId{static_cast<std::uint32_t>((encoded_value >> 32) & 0xFFFF)},
         MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
+}
+
+// Compute degree histogram for an adjacency graph. Degree = number of unique neighbors
+// (multiple links to the same neighbor count as one).
+template <typename NodeId>
+std::map<size_t, size_t> compute_degree_histogram(
+    const ::tt::tt_fabric::AdjacencyGraph<NodeId>& graph) {
+    std::map<size_t, size_t> hist;
+    for (const auto& node : graph.get_nodes()) {
+        const auto& neighbors = graph.get_neighbors(node);
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        size_t degree = unique_neighbors.size();
+        hist[degree]++;
+    }
+    return hist;
+}
+
+template <typename NodeId>
+void print_degree_histogram(const std::map<size_t, size_t>& hist, const std::string& graph_label) {
+    if (hist.empty()) {
+        log_info(tt::LogFabric, "TopologyMapper: {} degree histogram: (no nodes)", graph_label);
+        return;
+    }
+    std::string hist_str;
+    for (const auto& [degree, count] : hist) {
+        if (!hist_str.empty()) {
+            hist_str += ", ";
+        }
+        hist_str += fmt::format("degree {}: {} node(s)", degree, count);
+    }
+    log_info(tt::LogFabric, "TopologyMapper: {} degree histogram: {}", graph_label, hist_str);
 }
 
 // Encodes/decodes a FabricNodeId (mesh_id, chip_id) into/from a 64-bit value.
@@ -1493,6 +1525,16 @@ void TopologyMapper::print_logical_adjacency_map(
             log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node, neigh_str);
         }
     }
+
+    // Logical adjacency degree histograms (degree = unique neighbor count)
+    print_degree_histogram<::tt::tt_fabric::MeshId>(
+        compute_degree_histogram(multi_mesh_graph.mesh_level_graph_),
+        "Logical mesh-level");
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        print_degree_histogram<::tt::tt_fabric::FabricNodeId>(
+            compute_degree_histogram(graph),
+            fmt::format("Logical mesh {} (intra-mesh)", mesh_id.get()));
+    }
 }
 
 void TopologyMapper::print_physical_adjacency_map(
@@ -1529,6 +1571,16 @@ void TopologyMapper::print_physical_adjacency_map(
             log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node.get(), neigh_str);
             log_debug(tt::LogFabric, "    Host_name = {}", physical_system_descriptor_.get_host_name_for_asic(node));
         }
+    }
+
+    // Physical adjacency degree histograms (degree = unique neighbor count)
+    print_degree_histogram<::tt::tt_fabric::MeshId>(
+        compute_degree_histogram(multi_mesh_graph.mesh_level_graph_),
+        "Physical mesh-level");
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        print_degree_histogram<tt::tt_metal::AsicID>(
+            compute_degree_histogram(graph),
+            fmt::format("Physical mesh {} (intra-mesh)", mesh_id.get()));
     }
 }
 
