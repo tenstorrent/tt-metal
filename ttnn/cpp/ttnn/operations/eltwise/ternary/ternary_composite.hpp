@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ternary_composite_op.hpp"
-
 namespace ttnn {
 
 namespace operations::ternary {
@@ -44,29 +42,25 @@ struct ExecuteTernaryCompositeLerp {
     }
 };
 
-template <TernaryCompositeOpType ternary_comp_op_type>
-struct ExecuteTernaryCompositeMac {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const Tensor& input_tensor_c,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<ternary_comp_op_type>::handle(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
-    }
+inline Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<TernaryCompositeOpType::MAC>::handle(
+        input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
+}
 
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        float value1,
-        float value2,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<ternary_comp_op_type>::handle(input_tensor_a, value1, value2, memory_config);
-    }
-};
+inline Tensor mac(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<TernaryCompositeOpType::MAC>::handle(input_tensor_a, value1, value2, memory_config);
+}
 
 }  // namespace operations::ternary
 
-constexpr auto mac = ttnn::register_operation<
-    "ttnn::mac",
-    operations::ternary::ExecuteTernaryCompositeMac<operations::ternary::TernaryCompositeOpType::MAC>>();
+using operations::ternary::mac;
 
 }  // namespace ttnn

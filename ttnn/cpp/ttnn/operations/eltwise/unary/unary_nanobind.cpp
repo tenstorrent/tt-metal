@@ -14,10 +14,9 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "unary.hpp"
@@ -25,11 +24,51 @@
 namespace ttnn::operations::unary {
 
 namespace {
-template <typename unary_operation_t>
-void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
+template <Tensor (*Func)(
+    const Tensor&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&)>
+Tensor unary_3param_wrapper(const Tensor& t, const std::optional<MemoryConfig>& m, const std::optional<Tensor>& o) {
+    return Func(t, m, o, std::nullopt);
+}
+
+template <Tensor (*Func)(
+    const Tensor&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&)>
+Tensor unary_composite_2param_wrapper(const Tensor& t, const std::optional<MemoryConfig>& m) {
+    return Func(t, m, std::nullopt, std::nullopt);
+}
+
+template <auto Func>
+Tensor unary_4param_to_5param_wrapper(
+    const Tensor& input_tensor,
+    float parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor) {
+    return Func(input_tensor, parameter, memory_config, output_tensor, std::nullopt);
+}
+
+template <auto Func>
+Tensor unary_3param_to_4param_wrapper(
+    const Tensor& input_tensor, float parameter, const std::optional<MemoryConfig>& memory_config) {
+    return Func(input_tensor, parameter, memory_config, std::nullopt);
+}
+
+template <auto Func>
+Tensor unary_composite_3param_to_4param_wrapper(
+    const Tensor& input_tensor,
+    float parameter_a,
+    float parameter_b,
+    const std::optional<MemoryConfig>& memory_config) {
+    return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
+}
+
+void bind_unary_clamp(nb::module_& mod) {
+    const char* doc = R"doc(
+        Applies clamp to :attr:`input_tensor` element-wise.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -55,70 +94,49 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
                  - TILE, ROW_MAJOR
 
             INT32 is supported only for Tensor-scalar-scalar version.
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name());
+        )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"clamp">(
         mod,
-        operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<Tensor>& parameter_a,
-               const std::optional<Tensor>& parameter_b,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<Tensor>,
+                std::optional<Tensor>,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::clamp),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
             nb::arg("max") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               std::optional<std::variant<float, int32_t>> parameter_a,
-               std::optional<std::variant<float, int32_t>> parameter_b,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-            },
+            nb::arg("output_tensor") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<std::variant<float, int32_t>>,
+                std::optional<std::variant<float, int32_t>>,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::clamp),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
             nb::arg("max") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
-template <typename unary_operation_t>
-void bind_unary_composite_optional_floats_with_default(
-    nb::module_& mod,
-    const unary_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    std::optional<float> parameter_a_value,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    std::optional<float> parameter_b_value,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        {8}
+void bind_unary_clip(nb::module_& mod) {
+    const char* doc = R"doc(
+        Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float or ttnn.Tensor): {3}. Defaults to `None`.
-            {5} (float or ttnn.Tensor): {6}. Defaults to `None`.
+            min (float or ttnn.Tensor): Minimum value. Defaults to `None`.
+            max (float or ttnn.Tensor): Maximum value. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -132,60 +150,43 @@ void bind_unary_composite_optional_floats_with_default(
 
                * - Dtypes
                  - Layouts
-               * - {9}
+               * - BFLOAT16
                  - TILE, ROW_MAJOR
 
-            {10}
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
-        parameter_name_b,
-        parameter_b_doc,
-        parameter_b_value,
-        description,
-        supported_dtype,
-        note);
+        )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"clip">(
         mod,
-        operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<Tensor>& parameter_a,
-               const std::optional<Tensor>& parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        ttnn::overload_t{
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<Tensor>,
+                std::optional<Tensor>,
+                const std::optional<MemoryConfig>&>(&ttnn::clip),
             nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg(parameter_name_b.c_str()) = parameter_b_value,
+            nb::arg("min") = nb::none(),
+            nb::arg("max") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               std::optional<float> parameter_a,
-               std::optional<float> parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        ttnn::overload_t{
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<float>,
+                std::optional<float>,
+                const std::optional<MemoryConfig>&>(&ttnn::clip),
             nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg(parameter_name_b.c_str()) = parameter_b_value,
+            nb::arg("min") = nb::none(),
+            nb::arg("max") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()});
 }
 
-template <typename unary_operation_t>
-void bind_unary_operation(
+template <
+    ttnn::unique_string OpName,
+    Tensor (*Func)(const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&)>
+void bind_unary_operation_3param(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& math,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
@@ -221,34 +222,88 @@ void bind_unary_operation(
             {5}
 
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         math,
         range,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        Func,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename unary_operation_t>
+template <
+    ttnn::unique_string OpName,
+    Tensor (*Func)(
+        const Tensor&,
+        const std::optional<MemoryConfig>&,
+        const std::optional<Tensor>&,
+        const std::optional<CoreRangeSet>&)>
+void bind_unary_operation(
+    nb::module_& mod,
+    const std::string& math,
+    const std::string& range = "",
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {2}
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor. {3}
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - {4}
+                 - TILE, ROW_MAJOR
+
+            {5}
+
+        )doc",
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
+        math,
+        range,
+        supported_dtype,
+        note);
+
+    ttnn::bind_function<OpName>(
+        mod,
+        doc.c_str(),
+        &unary_3param_wrapper<Func>,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+}
+
+template <ttnn::unique_string OpName, typename Func>
 void bind_unary_operation_subcoregrids(
     nb::module_& mod,
-    const unary_operation_t& operation,
+    Func func,
     const std::string& math,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
@@ -285,97 +340,29 @@ void bind_unary_operation_subcoregrids(
             {5}
 
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         math,
         range,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, memory_config, output_tensor, sub_core_grids);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+        doc.c_str(),
+        func,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
-template <typename unary_operation_t>
-void bind_unary_sqrt_operation(
-    nb::module_& mod,
-    const unary_operation_t& operation,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            fast_approx_mode (bool, optional): use the fast and approximate mode. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {2}
-                 - TILE, ROW_MAJOR
-
-            {3}
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        supported_dtype,
-        info_doc);
-
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const bool fast_approx_mode,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, fast_approx_mode, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("fast_approx_mode") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
-}
-
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, typename FuncTensor, typename FuncComplex>
 void bind_unary_operation_overload_complex(
     nb::module_& mod,
-    const unary_operation_t& operation,
+    FuncTensor func_tensor,
+    FuncComplex func_complex,
     const std::string& math,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -409,43 +396,27 @@ void bind_unary_operation_overload_complex(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         math,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            func_tensor,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> Tensor { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
+            nb::arg("output_tensor") = nb::none()),
+        ttnn::overload_t(func_complex, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")));
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName>
 void bind_unary_operation_overload_complex_return_complex(
-    nb::module_& mod,
-    const unary_operation_t& operation,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& info_doc = "") {
+    nb::module_& mod, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -477,40 +448,30 @@ void bind_unary_operation_overload_complex_return_complex(
             {3}
             More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         supported_dtype,
         info_doc);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            &unary_3param_wrapper<ttnn::reciprocal>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> ComplexTensor { return self(input_tensor, memory_config); },
+        ttnn::overload_t{
+            nb::overload_cast<const ComplexTensor&, const ttnn::MemoryConfig&>(&ttnn::reciprocal),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config")});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_fast_and_approximate_mode(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& info_doc = "") {
@@ -546,25 +507,17 @@ void bind_unary_operation_with_fast_and_approximate_mode(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         range,
         supported_dtype,
         info_doc);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const bool parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, parameter, memory_config, output_tensor, sub_core_grids);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
@@ -573,10 +526,9 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             nb::arg("sub_core_grids") = nb::none()});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_float_parameter(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     const std::string& info_doc,
@@ -615,26 +567,19 @@ void bind_unary_operation_with_float_parameter(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name,
         parameter_doc,
         info_doc,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const float parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            &unary_4param_to_5param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
@@ -642,10 +587,9 @@ void bind_unary_operation_with_float_parameter(
             nb::arg("output_tensor") = nb::none()});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_scalar_parameter(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     const std::string& info_doc,
@@ -684,26 +628,19 @@ void bind_unary_operation_with_scalar_parameter(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name,
         parameter_doc,
         info_doc,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               ScalarVariant parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
@@ -711,10 +648,9 @@ void bind_unary_operation_with_scalar_parameter(
             nb::arg("output_tensor") = nb::none()});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_float_parameter_default(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string_view& parameter_name,
     const std::string_view& parameter_doc,
     const float parameter_default,
@@ -754,8 +690,8 @@ void bind_unary_operation_with_float_parameter_default(
 
             {7}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name,
         parameter_default,
         parameter_doc,
@@ -763,18 +699,11 @@ void bind_unary_operation_with_float_parameter_default(
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const float parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            &unary_4param_to_5param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name.data()) = parameter_default,
@@ -782,10 +711,9 @@ void bind_unary_operation_with_float_parameter_default(
             nb::arg("output_tensor") = nb::none()});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_with_default_float(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     float parameter_a_value,
@@ -818,26 +746,19 @@ void bind_unary_composite_with_default_float(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
         supported_dtype,
         info_doc);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter_a, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::kw_only(),
@@ -845,10 +766,9 @@ void bind_unary_composite_with_default_float(
             nb::arg("output_tensor") = nb::none()});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_int_parameter(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     const std::string& info_doc,
@@ -887,26 +807,19 @@ void bind_unary_operation_with_int_parameter(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name,
         parameter_doc,
         info_doc,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<int>& parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name.c_str()) = 0,
@@ -914,10 +827,9 @@ void bind_unary_operation_with_int_parameter(
             nb::arg("output_tensor") = nb::none()});
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_dim_parameter(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     const std::string& info_doc,
@@ -955,33 +867,118 @@ void bind_unary_operation_with_dim_parameter(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name,
         parameter_doc,
         info_doc,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               int dim,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, dim, memory_config); },
-            nb::arg("input_tensor"),
-            nb::arg("dim") = -1,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        doc.c_str(),
+        ttnn::overload_t{
+            Func, nb::arg("input_tensor"), nb::arg("dim") = -1, nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
-template <typename unary_operation_t>
+void bind_softplus(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
+            threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+        )doc",
+        "softplus",
+        "ttnn.softplus");
+
+    ttnn::bind_function<"softplus">(
+        mod,
+        doc.c_str(),
+        &ttnn::softplus,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("beta") = 1.0f,
+        nb::arg("threshold") = 20.0f,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+}
+
+void bind_xielu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies xIELU (Expanded Integral of the Exponential Linear Unit) to :attr:`input_tensor` element-wise.
+        This is a custom piecewise trainable activation function derived from "Deriving Activation Functions Using Integration" paper:
+        https://arxiv.org/abs/2411.13010
+
+        With beta = 0.5 and eps = -1e-6:
+            x > 0 :  alpha_p * x^2 + beta * x
+            x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
+            alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+        )doc");
+
+    ttnn::bind_function<"xielu">(
+        mod,
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::xielu,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("alpha_p") = 0.8f,
+            nb::arg("alpha_n") = 0.8f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
+}
+
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_rdiv(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
@@ -1019,8 +1016,8 @@ void bind_unary_rdiv(
 
             {9}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         parameter_name_b,
@@ -1030,19 +1027,11 @@ void bind_unary_rdiv(
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<std::string>& parameter_b,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
@@ -1051,121 +1040,8 @@ void bind_unary_rdiv(
             nb::arg("output_tensor") = nb::none()});
 }
 
-template <typename unary_operation_t>
-void bind_softplus(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
-            threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, BFLOAT8_B, FLOAT32
-                 - TILE, ROW_MAJOR
-        )doc",
-        ttnn::softplus.base_name(),
-        ttnn::softplus.python_fully_qualified_name());
-
-    bind_registered_operation(
-        mod,
-        ttnn::softplus,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const float beta,
-               const float threshold,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input, beta, threshold, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("beta") = 1.0f,
-            nb::arg("threshold") = 20.0f,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
-}
-
-template <typename unary_operation_t>
-void bind_xielu(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
-        Applies xIELU (Expanded Integral of the Exponential Linear Unit) to :attr:`input_tensor` element-wise.
-        This is a custom piecewise trainable activation function derived from "Deriving Activation Functions Using Integration" paper:
-        https://arxiv.org/abs/2411.13010
-
-        With beta = 0.5 and eps = -1e-6:
-            x > 0 :  alpha_p * x^2 + beta * x
-            x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
-            alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32
-                 - TILE, ROW_MAJOR
-        )doc");
-
-    bind_registered_operation(
-        mod,
-        ttnn::xielu,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const float alpha_p,
-               const float alpha_n,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input, alpha_p, alpha_n, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("alpha_p") = 0.8f,
-            nb::arg("alpha_n") = 0.8f,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
-}
-
-template <typename unary_operation_t>
-void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
+template <ttnn::unique_string OpName, auto Func>
+void bind_tanh_like(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1197,19 +1073,14 @@ void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
 
             BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name());
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName));
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               bool approx) { return self(input, memory_config, output_tensor, approx); },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
@@ -1217,7 +1088,6 @@ void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
             nb::arg("fast_and_approximate_mode") = false});
 }
 
-template <typename unary_operation_t>
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1250,29 +1120,20 @@ void bind_sigmoid_accurate(nb::module_& mod) {
                * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE, ROW_MAJOR
         )doc",
-        ttnn::sigmoid_accurate.base_name(),
-        ttnn::sigmoid_accurate.python_fully_qualified_name());
+        "sigmoid_accurate",
+        "ttnn.sigmoid_accurate");
 
-    bind_registered_operation(
+    ttnn::bind_function<"sigmoid_accurate">(
         mod,
-        ttnn::sigmoid_accurate,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               bool fast_and_approximate_mode,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, fast_and_approximate_mode, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("fast_and_approximate_mode") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::sigmoid_accurate,
+        nb::arg("input_tensor"),
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename unary_operation_t>
 void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1304,40 +1165,30 @@ void bind_sigmoid(nb::module_& mod) {
                * - BFLOAT16
                  - TILE, ROW_MAJOR
         )doc",
-        ttnn::sigmoid.base_name(),
-        ttnn::sigmoid.python_fully_qualified_name());
+        "sigmoid",
+        "ttnn.sigmoid");
 
     mod.attr("SigmoidMode") =
-        nb::enum_<Sigmoid::SigmoidMode>(mod, "SigmoidMode")
-            .value("Accurate", Sigmoid::SigmoidMode::ACCURATE, "Most accurate, but least performant.")
+        nb::enum_<SigmoidMode>(mod, "SigmoidMode")
+            .value("Accurate", SigmoidMode::ACCURATE, "Most accurate, but least performant.")
             .value(
                 "AccurateWithFastExp",
-                Sigmoid::SigmoidMode::ACCURATE_FAST_EXP,
+                SigmoidMode::ACCURATE_FAST_EXP,
                 "Similar to accurate, but uses fast and approximate exp")
-            .value("FastApproximate", Sigmoid::SigmoidMode::FAST_APPROXIMATE, "Fastest, but least accurate.");
+            .value("FastApproximate", SigmoidMode::FAST_APPROXIMATE, "Fastest, but least accurate.");
 
-    bind_registered_operation(
+    ttnn::bind_function<"sigmoid">(
         mod,
-        ttnn::sigmoid,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const int vector_mode,
-               const Sigmoid::SigmoidMode sigmoid_mode,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, vector_mode, sigmoid_mode, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("vector_mode") = 4,
-            nb::arg("mode") = Sigmoid::SigmoidMode::ACCURATE,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::sigmoid,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("vector_mode") = 4,
+        nb::arg("mode") = SigmoidMode::ACCURATE,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename unary_operation_t>
 void bind_unary_chain(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1368,28 +1219,19 @@ void bind_unary_chain(nb::module_& mod) {
                * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE, ROW_MAJOR
         )doc",
-        ttnn::unary_chain.base_name(),
-        ttnn::unary_chain.python_fully_qualified_name());
+        "unary_chain",
+        "ttnn.unary_chain");
 
-    bind_registered_operation(
+    ttnn::bind_function<"unary_chain">(
         mod,
-        ttnn::unary_chain,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const EltwiseFusedActivations& ops_chain,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_tensor, ops_chain, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("ops_chain"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::unary_chain,
+        nb::arg("input_tensor"),
+        nb::arg("ops_chain"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
-template <typename unary_operation_t>
 void bind_identity(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1420,28 +1262,22 @@ void bind_identity(nb::module_& mod) {
                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
                  - TILE, ROW_MAJOR
         )doc",
-        ttnn::identity.base_name(),
-        ttnn::identity.python_fully_qualified_name());
+        "identity",
+        "ttnn.identity");
 
-    bind_registered_operation(
+    ttnn::bind_function<"identity">(
         mod,
-        ttnn::identity,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) { return self(input_tensor, memory_config, output_tensor); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::identity,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename unary_operation_t>
-void bind_unary_composite(
+template <ttnn::unique_string OpName, Tensor (*Func)(const Tensor&, const std::optional<MemoryConfig>&)>
+void bind_unary_composite_2param(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& description,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
@@ -1476,32 +1312,82 @@ void bind_unary_composite(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         description,
         range,
         supported_dtype,
         supported_layout,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
+        mod, doc.c_str(), Func, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = nb::none());
+}
+
+template <
+    ttnn::unique_string OpName,
+    Tensor (*Func)(
+        const Tensor&,
+        const std::optional<MemoryConfig>&,
+        const std::optional<Tensor>&,
+        const std::optional<CoreRangeSet>&)>
+void bind_unary_composite(
+    nb::module_& mod,
+    const std::string& description,
+    const std::string& range = "",
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& supported_layout = "TILE",
+    const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor. {3}
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - {4}
+                 - {5}
+
+            {6}
+        )doc",
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
+        description,
+        range,
+        supported_dtype,
+        supported_layout,
+        note);
+
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        doc.c_str(),
+        &unary_composite_2param_wrapper<Func>,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 // OpHandler_1int
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_int_with_default(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     int32_t parameter_a_value,
@@ -1538,8 +1424,8 @@ void bind_unary_composite_int_with_default(
 
             {7}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
@@ -1547,17 +1433,11 @@ void bind_unary_composite_int_with_default(
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1565,10 +1445,9 @@ void bind_unary_composite_int_with_default(
 }
 
 // OpHandler_two_float_with_default
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_floats_with_default(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     float parameter_a_value,
@@ -1605,8 +1484,8 @@ void bind_unary_composite_floats_with_default(
 
             {9}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
@@ -1616,18 +1495,11 @@ void bind_unary_composite_floats_with_default(
         supported_dtype,
         info_doc);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            &unary_composite_3param_to_4param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1636,10 +1508,9 @@ void bind_unary_composite_floats_with_default(
 }
 
 // OpHandler_one_int
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_int(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     const std::string& description) {
@@ -1668,23 +1539,17 @@ void bind_unary_composite_int(
                * - BFLOAT16
                  - TILE, ROW_MAJOR
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         description);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
@@ -1692,10 +1557,9 @@ void bind_unary_composite_int(
 }
 
 // OpHandler_threshold
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_threshold(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
@@ -1730,26 +1594,19 @@ void bind_unary_threshold(
                * - BFLOAT16
                  - TILE, ROW_MAJOR
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         parameter_name_b,
         parameter_b_doc,
         description);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            &unary_composite_3param_to_4param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::arg(parameter_name_b.c_str()),
@@ -1758,10 +1615,9 @@ void bind_unary_threshold(
 }
 
 // OpHandler_float_with_default
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_float_with_default(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     float parameter_a_value,
@@ -1797,33 +1653,32 @@ void bind_unary_composite_float_with_default(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
         supported_dtype,
         info_doc);
 
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            &unary_3param_to_4param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg("memory_config") = nb::none()});
 }
 
-template <typename unary_operation_t>
-void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, const std::string& info_doc = "") {
+namespace {
+Tensor logit_wrapper(const Tensor& t, std::optional<float> eps, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::logit(t, eps, memory_config, std::nullopt);
+}
+}  // namespace
+
+void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Performs {0} function on :attr:`input_tensor`, :attr:`eps`.
@@ -1854,29 +1709,23 @@ void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, cons
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor, eps = None)
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        "logit",
+        "ttnn.logit",
         info_doc);
 
-    bind_registered_operation(
+    ttnn::bind_function<"logit">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               std::optional<float> eps,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, eps, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("eps") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+        doc.c_str(),
+        &logit_wrapper,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("eps") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
-template <typename unary_operation_t>
+template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_rpow(
     nb::module_& mod,
-    const unary_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     const std::string& description,
@@ -1910,25 +1759,19 @@ void bind_unary_composite_rpow(
 
             {7}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(OpName),
+        std::string("ttnn.") + std::string(OpName),
         parameter_name_a,
         parameter_a_doc,
         description,
         range,
         supported_dtype,
         info_doc);
-    bind_registered_operation(
+    ttnn::bind_function<OpName>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t{
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
@@ -1937,382 +1780,324 @@ void bind_unary_composite_rpow(
 }  // namespace
 
 void py_module(nb::module_& mod) {
-    bind_unary_operation_overload_complex(
+    bind_unary_operation_overload_complex<"abs">(
         mod,
-        ttnn::abs,
+        nb::overload_cast<const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&>(&ttnn::abs),
+        nb::overload_cast<const ttnn::operations::complex::ComplexTensor&, const MemoryConfig&>(&ttnn::abs),
         R"doc(\mathrm{{output\_tensor}}_i = \verb|abs|(\mathrm{{input\_tensor}}_i))doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"acos", &ttnn::acos>(
         mod,
-        ttnn::acos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|acos|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation<"asin", &ttnn::asin>(
         mod,
-        ttnn::asin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|asin|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation<"atan", &ttnn::atan>(
         mod,
-        ttnn::atan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|atan|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_composite(
+    bind_unary_composite<"atanh", &ttnn::atanh>(
+        mod, R"doc(Performs atanh function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation<"cos", &ttnn::cos>(
         mod,
-        ttnn::atanh,
-        R"doc(Performs atanh function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
-        mod,
-        ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"acosh", &ttnn::acosh>(
         mod,
-        ttnn::acosh,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|acosh|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    bind_unary_operation(
+    bind_unary_operation<"erfinv", &ttnn::erfinv>(
         mod,
-        ttnn::erfinv,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|erfinv|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    bind_unary_operation(
+    bind_unary_operation<"exp2", &ttnn::exp2>(
         mod,
-        ttnn::exp2,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|exp2|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    bind_unary_operation(
+    bind_unary_operation<"expm1", &ttnn::expm1>(
         mod,
-        ttnn::expm1,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|expm1|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    bind_unary_operation_subcoregrids(
+    bind_unary_operation_subcoregrids<"floor">(
         mod,
-        ttnn::floor,
+        &ttnn::floor,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_subcoregrids(
+    bind_unary_operation_subcoregrids<"trunc">(
         mod,
-        ttnn::trunc,
+        &ttnn::trunc,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|trunc|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation<"frac", &ttnn::frac>(
         mod,
-        ttnn::frac,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|frac|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"eqz", &ttnn::eqz>(
         mod,
-        ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"ceil", &ttnn::ceil>(
         mod,
-        ttnn::ceil,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"mish", &ttnn::mish>(
         mod,
-        ttnn::mish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
         "[Supported range -20 to inf]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"hardmish", &ttnn::hardmish>(
         mod,
-        ttnn::hardmish,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
         "[Supported range -20 to inf]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
-    bind_unary_operation(
+    bind_unary_operation<"gez", &ttnn::gez>(
         mod,
-        ttnn::gez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"gtz", &ttnn::gtz>(
         mod,
-        ttnn::gtz,
         R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
-    bind_unary_operation(
+    bind_unary_operation<"i0", &ttnn::i0>(
         mod,
-        ttnn::i0,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"i1", &ttnn::i1>(
         mod,
-        ttnn::i1,
         R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
         "[Validated range: -10 to 10]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the modified Bessel function of the first kind of order 1. This function is commonly used in physics and engineering, particularly in problems with cylindrical symmetry.)doc");
-    bind_unary_operation(
+    bind_unary_operation<"isfinite", &ttnn::isfinite>(
         mod,
-        ttnn::isfinite,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isfinite|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"isinf", &ttnn::isinf>(
         mod,
-        ttnn::isinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"isnan", &ttnn::isnan>(
         mod,
-        ttnn::isnan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isnan|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"isneginf", &ttnn::isneginf>(
         mod,
-        ttnn::isneginf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isneginf|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"isposinf", &ttnn::isposinf>(
         mod,
-        ttnn::isposinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isposinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"lez", &ttnn::lez>(
         mod,
-        ttnn::lez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"logical_not", &ttnn::logical_not>(
         mod,
-        ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
-    bind_unary_operation_subcoregrids(
+    bind_unary_operation_subcoregrids<"ltz">(
         mod,
-        ttnn::ltz,
+        &ttnn::ltz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"neg", &ttnn::neg>(
         mod,
-        ttnn::neg,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"nez", &ttnn::nez>(
         mod,
-        ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
 
-    bind_unary_operation_overload_complex_return_complex(
+    bind_unary_operation_overload_complex_return_complex<"reciprocal">(
         mod,
-        ttnn::reciprocal,
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(BFLOAT8_B is supported only for non-zero inputs. Inputs containing zero may produce inaccurate results due to the characteristics of the block-FP format.)doc");
-    bind_unary_operation(
+    bind_unary_operation<"relu", &ttnn::relu>(
         mod,
-        ttnn::relu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"relu6", &ttnn::relu6>(
         mod,
-        ttnn::relu6,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"sign", &ttnn::sign>(
         mod,
-        ttnn::sign,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sign|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"signbit", &ttnn::signbit>(
         mod,
-        ttnn::signbit,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"silu", &ttnn::silu>(
         mod,
-        ttnn::silu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|silu|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"swish", &ttnn::swish>(
         mod,
-        ttnn::swish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|swish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation<"sin", &ttnn::sin>(
         mod,
-        ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    bind_unary_operation(
+    bind_unary_operation<"square", &ttnn::square>(
         mod,
-        ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16 [0,255])doc");
-    bind_unary_operation(
+    bind_unary_operation<"tan", &ttnn::tan>(
         mod,
-        ttnn::tan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc",
         "Supported input range is (-1.45, 1.45)",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"log_sigmoid", &ttnn::log_sigmoid>(
         mod,
-        ttnn::log_sigmoid,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"bitwise_not", &ttnn::bitwise_not>(
         mod,
-        ttnn::bitwise_not,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc",
         R"doc(Supported input range is [-2147483647, 2147483647].)doc",
         R"doc(INT32)doc",
         R"doc(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32))doc");
-    bind_unary_operation(
+    bind_unary_operation<"alt_complex_rotate90", &ttnn::alt_complex_rotate90>(
         mod,
-        ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
         R"doc(The last dimension of the input tensor must be even.)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"deg2rad", &ttnn::deg2rad>(
         mod,
-        ttnn::deg2rad,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|deg2rad|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation_3param<"rad2deg", &ttnn::rad2deg>(
         mod,
-        ttnn::rad2deg,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|rad2deg|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation<"asinh", &ttnn::asinh>(
         mod,
-        ttnn::asinh,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|asinh|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"hardsigmoid", &ttnn::hardsigmoid>(
         mod,
-        ttnn::hardsigmoid,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardsigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"hardswish", &ttnn::hardswish>(
         mod,
-        ttnn::hardswish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardswish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"softsign", &ttnn::softsign>(
         mod,
-        ttnn::softsign,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|softsign|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation<"cbrt", &ttnn::cbrt>(
         mod,
-        ttnn::cbrt,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cbrt|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     //  Unaries with fast_and_approximate_mode
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::sqrt, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::rsqrt, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::exp, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::erf, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::erfc, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::gelu, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::log, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::log10, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::log2, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(
-        mod, ttnn::log1p, R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"sqrt", &ttnn::sqrt>(
+        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"rsqrt", &ttnn::rsqrt>(
+        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"exp", &ttnn::exp>(
+        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"erf", &ttnn::erf>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"erfc", &ttnn::erfc>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"gelu", &ttnn::gelu>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"log", &ttnn::log>(
+        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"log10", &ttnn::log10>(
+        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"log2", &ttnn::log2>(
+        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"log1p", &ttnn::log1p>(
+        mod, R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     // Unaries with float parameter
-    bind_unary_composite_with_default_float(
-        mod, ttnn::elu, "alpha", "The alpha parameter for the ELU function", 1.0f, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_float_parameter(
+    bind_unary_composite_with_default_float<"elu", &ttnn::elu>(
+        mod, "alpha", "The alpha parameter for the ELU function", 1.0f, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_float_parameter<"heaviside", &ttnn::heaviside>(
+        mod, "value", "The value parameter for the Heaviside function", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_float_parameter<"leaky_relu", &ttnn::leaky_relu>(
         mod,
-        ttnn::heaviside,
-        "value",
-        "The value parameter for the Heaviside function",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_float_parameter(
-        mod,
-        ttnn::leaky_relu,
         "negative_slope",
         "The slope parameter for the Leaky ReLU function",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_float_parameter(
+    bind_unary_operation_with_float_parameter<"relu_max", &ttnn::relu_max>(
         mod,
-        ttnn::relu_max,
         "upper_limit",
         "The max value for ReLU function",
         "This function caps off the input to a max value and a min value of 0",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(System memory is not supported.)doc");
-    bind_unary_operation_with_float_parameter(
+    bind_unary_operation_with_float_parameter<"relu_min", &ttnn::relu_min>(
         mod,
-        ttnn::relu_min,
         "lower_limit",
         "The min value for ReLU function",
         "This will carry out ReLU operation at min value instead of the standard 0",
         R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(System memory is not supported.)doc");
-    bind_unary_operation_with_float_parameter(
-        mod, ttnn::rpow, "exponent", "exponent value. Non-positive values are not supported.", "");
-    bind_unary_operation_with_float_parameter_default(
-        mod,
-        ttnn::celu,
-        "alpha",
-        "The alpha parameter for the CELU function",
-        1.0f,
-        "",
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_float_parameter<"rpow", &ttnn::rpow>(
+        mod, "exponent", "exponent value. Non-positive values are not supported.", "");
+    bind_unary_operation_with_float_parameter_default<"celu", &ttnn::celu>(
+        mod, "alpha", "The alpha parameter for the CELU function", 1.0f, "", R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
-    bind_unary_operation_with_scalar_parameter(
+    bind_unary_operation_with_scalar_parameter<"fill", &ttnn::fill>(
         mod,
-        ttnn::fill,
         "fill_value",
         "The value to be filled in the output tensor",
         "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
@@ -2320,9 +2105,8 @@ void py_module(nb::module_& mod) {
         R"doc(Host memory is not supported.)doc");
 
     // Unary ops with dim parameter
-    bind_unary_operation_with_dim_parameter(
+    bind_unary_operation_with_dim_parameter<"glu", &ttnn::glu>(
         mod,
-        ttnn::glu,
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the GLU function on the second tensor, and then perform multiplication "
@@ -2334,9 +2118,8 @@ void py_module(nb::module_& mod) {
 
         )doc");
 
-    bind_unary_operation_with_dim_parameter(
+    bind_unary_operation_with_dim_parameter<"reglu", &ttnn::reglu>(
         mod,
-        ttnn::reglu,
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform "
@@ -2348,9 +2131,8 @@ void py_module(nb::module_& mod) {
 
         )doc");
 
-    bind_unary_operation_with_dim_parameter(
+    bind_unary_operation_with_dim_parameter<"geglu", &ttnn::geglu>(
         mod,
-        ttnn::geglu,
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform "
@@ -2362,9 +2144,8 @@ void py_module(nb::module_& mod) {
 
         )doc");
 
-    bind_unary_operation_with_dim_parameter(
+    bind_unary_operation_with_dim_parameter<"swiglu", &ttnn::swiglu>(
         mod,
-        ttnn::swiglu,
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the SiLU function on the second tensor, and then perform "
@@ -2377,112 +2158,83 @@ void py_module(nb::module_& mod) {
         )doc");
 
     // Other unaries (unary chain operations)
-    bind_softplus<decltype(ttnn::softplus)>(mod);
-    bind_xielu<decltype(ttnn::xielu)>(mod);
-    bind_tanh_like(mod, ttnn::tanh);
-    bind_tanh_like(mod, ttnn::tanhshrink);
-    bind_sigmoid_accurate<decltype(ttnn::sigmoid_accurate)>(mod);
-    bind_sigmoid<decltype(ttnn::sigmoid)>(mod);
+    bind_softplus(mod);
+    bind_xielu(mod);
+    bind_tanh_like<"tanh", &ttnn::tanh>(mod);
+    bind_tanh_like<"tanhshrink", &ttnn::tanhshrink>(mod);
+    bind_sigmoid_accurate(mod);
+    bind_sigmoid(mod);
 
-    bind_unary_chain<decltype(ttnn::unary_chain)>(mod);
-    bind_identity<decltype(ttnn::identity)>(mod);
+    bind_unary_chain(mod);
+    bind_identity(mod);
 
     // unary composite imported into ttnn
-    bind_unary_composite(
+    bind_unary_composite<"cosh", &ttnn::cosh>(
         mod,
-        ttnn::cosh,
         R"doc(Performs cosh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"digamma", &ttnn::digamma>(
         mod,
-        ttnn::digamma,
         R"doc(Performs digamma function on :attr:`input_tensor`.)doc",
         "[supported for values greater than 0].",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(TILE)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"lgamma", &ttnn::lgamma>(
         mod,
-        ttnn::lgamma,
         R"doc(Performs lgamma function on :attr:`input_tensor`.)doc",
         "[supported for value greater than 0].",
         R"doc(BFLOAT16, FLOAT32)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
         mod,
-        ttnn::multigammaln,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",
         "[supported range 1.6 to inf].",
         R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(TILE)doc");
-    bind_unary_composite(
+    bind_unary_composite<"sinh", &ttnn::sinh>(
         mod,
-        ttnn::sinh,
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"var_hw", &ttnn::var_hw>(
         mod,
-        ttnn::var_hw,
         R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"std_hw", &ttnn::std_hw>(
         mod,
-        ttnn::std_hw,
         R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"normalize_hw", &ttnn::normalize_hw>(
         mod,
-        ttnn::normalize_hw,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(ROW_MAJOR, TILE)doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"logical_not_", &ttnn::logical_not_>(
         mod,
-        ttnn::logical_not_,
         R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
-    bind_unary_composite(
+    bind_unary_composite_2param<"normalize_global", &ttnn::normalize_global>(
         mod,
-        ttnn::normalize_global,
         R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(ROW_MAJOR, TILE)doc");
 
-    bind_unary_composite_optional_floats_with_default(
+    bind_unary_clip(mod);
+    bind_unary_clamp(mod);
+    bind_unary_composite_floats_with_default<"selu", &ttnn::selu>(
+        mod, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
+    bind_unary_composite_floats_with_default<"hardtanh", &ttnn::hardtanh>(
+        mod, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_threshold<"threshold", &ttnn::threshold>(
         mod,
-        ttnn::clip,
-        "min",
-        "Minimum value",
-        std::nullopt,
-        "max",
-        "Maximum value",
-        std::nullopt,
-        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
-    bind_unary_clamp(mod, ttnn::clamp);
-    bind_unary_composite_floats_with_default(
-        mod, ttnn::selu, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
-    bind_unary_composite_floats_with_default(
-        mod,
-        ttnn::hardtanh,
-        "min_val",
-        "min value",
-        -1.0f,
-        "max_val",
-        "max value",
-        1.0f,
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_threshold(
-        mod,
-        ttnn::threshold,
         "threshold",
         "Threshold value",
         "value",
         "Replacing value",
         R"doc(Performs threshold function on :attr:`input_tensor`, :attr:`threshold`, :attr:`value`.)doc");
-    bind_unary_composite_int_with_default(
+    bind_unary_composite_int_with_default<"tril", &ttnn::tril>(
         mod,
-        ttnn::tril,
         "diagonal",
         "diagonal value",
         0,
@@ -2495,9 +2247,8 @@ void py_module(nb::module_& mod) {
         - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps fewer elements)
         )doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite_int_with_default(
+    bind_unary_composite_int_with_default<"triu", &ttnn::triu>(
         mod,
-        ttnn::triu,
         "diagonal",
         "diagonal value",
         0,
@@ -2510,32 +2261,29 @@ void py_module(nb::module_& mod) {
         - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps more elements)
         )doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_int_parameter(
+    bind_unary_operation_with_int_parameter<"round", &ttnn::round>(
         mod,
-        ttnn::round,
         "decimals",
         "No. of decimal places to round off to [supported range -6 to 7], Defaults to 0.",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite_int(
+    bind_unary_composite_int<"polygamma", &ttnn::polygamma>(
         mod,
-        ttnn::polygamma,
         "k",
         "k value",
         R"doc(Performs polygamma function on :attr:`input_tensor`, :attr:`decimals`. it is supported for range 1 to 10 only)doc");
 
     // unary composite with float imported into ttnn
-    bind_unary_composite_float_with_default(
-        mod, ttnn::hardshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_composite_float_with_default<"hardshrink", &ttnn::hardshrink>(
+        mod, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
-    bind_unary_composite_float_with_default(
-        mod, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_composite_float_with_default<"softshrink", &ttnn::softshrink>(
+        mod, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
-    bind_unary_logit(mod, ttnn::logit);
+    bind_unary_logit(mod);
 
-    bind_unary_rdiv(
+    bind_unary_rdiv<"rdiv", &ttnn::rdiv>(
         mod,
-        ttnn::rdiv,
         "value",
         "denominator that is considered as numerator, which should be a non-zero float value",
         "rounding_mode",
@@ -2551,8 +2299,7 @@ void py_module(nb::module_& mod) {
         R"doc(System memory is not supported.)doc");
 
     // Bind bitcast operation
-    auto bitcast_doc = fmt::format(
-        R"doc(
+    const char* bitcast_doc = R"doc(
         Bitcast reinterprets the bit pattern without conversion (unlike typecast which converts values).
 
         Args:
@@ -2576,27 +2323,17 @@ void py_module(nb::module_& mod) {
                  - Layouts
                * - BFLOAT16, FLOAT32, INT32, UINT16, UINT32
                  - TILE, ROW_MAJOR
-        )doc",
-        ttnn::bitcast.base_name());
+        )doc";
 
-    using BitcastType = decltype(ttnn::bitcast);
-    bind_registered_operation(
+    ttnn::bind_function<"bitcast">(
         mod,
-        ttnn::bitcast,
         bitcast_doc,
-        ttnn::nanobind_overload_t{
-            [](const BitcastType& self,
-               const ttnn::Tensor& input_tensor,
-               const DataType dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, dtype, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("dtype"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        &ttnn::bitcast,
+        nb::arg("input_tensor"),
+        nb::arg("dtype"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::unary
