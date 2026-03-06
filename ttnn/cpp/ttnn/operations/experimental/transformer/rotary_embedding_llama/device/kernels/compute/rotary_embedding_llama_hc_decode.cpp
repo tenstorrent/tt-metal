@@ -9,6 +9,12 @@
 //   sin_term = rotated * sin           (element-wise)
 //   cos_term = x * cos                 (element-wise)
 //   out      = cos_term + sin_term     (element-wise)
+//
+// Optimizations vs. a naive 4-ACQ/REL implementation:
+//   - mm_init_short and mul_tiles_init are hoisted outside the (h,bt) loop;
+//     the mode is only re-initialized when switching math backend (mm ↔ eltwise).
+//   - Steps 2 (rotated*sin) and 3 (x*cos) share a single ACQ/REL block,
+//     halving math-pipeline flush overhead for those two eltwise muls.
 
 #include <cstdint>
 
@@ -37,8 +43,14 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t Wt = get_compile_time_arg_val(8);  // head_dim_t
 
+    // Initialize once: mm mode first, then eltwise common (sets up mul and add).
     mm_init(in_cb, trans_mat_cb, out_cb);
-    binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, out_cb);
+
+    // Hoist the eltwise-mul and eltwise-add inits outside the loop.
+    // They only need to be called again after switching away from mm mode.
+    mul_tiles_init(rotated_in_interm_cb, sin_cb);
+    add_tiles_init(cos_interm_cb, sin_interm_cb);
 
     // Wait for transformation matrix once — it is reused for every (head, batch_tile).
     cb_wait_front(trans_mat_cb, onetile);
@@ -55,7 +67,8 @@ void kernel_main() {
             cb_reserve_back(cos_interm_cb, Wt);
             cb_reserve_back(out_cb, Wt);
 
-            // rotated = x @ trans_mat  (each of Wt tiles independently)
+            // ACQ block 1: rotated = x @ trans_mat
+            // mm_init_short re-activates mm mode after the previous eltwise block.
             mm_init_short(in_cb, trans_mat_cb);
             ACQ();
             for (uint32_t j = 0; j < Wt; ++j) {
@@ -66,30 +79,28 @@ void kernel_main() {
             cb_push_back(rotated_in_interm_cb, Wt);
             cb_wait_front(rotated_in_interm_cb, Wt);
 
-            // sin_term = rotated * sin
+            // ACQ block 2 (merged): sin_term = rotated * sin, then cos_term = x * cos.
+            // Both are eltwise mul — same math mode, no backend switch needed.
+            // mul_tiles_init was called above; no re-init needed here.
             mul_tiles_init(rotated_in_interm_cb, sin_cb);
             ACQ();
             for (uint32_t j = 0; j < Wt; ++j) {
                 mul_tiles(rotated_in_interm_cb, sin_cb, j, j, j);
                 pack_tile(j, sin_interm_cb, j);
             }
-            REL();
-            cb_push_back(sin_interm_cb, Wt);
-            cb_pop_front(rotated_in_interm_cb, Wt);
-
-            // cos_term = x * cos
-            ACQ();
             for (uint32_t j = 0; j < Wt; ++j) {
                 mul_tiles(in_cb, cos_cb, j, j, j);
                 pack_tile(j, cos_interm_cb, j);
             }
             REL();
+            cb_push_back(sin_interm_cb, Wt);
             cb_push_back(cos_interm_cb, Wt);
+            cb_pop_front(rotated_in_interm_cb, Wt);
             cb_pop_front(in_cb, Wt);
             cb_pop_front(cos_cb, Wt);
             cb_pop_front(sin_cb, Wt);
 
-            // out = cos_term + sin_term
+            // ACQ block 3: out = cos_term + sin_term
             cb_wait_front(sin_interm_cb, Wt);
             cb_wait_front(cos_interm_cb, Wt);
             add_tiles_init(cos_interm_cb, sin_interm_cb);
