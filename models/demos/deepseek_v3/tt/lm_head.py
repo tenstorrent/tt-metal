@@ -257,6 +257,24 @@ class LMHead(AbstractModule):
             "ccl": ccl,
         }
 
+    @staticmethod
+    def _fwd_linear(x: ttnn.Tensor, cfg: dict, program_config: Any = None) -> ttnn.Tensor:
+        """Wrapper for lm_head linear projection.
+        Matches: forward_decode line 267, forward_prefill line 315-316
+
+        Args:
+            x: Input tensor
+            cfg: Config for linear operation (cfg["linear"])
+            program_config: Optional program config (required for prefill, None for decode)
+
+        Returns:
+            Output tensor after linear projection
+        """
+        if program_config is not None:  # prefill
+            return ttnn.linear(x, program_config=program_config, **cfg["linear"])
+        else:  # decode
+            return ttnn.linear(x, **cfg["linear"])
+
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
