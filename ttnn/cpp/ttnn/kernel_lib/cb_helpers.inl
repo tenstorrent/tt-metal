@@ -81,4 +81,14 @@ ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format) {
     return page_size_bytes == tile_size;
 }
 
+// =============================================================================
+// Data Format Classification Helpers
+// =============================================================================
+
+ALWI constexpr bool is_block_float_format(uint32_t format) {
+    // Bfp8=2, Bfp4=3, Bfp2=11, Bfp8_b=6, Bfp4_b=7, Bfp2_b=15
+    return format == 2 || format == 3 || format == 11 ||
+           format == 6 || format == 7 || format == 15;
+}
+
 }  // namespace compute_kernel_lib
