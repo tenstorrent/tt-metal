@@ -27,7 +27,7 @@ from models.demos.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
-
+from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 
 @dataclass
 class TtSDXLPipelineConfig:
@@ -72,6 +72,9 @@ class TtSDXLPipeline(LightweightModule):
             "`_debug_mode` and `capture_trace` cannot both be enabled at the same time. "
             "Please set only one of them to True."
         )
+        assert len(torch_pipeline.get_list_adapters()) == 0, (
+            "Torch pipeline must not have LoRA weights loaded. " "Use TtSDXLPipeline interface to manage LoRA weights."
+        )
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"
@@ -79,6 +82,8 @@ class TtSDXLPipeline(LightweightModule):
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
         self._reset_num_inference_steps()
+
+        self._lora_weights_manager = TtLoRAWeightsManager(self.ttnn_device, self.torch_pipeline)
 
         # Validate config parameters once at initialization
         self.__validate_config()
@@ -173,6 +178,19 @@ class TtSDXLPipeline(LightweightModule):
             int(width) // self.torch_pipeline.vae_scale_factor,
         )
         return shape
+
+    def fuse_lora(self, lora_scale=1.0):
+        if self._lora_weights_manager.has_lora_adapter():
+            logger.info("Fusing LoRA weights on TT device...")
+            with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+                self._lora_weights_manager.fuse_lora(lora_scale=lora_scale)
+
+    def load_lora_weights(self, lora_path):
+        self._lora_weights_manager.load_lora_weights(lora_path)
+
+    def unload_lora_weights(self):
+        with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+            self._lora_weights_manager.unload_lora_weights()
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
@@ -761,6 +779,7 @@ class TtSDXLPipeline(LightweightModule):
                 "unet",
                 model_config=self.tt_unet_model_config,
                 debug_mode=pipeline_config._debug_mode,
+                lora_weights_manager=self._lora_weights_manager,
             )
 
             # 2. Load tt_vae

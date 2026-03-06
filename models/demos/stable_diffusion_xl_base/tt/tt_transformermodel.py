@@ -11,11 +11,20 @@ from models.demos.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasic
 
 
 class TtTransformer2DModel(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config, query_dim, num_attn_heads, out_dim):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        lora_weights_manager=None,
+    ):
         super().__init__()
 
         self.device = device
-
         self.norm_groups = 32
         self.norm_eps = 1e-6
 
@@ -34,6 +43,7 @@ class TtTransformer2DModel(LightweightModule):
                     query_dim,
                     num_attn_heads,
                     out_dim,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
 
@@ -57,11 +67,22 @@ class TtTransformer2DModel(LightweightModule):
         )  # keep this same as attention weights dtype at the moment
         weights = state_dict[f"{module_path}.proj_in.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_in.bias"]
-        self.tt_weights_in, self.tt_bias_in = prepare_linear_params(device, weights, bias, proj_weights_dtype)
+        if lora_weights_manager:
+            self.tt_weights_in, self.tt_bias_in = lora_weights_manager.prepare_lora_linear_params(
+                device, weights, bias, proj_weights_dtype, f"{module_path}.proj_in"
+            )
+        else:
+            self.tt_weights_in, self.tt_bias_in = prepare_linear_params(device, weights, bias, proj_weights_dtype)
 
         weights = state_dict[f"{module_path}.proj_out.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_out.bias"]
-        self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, proj_weights_dtype)
+
+        if lora_weights_manager:
+            self.tt_weights_out, self.tt_bias_out = lora_weights_manager.prepare_lora_linear_params(
+                device, weights, bias, proj_weights_dtype, f"{module_path}.proj_out"
+            )
+        else:
+            self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, proj_weights_dtype)
 
         self.program_config_in = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_in")
         self.compute_config_in = model_config.get_mm_compute_config(f"{module_path}.proj_in")
