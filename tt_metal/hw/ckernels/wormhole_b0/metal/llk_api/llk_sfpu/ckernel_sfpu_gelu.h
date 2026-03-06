@@ -268,7 +268,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         _init_gelu_<APPROXIMATION_MODE>();
@@ -283,7 +283,7 @@ void gelu_derivative_init() {
     _init_gelu_derivative_<APPROXIMATION_MODE>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
@@ -292,6 +292,9 @@ inline void calculate_gelu() {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
             sfpi::vFloat result = calculate_gelu_piecewise<APPROXIMATION_MODE>(in);
+            if constexpr (!is_fp32_dest_acc_en) {
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            }
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
