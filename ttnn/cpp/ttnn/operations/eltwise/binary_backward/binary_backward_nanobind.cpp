@@ -781,11 +781,7 @@ void bind_binary_bw_div(
 void bind_binary_backward_assign(nb::module_& mod) {
     ttnn::bind_function<"assign_bw">(
         mod,
-        R"doc(
-        assign_bw(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, input_grad: Optional[ttnn.Tensor] = None) -> List[Optional[ttnn.Tensor]]
-
-        Returns the gradient of assign operation.
-        )doc",
+        R"doc(Returns the gradient of assign operation.)doc",
         ttnn::overload_t(
             nb::overload_cast<const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, std::optional<Tensor>>(
                 &ttnn::assign_bw),
