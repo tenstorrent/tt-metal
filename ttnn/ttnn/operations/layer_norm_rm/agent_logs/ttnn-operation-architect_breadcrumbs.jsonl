@@ -10,3 +10,4 @@
 {"event":"helper_analysis","file":"reduce_helpers_compute.hpp","applicable":true,"functions":["reduce<SUM, REDUCE_ROW, WaitUpfrontNoPop>","reduce<SUM, REDUCE_ROW>"],"ts":"2026-03-06T12:23:39+00:00"}
 {"event":"helper_analysis","file":"binary_op_helpers.hpp","applicable":true,"functions":["sub<COL>","square<WaitUpfrontNoPop>","add<SCALAR>","mul<COL>","mul<ROW>","add<ROW>"],"ts":"2026-03-06T12:23:42+00:00"}
 {"event":"helper_analysis","file":"untilize_helpers.hpp","applicable":true,"functions":["untilize<Wt, cb_normed, cb_out>(1)"],"ts":"2026-03-06T12:23:46+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["data_pipeline","reduce_mean","subtract_mean","variance","normalize","affine"],"final_commit":"72b3be5998","ts":"2026-03-06T12:25:30+00:00"}
