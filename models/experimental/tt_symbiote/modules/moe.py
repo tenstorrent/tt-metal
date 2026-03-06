@@ -19,7 +19,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core.run_config import disable_trace
+from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled
 import math
 
 
@@ -46,6 +46,19 @@ def even_int_div(a: int, b: int) -> int:
     return a // b
 
 
+def _find_rectangular_grid(actual_cores: int, max_x: int, max_y: int) -> tuple[int, int]:
+    """Find a rectangular (gx, gy) grid where gx*gy == actual_cores, gx <= max_x, gy <= max_y.
+
+    Prefers wider grids (larger gx) to maximise row utilisation.
+    """
+    for gy in range(max_y, 0, -1):
+        if actual_cores % gy == 0:
+            gx = actual_cores // gy
+            if gx <= max_x:
+                return gx, gy
+    return actual_cores, 1
+
+
 def _make_sparse_matmul_program_config(
     device,
     out_features: int,
@@ -55,11 +68,33 @@ def _make_sparse_matmul_program_config(
     per_core_M: int = 1,
 ):
     grid = device.compute_with_storage_grid_size()
-    core_x = int(getattr(grid, "x"))
-    core_y = int(getattr(grid, "y"))
+    max_x = int(getattr(grid, "x"))
+    max_y = int(getattr(grid, "y"))
     n_tiles = (int(out_features) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    num_cores = max(1, core_x * core_y)
+    num_cores = max(1, max_x * max_y)
     per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
+
+    actual_cores = int(math.ceil(n_tiles / per_core_N))
+
+    # The sparse matmul 1D mcast kernel requires a fully rectangular core grid
+    # (every core in the bounding box must have work).  When actual_cores does
+    # not tile the (max_x, max_y) grid rectangularly, bump per_core_N until a
+    # valid rectangle is found.
+    core_x, core_y = max_x, max_y
+    if actual_cores < num_cores:
+        gx, gy = _find_rectangular_grid(actual_cores, max_x, max_y)
+        if gx * gy == actual_cores:
+            core_x, core_y = gx, gy
+        else:
+            # Increase per_core_N until actual_cores forms a rectangle
+            for candidate_N in range(per_core_N + 1, n_tiles + 1):
+                candidate_cores = int(math.ceil(n_tiles / candidate_N))
+                gx, gy = _find_rectangular_grid(candidate_cores, max_x, max_y)
+                if gx * gy == candidate_cores:
+                    per_core_N = candidate_N
+                    core_x, core_y = gx, gy
+                    break
+
     out_block_w = per_core_N
     if out_subblock_w is None:
         out_subblock_w = min(per_core_N, 4)
@@ -1330,6 +1365,7 @@ class TTNNExperts(TTNNModule):
         return final_output
 
 
+@trace_enabled
 class TTNNMoE(TTNNModule):
     """
     Baseline MoE module for DeepSeek V3.
@@ -1348,6 +1384,7 @@ class TTNNMoE(TTNNModule):
         self.hidden_size = config.hidden_size
         self.num_experts_per_tok = config.num_experts_per_tok
         self.n_routed_experts = config.n_routed_experts
+        self._use_trace_sems = False
 
     @classmethod
     def from_torch(cls, torch_moe):
@@ -1402,36 +1439,71 @@ class TTNNMoE(TTNNModule):
             packer_l1_acc=True,
         )
 
+        self._num_devices = self.device.get_num_devices()
+        self._num_dispatch_devices = self.device.shape[0]
+        self._num_experts_per_device = even_int_div(self.config.n_routed_experts, self._num_devices)
+        self._n_rs = self.device.shape[1]
+        self._rs_scale = 1.0 / float(self._n_rs) if self._n_rs > 1 else 1.0
+
+        if self._num_devices > 1:
+            sub_device_crs = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(
+                            self.device.compute_with_storage_grid_size().x - 1,
+                            self.device.compute_with_storage_grid_size().y - 1,
+                        ),
+                    )
+                }
+            )
+            self._trace_ag_sem = [ttnn.create_global_semaphore(self.device, sub_device_crs, 0) for _ in range(2)]
+            self._trace_ag_barrier = ttnn.create_global_semaphore(self.device, sub_device_crs, 0)
+            self._trace_rs_sem = [ttnn.create_global_semaphore(self.device, sub_device_crs, 0) for _ in range(3)]
+            self._trace_rs_barrier = ttnn.create_global_semaphore(self.device, sub_device_crs, 0)
+
+    def should_trace(self, x, *args, **kwargs):
+        h = x
+        if isinstance(h, TorchTTNNTensor):
+            h = h.to_ttnn
+        seq_len = h.shape[-2] if hasattr(h, "shape") and len(h.shape) > 1 else 1
+        return seq_len == 1
+
     @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        self.num_devices = self.device.get_num_devices()
-        self.num_dispatch_devices = self.device.shape[0]
-        self.num_experts_per_device = even_int_div(self.config.n_routed_experts, self.num_devices)
         residual = x
+        seq_len = x.shape[-2] if len(x.shape) > 1 else 1
+        self._use_trace_sems = seq_len == 1
+
+        if self._use_trace_sems:
+            ag_sem = self._trace_ag_sem
+            ag_barrier = self._trace_ag_barrier
+            rs_sem = self._trace_rs_sem
+            rs_barrier = self._trace_rs_barrier
+        else:
+            ag_sem = self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1)
+            ag_barrier = self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1)
+            rs_sem = self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1)
+            rs_barrier = self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1)
 
         x = ttnn.experimental.all_gather_async(
             x,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            multi_device_global_semaphore=ag_sem,
+            barrier_semaphore=ag_barrier,
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
 
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x.dtype != ttnn.float32:
-            x_f32 = ttnn.typecast(x, ttnn.float32)
-        else:
-            x_f32 = x
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_f32 = ttnn.typecast(x, ttnn.float32)
         router_logits_f32 = ttnn.linear(
             x_f32,
             self._gate_weight_tt,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._gate_compute_cfg,
         )
-        if x_f32 is not x:
-            ttnn.deallocate(x_f32)
+        ttnn.deallocate(x_f32)
         router_logits = ttnn.typecast(router_logits_f32, ttnn.bfloat16)
         ttnn.deallocate(router_logits_f32)
 
@@ -1440,22 +1512,19 @@ class TTNNMoE(TTNNModule):
 
         topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts.forward(router_logits)
 
-        x = ttnn.unsqueeze(x, 1)  # Add experts dimension for compatibility with experts module
+        x = ttnn.unsqueeze(x, 1)
 
-        # 3. Experts handle dispatch → compute → combine → weight
         routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
 
-        # 4. Reduce-scatter final output.
-        n_rs = self.device.shape[1]  # devices along cluster_axis=1
         routed_out = routed_output.to_ttnn
-        if n_rs > 1:
-            routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
+        if self._n_rs > 1:
+            routed_out = ttnn.mul(routed_out, self._rs_scale)
         routed_output = ttnn.experimental.reduce_scatter_minimal_async(
             routed_out,
             persistent_output_buffers=None,
             dim=3,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            multi_device_global_semaphore=rs_sem,
+            barrier_semaphore=rs_barrier,
             num_links=1,
             cluster_axis=1,
             topology=ttnn.Topology.Ring,
@@ -1464,10 +1533,9 @@ class TTNNMoE(TTNNModule):
             num_buffers_per_channel=2,
         )
 
-        # 5. Add shared experts output
         shared_output = self.shared_experts(residual)
         output = ttnn.add(routed_output, shared_output.to_ttnn)
-        output = ttnn.squeeze(output, 1)  # Remove experts dimension
+        output = ttnn.squeeze(output, 1)
         return output
 
 

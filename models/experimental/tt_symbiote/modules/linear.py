@@ -123,6 +123,7 @@ class TTNNLinearInputShardedWeightSharded(TTNNLinear):
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
 
+@trace_disabled
 class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
     """TTNN-accelerated linear layer with input and weight sharded on last dimension."""
 
@@ -253,6 +254,7 @@ class TTNNLinearInputReplicatedWeightSharded(TTNNLinear):
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
 
+@trace_disabled
 class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
     """TTNN-accelerated linear layer with input and weight sharded on last dimension."""
 
@@ -299,7 +301,7 @@ class PytorchLinearActivation(nn.Module):
         return hidden_states
 
 
-@trace_enabled
+@trace_disabled
 class TTNNLinearActivation(TTNNModule):
     """Linear layer with activation using TTNN."""
 
