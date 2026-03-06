@@ -1005,7 +1005,6 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -1022,16 +1021,14 @@ void RiscFirmwareInitializer::initialize_firmware(
             launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
             prepare_initial_launch_msg();
 
-            // Write launch/go messages to DRAM core L1 (with NOC offset)
             uint64_t launch_addr =
-                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH) + dram_l1_noc_offset;
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH);
             uint64_t go_addr =
-                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG) + dram_l1_noc_offset;
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
             uint64_t launch_msg_rd_ptr_addr =
-                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR) +
-                dram_l1_noc_offset;
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
             uint64_t go_message_index_addr =
-                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX) + dram_l1_noc_offset;
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
             cluster_.write_core(
                 init_launch_msg_data.data(),
                 init_launch_msg_data.size(),
@@ -1158,7 +1155,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
     if (has_dram_fw) {
         log_debug(tt::LogMetal, "Initializing DRAM cores");
-        constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
         auto dram_dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
         auto dram_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DRAM);
         auto dram_launch_msg = dram_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
@@ -1170,7 +1166,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             dram_core_info.view().absolute_logical_x() = dram_noc.x;
             dram_core_info.view().absolute_logical_y() = dram_noc.y;
             uint64_t core_info_addr =
-                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO) + dram_l1_noc_offset;
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             cluster_.write_core(
                 dram_core_info.data(),
                 dram_core_info.size(),
