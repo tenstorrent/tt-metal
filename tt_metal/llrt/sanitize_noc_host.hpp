@@ -21,9 +21,12 @@ namespace tt {
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
-#define DRAM_L1_NOC_OFFSET 0x2000000000ULL
-#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                            \
-    ((((a) >= DRAM_L1_NOC_OFFSET) && ((a) + (l) <= DRAM_L1_NOC_OFFSET + HAL_MEM_DRAM_L1_SIZE)) || \
+#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                                              \
+    ((((a) >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                       \
+                  tt::tt_metal::HalProgrammableCoreType::DRAM)) &&                                                 \
+      ((a) + (l) <= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                \
+                         tt::tt_metal::HalProgrammableCoreType::DRAM) +                                            \
+                         HAL_MEM_DRAM_L1_SIZE)) ||                                                                 \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
@@ -79,7 +82,8 @@ static void watcher_sanitize_host_noc(
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        if (addr >= DRAM_L1_NOC_OFFSET) {
+        if (addr >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(
+                        tt::tt_metal::HalProgrammableCoreType::DRAM)) {
             if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
                 print_stack_trace();
                 TT_THROW("Host watcher: bad {} dram L1 address {}", what, noc_address(core, addr, lbytes));
