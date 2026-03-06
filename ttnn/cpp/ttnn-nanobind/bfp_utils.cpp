@@ -81,7 +81,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "pack_bfp2",
         [](const nb::ndarray<nb::numpy, const float, nb::ndim<1>>& input, bool row_major_input, bool is_exp_a) {
-            return pack_impl(pack_as_bfp2_tiles<float>, input, row_major_input, is_exp_a);
+            return pack_impl(tt::tt_metal::pack_as_bfp2_tiles<float>, input, row_major_input, is_exp_a);
         },
         nb::arg("input"),
         nb::arg("row_major_input") = false,
@@ -111,7 +111,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "unpack_bfp2",
         [](const nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>>& input, bool row_major_output, bool is_exp_a) {
-            return unpack_impl(unpack_bfp2_tiles_into_float_vec, input, row_major_output, is_exp_a);
+            return unpack_impl(tt::tt_metal::unpack_bfp2_tiles_into_float_vec, input, row_major_output, is_exp_a);
         },
         nb::arg("input"),
         nb::arg("row_major_output") = false,
