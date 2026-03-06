@@ -57,9 +57,8 @@ jobs:
   venvs:
     name: "🐍 Python venvs"
     if: |
-      fromJson(inputs.platform-data).dev_exists != true ||
-      fromJson(inputs.platform-data).basic_dev_exists != true ||
-      fromJson(inputs.platform-data).basic_ttnn_exists != true
+      fromJson(inputs.platform-data).ci_build_venv_exists != true ||
+      fromJson(inputs.platform-data).ci_test_venv_exists != true
     uses: ./.github/workflows/build-docker-python-venvs.yaml
     with:
       platform-data: ${{ inputs.platform-data }}

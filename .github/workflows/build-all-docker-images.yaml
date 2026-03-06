@@ -87,6 +87,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          sparse-checkout: .github
+          sparse-checkout-cone-mode: false
 
       - name: Check Harbor availability
         id: harbor
