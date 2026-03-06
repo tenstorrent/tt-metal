@@ -1,8 +1,9 @@
 name: "[internal] Build Docker tool images"
 
-# Reusable workflow that checks and builds tool images (ccache, mold, doxygen, etc.).
-# Called by build-docker-artifact.yaml. Tool images are pushed to GHCR.
+# Reusable workflow that builds missing tool images (ccache, mold, doxygen, etc.).
+# Tool images are pushed to GHCR.
 #
+# Expects tool-data JSON from preflight containing tool_tags, any_missing, and *_exists flags.
 # Uses manual docker buildx bake (dockerfile/docker-bake.hcl) to build missing tools.
 permissions:
   packages: write
@@ -13,85 +14,19 @@ env:
 on:
   workflow_call:
     inputs:
-      force-rebuild:
-        required: false
-        type: boolean
-        default: false
-        description: "Force rebuild of all tool images even if they exist in registry"
-      precomputed-tool-data:
-        required: false
+      tool-data:
+        required: true
         type: string
-        default: ""
-        description: |
-          JSON from preflight job (tool_tags, any_missing, *_exists). When set, skips tag computation.
+        description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
     outputs:
       tool-tags:
         description: "JSON object containing all tool image tags"
-        value: ${{ jobs.tags.outputs.tool-tags }}
+        value: ${{ fromJson(inputs.tool-data).tool_tags }}
 
 jobs:
-  # Compute content-addressed tags and check which images already exist, or use precomputed data
-  tags:
-    name: "📋 Compute tool tags"
-    runs-on: ubuntu-latest
-    outputs:
-      tool-tags: ${{ steps.data.outputs.tool-tags }}
-      any-missing: ${{ steps.data.outputs.any-missing }}
-      ccache-exists: ${{ steps.data.outputs.ccache-exists }}
-      mold-exists: ${{ steps.data.outputs.mold-exists }}
-      doxygen-exists: ${{ steps.data.outputs.doxygen-exists }}
-      cba-exists: ${{ steps.data.outputs.cba-exists }}
-      gdb-exists: ${{ steps.data.outputs.gdb-exists }}
-      cmake-exists: ${{ steps.data.outputs.cmake-exists }}
-      yq-exists: ${{ steps.data.outputs.yq-exists }}
-      sfpi-exists: ${{ steps.data.outputs.sfpi-exists }}
-      openmpi-exists: ${{ steps.data.outputs.openmpi-exists }}
-    steps:
-      - name: Checkout repo
-        if: inputs.precomputed-tool-data == ''
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Get tool data
-        id: data
-        env:
-          PRECOMPUTED: ${{ inputs.precomputed-tool-data }}
-          FORCE_REBUILD: ${{ inputs.force-rebuild }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "$PRECOMPUTED" ]; then
-            echo "Using precomputed tool data"
-            # Extract directly with jq (no checkout needed)
-            tool_tags=$(echo "$PRECOMPUTED" | jq -c '.tool_tags')
-            {
-              echo "tool-tags<<EOJSON"
-              echo "$tool_tags"
-              echo "EOJSON"
-            } >> "$GITHUB_OUTPUT"
-            echo "any-missing=$(echo "$PRECOMPUTED" | jq -r '.any_missing')" >> "$GITHUB_OUTPUT"
-            for tool in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
-              echo "${tool}-exists=$(echo "$PRECOMPUTED" | jq -r ".${tool}_exists")" >> "$GITHUB_OUTPUT"
-            done
-          else
-            echo "Computing tool data..."
-            ARGS="$REPO"
-            [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
-            DATA=$(.github/scripts/compute-tool-data.sh $ARGS)
-            # Extract outputs using script
-            .github/scripts/extract-outputs.sh "$DATA" \
-              tool-tags any-missing \
-              ccache-exists mold-exists doxygen-exists cba-exists \
-              gdb-exists cmake-exists yq-exists sfpi-exists openmpi-exists
-          fi
-
-  # Build any tool images that don't exist yet using manual docker bake
   build:
     name: "🔧 Build missing tools"
-    needs: tags
-    if: needs.tags.outputs.any-missing == 'true'
+    if: fromJson(inputs.tool-data).any_missing == true
     timeout-minutes: 60
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -110,15 +45,18 @@ jobs:
       - name: Prepare bake overrides
         id: bake
         env:
-          TOOL_TAGS: ${{ needs.tags.outputs.tool-tags }}
+          TOOL_DATA: ${{ inputs.tool-data }}
         run: |
           set -euo pipefail
+
+          TOOL_TAGS=$(echo "$TOOL_DATA" | jq -c '.tool_tags')
           TARGETS=""
           SET=""
 
           add_if_missing() {
             local name="$1"
-            local exists="$2"
+            local exists
+            exists=$(echo "$TOOL_DATA" | jq -r ".${name}_exists")
             if [ "$exists" != "true" ]; then
               local tag
               tag=$(echo "$TOOL_TAGS" | jq -r ".\"${name}-tag\"")
@@ -128,15 +66,15 @@ jobs:
             fi
           }
 
-          add_if_missing ccache "${{ needs.tags.outputs.ccache-exists }}"
-          add_if_missing mold "${{ needs.tags.outputs.mold-exists }}"
-          add_if_missing doxygen "${{ needs.tags.outputs.doxygen-exists }}"
-          add_if_missing cba "${{ needs.tags.outputs.cba-exists }}"
-          add_if_missing gdb "${{ needs.tags.outputs.gdb-exists }}"
-          add_if_missing cmake "${{ needs.tags.outputs.cmake-exists }}"
-          add_if_missing yq "${{ needs.tags.outputs.yq-exists }}"
-          add_if_missing sfpi "${{ needs.tags.outputs.sfpi-exists }}"
-          add_if_missing openmpi "${{ needs.tags.outputs.openmpi-exists }}"
+          add_if_missing ccache
+          add_if_missing mold
+          add_if_missing doxygen
+          add_if_missing cba
+          add_if_missing gdb
+          add_if_missing cmake
+          add_if_missing yq
+          add_if_missing sfpi
+          add_if_missing openmpi
 
           TARGETS="${TARGETS%,}"
 

@@ -1,8 +1,9 @@
 name: "[internal] Build Docker Python venv images"
 
-# Reusable workflow that checks and builds Python venv images (ci-build-venv, ci-test-venv).
-# Called by build-docker-artifact.yaml. Venv images are pushed to GHCR.
+# Reusable workflow that builds missing Python venv images (ci-build-venv, ci-test-venv).
+# Venv images are pushed to GHCR.
 #
+# Expects platform-data JSON from preflight containing venv tags, exists flags, and version.
 # Uses manual docker buildx bake (dockerfile/docker-bake.hcl) for builds.
 permissions:
   packages: write
@@ -13,118 +14,24 @@ env:
 on:
   workflow_call:
     inputs:
-      platform:
+      platform-data:
         required: true
         type: string
-        description: "Platform (e.g. Ubuntu 22.04) for venv base image"
-      force-rebuild:
-        required: false
-        type: boolean
-        default: false
-        description: "Force rebuild of all Python venv images even if they exist in registry"
-      precomputed-venv-data:
-        required: false
-        type: string
-        default: ""
-        description: |
-          JSON from preflight (ci_build_venv_tag, ci_test_venv_tag, ci_build_venv_exists, ci_test_venv_exists, version). When set, skips tag computation.
+        description: "JSON from preflight containing ci_build_venv_tag, ci_test_venv_tag, *_exists, version"
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
-        value: ${{ jobs.tags.outputs.ci-build-venv-tag }}
+        value: ${{ fromJson(inputs.platform-data).ci_build_venv_tag }}
       ci-test-venv-tag:
         description: "Docker tag for ci-test venv image"
-        value: ${{ jobs.tags.outputs.ci-test-venv-tag }}
-      ubuntu-version:
-        description: "Ubuntu version (e.g. 22.04) for build args"
-        value: ${{ jobs.tags.outputs.ubuntu-version }}
+        value: ${{ fromJson(inputs.platform-data).ci_test_venv_tag }}
 
 jobs:
-  # Compute content-addressed tags and check which venv images already exist, or use precomputed data
-  tags:
-    name: "📋 Compute venv tags"
-    runs-on: tt-ubuntu-2204-large-stable
-    outputs:
-      ci-build-venv-tag: ${{ steps.data.outputs.ci-build-venv-tag }}
-      ci-build-venv-exists: ${{ steps.data.outputs.ci-build-venv-exists }}
-      ci-test-venv-tag: ${{ steps.data.outputs.ci-test-venv-tag }}
-      ci-test-venv-exists: ${{ steps.data.outputs.ci-test-venv-exists }}
-      any-missing: ${{ steps.data.outputs.any-missing }}
-      ubuntu-version: ${{ steps.data.outputs.ubuntu-version }}
-    steps:
-      - name: Checkout repo
-        if: inputs.precomputed-venv-data == ''
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Parse platform
-        if: inputs.precomputed-venv-data == ''
-        id: platform
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-
-      - name: Get venv data
-        id: data
-        env:
-          PRECOMPUTED: ${{ inputs.precomputed-venv-data }}
-          FORCE_REBUILD: ${{ inputs.force-rebuild }}
-          REPO: ${{ github.repository }}
-          VERSION: ${{ steps.platform.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "$PRECOMPUTED" ]; then
-            echo "Using precomputed venv data"
-            # Extract directly with jq (no checkout needed)
-            ci_build_exists=$(echo "$PRECOMPUTED" | jq -r '.ci_build_venv_exists')
-            ci_test_exists=$(echo "$PRECOMPUTED" | jq -r '.ci_test_venv_exists')
-
-            if [ "$ci_build_exists" = "true" ] && [ "$ci_test_exists" = "true" ]; then
-              any_missing="false"
-            else
-              any_missing="true"
-            fi
-
-            echo "ci-build-venv-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
-            echo "ci-test-venv-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
-            echo "ci-build-venv-exists=$ci_build_exists" >> "$GITHUB_OUTPUT"
-            echo "ci-test-venv-exists=$ci_test_exists" >> "$GITHUB_OUTPUT"
-            echo "any-missing=$any_missing" >> "$GITHUB_OUTPUT"
-            echo "ubuntu-version=$(echo "$PRECOMPUTED" | jq -r '.version')" >> "$GITHUB_OUTPUT"
-          else
-            echo "Computing venv data..."
-            VERSION_NODOT="${VERSION//.}"
-            VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
-            BASE="ghcr.io/${REPO}/tt-metalium/python-venv"
-
-            CI_BUILD_VENV_TAG="${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}"
-            CI_TEST_VENV_TAG="${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}"
-
-            any_missing="false"
-            if [ "$FORCE_REBUILD" = "true" ]; then
-              ci_build_venv_exists="false"
-              ci_test_venv_exists="false"
-              any_missing="true"
-            else
-              docker manifest inspect "$CI_BUILD_VENV_TAG" > /dev/null 2>&1 && ci_build_venv_exists="true" || { ci_build_venv_exists="false"; any_missing="true"; }
-              docker manifest inspect "$CI_TEST_VENV_TAG" > /dev/null 2>&1 && ci_test_venv_exists="true" || { ci_test_venv_exists="false"; any_missing="true"; }
-            fi
-
-            echo "ci-build-venv-tag=$CI_BUILD_VENV_TAG" >> "$GITHUB_OUTPUT"
-            echo "ci-test-venv-tag=$CI_TEST_VENV_TAG" >> "$GITHUB_OUTPUT"
-            echo "ci-build-venv-exists=$ci_build_venv_exists" >> "$GITHUB_OUTPUT"
-            echo "ci-test-venv-exists=$ci_test_venv_exists" >> "$GITHUB_OUTPUT"
-            echo "any-missing=$any_missing" >> "$GITHUB_OUTPUT"
-            echo "ubuntu-version=$VERSION" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Build any venv images that don't exist yet using manual docker bake
   build:
     name: "🐍 Build missing venvs"
-    needs: tags
-    if: needs.tags.outputs.any-missing == 'true'
+    if: |
+      fromJson(inputs.platform-data).ci_build_venv_exists != true ||
+      fromJson(inputs.platform-data).ci_test_venv_exists != true
     timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
@@ -142,9 +49,16 @@ jobs:
 
       - name: Prepare bake overrides
         id: bake
+        env:
+          PLATFORM_DATA: ${{ inputs.platform-data }}
         run: |
           set -euo pipefail
-          UBUNTU_VERSION="${{ needs.tags.outputs.ubuntu-version }}"
+
+          CI_BUILD_VENV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_exists')
+          CI_TEST_VENV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_exists')
+          CI_BUILD_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')
+          CI_TEST_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')
+          UBUNTU_VERSION=$(echo "$PLATFORM_DATA" | jq -r '.version')
 
           if [ "$UBUNTU_VERSION" = "24.04" ]; then
             PYTHON_VERSION="3.12"
@@ -155,15 +69,15 @@ jobs:
           TARGETS=""
           SET=""
 
-          if [ "${{ needs.tags.outputs.ci-build-venv-exists }}" != "true" ]; then
+          if [ "$CI_BUILD_VENV_EXISTS" != "true" ]; then
             TARGETS+="ci-build-venv,"
-            SET+="ci-build-venv.tags=${{ needs.tags.outputs.ci-build-venv-tag }}"$'\n'
+            SET+="ci-build-venv.tags=${CI_BUILD_VENV_TAG}"$'\n'
             SET+="ci-build-venv.output=${BAKE_OUTPUT}"$'\n'
           fi
 
-          if [ "${{ needs.tags.outputs.ci-test-venv-exists }}" != "true" ]; then
+          if [ "$CI_TEST_VENV_EXISTS" != "true" ]; then
             TARGETS+="ci-test-venv,"
-            SET+="ci-test-venv.tags=${{ needs.tags.outputs.ci-test-venv-tag }}"$'\n'
+            SET+="ci-test-venv.tags=${CI_TEST_VENV_TAG}"$'\n'
             SET+="ci-test-venv.output=${BAKE_OUTPUT}"$'\n'
           fi
 

@@ -73,15 +73,15 @@ permissions:
 
 jobs:
   # Preflight: Harbor check + compute tool and platform data on a single runner
-  # This avoids spinning up multiple runners for precursor work
+  # Outputs raw JSON blobs that downstream workflows parse with fromJson()
   preflight:
     name: "Preflight (Harbor + tags)"
     runs-on: tt-ubuntu-2204-small-stable
     outputs:
       harbor-prefix: ${{ steps.harbor.outputs.harbor-prefix }}
       tool-data: ${{ steps.tool-data.outputs.data }}
-      ubuntu-2204-data: ${{ steps.platform-2204.outputs.data }}
-      ubuntu-2404-data: ${{ steps.platform-2404.outputs.data }}
+      platform-2204-data: ${{ steps.platform-2204.outputs.data }}
+      platform-2404-data: ${{ steps.platform-2404.outputs.data }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -154,14 +154,13 @@ jobs:
             echo "EOJSON"
           } >> "$GITHUB_OUTPUT"
 
-  # Tool images: use preflight tool-data
+  # Tool images
   build-tools:
     name: "Build tool images"
     needs: [preflight]
     uses: ./.github/workflows/build-docker-tools.yaml
     with:
-      force-rebuild: ${{ inputs.force-rebuild }}
-      precomputed-tool-data: ${{ needs.preflight.outputs.tool-data }}
+      tool-data: ${{ needs.preflight.outputs.tool-data }}
     secrets: inherit
 
   # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms
@@ -170,12 +169,9 @@ jobs:
     needs: [preflight, build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
-      platform: "Ubuntu 22.04"
-      architecture: "amd64"
       build-manylinux: true
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
-      force-rebuild: ${{ inputs.force-rebuild }}
-      precomputed-platform-data: ${{ needs.preflight.outputs.ubuntu-2204-data }}
+      platform-data: ${{ needs.preflight.outputs.platform-2204-data }}
     secrets: inherit
 
   # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here
@@ -184,12 +180,9 @@ jobs:
     needs: [preflight, build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
-      platform: "Ubuntu 24.04"
-      architecture: "amd64"
       build-manylinux: false
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
-      force-rebuild: ${{ inputs.force-rebuild }}
-      precomputed-platform-data: ${{ needs.preflight.outputs.ubuntu-2404-data }}
+      platform-data: ${{ needs.preflight.outputs.platform-2404-data }}
     secrets: inherit
 
   # Prewarm Harbor cache after all image-producing jobs complete
