@@ -260,6 +260,7 @@ def wait_for_tensix_operations_finished(
         TensixDump.try_process_request(tensix_dumps, core_loc)
 
         if completed == mailboxes:
+            set_tensix_soft_reset(1, location=core_loc)
             return tensix_dumps
 
         # Disable any waiting if running on simulator

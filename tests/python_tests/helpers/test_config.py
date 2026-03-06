@@ -1009,9 +1009,10 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        reset_mailboxes(location)
-
         set_tensix_soft_reset(1, location=location)
+        # unsafe, ordering is not guaranteed :(
+
+        reset_mailboxes(location)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
