@@ -15,7 +15,7 @@ import torch
 import ttnn
 from loguru import logger
 
-UPLOAD_CHUNK_QUERIES = 16
+UPLOAD_CHUNK_QUERIES = 64
 
 
 def compute_sampling_locations_and_attention_weights(
