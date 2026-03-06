@@ -5,6 +5,7 @@
 #include "groupnorm_sharded_program_factory.hpp"
 #include "groupnorm_program_utils.hpp"
 
+#include <bit>
 #include <string>
 #include <optional>
 
@@ -867,11 +868,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
     bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = eps;
+    uint32_t e_u = std::bit_cast<uint32_t>(eps);
 
     log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", num_rows_per_batch_per_core);
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
@@ -998,7 +995,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         std::vector<uint32_t> writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(packed_cinv_value);
         writer_mcast_sender_args.push_back(packed_winv_value);
-        writer_mcast_sender_args.push_back(e.u);
+        writer_mcast_sender_args.push_back(e_u);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
         writer_mcast_sender_args.push_back(input_mask_dram_addr);

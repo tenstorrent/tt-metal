@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <bit>
 #include <utility>
 
 namespace ttnn::prim {
@@ -282,11 +283,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     uint32_t out_addr = out0_buffer->address();
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } s{};
-    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
+    uint32_t s_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
     for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
@@ -324,7 +321,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                 core,
                 {src_addr,
                  block_size,
-                 s.u,
+                 s_u,
                  num_tile_rows_per_core,
                  tile_offset,
                  Wt,
@@ -343,7 +340,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                 core,
                 {src_addr,
                  block_size,
-                 s.u,
+                 s_u,
                  num_tile_rows_per_core,
                  tile_offset,
                  Wt,
@@ -504,11 +501,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     }
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } s{};
-    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
+    uint32_t s_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
 
     auto& cached_reader_args =
         GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernels_id);
@@ -552,7 +545,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
 
         reader_kernel_args[0] = src_buffer_address;
         reader_kernel_args[1] = block_size;
-        reader_kernel_args[2] = s.u;
+        reader_kernel_args[2] = s_u;
         reader_kernel_args[3] = num_tile_rows_per_core;
         reader_kernel_args[4] = tile_offset;
         reader_kernel_args[5] = Wt;

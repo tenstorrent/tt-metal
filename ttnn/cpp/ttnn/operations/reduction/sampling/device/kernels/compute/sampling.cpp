@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "api/compute/compute_kernel_api.h"
@@ -26,11 +27,9 @@ using namespace ckernel;
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
 
-    union f2u {
-        float f;
-        uint32_t u;
-    } rand_scale;
-    rand_scale.f = 1;
+    uint32_t rand_scale_u;
+    const float one_f = 1.0f;
+    std::memcpy(&rand_scale_u, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
     uint32_t rand_from = 0;
 
     if (seed != 0) {
@@ -39,7 +38,7 @@ void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     cb_reserve_back(cb_id, 1);
 
     tile_regs_acquire();
-    rand_tile(0, rand_from, rand_scale.u);
+    rand_tile(0, rand_from, rand_scale_u);
     tile_regs_commit();
 
     tile_regs_wait();
