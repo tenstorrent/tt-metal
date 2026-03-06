@@ -258,6 +258,7 @@ def test_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
+                    seed=42,
                 )
 
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
