@@ -170,13 +170,11 @@ void kernel_main() {
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
-        auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
         auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
         auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
         auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
 
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
@@ -212,13 +210,6 @@ void kernel_main() {
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
-
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-            page_size * 2);
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
@@ -289,9 +280,11 @@ void kernel_main() {
 
                                     // Gather phase: compute tile indices for every slot in this packet.
                                     // The reader always advances l1_write_addr regardless of validity,
-                                    // so CB slot i corresponds to iteration tile i. We track first_valid_l1
-                                    // to find the actual L1 address of the first valid tile.
+                                    // so CB slot i corresponds to iteration tile i. We track the exact
+                                    // L1 address of every valid tile to handle non-contiguous valid slots
+                                    // (e.g. when slice boundaries fall in the middle of a packet).
                                     uint32_t global_tile_idxs[num_tiles_to_write_per_packet];
+                                    uint32_t valid_l1_addrs[num_tiles_to_write_per_packet];
                                     uint32_t slice_tile_idx_first = 0;
                                     uint32_t num_in_bounds_tiles = 0;
                                     uint32_t first_valid_l1 = l1_read_addr;
@@ -317,8 +310,10 @@ void kernel_main() {
                                                     actual_slice_idx,
                                                     slice_Wt,
                                                     input_tensor_Wt);
+                                            valid_l1_addrs[num_in_bounds_tiles] =
+                                                l1_read_addr + packet_slot * page_size;
                                             if (num_in_bounds_tiles == 0) {
-                                                first_valid_l1 = l1_read_addr + packet_slot * page_size;
+                                                first_valid_l1 = valid_l1_addrs[0];
                                                 slice_tile_idx_first = slice_coordinates_to_slice_tile_index(
                                                     slice_row, slice_col - cols_before_actual_slice, slice_Wt);
                                             }
@@ -336,37 +331,21 @@ void kernel_main() {
 
                                     // Dispatch phase. All CB slots are consumed regardless of bounds,
                                     // so l1_read_addr always advances by tiles_to_put_in_current_packet.
+                                    // Valid tiles may be at non-contiguous CB slot positions (e.g. when
+                                    // a slice boundary splits the packet), so we use per-tile L1 addresses
+                                    // from valid_l1_addrs rather than a contiguous scatter from l1_read_addr.
                                     if (i < (ring_size - 1)) {
-                                        // Send tile(s) to the intermediate buffer on the neighboring device.
-                                        switch (num_in_bounds_tiles) {
-                                            case 2: {
-                                                const auto noc_address0 =
-                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                        intermediate_addrgen, global_tile_idxs[0], 0);
-                                                const auto noc_address1 =
-                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                        intermediate_addrgen, global_tile_idxs[1], 0);
-                                                fabric_unicast_noc_scatter_write_with_state<
-                                                    UnicastScatterWriteUpdateMask::DstAddrs>(
-                                                    &mux_connection_handle,
-                                                    pkt_scatter_hdr,
-                                                    l1_read_addr,
-                                                    NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
-                                                break;
-                                            }
-                                            case 1: {
-                                                const auto noc_address0 =
-                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                        intermediate_addrgen, global_tile_idxs[0], 0);
-                                                fabric_unicast_noc_unicast_write_with_state<
-                                                    UnicastWriteUpdateMask::DstAddr>(
-                                                    &mux_connection_handle,
-                                                    pkt_unicast_hdr,
-                                                    first_valid_l1,
-                                                    NocUnicastCommandHeader{noc_address0});
-                                                break;
-                                            }
-                                            default: break;  // all ghost tiles, nothing to send
+                                        // Send each in-bounds tile individually to the intermediate buffer.
+                                        for (uint32_t v = 0; v < num_in_bounds_tiles; v++) {
+                                            const auto noc_address =
+                                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                    intermediate_addrgen, global_tile_idxs[v], 0);
+                                            fabric_unicast_noc_unicast_write_with_state<
+                                                UnicastWriteUpdateMask::DstAddr>(
+                                                &mux_connection_handle,
+                                                pkt_unicast_hdr,
+                                                valid_l1_addrs[v],
+                                                NocUnicastCommandHeader{noc_address});
                                         }
                                         noc_async_writes_flushed();
                                     } else {
