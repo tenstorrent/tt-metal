@@ -39,7 +39,7 @@ void bind_convert_to_hwc(nb::module_& mod) {
 
     )doc";
 
-    ttnn::bind_function<"convert_to_hwc">(
+    ttnn::bind_function<"convert_to_hwc", "ttnn.experimental.">(
         mod,
         doc,
         &ttnn::experimental::convert_to_hwc,
