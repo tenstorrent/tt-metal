@@ -125,15 +125,15 @@ def get_batch_generator(
     while True:
         for X_np, y_np, loss_scaler_np in dataloader:
             X = ttml.autograd.Tensor.from_numpy(
-                X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+                X_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
             )
             y = ttml.autograd.Tensor.from_numpy(
-                y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+                y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
             )
             loss_scaler = ttml.autograd.Tensor.from_numpy(
                 loss_scaler_np,
-                ttml.Layout.TILE,
-                ttml.autograd.DataType.BFLOAT16,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
                 mapper,
             )
 
@@ -204,8 +204,8 @@ def generate_text_tt(
             # [1,1,1,T] -> TT tensor
             padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
                 padded_prompt_tokens,
-                ttml.Layout.ROW_MAJOR,
-                ttml.autograd.DataType.UINT32,
+                ttnn.Layout.ROW_MAJOR,
+                ttnn.DataType.UINT32,
             )
 
             # Forward: logits [1,1,T,V]
@@ -398,14 +398,16 @@ def train():
 
     # initialize device
     device_config = DeviceConfig(yaml_config)
+
+    # no need to initialize device if #devices=1
+    if device_config.total_devices() > 1:
+        initialize_device(yaml_config)
+
     ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
         ttml.autograd.DistributedConfig(
             enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp
         )
     )
-    # no need to initialize device if #devices=1
-    if device_config.total_devices() > 1:
-        initialize_device(yaml_config)
 
     # Download safetensors
     print("Downloading safetensors...")
@@ -472,7 +474,7 @@ def train():
     causal_mask = build_causal_mask(max_sequence_length)
 
     causal_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16
+        causal_mask, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
     )
 
     logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
