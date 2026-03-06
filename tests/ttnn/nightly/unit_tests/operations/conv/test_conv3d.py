@@ -205,6 +205,9 @@ def test_conv3d_sweep_blocks(
             # Only prepare if changing C_in_block
             w = conv3d_module.weight.data
             tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+            tt_weight = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=tt_weight, groups=groups, C_in_block=C_in_block, alignment=32, device=device
+            )
             tt_bias = ttnn.from_torch(
                 conv3d_module.bias.data.reshape(1, -1),
                 device=device,
@@ -340,16 +343,6 @@ def test_conv3d_mochi_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    w = conv3d_module.weight.data
-    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
-    tt_bias = ttnn.from_torch(
-        conv3d_module.bias.data.reshape(1, -1),
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        pad_value=0,
-    )
-
     config = create_conv3d_config(
         T_out_block=T_out_block,
         H_out_block=H_out_block,
@@ -357,6 +350,18 @@ def test_conv3d_mochi_shapes(
         C_out_block=C_out_block,
         C_in_block=C_in_block,
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=groups, C_in_block=C_in_block, alignment=32, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
     )
 
     tt_output = ttnn.experimental.conv3d(
