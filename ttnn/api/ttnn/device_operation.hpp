@@ -190,7 +190,7 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    bool program_cache_hit = false) {
+    [[maybe_unused]] bool program_cache_hit = false) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
