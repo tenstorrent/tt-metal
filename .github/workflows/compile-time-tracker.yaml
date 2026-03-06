@@ -89,7 +89,7 @@ jobs:
 
       - name: 🔑 Verify metrics repo PAT
         run: |
-          if [ -z "${{ secrets.WILDER_PAT }}" ]; then
+          if [ -z "${{ secrets.CLANGSA_RESULTS_PAT }}" ]; then
             echo "::error::WILDER_PAT secret is not set. Add a PAT with repo scope for tenstorrent/tt-metal-compile-time-tracker."
             exit 1
           fi
@@ -98,7 +98,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-metal-compile-time-tracker
-          token: ${{ secrets.WILDER_PAT }}
+          token: ${{ secrets.CLANGSA_RESULTS_PAT }}
           ref: gh-pages
           path: metrics-repo
 
