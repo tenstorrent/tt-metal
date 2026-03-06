@@ -155,7 +155,7 @@ class TopKRouter:
             router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
         )
         ttnn.deallocate(router_logits)
-        return expert_indices, expert_weights, None
+        return expert_indices, expert_weights
 
     def _fused_call(self, hidden_states, use_throughput_experts):
         """Forward pass using fused matmul+topk+softmax kernel."""
@@ -191,7 +191,7 @@ class TopKRouter:
             # Just slice to the actual k columns.
             expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
             expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
-            return expert_indices, expert_weights, None
+            return expert_indices, expert_weights
         else:
             # Unpack: tile 0 (cols 0..k-1) = softmax weights, tile 1 (cols 32..32+k-1) = indices
             expert_weights = ttnn.slice(result, [0, 0], [B, self.top_k])
@@ -203,4 +203,4 @@ class TopKRouter:
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
             )
-            return expert_indices, ttnn.scatter(zeros, dim=1, index=expert_indices, src=expert_weights), None
+            return expert_indices, ttnn.scatter(zeros, dim=1, index=expert_indices, src=expert_weights)
