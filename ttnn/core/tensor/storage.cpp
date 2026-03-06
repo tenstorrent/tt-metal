@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <unordered_set>
 #include <vector>
 
@@ -24,6 +25,13 @@ const DistributedHostBuffer& HostStorage::buffer() const { return distributed_bu
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     return HostStorage(
         distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
+}
+
+DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
+    mesh_buffer(std::move(mesh_buffer_)) {
+    auto* device = this->get_device();
+    distributed::MeshCoordinateRange coord_range(device->shape());
+    std::copy(coord_range.begin(), coord_range.end(), std::back_inserter(coords));
 }
 
 DeviceStorage::DeviceStorage(
@@ -85,11 +93,6 @@ bool DeviceStorage::is_uniform_storage() const {
     return coords.size() == mesh_buffer->device()->num_devices();
 }
 
-DeviceStorage DeviceStorage::reduce_to_single_device_storage(const distributed::MeshCoordinate& coord) const {
-    TT_FATAL(std::ranges::find(coords, coord) != coords.end(), "Tensor is not allocated at coordinate {}", coord);
-    return DeviceStorage(mesh_buffer, {coord});
-}
-
 namespace {
 namespace CMAKE_UNQIUE_NAMESPACE {
 // Returns true if all the coordinates are unique.
@@ -124,17 +127,13 @@ DeviceStorage DeviceStorage::combine_to_multi_device_storage(
 
     // Validations:
 
-    // No duplicated coordinates, infered from behavior in distribtued API.
+    // No duplicated coordinates
     TT_FATAL(
         CMAKE_UNQIUE_NAMESPACE::all_unique_coords(coords), "There are duplicate coordinates in the given storages.");
 
-    // TODO(River): Is a valid coordinate against the mesh buffer.
-
-    return DeviceStorage(prototype, std::move(coords));
-}
-
-DeviceStorage DeviceStorage::with_coords(std::vector<distributed::MeshCoordinate> new_coords) const {
-    return DeviceStorage(mesh_buffer, std::move(new_coords));
+    DeviceStorage result(prototype);
+    result.coords = std::move(coords);
+    return result;
 }
 
 }  // namespace tt::tt_metal

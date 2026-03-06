@@ -81,16 +81,8 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
 
-    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
-    coords.reserve(parent_mesh->shape().mesh_size());
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(parent_mesh->shape())) {
-        coords.push_back(coord);
-    }
-
-    tt::tt_metal::DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
-
     return Tensor(
-        std::move(device_storage),
+        tt::tt_metal::DeviceStorage(std::move(mesh_buffer)),
         reference_spec,
         tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
             tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0));
@@ -132,12 +124,7 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
             "Cannot disaggregate tensor when submesh has non-default sub-device manager");
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
-
-        DeviceStorage device_storage(
-            std::move(mesh_buffer),
-            std::vector<tt::tt_metal::distributed::MeshCoordinate>{tt::tt_metal::distributed::MeshCoordinate(0, 0)});
-
-        result.push_back(Tensor(std::move(device_storage), reference_spec, TensorTopology{}));
+        result.push_back(Tensor(DeviceStorage(std::move(mesh_buffer)), reference_spec, TensorTopology{}));
     }
 
     return result;
