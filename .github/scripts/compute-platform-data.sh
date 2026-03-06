@@ -125,6 +125,7 @@ CI_BUILD_EXISTS="$DEV_EXISTS"
 CI_TEST_EXISTS="$DEV_EXISTS"
 
 # Output JSON
+# Use --argjson for boolean fields to output proper JSON booleans (true/false) not strings
 jq -cn \
     --arg distro "$DISTRO" \
     --arg version "$VERSION" \
@@ -137,14 +138,14 @@ jq -cn \
     --arg manylinux_tag "$MANYLINUX_TAG" \
     --arg ci_build_venv_tag "$CI_BUILD_VENV_TAG" \
     --arg ci_test_venv_tag "$CI_TEST_VENV_TAG" \
-    --arg ci_build_exists "$CI_BUILD_EXISTS" \
-    --arg ci_test_exists "$CI_TEST_EXISTS" \
-    --arg dev_exists "$DEV_EXISTS" \
-    --arg basic_dev_exists "$BASIC_DEV_EXISTS" \
-    --arg basic_ttnn_exists "$BASIC_TTNN_EXISTS" \
-    --arg manylinux_exists "$MANYLINUX_EXISTS" \
-    --arg ci_build_venv_exists "$CI_BUILD_VENV_EXISTS" \
-    --arg ci_test_venv_exists "$CI_TEST_VENV_EXISTS" \
+    --argjson ci_build_exists "$CI_BUILD_EXISTS" \
+    --argjson ci_test_exists "$CI_TEST_EXISTS" \
+    --argjson dev_exists "$DEV_EXISTS" \
+    --argjson basic_dev_exists "$BASIC_DEV_EXISTS" \
+    --argjson basic_ttnn_exists "$BASIC_TTNN_EXISTS" \
+    --argjson manylinux_exists "$MANYLINUX_EXISTS" \
+    --argjson ci_build_venv_exists "$CI_BUILD_VENV_EXISTS" \
+    --argjson ci_test_venv_exists "$CI_TEST_VENV_EXISTS" \
     '{
         distro: $distro,
         version: $version,
