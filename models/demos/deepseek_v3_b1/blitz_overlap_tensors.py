@@ -61,8 +61,9 @@ class OverlappedShardSpec:
     def _tile_bytes(self) -> int:
         num_elements = self.tile_h * self.tile_w
         if self.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-            num_blocks = num_elements // 16
-            exponent_bytes = (num_blocks + 3) // 4 * 4
+            _L1_ALIGNMENT = 16
+            num_exponents = num_elements // 16
+            exponent_bytes = (num_exponents + _L1_ALIGNMENT - 1) // _L1_ALIGNMENT * _L1_ALIGNMENT
             mantissa_bytes = num_elements if self.dtype == ttnn.bfloat8_b else num_elements // 2
             return exponent_bytes + mantissa_bytes
         return num_elements * _DTYPE_ELEMENT_BYTES[self.dtype]

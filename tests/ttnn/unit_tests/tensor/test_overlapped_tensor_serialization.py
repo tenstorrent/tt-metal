@@ -93,7 +93,7 @@ def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device, dtype):
     t_bf16 = torch.randn(128, 128, dtype=torch.bfloat16)
 
     spec_primary = OverlappedShardSpec(core_range_set=crs_a, raw_tensor_shape=(512, 512), dtype=dtype)
-    spec_bf16 = OverlappedShardSpec(core_range_set=crs_b, raw_tensor_shape=(128, 128), dtype=ttnn.bfloat16)
+    spec_bf16 = OverlappedShardSpec(core_range_set=crs_b, raw_tensor_shape=(128, 128), dtype=dtype)
 
     views = overlap_tensors(
         [[("primary", t_primary, spec_primary)], [("bf16", t_bf16, spec_bf16)]],
@@ -184,7 +184,7 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device, dtype):
     spec_gamma = OverlappedShardSpec(
         core_range_set=crs_gamma,
         raw_tensor_shape=(1, 32),
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         tile_h=1,
         tile_w=32,
     )
