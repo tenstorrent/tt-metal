@@ -74,7 +74,6 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
         return v.name.find("tensor") != std::string::npos && v.in_edges.empty();
     });
     ASSERT_NE(tensor_it, levelized_graph.vertices().end());
-    auto vertex_0 = *tensor_it;
 
     auto binary_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
         return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
@@ -86,7 +85,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     // nodes.  Both in_edges of the binary op must reference tensor vertices.
     EXPECT_EQ(vertex_1.in_edges.size(), 2);
     for (auto edge_id : vertex_1.in_edges) {
-        auto edge_vertex = levelized_graph.get_vertex(edge_id);
+        const auto& edge_vertex = levelized_graph.get_vertex(edge_id);
         EXPECT_TRUE(edge_vertex.name.find("tensor") != std::string::npos);
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
@@ -108,7 +107,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
 
     EXPECT_EQ(vertex_1.in_edges.size(), 2);
     for (auto edge_id : vertex_1.in_edges) {
-        auto edge_vertex = levelized_graph_2.get_vertex(edge_id);
+        const auto& edge_vertex = levelized_graph_2.get_vertex(edge_id);
         EXPECT_TRUE(edge_vertex.name.find("tensor") != std::string::npos);
     }
 }
@@ -418,7 +417,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     // Tensor dedup removed: multiply(a,a) creates two separate tensor vertices.
     EXPECT_EQ(vertex_1.in_edges.size(), 2);
     for (auto edge_id : vertex_1.in_edges) {
-        auto& edge_v = levelized_graph.get_vertex(edge_id);
+        const auto& edge_v = levelized_graph.get_vertex(edge_id);
         EXPECT_TRUE(edge_v.name.find("tensor") != std::string::npos);
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
@@ -466,7 +465,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
 
     EXPECT_EQ(vertex_1.in_edges.size(), 2);
     for (auto edge_id : vertex_1.in_edges) {
-        auto& edge_v = levelized_graph_2.get_vertex(edge_id);
+        const auto& edge_v = levelized_graph_2.get_vertex(edge_id);
         EXPECT_TRUE(edge_v.name.find("tensor") != std::string::npos);
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
@@ -539,7 +538,7 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
 
     EXPECT_EQ(vertex_1.in_edges.size(), 2);
     for (auto edge_id : vertex_1.in_edges) {
-        auto edge_vertex = levelized_graph.get_vertex(edge_id);
+        const auto& edge_vertex = levelized_graph.get_vertex(edge_id);
         EXPECT_TRUE(edge_vertex.name.find("tensor") != std::string::npos);
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
@@ -547,7 +546,7 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
     if (vertex_2.id != vertex_1.id) {
         EXPECT_EQ(vertex_2.in_edges.size(), 2);
         for (auto edge_id : vertex_2.in_edges) {
-            auto edge_vertex = levelized_graph.get_vertex(edge_id);
+            const auto& edge_vertex = levelized_graph.get_vertex(edge_id);
             EXPECT_TRUE(edge_vertex.name.find("tensor") != std::string::npos);
         }
         EXPECT_TRUE(vertex_2.out_edges.empty());
@@ -712,8 +711,8 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
 
     // First subtract(a, b) should have 2 tensor inputs
     EXPECT_EQ(subtract_ab.in_edges.size(), 2);
-    auto sub_ab_in0 = levelized_graph.get_vertex(subtract_ab.in_edges[0]);
-    auto sub_ab_in1 = levelized_graph.get_vertex(subtract_ab.in_edges[1]);
+    const auto& sub_ab_in0 = levelized_graph.get_vertex(subtract_ab.in_edges[0]);
+    const auto& sub_ab_in1 = levelized_graph.get_vertex(subtract_ab.in_edges[1]);
     EXPECT_TRUE(sub_ab_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(sub_ab_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(sub_ab_in0.name, sub_ab_in1.name);
@@ -721,8 +720,8 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
 
     // Second subtract(b, a) should have 2 tensor inputs with reversed order
     EXPECT_EQ(subtract_ba.in_edges.size(), 2);
-    auto sub_ba_in0 = levelized_graph.get_vertex(subtract_ba.in_edges[0]);
-    auto sub_ba_in1 = levelized_graph.get_vertex(subtract_ba.in_edges[1]);
+    const auto& sub_ba_in0 = levelized_graph.get_vertex(subtract_ba.in_edges[0]);
+    const auto& sub_ba_in1 = levelized_graph.get_vertex(subtract_ba.in_edges[1]);
     EXPECT_TRUE(sub_ba_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(sub_ba_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(sub_ba_in0.name, sub_ba_in1.name);
@@ -795,15 +794,15 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
 
     // Verify add operations have tensor inputs representing the same underlying tensor
     EXPECT_EQ(add_aa.in_edges.size(), 2);
-    auto add_aa_in0 = levelized_graph.get_vertex(add_aa.in_edges[0]);
-    auto add_aa_in1 = levelized_graph.get_vertex(add_aa.in_edges[1]);
+    const auto& add_aa_in0 = levelized_graph.get_vertex(add_aa.in_edges[0]);
+    const auto& add_aa_in1 = levelized_graph.get_vertex(add_aa.in_edges[1]);
     EXPECT_TRUE(add_aa_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(add_aa_in1.name.find("tensor") != std::string::npos);
     EXPECT_EQ(add_aa_in0.name, add_aa_in1.name);
 
     EXPECT_EQ(add_bb.in_edges.size(), 2);
-    auto add_bb_in0 = levelized_graph.get_vertex(add_bb.in_edges[0]);
-    auto add_bb_in1 = levelized_graph.get_vertex(add_bb.in_edges[1]);
+    const auto& add_bb_in0 = levelized_graph.get_vertex(add_bb.in_edges[0]);
+    const auto& add_bb_in1 = levelized_graph.get_vertex(add_bb.in_edges[1]);
     EXPECT_TRUE(add_bb_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(add_bb_in1.name.find("tensor") != std::string::npos);
     EXPECT_EQ(add_bb_in0.name, add_bb_in1.name);
@@ -816,10 +815,10 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
     EXPECT_EQ(subtract_21.in_edges.size(), 2);
 
     // Verify the subtract operations have reversed argument order by comparing input names
-    auto s12_in0 = levelized_graph.get_vertex(subtract_12.in_edges[0]);
-    auto s12_in1 = levelized_graph.get_vertex(subtract_12.in_edges[1]);
-    auto s21_in0 = levelized_graph.get_vertex(subtract_21.in_edges[0]);
-    auto s21_in1 = levelized_graph.get_vertex(subtract_21.in_edges[1]);
+    const auto& s12_in0 = levelized_graph.get_vertex(subtract_12.in_edges[0]);
+    const auto& s12_in1 = levelized_graph.get_vertex(subtract_12.in_edges[1]);
+    const auto& s21_in0 = levelized_graph.get_vertex(subtract_21.in_edges[0]);
+    const auto& s21_in1 = levelized_graph.get_vertex(subtract_21.in_edges[1]);
 
     EXPECT_NE(s12_in0.name, s12_in1.name);
     EXPECT_NE(s21_in0.name, s21_in1.name);
@@ -893,7 +892,7 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
     // add(a, a) should have 2 tensor inputs (dedup removed, so different vertex IDs)
     EXPECT_EQ(add_aa.in_edges.size(), 2);
     for (auto edge_id : add_aa.in_edges) {
-        auto edge_v = levelized_graph.get_vertex(edge_id);
+        const auto& edge_v = levelized_graph.get_vertex(edge_id);
         EXPECT_TRUE(edge_v.name.find("tensor") != std::string::npos);
     }
     EXPECT_TRUE(add_aa.out_edges.empty());
@@ -976,9 +975,9 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
 
     // First addcmul(a, b, c) should have 3 tensor inputs
     EXPECT_EQ(addcmul_abc.in_edges.size(), 3);
-    auto abc_in0 = levelized_graph.get_vertex(addcmul_abc.in_edges[0]);
-    auto abc_in1 = levelized_graph.get_vertex(addcmul_abc.in_edges[1]);
-    auto abc_in2 = levelized_graph.get_vertex(addcmul_abc.in_edges[2]);
+    const auto& abc_in0 = levelized_graph.get_vertex(addcmul_abc.in_edges[0]);
+    const auto& abc_in1 = levelized_graph.get_vertex(addcmul_abc.in_edges[1]);
+    const auto& abc_in2 = levelized_graph.get_vertex(addcmul_abc.in_edges[2]);
     EXPECT_TRUE(abc_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(abc_in1.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(abc_in2.name.find("tensor") != std::string::npos);
@@ -986,9 +985,9 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
 
     // Second addcmul(c, b, a) should have 3 tensor inputs with reversed a,c order
     EXPECT_EQ(addcmul_cba.in_edges.size(), 3);
-    auto cba_in0 = levelized_graph.get_vertex(addcmul_cba.in_edges[0]);
-    auto cba_in1 = levelized_graph.get_vertex(addcmul_cba.in_edges[1]);
-    auto cba_in2 = levelized_graph.get_vertex(addcmul_cba.in_edges[2]);
+    const auto& cba_in0 = levelized_graph.get_vertex(addcmul_cba.in_edges[0]);
+    const auto& cba_in1 = levelized_graph.get_vertex(addcmul_cba.in_edges[1]);
+    const auto& cba_in2 = levelized_graph.get_vertex(addcmul_cba.in_edges[2]);
     EXPECT_TRUE(cba_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(cba_in1.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(cba_in2.name.find("tensor") != std::string::npos);
@@ -1073,9 +1072,9 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
 
     // First addcmul(a, b, a) should have 3 tensor inputs
     EXPECT_EQ(addcmul_aba.in_edges.size(), 3);
-    auto aba_in0 = levelized_graph.get_vertex(addcmul_aba.in_edges[0]);
-    auto aba_in1 = levelized_graph.get_vertex(addcmul_aba.in_edges[1]);
-    auto aba_in2 = levelized_graph.get_vertex(addcmul_aba.in_edges[2]);
+    const auto& aba_in0 = levelized_graph.get_vertex(addcmul_aba.in_edges[0]);
+    const auto& aba_in1 = levelized_graph.get_vertex(addcmul_aba.in_edges[1]);
+    const auto& aba_in2 = levelized_graph.get_vertex(addcmul_aba.in_edges[2]);
     EXPECT_TRUE(aba_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(aba_in1.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(aba_in2.name.find("tensor") != std::string::npos);
@@ -1085,9 +1084,9 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
 
     // Second addcmul(b, a, a) should have 3 tensor inputs
     EXPECT_EQ(addcmul_baa.in_edges.size(), 3);
-    auto baa_in0 = levelized_graph.get_vertex(addcmul_baa.in_edges[0]);
-    auto baa_in1 = levelized_graph.get_vertex(addcmul_baa.in_edges[1]);
-    auto baa_in2 = levelized_graph.get_vertex(addcmul_baa.in_edges[2]);
+    const auto& baa_in0 = levelized_graph.get_vertex(addcmul_baa.in_edges[0]);
+    const auto& baa_in1 = levelized_graph.get_vertex(addcmul_baa.in_edges[1]);
+    const auto& baa_in2 = levelized_graph.get_vertex(addcmul_baa.in_edges[2]);
     EXPECT_TRUE(baa_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(baa_in1.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(baa_in2.name.find("tensor") != std::string::npos);
@@ -1198,8 +1197,8 @@ for (auto t : tensor_vertices) {
 
     // First matmul(a, b) should have 2 different tensor inputs
     EXPECT_EQ(matmul_ab.in_edges.size(), 2);
-    auto mab_in0 = levelized_graph.get_vertex(matmul_ab.in_edges[0]);
-    auto mab_in1 = levelized_graph.get_vertex(matmul_ab.in_edges[1]);
+    const auto& mab_in0 = levelized_graph.get_vertex(matmul_ab.in_edges[0]);
+    const auto& mab_in1 = levelized_graph.get_vertex(matmul_ab.in_edges[1]);
     EXPECT_TRUE(mab_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(mab_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(mab_in0.name, mab_in1.name);
@@ -1207,8 +1206,8 @@ for (auto t : tensor_vertices) {
 
     // Second matmul(b, a) should have 2 different tensor inputs with reversed order
     EXPECT_EQ(matmul_ba.in_edges.size(), 2);
-    auto mba_in0 = levelized_graph.get_vertex(matmul_ba.in_edges[0]);
-    auto mba_in1 = levelized_graph.get_vertex(matmul_ba.in_edges[1]);
+    const auto& mba_in0 = levelized_graph.get_vertex(matmul_ba.in_edges[0]);
+    const auto& mba_in1 = levelized_graph.get_vertex(matmul_ba.in_edges[1]);
     EXPECT_TRUE(mba_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(mba_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(mba_in0.name, mba_in1.name);
@@ -1216,8 +1215,8 @@ for (auto t : tensor_vertices) {
 
     // Third matmul(a, a) should have 2 tensor inputs with same underlying tensor
     EXPECT_EQ(matmul_aa.in_edges.size(), 2);
-    auto maa_in0 = levelized_graph.get_vertex(matmul_aa.in_edges[0]);
-    auto maa_in1 = levelized_graph.get_vertex(matmul_aa.in_edges[1]);
+    const auto& maa_in0 = levelized_graph.get_vertex(matmul_aa.in_edges[0]);
+    const auto& maa_in1 = levelized_graph.get_vertex(matmul_aa.in_edges[1]);
     EXPECT_TRUE(maa_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(maa_in1.name.find("tensor") != std::string::npos);
     EXPECT_EQ(maa_in0.name, maa_in1.name);
@@ -1404,20 +1403,17 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
     // Multiply should have 2 tensor inputs (b and c)
     // Motivated by this issue: https://github.com/tenstorrent/tt-mlir/issues/5929
     EXPECT_EQ(v_multiply.in_edges.size(), 2);
-    auto mul_in0 = levelized_graph.get_vertex(v_multiply.in_edges[0]);
-    auto mul_in1 = levelized_graph.get_vertex(v_multiply.in_edges[1]);
+    const auto& mul_in0 = levelized_graph.get_vertex(v_multiply.in_edges[0]);
+    const auto& mul_in1 = levelized_graph.get_vertex(v_multiply.in_edges[1]);
     EXPECT_TRUE(mul_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(mul_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(mul_in0.name, mul_in1.name);
 
     // Add should have 2 inputs: one tensor (a) and one related to multiply's output
     EXPECT_EQ(v_add.in_edges.size(), 2);
-    auto add_in0 = levelized_graph.get_vertex(v_add.in_edges[0]);
-    auto add_in1 = levelized_graph.get_vertex(v_add.in_edges[1]);
-    // Both inputs should exist; at least one should be a tensor different from multiply's inputs
     bool found_tensor_a = false;
     for (auto edge_id : v_add.in_edges) {
-        auto& edge_v = levelized_graph.get_vertex(edge_id);
+        const auto& edge_v = levelized_graph.get_vertex(edge_id);
         if (edge_v.name.find("tensor") != std::string::npos && edge_v.name != mul_in0.name &&
             edge_v.name != mul_in1.name) {
             found_tensor_a = true;
@@ -1518,8 +1514,8 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
 
     // Multiply should have 2 tensor inputs (b and c)
     EXPECT_EQ(v_multiply.in_edges.size(), 2);
-    auto mul_in0 = levelized_graph.get_vertex(v_multiply.in_edges[0]);
-    auto mul_in1 = levelized_graph.get_vertex(v_multiply.in_edges[1]);
+    const auto& mul_in0 = levelized_graph.get_vertex(v_multiply.in_edges[0]);
+    const auto& mul_in1 = levelized_graph.get_vertex(v_multiply.in_edges[1]);
     EXPECT_TRUE(mul_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(mul_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(mul_in0.name, mul_in1.name);
@@ -1528,7 +1524,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
     EXPECT_EQ(v_add.in_edges.size(), 2);
     bool found_tensor_a = false;
     for (auto edge_id : v_add.in_edges) {
-        auto& edge_v = levelized_graph.get_vertex(edge_id);
+        const auto& edge_v = levelized_graph.get_vertex(edge_id);
         if (edge_v.name.find("tensor") != std::string::npos && edge_v.name != mul_in0.name &&
             edge_v.name != mul_in1.name) {
             found_tensor_a = true;
@@ -1611,14 +1607,14 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
     EXPECT_EQ(subtract_2.in_edges.size(), 2);
 
     // Verify inputs are tensor vertices and check argument order by name
-    auto s1_in0 = levelized_graph.get_vertex(subtract_1.in_edges[0]);
-    auto s1_in1 = levelized_graph.get_vertex(subtract_1.in_edges[1]);
+    const auto& s1_in0 = levelized_graph.get_vertex(subtract_1.in_edges[0]);
+    const auto& s1_in1 = levelized_graph.get_vertex(subtract_1.in_edges[1]);
     EXPECT_TRUE(s1_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(s1_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(s1_in0.name, s1_in1.name);
 
-    auto s2_in0 = levelized_graph.get_vertex(subtract_2.in_edges[0]);
-    auto s2_in1 = levelized_graph.get_vertex(subtract_2.in_edges[1]);
+    const auto& s2_in0 = levelized_graph.get_vertex(subtract_2.in_edges[0]);
+    const auto& s2_in1 = levelized_graph.get_vertex(subtract_2.in_edges[1]);
     EXPECT_TRUE(s2_in0.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(s2_in1.name.find("tensor") != std::string::npos);
     EXPECT_NE(s2_in0.name, s2_in1.name);

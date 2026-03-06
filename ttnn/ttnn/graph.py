@@ -151,7 +151,7 @@ def end_graph_capture_to_file(report_path):
     """Wrapper that appends Python I/O data to the JSON report."""
     result = _cpp_end_graph_capture_to_file(report_path)
     if _python_io_data:
-        _merge_python_io_into_report(report_path)
+        _write_python_io_sidecar(report_path)
     return result
 
 
@@ -259,18 +259,17 @@ def store_captured_graph(captured_graph_json):
         _python_io_data[-1]["captured_graph"] = captured_graph_json
 
 
-def _merge_python_io_into_report(report_path):
-    """Append python_io data to the JSON report on disk.
+def _write_python_io_sidecar(report_path):
+    """Write python_io data as a sidecar JSON file next to the main report.
 
-    For large models (e.g. ResNet-50) the report can be hundreds of MB.
-    We avoid pretty-printing to keep file size manageable.
+    Avoids the expensive read-modify-write cycle on potentially huge
+    (hundreds of MB) graph capture files.  The importer picks up the
+    sidecar automatically when it sits alongside the main report.
     """
     report_path = pathlib.Path(report_path)
-    with open(report_path, "r") as f:
-        report = json.load(f)
-    report["python_io"] = _python_io_data
-    with open(report_path, "w") as f:
-        json.dump(report, f)
+    sidecar_path = report_path.with_suffix(".python_io.json")
+    with open(sidecar_path, "w") as f:
+        json.dump(_python_io_data, f)
 
 
 class ExitStackWithPop(contextlib.ExitStack):
