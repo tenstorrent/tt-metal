@@ -40,6 +40,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -122,7 +124,7 @@ void set_math_fid_masks_binary(
     }
 }
 
-void add_reader_writer_kernels(
+std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
     distributed::MeshWorkload& workload,
     distributed::MeshCoordinateRange& device_range,
     const CoreCoord& logical_core,
@@ -148,28 +150,39 @@ void add_reader_writer_kernels(
             reader_compile_args.push_back(packed_scaler_value);
             std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
-            auto unary_reader_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default,
-                    .compile_args = reader_compile_args,
-                    .defines = reader_defines});
+            auto unary_reader_kernel = 0;
+            auto unary_writer_kernel = 0;
+
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                TT_THROW("Unsupported test for QSR!");
+            } else {
+                unary_reader_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt_metal::NOC::RISCV_1_default,
+                        .compile_args = reader_compile_args,
+                        .defines = reader_defines});
+            }
 
             std::vector<uint32_t> writer_compile_args = {};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
-            auto unary_writer_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",  // no need to transpose the
-                                                                                         // output since output Ht=1
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = writer_compile_args});
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                TT_THROW("Unsupported test for QSR!");
+            } else {
+                unary_writer_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",  // no need to transpose the
+                                                                                            // output since output Ht=1
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = writer_compile_args});
+            }
 
             tt_metal::SetRuntimeArgs(
                 program, unary_reader_kernel, logical_core, {src_dram_buffer->address(), N, Ht, Wt, Ht * Wt});
@@ -184,35 +197,59 @@ void add_reader_writer_kernels(
                     num_tensor_tiles / Ht  // num tiles
                 });
 
+            return {unary_reader_kernel, unary_writer_kernel};
             break;
         }
         case ReduceDim::HW: {
             scaler = std::sqrt(scaler);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                TT_THROW("Unsupported test for QSR!");
+            }
         }  // Needed because AVG pool multiplies twice by the scaler
         case ReduceDim::W: {
             std::vector<uint32_t> reader_compile_args = {};
             tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
 
-            auto unary_reader_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default,
-                    .compile_args = reader_compile_args});
+            KernelHandle unary_reader_kernel;
+            KernelHandle unary_writer_kernel;
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
+            } else {            
+                unary_reader_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt_metal::NOC::RISCV_1_default,
+                        .compile_args = reader_compile_args});
+            }
 
             std::vector<uint32_t> writer_compile_args = {};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
-            auto unary_writer_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = writer_compile_args});
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
+            } else {               
+                unary_writer_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = writer_compile_args});
+            }
 
             tt_metal::SetRuntimeArgs(
                 program,
@@ -240,9 +277,11 @@ void add_reader_writer_kernels(
                  (uint32_t)0,  // dram bank id
                  num_tiles});
 
+            return {unary_reader_kernel, unary_writer_kernel};
             break;
         }
         default: TT_THROW("Unsupported reduce dim!");
+        return {0, 0};
     }
 }
 
@@ -335,31 +374,85 @@ void run_single_core_reduce_program(
     std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
         distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_buffer_tiles = 32;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
-            num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_bytes)
-            .set_tile_dims(src0_cb_index, test_config.tile_shape);
-    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
-    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_bytes)
-            .set_tile_dims(ouput_cb_index, test_config.tile_shape);
-    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+    KernelHandle compute_kernel;
 
-    tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
-        tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
-            .set_page_size(CBIndex::c_2, single_tile_bytes)
-            .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
-    tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
+    uint32_t src0_dfb = 0;
+    uint32_t src1_dfb = 0;
+    uint32_t dst_dfb = 0;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
+            .entry_size = single_tile_bytes,
+            .num_entries = num_buffer_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = test_config.tile_shape,
+        };
 
-    add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_temp_reduce_tile_config = {
+            .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
+            .num_entries = 2,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tt_metal::Tile({32, 32}),
+        }; 
+
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
+            .entry_size = single_tile_bytes,
+            .num_entries = num_output_buffer_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x2,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = test_config.tile_shape,
+        };
+
+        src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
+        src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_temp_reduce_tile_config);
+        dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
+     
+    } else {
+        uint32_t src0_cb_index = 0;
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_bytes)
+                .set_tile_dims(src0_cb_index, test_config.tile_shape);
+        tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_bytes)
+                .set_tile_dims(ouput_cb_index, test_config.tile_shape);
+        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+
+        tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
+            tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
+                .set_page_size(CBIndex::c_2, single_tile_bytes)
+                .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
+        tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
+    }
+
+    auto [reader_kernel, writer_kernel] = add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
 
     vector<uint32_t> compute_kernel_args = {
         uint(Ht),
@@ -388,16 +481,30 @@ void run_single_core_reduce_program(
 
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 
-    tt_metal::CreateKernel(
-        program_,
-        compute_kernel_name,
-        core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = test_config.math_fidelity,
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .compile_args = compute_kernel_args,
-            .defines = reduce_defines});
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            compute_kernel_name,
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1, .math_fidelity = test_config.math_fidelity, .fp32_dest_acc_en = test_config.fp32_dest_acc_en, 
+                .dst_full_sync_en = test_config.dst_full_sync_en, .compile_args = compute_kernel_args, .defines = reduce_defines});
+    
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, src0_dfb, reader_kernel, compute_kernel);
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, src1_dfb, reader_kernel, compute_kernel);
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, dst_dfb, compute_kernel, writer_kernel);                      
+    } else {
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            compute_kernel_name,
+            core,
+            tt_metal::ComputeConfig{
+                .math_fidelity = test_config.math_fidelity,
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .compile_args = compute_kernel_args,
+                .defines = reduce_defines});
+    }
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
