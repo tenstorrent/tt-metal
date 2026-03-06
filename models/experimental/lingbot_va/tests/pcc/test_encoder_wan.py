@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Compare HuggingFace UMT5EncoderModel with TT-Metal UMT5Encoder.
 Uses Pearson Correlation Coefficient (PCC) as the accuracy metric.
