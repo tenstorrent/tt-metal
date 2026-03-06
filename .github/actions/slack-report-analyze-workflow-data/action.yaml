@@ -7,14 +7,8 @@ inputs:
   channel_id:
     description: "Channel ID for the Slack channel (required if using Bot Token)"
     required: false
-  regressed_workflows:
-    description: "JSON array from analyze step output 'regressed_workflows'"
-    required: false
   regressed_workflows_path:
     description: "Path to a JSON file containing regressed workflows"
-    required: false
-  alert_all_message:
-    description: "Optional Slack-ready alert text from analyze step output 'alert_all_message'"
     required: false
   alert_all_message_path:
     description: "Path to a text file containing the Slack-ready alert text"
