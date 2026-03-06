@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes
 
 
 @contextlib.contextmanager
@@ -44,9 +44,14 @@ def create_model(
     )
     host_io.run()
     try:
+
+        def read_and_extract_token_id(output_tensor: ttnn.Tensor) -> int:
+            d2h_socket.read_tensor(output_tensor)
+            return int(ttnn.to_torch(output_tensor).reshape(-1)[0].item())
+
         model = DeepSeekV3(
             write_fn=h2d_socket.write_tensor,
-            read_fn=d2h_socket.read_tensor,
+            read_fn=read_and_extract_token_id,
             batch_size=batch_size,
         )
         yield model
@@ -61,13 +66,8 @@ class TokenCodec:
             raise ValueError(f"batch_size must be > 0, got {batch_size}")
         self.page_size_datums = page_size_bytes(self.batch_size) // TOKEN_ID_BYTES
 
-    def make_input(self, token_id: int) -> ttnn.Tensor:
-        torch_token = torch.full((self.batch_size, 1), int(token_id), dtype=torch.int32)
-        return to_padded_input(torch_token, batch_size=self.batch_size, page_size_datums=self.page_size_datums)
+    def make_input(self, token_id: int) -> torch.Tensor:
+        return torch.full((self.batch_size, 1), int(token_id), dtype=torch.int32)
 
-    def make_prefill_inputs(self, token_ids: list[int]) -> list[ttnn.Tensor]:
+    def make_prefill_inputs(self, token_ids: list[int]) -> list[torch.Tensor]:
         return [self.make_input(token_id) for token_id in token_ids]
-
-    def extract_token_id(self, output_tensor: ttnn.Tensor) -> int:
-        torch_output = ttnn.to_torch(output_tensor).reshape(-1)
-        return int(torch_output[0].item())

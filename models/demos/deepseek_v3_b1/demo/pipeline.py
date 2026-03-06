@@ -258,12 +258,29 @@ class Pipeline:
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
+        # Only stage 0 injects tokens into the pipeline.
+        if self._my_mesh_id != 0:
+            return
         self._pipeline_block.write_token(token_tensor)
 
-    def read_output(self, output_tensor: ttnn.Tensor) -> None:
+    def read_output(self, output_tensor: ttnn.Tensor) -> int | None:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
-        self._pipeline_block.read_output(output_tensor)
+        input_stage = 0
+        # Token send/recv uses distributed process ranks (MPI ranks).
+        output_stage = int(ttnn.distributed_context_get_size()) - 1
+        if self._my_mesh_id == output_stage:
+            # Only the last stage reads from D2H; it then notifies stage 0 via a token.
+            self._pipeline_block.read_output(output_tensor)
+            token_id = int(ttnn.to_torch(output_tensor)[0, 0].item())
+            ttnn.send_token(token_id, ttnn.Rank(input_stage))
+            return None
+        elif self._my_mesh_id == input_stage:
+            # Returns output token ID only on the input-stage rank (rank 0).
+            return int(ttnn.recv_token(ttnn.Rank(output_stage)))
+        else:
+            # Middle stages don't participate in host I/O for this protocol.
+            return None
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()

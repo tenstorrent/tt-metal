@@ -37,7 +37,7 @@ def test_prefill_and_decode(
     logger.info(f"B={batch_size}, prefill {prompt_length} tokens, then {num_decode_steps} decode steps")
 
     with create_model(mesh_device=mesh_device, batch_size=batch_size) as model:
-        # Phase 1: Prefill - list of padded ttnn.Tensor tokens
+        # Phase 1: Prefill - list of raw torch tokens (B, 1)
         prompt_token_ids = list(range(prompt_length))
         prompt_inputs = token_codec.make_prefill_inputs(prompt_token_ids)
         model.prefill(prompt_inputs)
@@ -48,10 +48,10 @@ def test_prefill_and_decode(
         # Phase 2: Decode - loopback mode echoes token IDs.
         for step in range(num_decode_steps):
             token_id = prompt_length + step
-            torch_input = torch.full((batch_size, 1), token_id, dtype=torch.int32)
-            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = model.decode_step(input_tensor)
-            result_token_id = token_codec.extract_token_id(output_tensor)
+            input_tensor = torch.full((batch_size, 1), token_id, dtype=torch.int32)
+            output_token_id = model.decode_step(input_tensor)
+            assert output_token_id is not None
+            result_token_id = int(output_token_id)
             assert (
                 result_token_id == token_id
             ), f"Decode step {step} loopback mismatch: expected token {token_id}, got {result_token_id}"

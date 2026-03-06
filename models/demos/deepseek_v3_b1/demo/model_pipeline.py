@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
+from models.demos.deepseek_v3_b1.model import DeepSeekV3
 
 
 class ModelPipeline:
@@ -32,6 +32,9 @@ class ModelPipeline:
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
     ):
+        self.mesh_device = mesh_device
+        self._is_rank0 = self.mesh_device.get_system_mesh_id() == 0
+
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
             "real" if use_real_weights else "synthetic",
@@ -42,7 +45,6 @@ class ModelPipeline:
             raise RuntimeError(
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
-        self.mesh_device = mesh_device
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
@@ -67,48 +69,34 @@ class ModelPipeline:
         logger.info("Setting up and running pipeline")
         self.pipeline.setup_and_run()
 
-        self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
-        self.model: DeepSeekV3 | None = None
-        if self.pipeline.my_mesh_id == 0:
-            # Initialize host-side model interface for mesh id 0 (first stage)
-            self.model = DeepSeekV3(
-                write_fn=self.pipeline.write_token,
-                read_fn=self.pipeline.read_output,
-                batch_size=1,
-            )
+        self.model = DeepSeekV3(
+            write_fn=self.pipeline.write_token,
+            read_fn=self.pipeline.read_output,
+            batch_size=1,
+        )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
     def prefill_forward(self, tokens: list[int]) -> int:
         """Prefill 1 user's prompt tokens and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("prefill_forward() should only be called on mesh id 0")
-        assert self.model is not None
-        logger.debug(f"Prefilling with {len(tokens)} tokens...")
-        prompt_token_tensors = [
-            to_padded_input(
-                torch.tensor([[tid]], dtype=torch.int32),
-                batch_size=1,
-                page_size_datums=self._page_size_datums,
-            )
-            for tid in tokens
-        ]
-        last_output = self.model.prefill(prompt_token_tensors)
-        next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
-        logger.debug(f"Done prefilling with {len(tokens)} tokens.")
+        if self._is_rank0:
+            logger.debug(f"Prefilling with {len(tokens)} tokens...")
+        prompt_token_tensors = [torch.tensor([[tid]], dtype=torch.int32) for tid in tokens]
+        maybe_token_id = self.model.prefill(prompt_token_tensors)
+        if self._is_rank0:
+            assert maybe_token_id is not None
+            next_token_id = int(maybe_token_id)
+            logger.debug(f"Done prefilling with {len(tokens)} tokens.")
+        else:
+            next_token_id = 0
         return next_token_id
 
     def decode_forward(self, input_token: int) -> int:
         """Run 1 decode step and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("decode_forward() should only be called on mesh id 0")
-        assert self.model is not None
-        output = self.model.decode_step(
-            torch.tensor([[input_token]], dtype=torch.int32),
-        )
-        next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
-        return next_token_id
+        maybe_token_id = self.model.decode_step(torch.tensor([[input_token]], dtype=torch.int32))
+        if self._is_rank0:
+            assert maybe_token_id is not None
+            return int(maybe_token_id)
+        return 0
 
     def run_inference(
         self,
@@ -122,14 +110,13 @@ class ModelPipeline:
         Calls on_token(token_id) for each generated token (including the first
         one sampled after prefill). Optionally returns the list of all generated token IDs.
         """
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("run_inference() should only be called on mesh id 0")
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
-        # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
+        # Prefill: send prompt tokens; use last output token as y0 (rank 0 only).
         next_token_id = self.prefill_forward(prompt_token_ids)
         if on_token is not None:
-            on_token(next_token_id)
+            if self._is_rank0:
+                on_token(next_token_id)
         if return_generated_tokens:
             generated_tokens = [next_token_id]
 
@@ -137,17 +124,21 @@ class ModelPipeline:
         num_decode_steps = 0
         for i in range(max_new_tokens - 1):
             if eos_token_id is not None and next_token_id == eos_token_id:
-                logger.debug("EOS token {} at decode step {}", eos_token_id, i)
+                if self._is_rank0:
+                    logger.debug("EOS token {} at decode step {}", eos_token_id, i)
                 break
             next_token_id = self.decode_forward(next_token_id)
             num_decode_steps += 1
             if on_token is not None:
-                on_token(next_token_id)
+                if self._is_rank0:
+                    on_token(next_token_id)
             if return_generated_tokens:
                 generated_tokens.append(next_token_id)
-            logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
+            if self._is_rank0:
+                logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
 
-        logger.debug("Generation complete ({} tokens generated)", 1 + num_decode_steps)
+        if self._is_rank0:
+            logger.debug("Generation complete ({} tokens generated)", 1 + num_decode_steps)
         if return_generated_tokens:
             return generated_tokens
 
