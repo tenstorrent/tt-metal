@@ -33,11 +33,11 @@ uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
-uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
-uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
-uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
-uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
-uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+std::atomic<uint32_t> noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+std::atomic<uint32_t> noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+std::atomic<uint32_t> noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+std::atomic<uint32_t> noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+std::atomic<uint32_t> noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 // temporary for things to build
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));

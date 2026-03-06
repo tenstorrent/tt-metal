@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <stdint.h>
 #include "internal/risc_attribs.h"
 #include "noc_parameters.h"
@@ -71,11 +72,11 @@ constexpr uint32_t NOC_PCIE_MASK = 0x1000000F;
 constexpr uint32_t WRITE_RESPONSE_STATIC_VC = 14;
 constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 
-extern uint32_t noc_reads_num_issued[NUM_NOCS];
-extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
-extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
-extern uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
-extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
+extern std::atomic<uint32_t> noc_reads_num_issued[NUM_NOCS];
+extern std::atomic<uint32_t> noc_nonposted_writes_num_issued[NUM_NOCS];
+extern std::atomic<uint32_t> noc_nonposted_writes_acked[NUM_NOCS];
+extern std::atomic<uint32_t> noc_nonposted_atomics_acked[NUM_NOCS];
+extern std::atomic<uint32_t> noc_posted_writes_num_issued[NUM_NOCS];
 
 enum class NocBarrierType : uint8_t {
     READS_NUM_ISSUED,

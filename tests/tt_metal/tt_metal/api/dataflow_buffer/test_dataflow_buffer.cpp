@@ -708,7 +708,7 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx1B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4B) { // generate waves for this
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
