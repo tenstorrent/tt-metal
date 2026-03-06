@@ -7,6 +7,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <fstream>
+#include <tt-metalium/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -19,6 +20,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "utils/memory_utils.hpp"
 namespace {
 /*
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
@@ -363,4 +365,263 @@ TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
         GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
     train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
+}
+
+struct FusedSwiGLUTestConfig {
+    std::string name;
+    uint32_t embedding_dim;
+    uint32_t num_heads;
+    uint32_t num_groups;
+    uint32_t num_blocks;
+    uint32_t max_sequence_length;
+    uint32_t batch_size;
+    std::optional<uint32_t> intermediate_dim;
+    uint32_t num_warmup = 2;
+    uint32_t num_measure = 5;
+};
+
+void run_fused_swiglu_comparison(const FusedSwiGLUTestConfig &test_cfg) {
+    auto mesh = tt::tt_metal::distributed::MeshShape(1, 1);
+    ttml::autograd::ctx().open_device(mesh);
+
+    const uint32_t seed = 5489U;
+
+    struct RunResult {
+        std::vector<double> step_times;
+        std::vector<double> fwd_times;
+        std::vector<double> bwd_times;
+        size_t dram_peak = 0;
+    };
+
+    auto run_steps = [&](bool use_fused) -> RunResult {
+        auto config = TrainingConfig();
+        config.batch_size = test_cfg.batch_size;
+        config.max_steps = test_cfg.num_warmup + test_cfg.num_measure;
+        config.transformer_config.embedding_dim = test_cfg.embedding_dim;
+        config.transformer_config.num_heads = test_cfg.num_heads;
+        config.transformer_config.num_groups = test_cfg.num_groups;
+        config.transformer_config.num_blocks = test_cfg.num_blocks;
+        config.transformer_config.max_sequence_length = test_cfg.max_sequence_length;
+        config.transformer_config.intermediate_dim = test_cfg.intermediate_dim;
+        config.transformer_config.runner_type = ttml::models::llama::RunnerType::MemoryEfficient;
+        config.transformer_config.use_fused_swiglu = use_fused;
+        config.data_path = std::string(TEST_DATA_DIR) + "/shakespeare.txt";
+
+        ttml::autograd::ctx().set_seed(seed);
+
+        std::ifstream file(config.data_path);
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string text = buffer.str();
+
+        auto *device = &ttml::autograd::ctx().get_device();
+        device->clear_program_cache();
+
+        auto sequence_length = config.transformer_config.max_sequence_length;
+        auto batch_size = config.batch_size;
+
+        auto [dataset, tokenizer] =
+            ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(text, sequence_length);
+
+        config.transformer_config.vocab_size = ((tokenizer->get_vocab_size() + 31U) / 32U) * 32U;
+
+        std::vector<float> mask;
+        mask.reserve((size_t)sequence_length * sequence_length);
+        for (uint32_t i = 0; i < sequence_length; ++i) {
+            for (uint32_t j = 0; j < sequence_length; ++j) {
+                mask.push_back(i >= j ? 1.0F : 0.0F);
+            }
+        }
+        auto masks_tensor = ttml::autograd::create_tensor(
+            ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
+
+        auto collate_fn =
+            [batch_size, sequence_length, device, masks_tensor](std::vector<DatasetSample> &&samples) -> BatchType {
+            std::vector<uint32_t> data, targets;
+            data.reserve((size_t)batch_size * sequence_length);
+            targets.reserve((size_t)batch_size * sequence_length);
+            for (auto &[features, target_span] : samples) {
+                std::copy(features.begin(), features.end(), std::back_inserter(data));
+                std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
+            }
+
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                data, ttnn::Shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR, mapper.get()));
+            auto targets_tensor =
+                ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                    targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+            return {data_tensor, targets_tensor, masks_tensor};
+        };
+
+        auto train_dataloader = DataLoader(dataset, config.batch_size, true, collate_fn);
+
+        auto model = ttml::models::llama::create(config.transformer_config);
+
+        auto adamw_params = ttml::optimizers::AdamWConfig();
+        adamw_params.lr = config.learning_rate;
+        auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+
+        RunResult result;
+        uint32_t step = 0;
+        for (auto [features, target, masks] : train_dataloader) {
+            bool is_measured = step >= test_cfg.num_warmup;
+            bool capture_memory = is_measured && result.dram_peak == 0;
+
+            auto run_step = [&](double &fwd_ms, double &bwd_ms) {
+                auto *dev = &ttml::autograd::ctx().get_device();
+
+                optimizer->zero_grad();
+
+                auto t0 = std::chrono::high_resolution_clock::now();
+                auto output = (*model)(features, masks);
+                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
+                auto t1 = std::chrono::high_resolution_clock::now();
+
+                loss->backward();
+                tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
+                auto t2 = std::chrono::high_resolution_clock::now();
+
+                optimizer->step();
+                ttml::autograd::ctx().reset_graph();
+
+                fwd_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                bwd_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+            };
+
+            double fwd_ms = 0, bwd_ms = 0;
+            if (capture_memory) {
+                auto *dev = &ttml::autograd::ctx().get_device();
+
+                auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
+                optimizer->zero_grad();
+                auto t0 = std::chrono::high_resolution_clock::now();
+                auto output = (*model)(features, masks);
+                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
+                auto t1 = std::chrono::high_resolution_clock::now();
+                ttml::utils::MemoryUsageTracker::snapshot("forward");
+
+                loss->backward();
+                tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
+                auto t2 = std::chrono::high_resolution_clock::now();
+                ttml::utils::MemoryUsageTracker::snapshot("backward");
+
+                optimizer->step();
+                ttml::autograd::ctx().reset_graph();
+                ttml::utils::MemoryUsageTracker::end_capture("optimizer");
+
+                fwd_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                bwd_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+
+                auto fwd_peak = ttml::utils::MemoryUsageTracker::get_dram_usage("forward").peak;
+                auto bwd_peak = ttml::utils::MemoryUsageTracker::get_dram_usage("backward").peak;
+                auto opt_peak = ttml::utils::MemoryUsageTracker::get_dram_usage("optimizer").peak;
+                result.dram_peak = std::max({fwd_peak, bwd_peak, opt_peak});
+
+                fmt::print(
+                    "    [{}] DRAM peak by phase: fwd={:.0f}KB  bwd={:.0f}KB  opt={:.0f}KB\n",
+                    use_fused ? "fused" : "baseline",
+                    fwd_peak / 1024.0,
+                    bwd_peak / 1024.0,
+                    opt_peak / 1024.0);
+
+                ttml::utils::MemoryUsageTracker::clear();
+            } else {
+                run_step(fwd_ms, bwd_ms);
+            }
+            if (is_measured) {
+                result.step_times.push_back(fwd_ms + bwd_ms);
+                result.fwd_times.push_back(fwd_ms);
+                result.bwd_times.push_back(bwd_ms);
+            }
+            if (++step >= config.max_steps) {
+                break;
+            }
+        }
+        return result;
+    };
+
+    auto baseline = run_steps(false);
+    auto fused = run_steps(true);
+
+    auto avg = [](const std::vector<double> &v) {
+        return std::accumulate(v.begin(), v.end(), 0.0) / static_cast<double>(v.size());
+    };
+
+    auto pct = [](double a, double b) { return (a - b) / b * 100.0; };
+
+    double b_fwd = avg(baseline.fwd_times), f_fwd = avg(fused.fwd_times);
+    double b_bwd = avg(baseline.bwd_times), f_bwd = avg(fused.bwd_times);
+    double b_total = avg(baseline.step_times), f_total = avg(fused.step_times);
+
+    fmt::print("\n");
+    fmt::print("╔══════════════════════════════════════════════════════════════════════════════════╗\n");
+    fmt::print("║ {} {:>{}}║\n", test_cfg.name, "", 78 - test_cfg.name.size());
+    fmt::print("╠═══════════════════════╦══════════╦══════════╦══════════╦═════════════════════════╣\n");
+    fmt::print("║ Variant               ║ Fwd (ms) ║ Bwd (ms) ║ Tot (ms) ║  DRAM peak (KB)         ║\n");
+    fmt::print("╠═══════════════════════╬══════════╬══════════╬══════════╬═════════════════════════╣\n");
+    fmt::print(
+        "║ baseline (individual) ║ {:>8.1f} ║ {:>8.1f} ║ {:>8.1f} ║  {:>21.0f}  ║\n",
+        b_fwd,
+        b_bwd,
+        b_total,
+        static_cast<double>(baseline.dram_peak) / 1024.0);
+    fmt::print(
+        "║ fused swiglu          ║ {:>8.1f} ║ {:>8.1f} ║ {:>8.1f} ║  {:>21.0f}  ║\n",
+        f_fwd,
+        f_bwd,
+        f_total,
+        static_cast<double>(fused.dram_peak) / 1024.0);
+    fmt::print("╠═══════════════════════╬══════════╬══════════╬══════════╬═════════════════════════╣\n");
+    fmt::print(
+        "║ delta                 ║ {:>+7.1f}% ║ {:>+7.1f}% ║ {:>+7.1f}% ║  {:>+20.1f}%  ║\n",
+        pct(f_fwd, b_fwd),
+        pct(f_bwd, b_bwd),
+        pct(f_total, b_total),
+        pct(static_cast<double>(fused.dram_peak), static_cast<double>(baseline.dram_peak)));
+    fmt::print("╚═══════════════════════╩══════════╩══════════╩══════════╩═════════════════════════╝\n");
+
+    ttml::autograd::ctx().close_device();
+}
+
+// Full sweep: 3 models × batch sizes
+// NanoLlama3: D=384, H=default(~256), 6 blocks
+// TinyLlama:  D=2048, H=5632, 4 blocks
+// Llama-1B:   D=2048, H=8192, 4 blocks
+TEST_F(NanoLlamaTest, NIGHTLY_FusedSwiGLU_Sweep) {
+    struct ModelTemplate {
+        std::string name;
+        uint32_t embedding_dim;
+        uint32_t num_heads;
+        uint32_t num_groups;
+        uint32_t num_blocks;
+        std::optional<uint32_t> intermediate_dim;
+    };
+
+    const std::vector<ModelTemplate> models = {
+        {"NanoLlama3", 384, 6, 3, 6, std::nullopt},
+        {"TinyLlama", 2048, 32, 4, 4, 5632},
+        {"Llama-1B", 2048, 32, 8, 4, 8192},
+    };
+
+    const std::vector<uint32_t> batch_sizes = {4, 16, 32, 64, 128};
+
+    for (const auto &model : models) {
+        for (uint32_t B : batch_sizes) {
+            auto name = fmt::format("{:<12} B={}", model.name, B);
+            run_fused_swiglu_comparison({
+                .name = name,
+                .embedding_dim = model.embedding_dim,
+                .num_heads = model.num_heads,
+                .num_groups = model.num_groups,
+                .num_blocks = model.num_blocks,
+                .max_sequence_length = 256,
+                .batch_size = B,
+                .intermediate_dim = model.intermediate_dim,
+            });
+        }
+    }
 }

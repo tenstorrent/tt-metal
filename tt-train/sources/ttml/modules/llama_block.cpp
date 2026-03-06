@@ -8,10 +8,13 @@
 #include "modules/grouped_query_attention.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/rope_op.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
-LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob) {
+LlamaMLP::LlamaMLP(
+    uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob, bool use_fused) :
+    m_dropout_prob(dropout_prob), m_use_fused(use_fused) {
     uint32_t multiple_of = 256;
     uint32_t hidden_size = 0U;
     if (intermediate_dim) {
@@ -33,12 +36,14 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
+    if (m_use_fused) {
+        return ops::swiglu_optimized(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), m_dropout_prob);
+    }
+
     auto swished = ops::silu((*m_w1)(input));
     auto gate = (*m_w3)(input);
-    auto gated = ops::mul(swished, gate);
-    auto x = (*m_w2)(gated);
-    x = (*m_dropout)(x);
-    return x;
+    auto x = (*m_w2)(ops::mul(swished, gate));
+    return (*m_dropout)(x);
 }
 
 LlamaBlock::LlamaBlock(
@@ -47,8 +52,9 @@ LlamaBlock::LlamaBlock(
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
     float dropout_prob,
-    std::optional<uint32_t> intermediate_dim) {
-    m_mlp = std::make_shared<LlamaMLP>(embedding_size, intermediate_dim, dropout_prob);
+    std::optional<uint32_t> intermediate_dim,
+    bool use_fused_swiglu) {
+    m_mlp = std::make_shared<LlamaMLP>(embedding_size, intermediate_dim, dropout_prob, use_fused_swiglu);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_attention = std::make_shared<GroupedQueryAttention>(GQAConfig{
