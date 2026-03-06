@@ -219,12 +219,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
     const auto& dense_token_counts_tensor = tensor_args.dense_token_counts_tensor;
-    const auto batch_size = operation_attributes.batch_size;
-    const auto seq_size = operation_attributes.seq_size;
+    const auto total_tokens = operation_attributes.total_tokens;
     const auto select_experts_k = operation_attributes.select_experts_k;
     const auto hidden_size = operation_attributes.hidden_size;
-
-    const auto total_tokens = batch_size * seq_size;
     // Eventually map number of experts to device
     const auto experts = operation_attributes.experts;
 
@@ -235,7 +232,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto& mesh_view = mesh_device->get_view();
 
     //  assert (axis.has_value()) in validate
-    const auto& axis = operation_attributes.axis;
+    const auto& axis = operation_attributes.cluster_axis;
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;

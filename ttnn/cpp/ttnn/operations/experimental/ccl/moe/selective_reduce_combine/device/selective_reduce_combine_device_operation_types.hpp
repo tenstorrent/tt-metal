@@ -16,13 +16,12 @@ namespace ttnn::experimental::prim {
 
 struct SelectiveReduceCombineParams {
     uint32_t hidden_size;
-    uint32_t batch_size;
-    uint32_t seq_size;
+    uint32_t total_tokens;
     uint32_t select_experts_k;
     uint32_t experts;
     uint32_t num_links;
 
-    std::optional<uint32_t> axis;
+    std::optional<uint32_t> cluster_axis;
     tt::tt_fabric::Topology topology;
 
     uint32_t num_token_parallel_cores;
@@ -36,12 +35,11 @@ struct SelectiveReduceCombineParams {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("hidden_size", hidden_size);
-        attrs.emplace_back("batch_size", batch_size);
-        attrs.emplace_back("seq_size", seq_size);
+        attrs.emplace_back("total_tokens", total_tokens);
         attrs.emplace_back("select_experts_k", select_experts_k);
         attrs.emplace_back("experts", experts);
         attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("axis", axis);
+        attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
         attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);
         attrs.emplace_back("worker_cores", worker_cores);

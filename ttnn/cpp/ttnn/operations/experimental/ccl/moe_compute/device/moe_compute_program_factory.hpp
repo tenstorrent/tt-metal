@@ -5,6 +5,7 @@
 #pragma once
 
 #include "moe_compute_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 
@@ -29,6 +30,15 @@ struct MoEComputeMeshWorkloadFactory {
 
         // CB handle for matmul output
         tt::tt_metal::CBHandle matmul_writer_cb_handle;
+
+        // Combine kernel handles
+        std::vector<tt::tt_metal::KernelHandle> combine_kernel_handles;
+
+        // Combine cores
+        std::vector<CoreCoord> combine_cores;
+
+        // Combine global semaphores
+        std::vector<GlobalSemaphore> combine_global_semaphores;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

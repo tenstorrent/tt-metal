@@ -5,6 +5,8 @@
 #include "moe_compute_program_factory.hpp"
 #include "moe_compute_device_operation_types.hpp"
 
+#include "ttnn/global_semaphore.hpp"
+
 #include <algorithm>
 #include <numeric>
 #include <tuple>
@@ -319,8 +321,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
     // that metadata is ready and task splitting can proceed.
-    [[maybe_unused]] const auto tilize_combine_sync_semaphore =
-        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
+    const auto tilize_combine_sync_semaphore = tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split
@@ -987,18 +988,56 @@ MoEComputeMeshWorkloadFactory::create_at(
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
 
-    const ttnn::CoreRangeSet output_shard_core_range_set(combine_cores);
-    auto combine_dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/combine_dm1.cpp",
-        output_shard_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
+    //-------------------------------------------------------------------------
+    // Combine stage
+    //-------------------------------------------------------------------------
 
-    // Create semaphore on combine cores for source->combine completion signaling.
-    // The dm1 kernel uses get_semaphore(ring_semaphore_id) to compute the remote address,
-    // so the combine cores need a semaphore at the same ID.
-    const uint32_t combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_shard_core_range_set, 0);
+    // Global semaphores
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
+    auto final_barrier_semaphore = args.optional_cross_device_semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
+
+    // Combine parameters
+    TT_FATAL(args.combine_num_links > 0, "num_links must be greater than 0");
+    TT_FATAL(args.cluster_axis < 2, "cluster_axis must be 0 or 1");
+    ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
+        .hidden_size = hidden_size,
+        .total_tokens = tokens,
+        .select_experts_k = selected_experts_k,
+        .experts = experts,
+        .num_links = args.combine_num_links.value_or(4),
+        .cluster_axis = args.cluster_axis.value_or(1),
+        .topology = args.combine_topology,
+        .num_token_parallel_cores = args.combine_token_parallel_core_dim.value_or(4),
+        .num_data_parallel_cores = args.combine_data_parallel_core_dim.value_or(4),
+        .worker_cores = combine_cores,
+        .mux_core_range_set = args.mux_core_range_set,
+        .output_memory_config = args.output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        .optional_cross_device_semaphore = args.optional_cross_device_semaphore,
+    };
+    // selective_reduce_combine_artifacts is built in build_selective_reduce_combine_program_artifacts
+    auto selective_reduce_combine_artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
+        program,
+        combine_params,
+        mesh_coordinate,
+        all_mesh_coords,        //
+        combine_tensor_args,    //
+        combine_output_tensor,  //
+        init_barrier_semaphore,
+        final_barrier_semaphore);
+
+    auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
+    auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;
+    auto combine_init_semaphore =
+        selective_reduce_combine_artifacts.init_semaphore;  // To Do: check if this is equal to init_barrier_semaphore
+    auto combine_cross_device_semaphore =
+        selective_reduce_combine_artifacts
+            .cross_device_semaphore;  // To Do: check if this is equal to final_barrier_semaphore
+
+    //-------------------------------------------------------------------------
+    // ring ordering
+    //-------------------------------------------------------------------------
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
     // NOC1 routes: decreasing y (top) first, then decreasing x (left)
@@ -1077,10 +1116,12 @@ MoEComputeMeshWorkloadFactory::create_at(
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
 
-    const std::vector<uint32_t> combine_runtime_args = {combine_semaphore_id};
-    for (const auto& core : combine_cores) {
-        tt::tt_metal::SetRuntimeArgs(program, combine_dm1_kernel_handle, core, combine_runtime_args);
-    }
+    //    if (combine_dm1_kernel_handle_opt.has_value() && combine_semaphore_id_opt.has_value()) {
+    //        const std::vector<uint32_t> combine_runtime_args = {*combine_semaphore_id_opt};
+    //        for (const auto& core : combine_cores) {
+    //            tt::tt_metal::SetRuntimeArgs(program, *combine_dm1_kernel_handle_opt, core, combine_runtime_args);
+    //        }
+    //    }
 
     //-------------------------------------------------------------------------
     // Cached program
@@ -1093,19 +1134,24 @@ MoEComputeMeshWorkloadFactory::create_at(
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores,
          .sharded_output_cb_handle = sharded_output_cb_handle,
-         .matmul_writer_cb_handle=matmul_writer_cb_handle}};
+         .matmul_writer_cb_handle = matmul_writer_cb_handle,
+         .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
+         .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore},
+         .combine_cores = combine_cores}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const MoEComputeParams&,
+    const MoEComputeParams& args,
     const MoEComputeInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     // output tensors
     const ttnn::Tensor& tilize_per_expert_total_tokens_output_tensor = tensor_return_value.at(0);
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
+    ttnn::Tensor& combine_output_tensor = tensor_return_value.at(4);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
@@ -1155,7 +1201,36 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 matmul_runtime_args.at(4) = tilize_output_tensor.buffer()->address();
             }
         }
-    }
+
+        //-------------------------------------------------------------------------
+        // Combine
+        //-------------------------------------------------------------------------
+
+        {
+            auto reader_kernel_id = shared_variables.combine_kernel_handles.at(0);
+            auto writer_kernel_id = shared_variables.combine_kernel_handles.at(1);
+            auto cores = shared_variables.combine_cores;
+            auto init_semaphore = shared_variables.combine_global_semaphores.at(0);
+            auto cross_device_semaphore = shared_variables.combine_global_semaphores.at(1);
+
+            ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
+                .dense_input_tensor = tilize_output_tensor,
+                .dense_metadata_tensor = tilize_expert_activation_output_tensor,
+                .dense_token_maps_tensor = tilize_e_t_output_tensor,
+                .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
+                .optional_output_tensor = combine_output_tensor,
+            };
+            ttnn::selective_reduce_combine_helper_override_runtime_arguments(
+                program,
+                reader_kernel_id,
+                writer_kernel_id,
+                cores,
+                combine_tensor_args,
+                combine_output_tensor,
+                init_semaphore,
+                cross_device_semaphore,
+                optional_cross_device_semaphore);
+        }
 }
 
 }  // namespace ttnn::experimental::prim

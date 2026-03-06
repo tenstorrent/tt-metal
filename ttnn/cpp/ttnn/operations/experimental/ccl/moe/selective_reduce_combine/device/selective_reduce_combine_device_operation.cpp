@@ -25,17 +25,14 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     const auto& mesh_view = mesh_device->get_view();
 
     const auto hidden_size = operation_attributes.hidden_size;
-
-    const uint32_t batch_size = operation_attributes.batch_size;
-    const uint32_t seq_size = operation_attributes.seq_size;
-
+    const uint32_t total_tokens = operation_attributes.total_tokens;
     const uint32_t experts = operation_attributes.experts;
 
-    const auto& axis = operation_attributes.axis;
+    const auto& axis = operation_attributes.cluster_axis;
     const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
+    const uint32_t total_tokens_per_device = total_tokens / num_devices_cluster;
     const uint32_t experts_per_cluster = experts / num_clusters;
 
     auto output_shape = ttnn::Shape({experts_per_cluster, total_tokens_per_device, hidden_size});
@@ -62,11 +59,10 @@ ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     uint32_t hidden_size,
-    uint32_t batch_size,
-    uint32_t seq_size,
+    uint32_t total_tokens,
     uint32_t select_experts_k,
     uint32_t experts,
-    const std::optional<uint32_t>& axis,
+    const std::optional<uint32_t>& cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,
@@ -81,12 +77,11 @@ ttnn::Tensor selective_reduce_combine(
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .hidden_size = hidden_size,
-            .batch_size = batch_size,
-            .seq_size = seq_size,
+            .total_tokens = total_tokens,
             .select_experts_k = select_experts_k,
             .experts = experts,
             .num_links = num_links,
-            .axis = axis,
+            .cluster_axis = cluster_axis,
             .topology = topology,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
