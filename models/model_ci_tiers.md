@@ -78,20 +78,14 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 
 
 # Pipelines
-The new models CI pipelines are divided into different tiers, to facilitate automated schedule on github actions. Each test type has a per-tier dispatch workflow and a shared internal implementation workflow.
 
-Although pipelines are separated by tiers to facilitate github actions integration, we provide a single configuration yaml file per group of pipelines. This can be found in the sub-sections below.
+Each test type has a per-tier GitHub Actions workflow and a shared configuration file. The workflows are separated by tier to allow independent scheduling, but the test definitions live in a single config YAML per pipeline.
 
-## Models End-to-End Tests Pipeline
-This pipeline mainly includes two types of tests:
-- **End-to-end performance evaluation**
-  - Typically runs multiple batch-32 requests
-  - Reports end-to-end performance (time-to-first-token and tokens/sec/user) after first batch
-  - Validates determism by comparing the different users outputs across different batches
-- **End-to-end accuracy validation**
-  - Teacher forcing against reference, reports final top-1/top-5 accuracy
-  - Validates against pre-estabilished targets
+## End-to-End Tests
 
+This pipeline covers two areas:
+- **Performance evaluation** — Runs multiple batch-32 requests, reports TTFT and tokens/sec/user, and validates determinism by comparing outputs across batches.
+- **Accuracy validation** — Uses teacher forcing against a reference to report top-1/top-5 accuracy against pre-established targets.
 
 | Tier | Workflow |
 |------|----------|
@@ -100,7 +94,9 @@ This pipeline mainly includes two types of tests:
 | Tier 3 | [`[Tier 3] Models End-To-End Tests`](../.github/workflows/models-t3-e2e-tests.yaml) |
 | Config | [`models_e2e_tests.yaml`](../tests/pipeline_reorg/models_e2e_tests.yaml) |
 
-## Models Unit Tests Pipeline
+## Unit Tests
+
+Short module-level tests that compare PCC against the reference implementation. Tier 1 and 2 models should cover most components; Tier 3 requires only the most critical module (typically a single decoder layer for LLMs).
 
 | Tier | Workflow |
 |------|----------|
@@ -109,7 +105,12 @@ This pipeline mainly includes two types of tests:
 | Tier 3 | [`[Tier 3] Models Unit Tests`](../.github/workflows/models-t3-unit-tests.yaml) |
 | Config | [`models_unit_tests.yaml`](../tests/pipeline_reorg/models_unit_tests.yaml) |
 
-## Models Sweep Tests Pipeline
+## Sweep Tests
+
+Parameter sweeps across the configurations each model supports. Currently includes:
+- **Sequence length** — From short contexts up to the model's maximum supported length
+- **Sampling parameters** — Logprobs, seeds, penalties, and other sampling features
+- **Prefetcher** — Runs with prefetcher enabled and disabled to isolate model-specific issues
 
 | Tier | Workflow |
 |------|----------|
@@ -119,18 +120,15 @@ This pipeline mainly includes two types of tests:
 
 > **Note:** Tier 3 does not include sweep tests.
 
-## Models Device Perf Tests Pipeline
+## Device Perf Tests
 
-| Pipeline | Workflow |
-|----------|----------|
-| Device perf regressions | [`(Single-card) Device perf regressions`](../.github/workflows/perf-device-models.yaml) |
-| Device perf impl | [`[internal] Single-card Device perf regressions impl`](../.github/workflows/perf-device-models-impl.yaml) |
-| Model perf tests | [`(Single-card) Model perf tests`](../.github/workflows/perf-models.yaml) |
-| Model perf impl | [`[internal] Perf models impl`](../.github/workflows/perf-models-impl.yaml) |
+Captures device timing for a single layer of each target model, used to track performance for models under active optimization. Tier 1 only.
 
-> **Note:** Device perf tests are Tier 1 only.
+> **TODO:** Add pipeline links once merged to main.
 
 ## Other Pipelines
+
+> **TODO:** Expand descriptions for the pipelines below.
 
 | Pipeline | Workflow |
 |----------|----------|
