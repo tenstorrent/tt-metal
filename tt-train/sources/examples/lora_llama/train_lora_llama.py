@@ -35,6 +35,8 @@ PRINT_INTERVAL = 1
 LORA_RANK = 8
 LORA_ALPHA = 16
 LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
+LORA_IS_BIAS_TRAINABLE = False
+LORA_TRAINABLE_MODULES: list[str] = []
 
 
 def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
@@ -150,7 +152,11 @@ def main():
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
     lora_config = LoraConfig(
-        rank=LORA_RANK, alpha=LORA_ALPHA, target_modules=LORA_TARGET_MODULES
+        rank=LORA_RANK,
+        alpha=LORA_ALPHA,
+        target_modules=LORA_TARGET_MODULES,
+        is_bias_trainable=LORA_IS_BIAS_TRAINABLE,
+        trainable_modules=LORA_TRAINABLE_MODULES,
     )
     model = LoraModel(model, lora_config)
 
@@ -159,12 +165,10 @@ def main():
 
     # ── Trainable parameters ──────────────────────────────────────────────────
     all_params = model.parameters()
-    train_params = {
-        k: v for k, v in all_params.items() if "lora_A" in k or "lora_B" in k
-    }
+    train_params = {k: v for k, v in all_params.items() if v.get_requires_grad()}
 
     print(f"Total params: {len(all_params)}")
-    print(f"Trainable (LoRA): {len(train_params)}")
+    print(f"Trainable: {len(train_params)}")
     for name, tensor in sorted(all_params.items()):
         print(f"  {'*' if name in train_params else ' '} {name}: {tensor.shape()}")
 

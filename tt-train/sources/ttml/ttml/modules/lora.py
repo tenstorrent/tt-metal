@@ -24,6 +24,8 @@ class LoraConfig:
     alpha: float = 16.0
     target_modules: list[str] = field(default_factory=list)
     use_rslora: bool = False
+    is_bias_trainable: bool = False
+    trainable_modules: list[str] = field(default_factory=list)
 
 
 def _create_lora_A(in_features: int, rank: int):
@@ -60,7 +62,7 @@ class LoraLinear(AbstractModuleBase):
 
         self.bias = linear.bias
         if self.bias is not None:
-            self.bias.tensor.set_requires_grad(False)
+            self.bias.tensor.set_requires_grad(config.is_bias_trainable)
 
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
@@ -92,6 +94,9 @@ class LoraModel(AbstractModuleBase):
         patterns = [re.compile(p) for p in config.target_modules]
         self._inject(model, "", patterns, config)
 
+        if config.trainable_modules:
+            self._unfreeze_trainable(model, config.trainable_modules)
+
     def _inject(
         self,
         module: AbstractModuleBase,
@@ -114,6 +119,15 @@ class LoraModel(AbstractModuleBase):
                     setattr(module, name, lora_linear)
             elif isinstance(child, AbstractModuleBase):
                 self._inject(child, full_name, patterns, config)
+
+    @staticmethod
+    def _unfreeze_trainable(
+        model: AbstractModuleBase, trainable_modules: list[str]
+    ) -> None:
+        """Unfreeze parameters whose full path starts with any of the given prefixes."""
+        for param_path, tensor in model.parameters().items():
+            if any(prefix in param_path for prefix in trainable_modules):
+                tensor.set_requires_grad(True)
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         return self.model(*args, **kwargs)
