@@ -381,9 +381,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(17);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
 
-    constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;
+    constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
     // mask out invalid experts
     // TODO: fix the bug that makes this give bad results
@@ -402,7 +402,7 @@ void kernel_main() {
         index_transposed_cb_index,
         values_cb_index,
         output_ind_cb_index,
-        TILE_WIDTH,
+        tile_width,
         true>();
 
     // mask out all experts except the top-k

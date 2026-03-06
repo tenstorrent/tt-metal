@@ -43,7 +43,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(3);
     constexpr uint32_t Wt = get_compile_time_arg_val(4);
     constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(6);
 
     constexpr auto s0_args = TensorAccessorArgs<7>();
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
@@ -73,7 +73,7 @@ void kernel_main() {
     }
 
     // input indices RM
-    for (uint32_t j = 0; j < Ht * TILE_HEIGHT; ++j) {
+    for (uint32_t j = 0; j < Ht * tile_height; ++j) {
         cb_reserve_back(input_indices_cb_index, onetile);
         uint32_t l1_write_addr_indices = get_write_ptr(input_indices_cb_index);
         uint64_t input_noc_addr = get_noc_addr(j, s1);
