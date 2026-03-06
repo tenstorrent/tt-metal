@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_cluster_dims
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import _device_mesh_iterator  # TODO (AM) bad form
@@ -390,11 +390,21 @@ def get_batch_cluster_idxr(replication_axis, batch, batch_per_device):
     return _idxr
 
 
-# TODO: (GR) confirm on quad
+# TODO: (GR) diff with linearized
+def _expert_on_device(e, d, expert_mapping):
+    # expert_mapping: [1, 256]
+    group = d // 16
+    offset = d % 16
+    linearized_mesh_coord = offset * 8 + group
+
+    return expert_mapping[e].item() == linearized_mesh_coord
+
+
+# TODO: (GR) confirm on quad (128 devices, diff )
 def gen_dispatch_golden(
     torch_dispatch_input_tensor,  # [T * D, 1, 1, H]
     torch_dispatch_input_expert_indices,  # [T * D, 1, 1, K]
-    expert_mapping_tensor,
+    torch_expert_mapping,
     batch,
     select_experts_k,
     hidden_size,
@@ -410,7 +420,7 @@ def gen_dispatch_golden(
         for b in range(batch):
             for k in range(select_experts_k):
                 e = torch_dispatch_input_expert_indices[b, 0, 0, k]
-                if _expert_on_device(e, rec_d, expert_mapping_tensor[0]):
+                if _expert_on_device(e, rec_d, torch_expert_mapping[0]):
                     torch_dispatch_ref_tensor[rec_d, b] = torch_dispatch_input_tensor[b, 0, 0]
                     torch_dispatch_ref_map[rec_d, b] = 1
                     break
@@ -460,6 +470,56 @@ def gen_combine_golden(
     return torch_combine_ref_tensor
 
 
+def verify_dispatch(iteration, mesh_device, mesh_shape, cluster_axis, tt_dispatch_tensor, torch_dispatch_golden):
+    if cluster_axis == 0:
+        # TODO: (GR) remove hardcoding
+        torch_dispatch_output = ttnn.to_torch(
+            tt_combine_tensor,
+            dtype=torch.bfloat16,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 0)),
+        )
+        torch_dispatch_output = torch_combine_output.reshape(1, 65536, 7168)
+
+        # TODO: (GR) check if this works for col major
+        # device_shards = [
+        #     ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_dispatch_tensor)
+        # ]
+        # ordered_shards = []
+        # for ir in range(mesh_shape[1]):
+        #     for ic in range(mesh_shape[0]):
+        #         ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
+        # torch_dispatch_output = torch.cat(ordered_shards, dim=0)
+
+    else:
+        torch_dispatch_output = ttnn.to_torch(
+            tt_dispatch_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        )
+
+    torch_dispatch_golden_ref, torch_dispatch_golden_map = torch_dispatch_golden
+    ref_shape = torch_dispatch_golden_ref.shape
+
+    # TODO: (GR) check if this works with 128 devices (not just 16)
+    torch_output_data = []
+    torch_ref_data = []
+    assert ref_shape == torch_dispatch_output.shape
+    for d in range(ref_shape[0]):
+        for b in range(ref_shape[1]):
+            if torch_dispatch_golden_map[d, b].item() == 1:
+                torch_output_data.append(torch_dispatch_output[d, b])
+                torch_ref_data.append(torch_dispatch_golden_ref[d, b])
+
+    torch_output_data = torch.stack(torch_output_data)
+    torch_ref_data = torch.stack(torch_ref_data)
+    eq, output = comp_pcc(torch_output_data, torch_ref_data)
+    logger.info(f"{output}, iteration {iteration}")
+    if not eq:
+        logger.warning(f"DISPATCH FAILED: {output}")
+
+    logger.info(comp_allclose(torch_ref_data, torch_output_data))
+
+    return eq
+
+
 def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_combine_golden):
     # TODO: (GR) remove hardcoding
     tt_combine_tensor = ttnn.reshape(tt_combine_tensor, [8, 1, 32, 7168])
@@ -491,6 +551,8 @@ def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_
     logger.info(f"{output}, iteration {iteration}")
     if not eq:
         logger.warning(f"COMBINE FAILED: {output}")
+
+    logger.info(comp_allclose(torch_combine_golden, torch_combine_output))
 
     return eq
 
@@ -543,6 +605,8 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 
     # (1, 1, 512, 7168) -> (512, 1, 1, 7168)
     tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
+
+    logger.info(comp_allclose(output_reference_tensor, tt_output_tensor))
 
     # compare output
     eq, output = comp_pcc(tt_output_tensor, output_reference_tensor)
@@ -620,6 +684,9 @@ def test_optimized_moe_decode_block(
     ############################################
     # initial setup
     ############################################
+
+    torch.manual_seed(2005)
+    random.seed(2005)
 
     devices = mesh_shape[0] * mesh_shape[1]
     dispatch_devices = mesh_shape[cluster_axis]
@@ -796,6 +863,7 @@ def test_optimized_moe_decode_block(
     tt_dispatch_input_expert_scores_tensors = []
 
     output_reference_tensors = []
+    torch_dispatch_goldens = []
     torch_combine_goldens = []
     for iteration in range(num_input_sets):
         dispatch_input_dtype = ttnn.bfloat16
@@ -850,6 +918,18 @@ def test_optimized_moe_decode_block(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
+
+        torch_dispatch_golden = gen_dispatch_golden(
+            torch_dispatch_input_tensor,
+            torch_dispatch_input_expert_indices_tensor,
+            torch_expert_mapping,
+            batch,
+            select_experts_k,
+            hidden_size,
+            mesh_shape,
+            cluster_axis,
+        )
+        torch_dispatch_goldens.append(torch_dispatch_golden)
 
         torch_combine_golden = gen_combine_golden(
             torch_dispatch_input_tensor,
@@ -1075,8 +1155,10 @@ def test_optimized_moe_decode_block(
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("HHHHH")
 
-        # TODO: (GR) temp
-        temp = ttnn.to_memory_config(tt_dispatch_output_sparse_buffer, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: DRAM so the L1 version can be deallocated later in the sequence
+        tt_dram_dispatch_output_sparse_buffer = ttnn.to_memory_config(
+            tt_dispatch_output_sparse_buffer, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # logger.info("Compute Inputs")
         # logger.info(f"Input: {tt_dispatch_output_sparse_buffer.shape}")
@@ -1207,9 +1289,10 @@ def test_optimized_moe_decode_block(
         logger.info("VVVVV")
 
         logger.info(f"Final Output Shape: {tt_final_output.shape}")
-        return tt_final_output, temp, tt_combine_output
+        return tt_final_output, tt_dram_dispatch_output_sparse_buffer, tt_combine_output
 
     tt_output_tensors = []
+    tt_dispatch_tensors = []
     tt_combine_tensors = []
     if enable_trace:
         logger.info(f"Begin compiling op")
@@ -1237,6 +1320,7 @@ def test_optimized_moe_decode_block(
         for iteration in range(num_iterations):
             tt_output, tt_dispatch_output, tt_combine_output = run_op(iteration)
             tt_output_tensors.append(tt_output)
+            tt_dispatch_tensors.append(tt_dispatch_output)
             tt_combine_tensors.append(tt_combine_output)
 
     logger.info(f"Begin synchronizing devices")
@@ -1253,6 +1337,11 @@ def test_optimized_moe_decode_block(
     all_iterations_passed = True
     for iteration in range(num_iterations):
         logger.info(f"Validating iteration: {iteration}")
+
+        # if not verify_dispatch(
+        #     iteration, mesh_device, mesh_shape, cluster_axis, tt_dispatch_tensors[iteration], torch_dispatch_goldens[iteration]
+        # ):
+        #     all_iterations_passed = False
 
         if not verify_combine(
             iteration, mesh_device, mesh_shape, tt_combine_tensors[iteration], torch_combine_goldens[iteration]
