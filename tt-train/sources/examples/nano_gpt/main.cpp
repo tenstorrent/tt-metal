@@ -201,7 +201,7 @@ struct MultihostConfig {
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
     SocketType socket_type = SocketType::MPI;
-    std::optional<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig> pipeline_parallel_config;
+    std::optional<ttml::models::distributed::llama::PipelineParallelConfig> pipeline_parallel_config;
 };
 
 MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
@@ -222,8 +222,7 @@ MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
 
     if (auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"]) {
-        config.pipeline_parallel_config =
-            ttml::models::distributed::pipeline_parallel_llama::read_config(pipeline_parallel_config);
+        config.pipeline_parallel_config = ttml::models::distributed::llama::read_config(pipeline_parallel_config);
     }
 
     return config;
@@ -385,6 +384,7 @@ int main(int argc, char **argv) {
         (training_config_path.parent_path().parent_path() / training_config.model_config).string();
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
     MultihostConfig multihost_config;
+    // This should really try to parse from what is defined in the model config
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
     }
@@ -653,12 +653,21 @@ int main(int argc, char **argv) {
     Model model = std::visit(
         [&device_config, &multihost_config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                if (multihost_config.pipeline_parallel_config) {
+                /*if (multihost_config.pipeline_parallel_config) {
+                    fmt::print("Creating pipeline parallel llama\n");
                     return ttml::models::distributed::pipeline_parallel_llama::create(
                         arg, *multihost_config.pipeline_parallel_config, device_config.enable_tp);
-                } else if (device_config.enable_tp || device_config.enable_cp) {
-                    return ttml::models::distributed::llama::create(arg);
+                } else */
+                if (device_config.enable_tp || device_config.enable_cp) {
+                    fmt::print("Creating distributed llama\n");
+                    std::optional<ttml::models::distributed::llama::PipelineParallelConfig> pipeline_config =
+                        std::nullopt;
+                    if (multihost_config.pipeline_parallel_config) {
+                        pipeline_config = *multihost_config.pipeline_parallel_config;
+                    }
+                    return ttml::models::distributed::llama::create(arg, pipeline_config);
                 } else {
+                    fmt::print("Creating normal llama\n");
                     return ttml::models::llama::create(arg);
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {

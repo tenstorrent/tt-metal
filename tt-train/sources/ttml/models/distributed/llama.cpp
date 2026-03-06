@@ -11,6 +11,7 @@
 #include "modules/embedding_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
+#include "ops/distributed/pipeline_parallel_comm_ops.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
@@ -42,14 +43,26 @@ namespace {
 
 }  // namespace
 
-DistributedLlama::DistributedLlama(const LlamaConfig& config) {
+PipelineParallelConfig read_config(const YAML::Node& config) {
+    PipelineParallelConfig pipeline_parallel_config;
+    pipeline_parallel_config.num_blocks = config["num_blocks"].as<uint32_t>();
+    pipeline_parallel_config.blocks_per_rank = config["blocks_per_rank"].as<std::unordered_map<uint32_t, uint32_t>>();
+    // pipeline_parallel_config.verify();
+    return pipeline_parallel_config;
+}
+
+DistributedLlama::DistributedLlama(
+    const LlamaConfig& config, const std::optional<PipelineParallelConfig>& pipeline_parallel_config) :
+    pipeline_parallel_config(pipeline_parallel_config) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     bool use_tp = pctx.is_tp_enabled();
+    bool use_pp = pipeline_parallel_config.has_value();
 
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
+    this->embedding_dim = config.embedding_dim;
     std::optional<uint32_t> intermediate_dim = config.intermediate_dim;
     uint32_t num_heads = config.num_heads;
     uint32_t num_groups = config.num_groups;
@@ -72,6 +85,15 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Theta: {}\n", theta);
 
+    if (use_pp) {
+        fmt::println("  Pipeline parallel configuration:");
+        fmt::println("    Num blocks: {}", pipeline_parallel_config->num_blocks);
+        fmt::println("    Blocks per rank:");
+        for (const auto& [rank, blocks] : pipeline_parallel_config->blocks_per_rank) {
+            fmt::println("      Rank {}: {}", rank, blocks);
+        }
+    }
+
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(
@@ -85,7 +107,9 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
             "embedding_dim={}",
             embedding_dim));
     }
-    tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
+    if (!use_pp || is_first_rank()) {
+        tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
+    }
 
     // Create RoPE scaling params if they are set
     ops::RopeScalingParams rope_scaling_params;
@@ -107,32 +131,99 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
         /*rope_scaling_params=*/rope_scaling_params);
-    blocks.reserve(num_blocks);
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+
+    auto blocks_to_skip = get_blocks_to_skip();
+    auto blocks_to_load = get_blocks_to_load(num_blocks);
+
+    blocks.reserve(blocks_to_load);
+    for (uint32_t block_idx = blocks_to_skip; block_idx < blocks_to_skip + blocks_to_load; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
             embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
     }
-    ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
-    if (use_tp) {
-        fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
-    } else {
-        fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
+
+    if (!use_pp || is_last_rank()) {
+        ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
+        if (use_tp) {
+            fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
+                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
+        } else {
+            fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
+        }
     }
 
     create_name("llama");
-    register_module(tok_emb, "tok_emb");
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        register_module(blocks[block_idx], fmt::format("llama_block_{}", block_idx));
+    if (tok_emb) {
+        register_module(tok_emb, "tok_emb");
     }
-    register_module(ln_fc, "ln_fc");
-    register_module(fc, "fc");
+
+    for (uint32_t block_idx = 0; block_idx < blocks_to_load; ++block_idx) {
+        register_module(blocks[block_idx], fmt::format("llama_block_{}", block_idx + blocks_to_skip));
+    }
+    if (ln_fc) {
+        register_module(ln_fc, "ln_fc");
+        register_module(fc, "fc");
+    }
+}
+
+bool DistributedLlama::is_first_rank() const {
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
+    return rank == 0;
+}
+
+bool DistributedLlama::is_last_rank() const {
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
+    int size = *distributed_ctx->size();
+    return rank + 1 == size;
+}
+
+uint32_t DistributedLlama::get_blocks_to_skip() const {
+    if (!pipeline_parallel_config.has_value()) {
+        return 0;
+    }
+
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int our_rank = *distributed_ctx->rank();
+    auto blocks_to_skip = 0U;
+    for (const auto& [rank_key, blocks] : pipeline_parallel_config.value().blocks_per_rank) {
+        if (static_cast<int>(rank_key) < our_rank) {
+            blocks_to_skip += blocks;
+        }
+    }
+    return blocks_to_skip;
+}
+
+uint32_t DistributedLlama::get_blocks_to_load(uint32_t default_num) const {
+    if (!pipeline_parallel_config.has_value()) {
+        return default_num;
+    }
+
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int our_rank = *distributed_ctx->rank();
+    return pipeline_parallel_config.value().blocks_per_rank.at(static_cast<uint32_t>(our_rank));
 }
 
 autograd::TensorPtr DistributedLlama::operator()(
     const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
-    auto tok_emb_out = (*tok_emb)(x);
-    auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
+    bool use_pp = pipeline_parallel_config.has_value();
+    auto out = x;
+    if (!use_pp || is_first_rank()) {
+        out = (*tok_emb)(out);
+    } else {
+        auto distributed_ctx = autograd::ctx().get_distributed_context();
+        int rank = *distributed_ctx->rank();
+        auto recv_rank = core::distributed::Rank(rank - 1);
+
+        auto batch_size = out->get_value().logical_shape()[0];
+        auto seq_len = out->get_value().logical_shape()[-1];
+
+        auto recv_tensor = ttml::core::empty(
+            ttnn::Shape{batch_size, 1U, seq_len, embedding_dim}, &autograd::ctx().get_device(), ttnn::MemoryConfig{});
+        out = autograd::create_tensor(recv_tensor);
+        out = ttml::ops::distributed::intermesh_recv(out, recv_rank);
+    }
+
     for (auto& block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
             out = common::transformer::memory_efficient_runner(*block, out, mask);
@@ -142,17 +233,27 @@ autograd::TensorPtr DistributedLlama::operator()(
             throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
         }
     }
-    out = (*ln_fc)(out);
-    auto logits = (*fc)(out);
-    return logits;
+
+    if (!use_pp || is_last_rank()) {
+        out = (*ln_fc)(out);
+        out = (*fc)(out);
+    } else {
+        auto distributed_ctx = autograd::ctx().get_distributed_context();
+        int rank = *distributed_ctx->rank();
+        auto send_rank = core::distributed::Rank(rank + 1);
+        out = ttml::ops::distributed::intermesh_send(out, send_rank);
+    }
+    return out;
 }
 
-std::shared_ptr<DistributedLlama> create(const LlamaConfig& config) {
-    return std::make_shared<DistributedLlama>(config);
+std::shared_ptr<DistributedLlama> create(
+    const LlamaConfig& config, const std::optional<PipelineParallelConfig>& pipeline_parallel_config) {
+    return std::make_shared<DistributedLlama>(config, pipeline_parallel_config);
 }
-std::shared_ptr<DistributedLlama> create(const YAML::Node& config) {
+std::shared_ptr<DistributedLlama> create(
+    const YAML::Node& config, const std::optional<PipelineParallelConfig>& pipeline_parallel_config) {
     LlamaConfig llama_config = models::llama::read_config(config);
-    return std::make_shared<DistributedLlama>(llama_config);
+    return std::make_shared<DistributedLlama>(llama_config, pipeline_parallel_config);
 }
 
 }  // namespace ttml::models::distributed::llama
