@@ -24,7 +24,7 @@ def float_to_uint32(value):
 def generate_mm_weights(shape, dtype):
     import torch
 
-    torch_mm_weights = (torch.randn(shape, dtype=torch.float32) / (shape[0] ** 0.5)).to(dtype)
+    torch_mm_weights = (torch.randn(shape, dtype=torch.float32) / (shape[-2] ** 0.5)).to(dtype)
     return torch_mm_weights
     # TODO: Review the below, which should provide a similar result
     # torch_mm_weights = torch.empty(shape, dtype=dtype)

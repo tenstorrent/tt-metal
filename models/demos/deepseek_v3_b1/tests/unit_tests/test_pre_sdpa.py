@@ -897,7 +897,7 @@ def test_pre_sdpa(
             )
             continue
 
-        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.935)
+        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.94)
         logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {sdpa_pcc}")
         assert (
             passing
