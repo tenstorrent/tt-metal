@@ -12,7 +12,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "common/stable_hash.hpp"
 

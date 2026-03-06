@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
-
 #include "hal_2xx_common.hpp"
 #include "rtoptions.hpp"
 #include <enchantum/enchantum.hpp>
