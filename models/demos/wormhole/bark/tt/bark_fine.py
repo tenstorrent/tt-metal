@@ -20,8 +20,8 @@ Reference: HuggingFace BarkFineModel
 from typing import List, Optional, Union
 
 import torch
-import ttnn
 
+import ttnn
 from models.demos.wormhole.bark.tt.bark_gpt import (
     BarkConfig,
     TtBarkBlock,

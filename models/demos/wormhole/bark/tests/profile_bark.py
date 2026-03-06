@@ -4,8 +4,8 @@
 import time
 
 import torch
-import ttnn
 
+import ttnn
 from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
 
