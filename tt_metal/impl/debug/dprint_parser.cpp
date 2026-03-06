@@ -492,12 +492,13 @@ std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const s
     return new_parser;
 }
 
-std::string DevicePrintParser::format_message(uint32_t info_id, std::span<const std::byte> payload_bytes) {
+std::string_view DevicePrintParser::format_message(
+    uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) {
     auto* string_info = get_string_info(info_id);
     if (string_info == nullptr) {
         return {};
     }
-    return format_message(*string_info, payload_bytes);
+    return format_message(*string_info, payload_bytes, buffer);
 }
 
 DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t info_id) {
@@ -513,7 +514,7 @@ DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t
             const char* format_string = reinterpret_cast<const char*>(
                 format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
             parsed_info.format_string = format_string;
-            parsed_info.placeholders = parse_format_string(format_string);
+            std::tie(parsed_info.plain_text_parts, parsed_info.placeholders) = parse_format_string(format_string);
             uint32_t max_arg_id = 0;
             for (const auto& placeholder : parsed_info.placeholders) {
                 max_arg_id = std::max(max_arg_id, placeholder.arg_id);
@@ -547,36 +548,38 @@ T read_value_from_payload(std::span<const std::byte> payload_bytes, std::size_t&
 }
 
 std::size_t DevicePrintParser::get_argument_size_from_type_id(char type_id) {
-    static std::byte empty_bytes[16];
+    static std::byte empty_bytes[32];
     std::size_t offset = 0;
     read_argument_from_payload(type_id, std::span<const std::byte>(empty_bytes), offset);
     return offset;
 }
 
-std::vector<DevicePrintParser::ArgumentValue> DevicePrintParser::read_arguments_from_payload(
-    std::span<char> argument_types, std::span<const std::byte> payload_bytes) {
-    std::vector<ArgumentValue> arguments;
+void DevicePrintParser::read_arguments_from_payload(
+    std::span<char> argument_types, std::span<const std::byte> payload_bytes, std::vector<ArgumentValue>& arguments) {
     std::size_t payload_offset = 0;
 
+    arguments.clear();
     arguments.reserve(argument_types.size());
     for (char argument_type : argument_types) {
         arguments.push_back(read_argument_from_payload(argument_type, payload_bytes, payload_offset));
     }
-
-    return arguments;
 }
 
-std::vector<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse_format_string(
-    std::string_view format_str) {
+std::pair<std::vector<std::string>, std::vector<DevicePrintParser::FormatPlaceholderInfo>>
+DevicePrintParser::parse_format_string(std::string_view format_str) {
+    std::vector<std::string> plain_text_parts;
     std::vector<FormatPlaceholderInfo> placeholders;
+    fmt::memory_buffer current_text;
     for (size_t i = 0; i < format_str.size(); i++) {
         if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
             // Escaped '{', add a single '{' to the result and skip the next character.
+            current_text.push_back('{');
             i++;
             continue;
         }
         if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
             // Escaped '}', add a single '}' to the result and skip the next character.
+            current_text.push_back('}');
             i++;
             continue;
         }
@@ -585,14 +588,19 @@ std::vector<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse_f
             if (!placeholder) {
                 TT_THROW("Invalid format string: failed to parse placeholder at position {}", i);
             }
+            placeholder->fmt_format = "{0" + std::string(placeholder->format_spec) + "}";
             placeholders.push_back(*placeholder);
+            plain_text_parts.push_back(std::string(current_text.data(), current_text.size()));
+            current_text.clear();
             i--;  // Step back so that the main loop can correctly identify the end of the placeholder
         } else {
             // Regular character, add it to the result.
+            current_text.push_back(format_str[i]);
             continue;
         }
     }
-    return placeholders;
+    plain_text_parts.push_back(std::string(current_text.data(), current_text.size()));
+    return {std::move(plain_text_parts), std::move(placeholders)};
 }
 
 std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse_placeholder(
@@ -651,9 +659,10 @@ std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse
     return {{arg_id, type_id, format_str.substr(format_spec_start, pos - format_spec_start - 1)}};
 }
 
-std::string DevicePrintParser::format_message(ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes) {
+std::string_view DevicePrintParser::format_message(
+    ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) {
     // Iterate over format_str and replace {} with format of payload values.
-    std::stringstream result;
+    buffer.buffer.clear();
     auto format_str = string_info.format_string;
     if (string_info.arguments_size > payload_bytes.size()) {
         log_warning(
@@ -664,73 +673,95 @@ std::string DevicePrintParser::format_message(ParsedStringInfo& string_info, std
             format_str);
         return {};
     }
-    auto argument_values = read_arguments_from_payload(string_info.argument_types, payload_bytes);
+    read_arguments_from_payload(string_info.argument_types, payload_bytes, buffer.argument_values);
 
-    for (size_t i = 0; i < format_str.size(); i++) {
-        if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
-            // Escaped '{', add a single '{' to the result and skip the next character.
-            result << '{';
-            i++;
-        } else if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
-            // Escaped '}', add a single '}' to the result and skip the next character.
-            result << '}';
-            i++;
-        } else if (format_str[i] == '{') {
-            auto placeholder = parse_placeholder(format_str, i);
-            if (!placeholder) {
-                return {};
-            }
-            i--;  // Step back so that the main loop can correctly identify the end of the placeholder
+    for (size_t i = 0; i < string_info.placeholders.size(); i++) {
+        // Append prefix plain text part before the placeholder
+        auto& plain_text_part = string_info.plain_text_parts[i];
+        buffer.buffer.append(plain_text_part.data(), plain_text_part.data() + plain_text_part.size());
 
-            // Do the actual formatting of the argument
-            auto format = fmt::runtime("{0" + std::string(placeholder->format_spec) + "}");
+        // Append the formatted argument for the placeholder
+        auto& placeholder = string_info.placeholders[i];
 
-            switch (placeholder->type_id) {
-                case 'b':  // int8_t
-                    result << fmt::format(format, std::get<int8_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'B':  // uint8_t
-                    result << fmt::format(format, std::get<uint8_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'h':  // int16_t
-                    result << fmt::format(format, std::get<int16_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'H':  // uint16_t
-                    result << fmt::format(format, std::get<uint16_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'i':  // int32_t
-                    result << fmt::format(format, std::get<int32_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'I':  // uint32_t
-                    result << fmt::format(format, std::get<uint32_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'q':  // int64_t
-                    result << fmt::format(format, std::get<int64_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'Q':  // uint64_t
-                    result << fmt::format(format, std::get<uint64_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'f':  // float
-                case 'e':  // bf4_t, but stored as float
-                case 'E':  // bf8_t, but stored as float
-                case 'w':  // bf16_t, but stored as float
-                    result << fmt::format(format, std::get<float>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'd':  // double
-                    result << fmt::format(format, std::get<double>(argument_values[placeholder->arg_id]));
-                    break;
-                case '?':  // bool
-                    result << fmt::format(format, std::get<bool>(argument_values[placeholder->arg_id]));
-                    break;
-                default:
-                    TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder->type_id);
-            }
-        } else {
-            // Regular character, add it to the result.
-            result << format_str[i];
+        // Do the actual formatting of the argument
+        auto format = fmt::runtime(placeholder.fmt_format);
+
+        switch (placeholder.type_id) {
+            case 'b':  // int8_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int8_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'B':  // uint8_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint8_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'h':  // int16_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int16_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'H':  // uint16_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint16_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'i':  // int32_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int32_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'I':  // uint32_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint32_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'q':  // int64_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int64_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'Q':  // uint64_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint64_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'f':  // float
+            case 'e':  // bf4_t, but stored as float
+            case 'E':  // bf8_t, but stored as float
+            case 'w':  // bf16_t, but stored as float
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<float>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'd':  // double
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<double>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case '?':  // bool
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<bool>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
-    return result.str();
+    auto& plain_text_part = string_info.plain_text_parts[string_info.placeholders.size()];
+    buffer.buffer.append(plain_text_part.data(), plain_text_part.data() + plain_text_part.size());
+    return std::string_view(buffer.buffer.data(), buffer.buffer.size());
 }
 
 DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(

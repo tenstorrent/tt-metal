@@ -371,6 +371,7 @@ void DevicePrintImpl::print_buffer_data(
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     uint32_t programmable_core_type_idx =
         MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    DevicePrintParser::FormatMessageBuffer format_message_buffer;
 
     while (word_index < data.size()) {
         // New data always starts with a DevicePrintHeader, so lets parse it.
@@ -442,13 +443,14 @@ void DevicePrintImpl::print_buffer_data(
                 // Format message
                 auto payload_bytes =
                     std::as_bytes(std::span(data).subspan(word_index)).subspan(0, header->message_payload);
-                auto formatted_message = elf_parser->format_message(header->info_id, payload_bytes);
+                auto formatted_message =
+                    elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer);
                 if (!formatted_message.empty()) {
                     // Find if we have something buffered from before
                     if (!risc_data.message_buffer.empty()) {
                         // We have something in the buffer, prepend it to the current message and clear the buffer.
-                        formatted_message = risc_data.message_buffer + formatted_message;
-                        risc_data.message_buffer.clear();
+                        risc_data.message_buffer += formatted_message;
+                        formatted_message = risc_data.message_buffer;
                     }
 
                     // Check if we hit new line
@@ -479,6 +481,7 @@ void DevicePrintImpl::print_buffer_data(
                         ostream* output_stream = get_output_stream(risc_key);
                         if (newline_pos == formatted_message.size() - 1) {
                             *output_stream << line_prefix << formatted_message << flush;
+                            risc_data.message_buffer.clear();
                         } else {
                             std::size_t newline_start = 0;
                             std::string_view full_message_view = formatted_message;
@@ -491,6 +494,8 @@ void DevicePrintImpl::print_buffer_data(
                             }
                             if (newline_start < full_message_view.size()) {
                                 risc_data.message_buffer = formatted_message.substr(newline_start);
+                            } else {
+                                risc_data.message_buffer.clear();
                             }
                         }
                     } else {
@@ -512,7 +517,6 @@ bool DevicePrintImpl::poll_one_core(
         device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
-    bool new_data = false;
 
     // Memory layout:
     // uint32_t wpos;
@@ -532,40 +536,37 @@ bool DevicePrintImpl::poll_one_core(
         buffer_address + eightbytes + risc_state_bytes + sizeof(uint32_t);  // Skip wpos, rpos, risc state, and lock
     uint32_t print_buffer_size = buffer_size - eightbytes - risc_state_bytes - sizeof(uint32_t);
 
-    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC || wpos == rpos) {
         return false;
     }
 
-    if (wpos != rpos) {
-        new_data = true;
-        if (rpos > wpos) {
-            // Read until end of buffer and then from beginning until wpos
-            auto data = MetalContext::instance().get_cluster().read_core(
-                device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
+    if (rpos > wpos) {
+        // Read until end of buffer and then from beginning until wpos
+        auto data = MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
 
-            // Process buffer data
-            print_buffer_data(device_id, logical_core, data);
+        // Process buffer data
+        print_buffer_data(device_id, logical_core, data);
 
-            // Update rpos, so that device knows it can use rest of the buffer
-            rpos = 0;
-            MetalContext::instance().get_cluster().write_core(
-                device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
-        }
-        if (rpos < wpos) {
-            // Read until wpos
-            auto data = MetalContext::instance().get_cluster().read_core(
-                device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
-
-            // Process buffer data
-            print_buffer_data(device_id, logical_core, data);
-
-            // Update rpos, so that device knows it can use rest of the buffer
-            rpos = wpos;
-            MetalContext::instance().get_cluster().write_core(
-                device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
-        }
+        // Update rpos, so that device knows it can use rest of the buffer
+        rpos = 0;
+        MetalContext::instance().get_cluster().write_core(
+            device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     }
-    return new_data;
+    if (rpos < wpos) {
+        // Read until wpos
+        auto data = MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+
+        // Process buffer data
+        print_buffer_data(device_id, logical_core, data);
+
+        // Update rpos, so that device knows it can use rest of the buffer
+        rpos = wpos;
+        MetalContext::instance().get_cluster().write_core(
+            device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
+    }
+    return true;
 }
 
 void DevicePrintImpl::init_print_buffers_for_core(

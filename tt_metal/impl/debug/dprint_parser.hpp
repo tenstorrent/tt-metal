@@ -63,25 +63,33 @@ public:
     DevicePrintParser(const DevicePrintParser&) = delete;
     DevicePrintParser& operator=(const DevicePrintParser&) = delete;
 
+    using ArgumentValue =
+        std::variant<bool, int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t, float, double>;
+    struct FormatMessageBuffer {
+        fmt::memory_buffer buffer;
+        std::vector<ArgumentValue> argument_values;
+    };
+
     static std::shared_ptr<DevicePrintParser> get_parser_for_elf(const std::string& elf_path);
-    std::string format_message(uint32_t info_id, std::span<const std::byte> payload_bytes);
+    std::string_view format_message(
+        uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
 private:
     DevicePrintParser(const std::string& elf_path);
-
-    using ArgumentValue =
-        std::variant<bool, int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t, float, double>;
 
     struct FormatPlaceholderInfo {
         uint32_t arg_id;
         char type_id;
         std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
+        std::string fmt_format;        // The full format to be used in fmt::format, e.g. "{0:08x}"
     };
 
     struct ParsedStringInfo {
         std::string_view format_string;
         std::string_view file;
         uint32_t line = 0;
+        std::vector<std::string> plain_text_parts;  // The parts of the format string that are plain text, split by the
+                                                    // placeholders. Size is one more than the number of placeholders.
         std::vector<FormatPlaceholderInfo> placeholders;
         std::vector<char> argument_types;
         uint32_t arguments_size = 0;
@@ -92,11 +100,15 @@ private:
     static std::size_t get_argument_size_from_type_id(char type_id);
     static ArgumentValue read_argument_from_payload(
         char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset);
-    static std::vector<FormatPlaceholderInfo> parse_format_string(std::string_view format_str);
+    static std::pair<std::vector<std::string>, std::vector<FormatPlaceholderInfo>> parse_format_string(
+        std::string_view format_str);
     static std::optional<FormatPlaceholderInfo> parse_placeholder(std::string_view format_str, std::size_t& pos);
-    static std::vector<ArgumentValue> read_arguments_from_payload(
-        std::span<char> argument_types, std::span<const std::byte> payload_bytes);
-    static std::string format_message(ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes);
+    static void read_arguments_from_payload(
+        std::span<char> argument_types,
+        std::span<const std::byte> payload_bytes,
+        std::vector<ArgumentValue>& arguments);
+    static std::string_view format_message(
+        ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
     std::string elf_path;
     ll_api::ElfFile elf_file;
