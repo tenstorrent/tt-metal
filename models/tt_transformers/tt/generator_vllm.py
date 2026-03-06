@@ -140,6 +140,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # Note: Mllama doesn't support prefix caching (it's V0 only)
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -236,6 +237,7 @@ class LlamaForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -297,6 +299,7 @@ class QwenForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -345,6 +348,7 @@ class MistralForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -398,6 +402,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -460,6 +465,7 @@ class GptOssForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
