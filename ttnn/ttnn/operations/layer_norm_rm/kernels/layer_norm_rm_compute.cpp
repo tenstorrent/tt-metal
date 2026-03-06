@@ -1,27 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// layer_norm_rm - Compute Kernel
-// Runs on math RISC-V core, performs FPU/SFPU operations
-//
-// Stage 1 stub: minimal implementation - no-op kernel.
-// Full implementation will run these phases per tile-row:
-//   Phase 1: tilize(cb_in -> cb_tilized, Wt, 1)
-//   Phase 2: reduce<SUM,REDUCE_ROW>(cb_tilized, cb_reduce_scaler -> cb_mean, row(Wt))
-//             -- WaitUpfrontNoPop so cb_tilized persists for Phase 3
-//   Phase 3: sub<COL>(cb_tilized, cb_mean -> cb_centered, row(Wt))
-//             -- manual cb_pop_front(cb_tilized, Wt) after
-//   Phase 4: square<WaitUpfrontNoPop>(cb_centered -> cb_squared, row(Wt))
-//             -- WaitUpfrontNoPop so cb_centered persists for Phase 7
-//   Phase 5: reduce<SUM,REDUCE_ROW>(cb_squared, cb_reduce_scaler -> cb_var_eps, row(Wt))
-//   Phase 6: add<SCALAR>(cb_var_eps, cb_eps -> cb_inv_std, single())
-//             -- post_op: rsqrt_tile_init(); rsqrt_tile(dst_idx);
-//   Phase 7: mul<COL>(cb_centered, cb_inv_std -> cb_normed, row(Wt))
-//             -- manual cb_pop_front(cb_centered, Wt) after
-//   Phase 8a: mul<ROW>(cb_normed, cb_gamma -> cb_affine_out, row(Wt))
-//   Phase 8b: add<ROW>(cb_affine_out, cb_beta -> cb_normed, row(Wt))  [reuse freed cb]
-//   Phase 9: untilize<Wt>(cb_normed -> cb_out, 1)
-
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -29,15 +8,32 @@
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
 
+constexpr uint32_t cb_in = 0;
+constexpr uint32_t cb_reduce_scaler = 8;
+constexpr uint32_t cb_out = 16;
+constexpr uint32_t cb_tilized = 24;
+
 void kernel_main() {
-    // Compile-time args:
-    //   [0] Wt          - Tiles per tile-row
-    //   [1] has_gamma   - 1 if gamma
-    //   [2] has_beta    - 1 if beta
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(2);
 
-    // Runtime args:
-    //   [0] N           - Tile-rows to process on this core
+    const uint32_t N = get_arg_val<uint32_t>(0);
 
-    // Stub: no-op
-    // Real implementation will execute 9 phases of layer norm computation.
+    if (N == 0) {
+        return;
+    }
+
+    compute_kernel_hw_startup(cb_in, cb_reduce_scaler, cb_out);
+
+    // Wait for constant CBs (reduce_scaler pushed by reader)
+    cb_wait_front(cb_reduce_scaler, 1);
+
+    for (uint32_t tr = 0; tr < N; tr++) {
+        // Phase 1: Tilize input (cb_in -> cb_tilized)
+        compute_kernel_lib::tilize<cb_in, cb_tilized>(Wt, 1);
+
+        // Stage 1: passthrough — untilize directly (cb_tilized -> cb_out)
+        compute_kernel_lib::untilize<Wt, cb_tilized, cb_out>(1);
+    }
 }

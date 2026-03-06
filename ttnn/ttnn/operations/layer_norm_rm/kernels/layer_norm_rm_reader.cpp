@@ -1,39 +1,96 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// layer_norm_rm - Reader Kernel
-// Runs on RISCV_0 (BRISC), reads RM sticks from DRAM to L1 CBs via NOC0
-//
-// Stage 1 stub: minimal implementation that signals completion.
-// Full implementation will:
-//   1. Read Wt RM sticks per tile-row from input into cb_in (Wt tile-sized pages)
-//   2. On first tile-row: generate reduce scaler (1/W) into cb_reduce_scaler
-//   3. On first tile-row: generate epsilon scalar tile into cb_eps
-//   4. On first tile-row: read gamma Wt tiles into cb_gamma (once, never popped)
-//   5. On first tile-row: read beta Wt tiles into cb_beta (once, never popped)
-
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-// TensorAccessor is available via dataflow_api.h (includes api/tensor/tensor_accessor.h)
+
+constexpr uint32_t cb_in = 0;
+constexpr uint32_t cb_gamma = 1;
+constexpr uint32_t cb_beta = 2;
+constexpr uint32_t cb_reduce_scaler = 8;
+constexpr uint32_t cb_eps = 9;
 
 void kernel_main() {
-    // Compile-time args:
-    //   [0] stick_size       - Width of one RM stick in bytes
-    //   [1] Wt               - Tiles per row
-    //   [2] has_gamma        - 1 if gamma tensor provided
-    //   [3] has_beta         - 1 if beta tensor provided
-    //   [4+] input TensorAccessor compile-time args
+    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+    constexpr uint32_t input_acc_idx = 4;
+    constexpr auto input_args = TensorAccessorArgs<input_acc_idx>();
 
-    // Runtime args:
-    //   [0] src_addr         - Input buffer base address
-    //   [1] N                - Tile-rows for this core
-    //   [2] start_stick_id   - First stick ID for this core
-    //   [3] scaler_packed    - 1/W as packed bfloat16 u32
-    //   [4] eps_packed       - epsilon as packed bfloat16 u32
-    //   [5] gamma_addr       - Gamma buffer base address (0 if no gamma)
-    //   [6] beta_addr        - Beta buffer base address (0 if no beta)
+    uint32_t arg_idx = 0;
+    const uint32_t src_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t N = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_stick_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t scaler_packed = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t eps_packed = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    // Stub: no-op
-    // Real implementation will populate cb_in with Wt pages per tile-row,
-    // and constant CBs (reduce_scaler, eps, gamma, beta) on first iteration.
+    if (N == 0) {
+        return;
+    }
+
+    const auto input_accessor = TensorAccessor(input_args, src_addr, stick_size);
+
+    constexpr uint32_t sticks_per_tile_row = 32;
+
+    // Generate reduce scaler tile (1/W) - program lifetime constant
+    union {
+        float f;
+        uint32_t u;
+    } scaler_conv;
+    scaler_conv.u = scaler_packed;
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce_scaler>(scaler_conv.f);
+
+    // Generate epsilon tile - program lifetime constant
+    union {
+        float f;
+        uint32_t u;
+    } eps_conv;
+    eps_conv.u = eps_packed;
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_conv.f);
+
+    // Read gamma tiles if present (Wt tiles, program lifetime)
+    if constexpr (has_gamma) {
+        constexpr uint32_t tile_size = get_tile_size(cb_gamma);
+        cb_reserve_back(cb_gamma, Wt);
+        uint32_t gamma_l1_write_addr = get_write_ptr(cb_gamma);
+        for (uint32_t t = 0; t < Wt; t++) {
+            uint64_t gamma_noc_addr = get_noc_addr(t, gamma_addr);
+            noc_async_read(gamma_noc_addr, gamma_l1_write_addr, tile_size);
+            gamma_l1_write_addr += tile_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_gamma, Wt);
+    }
+
+    // Read beta tiles if present (Wt tiles, program lifetime)
+    if constexpr (has_beta) {
+        constexpr uint32_t tile_size = get_tile_size(cb_beta);
+        cb_reserve_back(cb_beta, Wt);
+        uint32_t beta_l1_write_addr = get_write_ptr(cb_beta);
+        for (uint32_t t = 0; t < Wt; t++) {
+            uint64_t beta_noc_addr = get_noc_addr(t, beta_addr);
+            noc_async_read(beta_noc_addr, beta_l1_write_addr, tile_size);
+            beta_l1_write_addr += tile_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_beta, Wt);
+    }
+
+    // Main loop: read N tile-rows of RM sticks into cb_in
+    for (uint32_t tr = 0; tr < N; tr++) {
+        cb_reserve_back(cb_in, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_in);
+
+        for (uint32_t s = 0; s < sticks_per_tile_row; s++) {
+            uint64_t noc_addr = input_accessor.get_noc_addr(start_stick_id);
+            noc_async_read(noc_addr, l1_write_addr, stick_size);
+            l1_write_addr += stick_size;
+            start_stick_id++;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_in, Wt);
+    }
 }

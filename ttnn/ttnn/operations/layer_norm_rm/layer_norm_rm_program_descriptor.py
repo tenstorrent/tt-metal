@@ -371,11 +371,10 @@ def create_program_descriptor(
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    # Epsilon packed as bfloat16 in lower 16 bits for scaler
-    eps_packed = _float_to_packed_bf16_u32(epsilon)
-    # Reduce scaler = 1/W (for mean computation)
+    # Pack float values as uint32 (IEEE 754 bits) for passing to kernel
+    eps_packed = struct.unpack("I", struct.pack("f", epsilon))[0]
     scaler_val = 1.0 / float(W)
-    scaler_packed = _float_to_packed_bf16_u32(scaler_val)
+    scaler_packed = struct.unpack("I", struct.pack("f", scaler_val))[0]
 
     reader_rt_args = ttnn.RuntimeArgs()
 
