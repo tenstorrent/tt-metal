@@ -18,6 +18,14 @@
 namespace ttnn::graph {
 
 namespace {
+
+int64_t json_to_int(const nlohmann::json& v) {
+    if (v.is_number()) {
+        return v.get<int64_t>();
+    }
+    return std::stoll(v.get<std::string>());
+}
+
 ttnn::Shape parse_shape(std::string_view shape_string) {
     // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
     auto start = shape_string.find('[') + 1;
@@ -63,7 +71,7 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
                 while (++i < trace.size()) {
                     const auto& inner_v = trace[i];
                     if (inner_v[kNodeType] == "buffer" && inner_v[kParams][kType] == "L1") {
-                        total_buffer += std::stoi(inner_v[kParams][kSize].get<std::string>());
+                        total_buffer += json_to_int(inner_v[kParams][kSize]);
                     } else if (inner_v[kNodeType] == kNodeTensor) {
                         continue;
                     } else {
@@ -74,16 +82,16 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
             }
             current_op.push_back(v[kParams][kName]);
         } else if (v[kNodeType] == kNodeCBAllocate) {
-            total_cb += stoi(v[kParams][kSize].get<std::string>());
+            total_cb += json_to_int(v[kParams][kSize]);
         } else if (v[kNodeType] == kNodeCBDeallocateAll) {
             total_cb = 0;
         } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "L1") {
-            total_buffer += stoi(v[kParams][kSize].get<std::string>());
+            total_buffer += json_to_int(v[kParams][kSize]);
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
             if (buffer[kParams][kType] == "L1") {
-                total_buffer -= stoi(buffer[kParams][kSize].get<std::string>());
+                total_buffer -= json_to_int(buffer[kParams][kSize]);
             }
         } else if (v[kNodeType] == kNodeFunctionEnd) {
             current_op.pop_back();
@@ -224,7 +232,7 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
 
             const auto type =
                 node[kParams][kType] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
-            const auto size = stoi(node[kParams][kSize].get<std::string>());
+            const auto size = json_to_int(node[kParams][kSize]);
 
             const auto& tensor = trace[tensor_id];
             const std::string shape_string = tensor[kParams][kShape];
@@ -276,13 +284,13 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
 
 // calculate the size of buffer allocated/deallocated on each core
 static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
-    uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
-    uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
+    uint32_t page_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kPageSize)));
+    uint32_t num_of_cores = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kNumCores)));
     if (num_of_cores == 0) {
         num_of_cores = interleaved_storage_cores;
     }
 
-    uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
+    uint32_t total_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kSize)));
     return detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
 }
 
@@ -307,9 +315,9 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
         }
 
         if (node.at(kNodeType) == kNodeCBAllocate) {
-            bool is_globally_allocated = std::stoi(node.at(kParams).at(kGloballyAllocated).get<std::string>()) == 1;
+            bool is_globally_allocated = json_to_int(node.at(kParams).at(kGloballyAllocated)) == 1;
             if (!is_globally_allocated) {
-                uint32_t alloc_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
+                uint32_t alloc_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kSize)));
                 current_cb += alloc_size;
                 peak_cb = std::max(peak_cb, current_cb);
                 current_total += alloc_size;
@@ -345,14 +353,14 @@ DRAMUsage extract_dram_usage(const nlohmann::json& trace) {
         const auto& v = trace[i];
 
         if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
-            size_t buffer_size = std::stoll(v[kParams][kSize].get<std::string>());
+            size_t buffer_size = static_cast<size_t>(json_to_int(v[kParams][kSize]));
             current_buffer += buffer_size;
             result.total_allocations += buffer_size;
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
             if (buffer[kParams][kType] == "DRAM") {
-                size_t buffer_size = std::stoll(buffer[kParams][kSize].get<std::string>());
+                size_t buffer_size = static_cast<size_t>(json_to_int(buffer[kParams][kSize]));
                 current_buffer -= buffer_size;
                 result.total_deallocations += buffer_size;
             }

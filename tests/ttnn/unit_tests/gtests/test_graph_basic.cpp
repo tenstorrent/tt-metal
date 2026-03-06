@@ -761,7 +761,7 @@ TEST_F(TestScopedGraphCapture, GetReportTest) {
         EXPECT_GT(report.at(ttnn::graph::kReportGraph).size(), 0u);
 
         // Metadata should have timestamp
-        auto& metadata = report.at(ttnn::graph::kReportMetadata);
+        const auto& metadata = report.at(ttnn::graph::kReportMetadata);
         ASSERT_TRUE(metadata.contains(ttnn::graph::kReportTimestampNs));
         EXPECT_GT(metadata.at(ttnn::graph::kReportTimestampNs).get<uint64_t>(), 0u);
 
@@ -807,7 +807,7 @@ TEST_P(StackTraceTest, StackTracesEnabledTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart) {
             if (node.contains(ttnn::graph::kStackTrace)) {
-                auto& stack_trace = node.at(ttnn::graph::kStackTrace);
+                const auto& stack_trace = node.at(ttnn::graph::kStackTrace);
                 if (!stack_trace.empty()) {
                     found_stack_trace = true;
                     // Stack trace should be an array of strings
@@ -852,7 +852,7 @@ TEST_P(StackTraceTest, StackTracesDisabledTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart) {
             if (node.contains(ttnn::graph::kStackTrace)) {
-                auto& stack_trace = node.at(ttnn::graph::kStackTrace);
+                const auto& stack_trace = node.at(ttnn::graph::kStackTrace);
                 EXPECT_TRUE(stack_trace.empty()) << "Stack trace should be empty when disabled";
             }
         }
@@ -899,7 +899,7 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
     bool found_tensor_with_full_info = false;
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeTensor) {
-            auto& params = node.at(ttnn::graph::kParams);
+            const auto& params = node.at(ttnn::graph::kParams);
 
             // Required fields
             ASSERT_TRUE(params.contains(ttnn::graph::kShape));
@@ -995,7 +995,7 @@ TEST_F(TestScopedGraphCapture, ErrorTrackingTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeError) {
             found_error_node = true;
-            auto& params = node.at(ttnn::graph::kParams);
+            const auto& params = node.at(ttnn::graph::kParams);
             EXPECT_EQ(params.at(ttnn::graph::kErrorType).get<std::string>(), "TestError");
             EXPECT_EQ(params.at(ttnn::graph::kErrorMessage).get<std::string>(), "This is a test error message");
             EXPECT_EQ(params.at(ttnn::graph::kErrorOperation).get<std::string>(), "test_operation");
@@ -1027,7 +1027,7 @@ TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
 
     // Check that the report has devices
     ASSERT_TRUE(report.contains(ttnn::graph::kReportDevices));
-    auto& devices = report.at(ttnn::graph::kReportDevices);
+    const auto& devices = report.at(ttnn::graph::kReportDevices);
     EXPECT_GT(devices.size(), 0u) << "Expected at least one device to be captured";
 
     // cluster_descriptor may or may not be present depending on environment
@@ -1059,7 +1059,7 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferAllocate) {
             found_buffer_allocate = true;
-            auto& params = node.at(ttnn::graph::kParams);
+            const auto& params = node.at(ttnn::graph::kParams);
 
             ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType))
                 << "buffer_allocate should contain exact_buffer_type";
@@ -1069,7 +1069,7 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
 
             ASSERT_TRUE(params.contains(ttnn::graph::kMaxSizePerBank))
                 << "buffer_allocate should contain max_size_per_bank";
-            auto max_size = std::stoull(params.at(ttnn::graph::kMaxSizePerBank).get<std::string>());
+            auto max_size = params.at(ttnn::graph::kMaxSizePerBank).get<uint64_t>();
             EXPECT_GT(max_size, 0u);
         }
     }
@@ -1098,11 +1098,11 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
 
     ASSERT_TRUE(report.contains("per_operation_buffers"))
         << "Report should contain per_operation_buffers in NORMAL mode";
-    auto& per_op = report.at("per_operation_buffers");
+    const auto& per_op = report.at("per_operation_buffers");
     EXPECT_TRUE(per_op.is_object());
     EXPECT_GT(per_op.size(), 0u) << "Expected at least one operation's buffer snapshot";
 
-    for (auto& [op_counter, bufs] : per_op.items()) {
+    for (const auto& [op_counter, bufs] : per_op.items()) {
         EXPECT_TRUE(bufs.is_array());
         for (const auto& buf : bufs) {
             EXPECT_TRUE(buf.contains("device_id"));
@@ -1135,7 +1135,7 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
 
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferDeallocate) {
-            auto& params = node.at(ttnn::graph::kParams);
+            const auto& params = node.at(ttnn::graph::kParams);
             EXPECT_TRUE(params.contains(ttnn::graph::kExactBufferType))
                 << "buffer_deallocate should contain exact_buffer_type";
             if (params.contains(ttnn::graph::kExactBufferType)) {
@@ -1150,7 +1150,7 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferAllocate) {
             found_alloc = true;
-            auto& params = node.at(ttnn::graph::kParams);
+            const auto& params = node.at(ttnn::graph::kParams);
             ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType));
             ASSERT_TRUE(params.contains(ttnn::graph::kAddress));
         }

@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/reports.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <mutex>
@@ -179,8 +180,8 @@ public:
     static bool is_buffer_pages_enabled();
 
 private:
-    static bool capture_stack_traces_;
-    static bool capture_buffer_pages_;
+    static std::atomic<bool> capture_stack_traces_;
+    static std::atomic<bool> capture_buffer_pages_;
     static std::vector<std::string> capture_stack_trace();
 };
 
