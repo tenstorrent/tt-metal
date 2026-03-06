@@ -842,6 +842,11 @@ class TraceEntry:
 _TRACE_ENABLED_CLASSES: Set[Type] = set()
 _TRACE_DISABLED_CLASSES: Set[Type] = set()
 _TRACE_RUNNING = False
+_TRACE_CAPTURING = False
+
+
+def is_trace_capturing():
+    return _TRACE_CAPTURING
 
 
 def trace_enabled(cls: Type) -> Type:
@@ -924,6 +929,20 @@ class TracedRun(LightweightRun):
         return (module_name, _compute_args_signature(args))
 
     @staticmethod
+    def _invalidate_output_cache(trace_output) -> None:
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def _clear(e):
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                e.elem = None
+
+        if isinstance(trace_output, (list, tuple)):
+            for item in trace_output:
+                _clear(item)
+        else:
+            _clear(trace_output)
+
+    @staticmethod
     def _copy_inputs_to_trace_buffer(new_args, trace_inputs) -> None:
         """Copy new inputs to trace input buffers."""
         trace_idx = 0
@@ -959,16 +978,13 @@ class TracedRun(LightweightRun):
 
         for arg in func_args:
             if isinstance(arg, ttnn.Tensor):
-                host_tensor = arg.cpu() if arg.storage_type() != ttnn.StorageType.HOST else arg
-                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_input = ttnn.clone(arg, memory_config=arg.memory_config(), dtype=arg.dtype)
                 trace_inputs.append(trace_input)
                 trace_func_args.append(trace_input)
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
                 t = arg.ttnn_tensor
-                host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
-                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_input = ttnn.clone(t, memory_config=t.memory_config(), dtype=t.dtype)
                 trace_inputs.append(trace_input)
-                # Clone the wrapper and set trace input
                 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
                 new_arg = TorchTTNNTensor(trace_input)
@@ -978,10 +994,13 @@ class TracedRun(LightweightRun):
                 trace_func_args.append(arg)
 
         # Warm-up
-        trace_output = module.forward(*func_args, **func_kwargs)
+        _ = module.forward(*func_args, **func_kwargs)
         # Capture
+        global _TRACE_CAPTURING
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
-        _ = module.forward(*trace_func_args, **func_kwargs)
+        _TRACE_CAPTURING = True
+        trace_output = module.forward(*trace_func_args, **func_kwargs)
+        _TRACE_CAPTURING = False
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(device)
 
@@ -1023,9 +1042,11 @@ class TracedRun(LightweightRun):
             signpost(f"{self.module_name}", f"{self.__class__.__name__}")
 
         begin = time.time()
-        # Check if this module is trace-enabled
         global _TRACE_RUNNING
-        if not is_trace_enabled(self) or _TRACE_RUNNING:
+        should_trace = is_trace_enabled(self) and (
+            not hasattr(self, "should_trace") or self.should_trace(*args, **kwds)
+        )
+        if not should_trace or _TRACE_RUNNING:
             if _TRACE_RUNNING:
                 print(
                     f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
@@ -1047,11 +1068,13 @@ class TracedRun(LightweightRun):
         cache_key = TracedRun._make_cache_key(self.module_name, func_args)
 
         if cache_key in TracedRun._trace_cache:
-            # Execute cached trace
             print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             entry = TracedRun._trace_cache[cache_key]
+            if hasattr(self, "pre_trace_execute"):
+                self.pre_trace_execute(*args, **kwds)
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
+            TracedRun._invalidate_output_cache(entry.trace_output)
             result = entry.trace_output
         else:
             _TRACE_RUNNING = True
