@@ -506,6 +506,12 @@ void LatencyResultsManager::report_latency_results(
     latency_summary.ftype = ftype_str;
     latency_summary.ntype = ntype_str;
     latency_summary.topology = topology_str;
+    latency_summary.sender_device_id = sender_location.node_id.chip_id;
+    latency_summary.sender_core_x = sender_location.core.x;
+    latency_summary.sender_core_y = sender_location.core.y;
+    latency_summary.responder_device_id = responder_location.node_id.chip_id;
+    latency_summary.responder_core_x = responder_location.core.x;
+    latency_summary.responder_core_y = responder_location.core.y;
     latency_summary.num_devices = num_devices;
     latency_summary.num_links = num_links;
     latency_summary.num_samples = num_samples;
@@ -585,7 +591,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
     if (include_upload_columns) {
         csv_stream << "file_name,machine_type,test_ts,";
     }
-    csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+    csv_stream << "test_name,ftype,ntype,topology,sender_device,sender_core_x,sender_core_y,"
+                  "responder_device,responder_core_x,responder_core_y,num_devices,num_links,num_samples,payload_size,"
                   "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                   "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
@@ -600,6 +607,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
         }
 
         csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
+                   << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
+                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
                    << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                    << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                    << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","

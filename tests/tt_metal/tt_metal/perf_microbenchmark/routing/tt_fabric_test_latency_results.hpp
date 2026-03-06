@@ -88,6 +88,12 @@ struct LatencyResultSummary {
     std::string ftype;
     std::string ntype;
     std::string topology;
+    uint32_t sender_device_id{};
+    uint32_t sender_core_x{};
+    uint32_t sender_core_y{};
+    uint32_t responder_device_id{};
+    uint32_t responder_core_x{};
+    uint32_t responder_core_y{};
     uint32_t num_devices{};
     uint32_t num_links{};
     uint32_t num_samples{};
