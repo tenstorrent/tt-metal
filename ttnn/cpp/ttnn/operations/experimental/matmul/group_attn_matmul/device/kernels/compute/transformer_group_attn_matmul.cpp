@@ -7,7 +7,6 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
-#include "ttnn/kernel_lib/tilize_helpers.hpp"
 
 using std::uint32_t;
 
@@ -120,11 +119,11 @@ void kernel_main() {
                             // uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
                             // uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
                             // uint32_t in1_index = in1_index_subblock_offset; // offset into in1 block
-                            // // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                            // // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                             // for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                             //     // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             //     // accumulation is done by iterating matmul_block across inner dim
-                            //     // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                            //     // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                             //     matmul_block(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
                             //     in0_index ++;  // stride right by 1
                             //     in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
@@ -153,8 +152,19 @@ void kernel_main() {
             } // in0_num_blocks_w
 
             // cb_intermed1 comes from reader; untilized row-major tile
-            // tilize CB::intermed1 and write to CBIndex::c_16 with reconfiguration
-            compute_kernel_lib::tilize<cb_intermed1, out_cb_id>(out_num_tiles, 1);
+            reconfig_data_format_srca(cb_in1, cb_intermed1);
+            pack_reconfig_data_format(cb_intermed0, out_cb_id);
+            cb_wait_front(cb_intermed1, out_num_tiles);
+
+            cb_reserve_back(out_cb_id, out_num_tiles);
+
+            // tilize CB::intermed1 and write to CBIndex::c_16
+            tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles, out_cb_id);
+            tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
+            cb_push_back(out_cb_id, out_num_tiles);
+
+            cb_pop_front(cb_intermed1, out_num_tiles);
+            tilize_uninit(cb_intermed1, out_cb_id);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

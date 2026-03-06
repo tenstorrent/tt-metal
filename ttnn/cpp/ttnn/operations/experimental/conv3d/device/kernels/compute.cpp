@@ -199,12 +199,13 @@ void kernel_main() {
                             // Tilize row-major patches with variable row alignment
                             // Reader produces row pages, which may not be tile aligned
                             compute_kernel_lib::tilize<
+                                matmul_K_t,
                                 cb_vol2col_rm,
                                 cb_vol2col_tiled,
                                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                                matmul_K_t, matmul_M_t, num_patches);
+                                matmul_M_t, num_patches);
 
                             // Apply matmul blocks
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
