@@ -293,7 +293,8 @@ jobs:
         id: slack-status
         shell: bash
         run: |
-          if [ "${{ steps.slack-report.outcome }}" = "success" ]; then
+          slack_ts="${{ steps.slack-report.outputs.slack_ts }}"
+          if [ -n "$slack_ts" ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failed" >> "$GITHUB_OUTPUT"
