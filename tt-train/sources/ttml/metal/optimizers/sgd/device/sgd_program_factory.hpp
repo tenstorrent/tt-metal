@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "metal/ttnn_all_includes.hpp"
-#include "sgd_fused_device_operation_types.hpp"
+#include "sgd_device_operation_types.hpp"
 
-namespace ttml::metal::optimizers::sgd_fused::device {
+namespace ttml::metal::optimizers::sgd::device {
 
-struct SGDFusedProgramFactory {
+struct SGDProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
@@ -34,4 +34,4 @@ struct SGDFusedProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttml::metal::optimizers::sgd_fused::device
+}  // namespace ttml::metal::optimizers::sgd::device
