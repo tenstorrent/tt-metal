@@ -177,7 +177,7 @@ jobs:
           with open(path) as f:
               tests = yaml.safe_load(f)
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
-          TTSIM_TIMEOUT_MINUTES = 20
+          TTSIM_TIMEOUT_MINUTES = 80
           entries = []
           for t in tests:
               if not t.get("ttsim") or not t.get("cmd"):
@@ -266,9 +266,6 @@ jobs:
           mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.arch.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
-      - name: Install pytest-xdist for parallel execution
-        run: uv pip install pytest-xdist
-
       # Note: The skip list YAML is available from the full checkout above (line 227-230).
       # No sparse checkout is needed because the ttnn-pytests job does a full checkout with submodules.
       - name: Build skip list arguments
@@ -282,8 +279,8 @@ jobs:
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
         run: |
-          # Run pytest with parallel execution and skip list
-          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
+          # Run pytest with skip list
+          ${{ matrix.test-group.cmd }} ${{ steps.skip-list.outputs.skip_args }}
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
