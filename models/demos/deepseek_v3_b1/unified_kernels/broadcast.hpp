@@ -158,9 +158,10 @@ struct Broadcast {
                         connections[connection_idx] =
                             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                                 arg_idx);
-                        connections[connection_idx].open();
+                        connections[connection_idx].open_start();
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
                         fabric_set_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        connections[connection_idx].open_finish();
                     }
                 }
 
