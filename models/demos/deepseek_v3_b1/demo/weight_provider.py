@@ -60,7 +60,8 @@ class LogicalModelDimensions:
     KV_B_LORA_RANK = 512
     KV_B_PROJ_OUT = 32768
     O_PROJ_OUT = 16384
-    MLP_INTERMEDIATE_SIZE = 2048
+    MOE_INTERMEDIATE_SIZE = 2048
+    INTERMEDIATE_SIZE = 18432
     GATE_NUM_INDICES = 256
 
 
@@ -119,25 +120,25 @@ def _build_synthetic_moe_state_dict(
 
     # Shared experts
     state_dict[_layer_key(layer_id, "mlp.shared_experts.gate_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.shared_experts.up_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.shared_experts.down_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, dtype=dtype
     )
 
     # Routed experts
     for e in range(num_routed_experts):
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.gate_proj.weight")] = torch.randn(
-            LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
         )
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.up_proj.weight")] = torch.randn(
-            LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
         )
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.down_proj.weight")] = torch.randn(
-            LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, dtype=dtype
+            LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, dtype=dtype
         )
 
     return state_dict
@@ -181,13 +182,13 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
 
     # Single MLP (used for both shared and routed in dense)
     state_dict[_layer_key(layer_id, "mlp.gate_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.up_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.down_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MLP_INTERMEDIATE_SIZE, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.INTERMEDIATE_SIZE, dtype=dtype
     )
 
     return state_dict
