@@ -384,8 +384,12 @@ int main(int argc, char* argv[]) {
     AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
 
     bool links_reset = false;
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool link_retrain_supported =
+        (cluster.arch() == tt::ARCH::WORMHOLE_B0 ||
+         (cluster.arch() == tt::ARCH::BLACKHOLE &&
+          cluster.get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0)));
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
@@ -397,11 +401,13 @@ int main(int argc, char* argv[]) {
         missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
     }
 
+    distributed_context.barrier();
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
         TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
+        // Return and ask user to run again, otherwise some incorrect HW states might persist and cause hangs
         log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
         return 0;
     }

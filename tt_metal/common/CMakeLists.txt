@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(common OBJECT)
 add_library(TT::Metalium::Common ALIAS common)
 
@@ -5,22 +7,7 @@ add_library(TT::Metalium::Common ALIAS common)
 TT_ENABLE_UNITY_BUILD(common)
 target_precompile_headers(common REUSE_FROM metal_common_pch)
 
-target_sources(
-    common
-    PRIVATE
-        core_assignment.cpp
-        core_coord.cpp
-        filesystem_utils.cpp
-        mesh_coord.cpp
-        shape.cpp
-        shape2d.cpp
-        shape_base.cpp
-        tt_backend_api_types.cpp
-        work_split.cpp
-        thread_pool.cpp
-        host_buffer.cpp
-        memory_pin.cpp
-)
+target_sources(common PRIVATE ${COMMON_SOURCES})
 
 target_include_directories(
     common

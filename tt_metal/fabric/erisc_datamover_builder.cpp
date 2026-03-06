@@ -350,14 +350,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
     // ----------- Receiver Channels
     for (uint32_t i = 0; i < num_downstream_edms; i++) {
-        // temporarily padded to have exact parity with addresses pre-refactor
-        // because receiver_channels_local_buffer_index_address was removed (as dead code) and is no longer
-        // needed. We still waste the L1 to minimize the incremental changes in builder refactor
-        buffer_address += field_size;
-
         // persistent mode field
-        this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
@@ -1269,10 +1262,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // Credit amortization named compile-time args
-    // Only enabled when there is a single sender channel (common 1D case)
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (num_sender_channels == 1) {
+    if (actual_sender_channels_vc0 == 1) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
@@ -1494,8 +1486,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
 
         for (uint32_t i = 0; i < num_downstream_edms; i++) {
-            receiver_channels_downstream_flow_control_semaphore_id[i] =
-                config.receiver_channels_downstream_flow_control_semaphore_address[i];
+            receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
             receiver_channels_downstream_teardown_semaphore_id[i] =
                 config.receiver_channels_downstream_teardown_semaphore_address[i];
         }
@@ -1647,6 +1638,18 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
+
+tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_level() const {
+    // User override via TT_METAL_FABRIC_OPT_LEVEL takes priority
+    auto opt_level_override = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_kernel_opt_level();
+    if (opt_level_override.has_value()) {
+        return opt_level_override.value();
+    }
+    // Use Os (optimize for size) when VC1 is active to fit in code space
+    // Use O3 (optimize for performance) otherwise
+    bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
+    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+}
 
 void FabricEriscDatamoverBuilder::teardown_from_host(
     tt::tt_metal::IDevice* d, tt::tt_fabric::TerminationSignal termination_signal) const {
