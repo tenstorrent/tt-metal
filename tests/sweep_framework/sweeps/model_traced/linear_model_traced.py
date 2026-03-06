@@ -16,11 +16,9 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import (
     MasterConfigLoader,
     dict_to_memory_config,
-    dict_to_core_grid,
-    dict_to_compute_kernel_config,
     dict_to_program_config,
-    parse_dtype,
 )
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
@@ -124,12 +122,28 @@ def run(
     if input_b_shape is None:
         raise ValueError("Weight shape (input_b_shape or input_tensor_b_shape) is required")
 
-    # Convert traced dict params to proper ttnn objects
-    memory_config = dict_to_memory_config(memory_config)
-    core_grid = dict_to_core_grid(core_grid)
-    compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
+    # Use build_op_kwargs to parse dict values for op kwargs (memory_config, core_grid,
+    # compute_kernel_config, dtype). Exclude program_config since it needs special handling
+    # with input_b_memory_config. Also exclude activation since it's used for golden too.
+    parsed_op_kwargs = build_op_kwargs(
+        kwargs, exclude={"program_config", "activation"}, output_memory_config=output_memory_config
+    )
+
+    # Parse named op params that were in the function signature (not in **kwargs)
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    if isinstance(memory_config, dict):
+        memory_config = parse_dict_value("memory_config", memory_config)
+    if isinstance(core_grid, dict):
+        core_grid = parse_dict_value("core_grid", core_grid)
+    if isinstance(compute_kernel_config, dict):
+        compute_kernel_config = parse_dict_value("compute_kernel_config", compute_kernel_config)
     if isinstance(dtype, (dict, str)):
-        dtype = parse_dtype(dtype.get("repr", "") if isinstance(dtype, dict) else dtype)
+        dtype = (
+            parse_dict_value("dtype", dtype)
+            if isinstance(dtype, dict)
+            else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
+        )
     if isinstance(program_config, dict):
         program_config = dict_to_program_config(program_config, input_b_memory_config, input_a_memory_config)
 
@@ -317,6 +331,7 @@ def run(
     if activation is not None:
         linear_kwargs["activation"] = activation
 
+    linear_kwargs.update(op_kwargs)
     output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

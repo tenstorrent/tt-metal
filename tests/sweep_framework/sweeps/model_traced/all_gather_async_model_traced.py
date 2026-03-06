@@ -23,6 +23,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
@@ -235,6 +236,9 @@ def run(
     device,  # unused
     **kwargs,
 ) -> list:
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
 
@@ -412,6 +416,7 @@ def run(
                     chunks_per_sync=chunks_per_sync,
                     num_workers_per_link=num_workers_per_link,
                     num_buffers_per_channel=num_buffers_per_channel,
+                    **op_kwargs,
                 )
 
                 ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)

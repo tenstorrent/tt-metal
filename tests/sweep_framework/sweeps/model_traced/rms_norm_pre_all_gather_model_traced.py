@@ -10,7 +10,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_compute_kernel_config, parse_dtype
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -154,22 +155,15 @@ def run(
                 inplace=bool(program_config.get("inplace", 0)),
             )
 
-    # Parse compute_kernel_config and dtype from traced config
-    compute_kernel_config = kwargs.get("compute_kernel_config", None)
-    if isinstance(compute_kernel_config, dict):
-        compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
-    output_dtype = kwargs.get("dtype", ttnn.bfloat16)
-    if isinstance(output_dtype, dict):
-        output_dtype = parse_dtype(output_dtype)
-    if output_dtype is None:
-        output_dtype = ttnn.bfloat16
-
-    start_time = start_measuring_time()
-    op_kwargs = {"dtype": output_dtype}
+    # Parse compute_kernel_config and dtype from traced config via build_op_kwargs
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
+    # Ensure dtype has a default
+    if "dtype" not in op_kwargs:
+        op_kwargs["dtype"] = ttnn.bfloat16
     if ttnn_program_config is not None:
         op_kwargs["program_config"] = ttnn_program_config
-    if compute_kernel_config is not None:
-        op_kwargs["compute_kernel_config"] = compute_kernel_config
+
+    start_time = start_measuring_time()
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, **op_kwargs)
     tt_stats_torch = mesh_tensor_to_torch(tt_stats, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
@@ -179,5 +173,5 @@ def run(
     # Use 0.95 PCC threshold: this operation computes intermediate stats (sum(x^2))
     # which can have lower precision in bfloat16 accumulation, especially without fp32_dest_acc_en.
     # The final model accuracy is maintained by rms_norm_post_all_gather.
-    pcc_threshold = 0.99 if compute_kernel_config is not None else 0.95
+    pcc_threshold = 0.99 if op_kwargs.get("compute_kernel_config") is not None else 0.95
     return [check_with_pcc(torch_expected_stats, tt_sum_x2, pcc_threshold), e2e_perf]

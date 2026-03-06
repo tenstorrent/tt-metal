@@ -12,6 +12,7 @@ from functools import partial
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -90,6 +91,7 @@ def run(
 
     # Check if device is mesh device
     is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -132,7 +134,7 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.clone(input_tensor_a, memory_config=output_memory_config)
+    output_tensor = ttnn.clone(input_tensor_a, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -9,23 +9,29 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("transformer::scaled_dot_product_attention", all_cases=False)
+model_traced_params = loader.get_suite_parameters("transformer::scaled_dot_product_attention")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 8, 32, 64)],  # Batch, heads, seq_len, head_dim
+        "input_a_shape": [(1, 8, 32, 64)],  # Batch, heads, seq_len, head_dim
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -36,7 +42,7 @@ parameters = {
         "input_c_layout": [ttnn.TILE_LAYOUT],
         "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -49,7 +55,7 @@ def invalidate_vector(test_vector) -> tuple:
     """
     Filter out configs that are known to cause timeouts or resource issues.
     """
-    input_shape = test_vector.get("input_shape")
+    input_shape = test_vector.get("input_a_shape")
 
     # If we have shape info, check for very large configs
     if isinstance(input_shape, dict):
@@ -60,8 +66,6 @@ def invalidate_vector(test_vector) -> tuple:
             batch, num_heads, seq_len, head_dim = shape_q[0], shape_q[1], shape_q[2], shape_q[3]
 
             # Filter very large attention computations that cause timeouts
-            # Attention complexity is O(batch * heads * seq_len^2 * head_dim)
-            # Very large seq_len (> 4096) or very large num_heads (> 64) can cause timeouts
             if seq_len > 4096:
                 return True, f"Sequence length {seq_len} too large (timeout risk)"
 
@@ -79,8 +83,30 @@ def invalidate_vector(test_vector) -> tuple:
     return False, None
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -91,46 +117,44 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle dict input_shape from traced configurations (multi-input)
-    if isinstance(input_shape, dict):
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Handle dict input_a_shape from traced configurations (multi-input)
+    if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs (Q, K, V)
-        shape_q = input_shape.get("input_a", input_shape.get("self"))
-        shape_k = input_shape.get("input_b", input_shape.get("other"))
-        shape_v = input_shape.get("input_c")
+        shape_q = input_a_shape.get("input_a", input_a_shape.get("self"))
+        shape_k = input_a_shape.get("input_b", input_a_shape.get("other"))
+        shape_v = input_a_shape.get("input_c")
         if shape_v is None:
             # If only 2 inputs, use K shape for V
             shape_v = shape_k
     else:
         # Fallback for sample configurations
-        if isinstance(input_shape, (tuple, list)):
-            shape = tuple(input_shape)
+        if isinstance(input_a_shape, (tuple, list)):
+            shape = tuple(input_a_shape)
         else:
-            shape = input_shape
+            shape = input_a_shape
         shape_q = shape_k = shape_v = shape
 
     # Validate shapes - Q, K, V must have compatible shapes for attention
-    # Q: [B, H_q, S_q, D], K: [B, H_k, S_k, D], V: [B, H_v, S_v, D]
-    # For GQA (Grouped Query Attention), H_k and H_v can be less than H_q
-    # But S_q, S_k, S_v must match, and D must match
     if isinstance(shape_q, (list, tuple)) and isinstance(shape_k, (list, tuple)) and isinstance(shape_v, (list, tuple)):
         if len(shape_q) == 4 and len(shape_k) == 4 and len(shape_v) == 4:
-            # Check sequence length and head dimension match
             if shape_q[2] != shape_k[2] or shape_q[3] != shape_k[3]:
-                # Adjust K/V to match Q if needed
                 shape_k = (shape_k[0], shape_k[1], shape_q[2], shape_q[3])
             if shape_q[2] != shape_v[2] or shape_q[3] != shape_v[3]:
                 shape_v = (shape_v[0], shape_v[1], shape_q[2], shape_q[3])
-            # For GQA, we need to handle different num_heads
-            # PyTorch SDPA requires Q and K/V to have same num_heads, so we'll replicate K/V heads if needed
             if shape_q[1] != shape_k[1]:
-                # GQA case: replicate K heads to match Q
-                # This is a simplification - real GQA would use grouped attention
                 shape_k = (shape_k[0], shape_q[1], shape_k[2], shape_k[3])
             if shape_q[1] != shape_v[1]:
                 shape_v = (shape_v[0], shape_q[1], shape_v[2], shape_v[3])
@@ -159,7 +183,6 @@ def run(
         raise ValueError("input_b_memory_config is None - required parameter missing")
     if input_c_memory_config is None:
         raise ValueError("input_c_memory_config is None - required parameter missing")
-    # Fall back to input_a_memory_config if output_memory_config is not provided
     if output_memory_config is None:
         output_memory_config = input_a_memory_config
     mem_config_k = input_b_memory_config
@@ -202,7 +225,6 @@ def run(
     )
 
     # Ensure all tensors have the same dtype for PyTorch SDPA
-    # PyTorch requires all inputs to have the same dtype
     torch_q = torch_q.to(torch.float32)
     torch_k = torch_k.to(torch.float32)
     torch_v = torch_v.to(torch.float32)
@@ -219,9 +241,9 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, is_causal=False, memory_config=output_mem_config
+        q_tensor, k_tensor, v_tensor, is_causal=False, **op_kwargs
     )
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Quantize PyTorch output to match TTNN output dtype for fair comparison

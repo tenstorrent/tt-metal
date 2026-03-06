@@ -9,31 +9,37 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from typing import Optional, Tuple
 
 # Override the default timeout in seconds for hang detection.
 # group_norm is computationally intensive, needs longer timeout
 TIMEOUT = 300
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("group_norm", all_cases=False)
+model_traced_params = loader.get_suite_parameters("group_norm")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 1024, 32)],  # Shape: [N, 1, H*W, C] as per ttnn.group_norm docs
+        "input_a_shape": [(1, 1, 1024, 32)],  # Shape: [N, 1, H*W, C] as per ttnn.group_norm docs
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "num_groups": [8],
         "epsilon": [1e-5],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -43,17 +49,25 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Using explicit DispatchCoreConfig to handle sharded memory configs.
-    """
-    import ttnn
-
-    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_device(device)
-    del device
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
@@ -61,7 +75,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     Skip test vectors that cause L1 circular buffer overflow.
     group_norm allocates internal circular buffers that can exceed L1 capacity for large tensors.
     """
-    input_shape = test_vector.get("input_shape")
+    input_shape = test_vector.get("input_a_shape")
 
     if input_shape:
         # Calculate total tensor size
@@ -78,7 +92,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     output_memory_config,
@@ -109,11 +123,14 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    weight_tensor_placement = kwargs.get("weight_tensor_placement", None)
+    bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Handle tuple input_a_shape for sample suite
+    shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -125,7 +142,7 @@ def run(
     # TTNN group_norm format: [N, 1, H*W, C]
     #   - N: batch size
     #   - 1: fixed dimension (always 1 for TTNN)
-    #   - H*W: spatial dimensions (height × width) flattened into single dimension
+    #   - H*W: spatial dimensions (height x width) flattened into single dimension
     #   - C: number of channels (must be divisible by num_groups)
     #
     # PyTorch group_norm format: [N, C, H, W]
@@ -178,8 +195,8 @@ def run(
 
         H = W = int(math.sqrt(HW))
         if H * W != HW:
-            # HW is not a perfect square (e.g., HW=1024 but sqrt(1024)=32 and 32*32=1024 ✓)
-            # If not perfect square, use H=HW and W=1 (e.g., HW=1000 -> H=1000, W=1)
+            # HW is not a perfect square
+            # If not perfect square, use H=HW and W=1
             H = HW
             W = 1
 
@@ -224,19 +241,27 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    # Always use DRAM to avoid OOM and sharding constraint issues
+    # Create input tensor with mesh support
     if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                ttnn.DRAM_MEMORY_CONFIG,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+    else:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Create optional tensors if traced config provides them
     input_mask = None
@@ -246,35 +271,57 @@ def run(
 
     if input_mask_shape and not is_host:
         torch_input_mask = torch.ones(input_mask_shape, dtype=torch.float32)
-        input_mask = ttnn.from_torch(
-            torch_input_mask,
-            dtype=input_mask_dtype or ttnn.bfloat16,
-            layout=input_mask_layout or ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=input_mask_memory_config or ttnn.DRAM_MEMORY_CONFIG,
-        )
+        mask_dtype = input_mask_dtype or ttnn.bfloat16
+        mask_layout = input_mask_layout or ttnn.TILE_LAYOUT
+        mask_mem = input_mask_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        if is_mesh_device and input_a_tensor_placement:
+            input_mask = create_tensor_on_mesh(
+                torch_input_mask, device, mask_dtype, mask_layout, mask_mem, input_a_tensor_placement
+            )
+        else:
+            input_mask = ttnn.from_torch(
+                torch_input_mask,
+                dtype=mask_dtype,
+                layout=mask_layout,
+                device=device,
+                memory_config=mask_mem,
+            )
 
     if weight_shape and torch_weight is not None and not is_host:
         # Use original weight shape from traced config (already correct for group_norm)
         # group_norm requires last dim to be TILE_WIDTH (32), so shapes like [1, 1, 4, 32] are correct
-        weight_tensor = ttnn.from_torch(
-            torch_weight,
-            dtype=weight_dtype or ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for weight
-            device=device,
-            memory_config=weight_memory_config or ttnn.DRAM_MEMORY_CONFIG,
-        )
+        w_dtype = weight_dtype or ttnn.bfloat16
+        w_mem = weight_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        if is_mesh_device and weight_tensor_placement:
+            weight_tensor = create_tensor_on_mesh(
+                torch_weight, device, w_dtype, ttnn.ROW_MAJOR_LAYOUT, w_mem, weight_tensor_placement
+            )
+        else:
+            weight_tensor = ttnn.from_torch(
+                torch_weight,
+                dtype=w_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for weight
+                device=device,
+                memory_config=w_mem,
+            )
 
     if bias_shape and torch_bias is not None and not is_host:
         # Use original bias shape from traced config (already correct for group_norm)
         # group_norm requires last dim to be TILE_WIDTH (32), so shapes like [1, 1, 4, 32] are correct
-        bias_tensor = ttnn.from_torch(
-            torch_bias,
-            dtype=bias_dtype or ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for bias
-            device=device,
-            memory_config=bias_memory_config or ttnn.DRAM_MEMORY_CONFIG,
-        )
+        b_dtype = bias_dtype or ttnn.bfloat16
+        b_mem = bias_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        if is_mesh_device and bias_tensor_placement:
+            bias_tensor = create_tensor_on_mesh(
+                torch_bias, device, b_dtype, ttnn.ROW_MAJOR_LAYOUT, b_mem, bias_tensor_placement
+            )
+        else:
+            bias_tensor = ttnn.from_torch(
+                torch_bias,
+                dtype=b_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for bias
+                device=device,
+                memory_config=b_mem,
+            )
 
     if reciprocals_shape and use_welford and not is_host:
         # Reciprocals are needed for Welford's algorithm, but traced configs often have issues:
@@ -305,14 +352,25 @@ def run(
         if not skip_reciprocals:
             torch_reciprocals = torch.ones(reciprocals_shape, dtype=torch.float32)
             recip_layout = reciprocals_layout or ttnn.TILE_LAYOUT  # Prefer TILE for compatibility
+            recip_dtype = reciprocals_dtype or ttnn.float32
 
-            reciprocals_tensor = ttnn.from_torch(
-                torch_reciprocals,
-                dtype=reciprocals_dtype or ttnn.float32,
-                layout=recip_layout,
-                device=device,
-                memory_config=reciprocals_mem_cfg,
-            )
+            if is_mesh_device and input_a_tensor_placement:
+                reciprocals_tensor = create_tensor_on_mesh(
+                    torch_reciprocals,
+                    device,
+                    recip_dtype,
+                    recip_layout,
+                    reciprocals_mem_cfg,
+                    input_a_tensor_placement,
+                )
+            else:
+                reciprocals_tensor = ttnn.from_torch(
+                    torch_reciprocals,
+                    dtype=recip_dtype,
+                    layout=recip_layout,
+                    device=device,
+                    memory_config=reciprocals_mem_cfg,
+                )
 
     start_time = start_measuring_time()
 
@@ -362,8 +420,9 @@ def run(
     if use_welford:
         group_norm_kwargs["use_welford"] = use_welford
 
+    group_norm_kwargs.update(op_kwargs)
     output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

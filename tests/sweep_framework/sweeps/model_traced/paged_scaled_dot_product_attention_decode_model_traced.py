@@ -9,9 +9,16 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 TIMEOUT = 30
 
@@ -26,26 +33,48 @@ TIMEOUT = 30
 # model_traced suite for this op to avoid claiming coverage we do not have.
 #
 # The sample suite below still exercises the operation shape/layout path; the
-# traced configurations will be wired in a follow‑up once a proper golden exists.
+# traced configurations will be wired in a follow-up once a proper golden exists.
 loader = MasterConfigLoader()
 _model_traced_params = None  # reserved for future enablement
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 8, 32, 64)],
+        "input_a_shape": [(1, 8, 32, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
 # Intentionally do not attach a "model_traced" suite yet.
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -69,20 +98,28 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle dict input_shape from traced configurations (multi-input)
-    if isinstance(input_shape, dict):
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
+    input_e_tensor_placement = kwargs.get("input_e_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Handle dict input_a_shape from traced configurations (multi-input)
+    if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs
-        shape_a = input_shape.get("input_a", input_shape.get("self"))
-        shape_b = input_shape.get("input_b", input_shape.get("other"))
-        shape_c = input_shape.get("input_c")
-        shape_d = input_shape.get("input_d")
-        shape_e = input_shape.get("input_e")
+        shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
+        shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
+        shape_c = input_a_shape.get("input_c")
+        shape_d = input_a_shape.get("input_d")
+        shape_e = input_a_shape.get("input_e")
     else:
         # Fallback for sample configurations
-        if isinstance(input_shape, (tuple, list)):
-            shape = tuple(input_shape)
+        if isinstance(input_a_shape, (tuple, list)):
+            shape = tuple(input_a_shape)
         else:
-            shape = input_shape
+            shape = input_a_shape
         shape_a = shape_b = shape_c = shape_d = shape_e = shape
 
     # Use provided dtypes - fail if not provided (no fallbacks)
@@ -141,14 +178,16 @@ def run(
     # TODO: Compute a true PyTorch attention golden using traced K/V/page table inputs.
     torch_output_tensor = torch_input_a.clone()
 
+    # Check if storage_type is HOST
+    is_host = storage_type and "HOST" in str(storage_type)
+
     # Convert to TTNN tensors
-    # Use the traced memory configs directly
     tensor_a = ttnn.from_torch(
         torch_input_a,
         dtype=dtype_a,
         layout=layout_a,
         device=device,
-        memory_config=mem_config_a,  # Use traced config
+        memory_config=mem_config_a,
     )
 
     tensor_b = ttnn.from_torch(
@@ -187,17 +226,15 @@ def run(
     # paged_scaled_dot_product_attention_decode signature:
     # (input_tensor_q, input_tensor_k, input_tensor_v, page_table_tensor, *, is_causal=True, attn_mask=None, cur_pos_tensor=None, ...)
     # So tensor_a=Q, tensor_b=K, tensor_c=V, tensor_d=page_table, tensor_e=cur_pos
-    # Use the traced output_memory_config directly
     output_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
         tensor_b,  # K
         tensor_c,  # V
         tensor_d,  # page_table (required positional)
         is_causal=True,
-        cur_pos_tensor=tensor_e,  # cur_pos (optional keyword)
-        memory_config=output_mem_config,  # Use traced config
+        cur_pos_tensor=tensor_e,  # cur_pos (optional keyword), **op_kwargs,
     )
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)

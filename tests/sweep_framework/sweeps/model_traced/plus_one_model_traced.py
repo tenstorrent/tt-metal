@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,45 +9,64 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
-
-# Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
-# Load traced configurations from real model tests
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("plus_one", all_cases=False)
+model_traced_params = loader.get_suite_parameters("plus_one")
 
-# Parameters provided to the test vector generator are defined here.
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
-        "input_a_dtype": [ttnn.int32],  # plus_one requires INT32 or UINT32
-        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],  # plus_one requires ROW_MAJOR
+        "input_a_shape": [(1, 1, 32, 32)],
+        "input_a_dtype": [ttnn.int32],
+        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
-    # Override layout to ROW_MAJOR as required by plus_one operation
-    # Keep the original dtypes from traced configs (they should be INT32/UINT32)
     if "input_a_layout" in model_traced_params:
         model_traced_params["input_a_layout"] = [ttnn.ROW_MAJOR_LAYOUT] * len(model_traced_params["input_a_layout"])
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_memory_config,
-    output_memory_config,
+    output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -55,54 +74,54 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Generate tensor with correct dtype for plus_one (INT32/UINT32 required)
-    # Check if dtype is int32 or uint32
+    shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
     dtype_str = str(input_a_dtype).lower()
     if "int32" in dtype_str:
         torch_input_tensor_a = torch.randint(-100, 100, shape, dtype=torch.int32)
     elif "uint32" in dtype_str:
-        torch_input_tensor_a = torch.randint(0, 200, shape, dtype=torch.int32)  # Will convert to uint32 in ttnn
+        torch_input_tensor_a = torch.randint(0, 200, shape, dtype=torch.int32)
     else:
-        # Fallback for other dtypes (shouldn't happen with traced configs)
         torch_input_tensor_a = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
-    # Plus one operation: x + 1
     torch_output_tensor = torch_input_tensor_a + 1
 
-    # Force ROW_MAJOR layout as required by plus_one operation
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": ttnn.ROW_MAJOR_LAYOUT,
-    }
-
-    # Only add device and memory_config if not HOST storage
     if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                ttnn.ROW_MAJOR_LAYOUT,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+    else:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.plus_one(input_tensor_a)  # plus_one doesn't support memory_config
-    # If needed, move to desired memory config
-    if output_memory_config != input_a_memory_config:
+    output_tensor = ttnn.plus_one(input_tensor_a, **op_kwargs)
+    if output_memory_config and output_memory_config != input_a_memory_config:
         output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

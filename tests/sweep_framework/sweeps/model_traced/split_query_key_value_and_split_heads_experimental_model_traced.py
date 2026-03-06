@@ -5,7 +5,14 @@
 import torch
 import ttnn
 from functools import partial
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -13,11 +20,9 @@ from models.common.utility_functions import torch_random
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters(
-    "experimental::split_query_key_value_and_split_heads", all_cases=False
-)
+model_traced_params = loader.get_suite_parameters("experimental::split_query_key_value_and_split_heads")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {}
@@ -41,14 +46,37 @@ def invalidate_vector(test_vector) -> tuple:
     return True, "C++ bug: operation produces non-tile-aligned output shard shapes - needs fix in op implementation"
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
     kv_input_height=None,
     num_heads=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
@@ -65,11 +93,15 @@ def run(
     """
     torch.manual_seed(0)
 
-    # Handle tuple input_shape
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config or input_a_memory_config)
+
+    # Handle tuple input_a_shape
+    if isinstance(input_a_shape, (tuple, list)):
+        shape = tuple(input_a_shape)
     else:
-        shape = input_shape
+        shape = input_a_shape
 
     # Generate input tensor
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
@@ -86,8 +118,6 @@ def run(
     # Infer num_heads and head_dim from shape if not provided
     if num_heads is None:
         # Common values: 12 or 16 heads for BERT
-        # Try to infer from hidden_dim: hidden_dim = 3 * num_heads * head_dim
-        # For BERT-large: 3072 = 3 * 16 * 64
         if hidden_dim == 3072:
             num_heads = 16
         elif hidden_dim == 2304:
@@ -113,19 +143,33 @@ def run(
     # Use Q for PCC comparison (first output)
     torch_output = ref_q
 
+    # Check if storage_type is HOST
+    is_host = storage_type and "HOST" in str(storage_type)
+
     # Convert to TTNN
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor = create_tensor_on_mesh(
+                torch_input,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+    else:
+        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     # Run operation
     # The operation takes a kv_input_height parameter that specifies the grid size
-    # From unit test: ttnn.CoreCoord(12, 9) for 16 heads
-    # We'll use a default grid based on num_heads
     if kv_input_height is None:
         # Default grid calculation
         grid_size = ttnn.CoreCoord(num_heads, max(1, seq_len // 64))
@@ -137,12 +181,10 @@ def run(
             grid_size = kv_input_height
 
     start_time = start_measuring_time()
-    q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(
-        input_tensor, grid_size, memory_config=output_memory_config or input_a_memory_config
-    )
+    q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(input_tensor, grid_size, **op_kwargs)
 
     # Convert Q output to torch for comparison
-    output_tensor = ttnn.to_torch(q)
+    output_tensor = mesh_tensor_to_torch(q, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check PCC

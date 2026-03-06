@@ -17,6 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -101,6 +102,7 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar", "arg1"}, output_memory_config=output_memory_config)
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -158,7 +160,7 @@ def run(
     if is_scalar_add:
         # Tensor-scalar add: pass scalar directly
         scalar_value = scalar if scalar is not None else 1.0
-        output_tensor = ttnn.add(input_tensor_a, scalar_value, memory_config=output_memory_config)
+        output_tensor = ttnn.add(input_tensor_a, scalar_value, **op_kwargs)
     else:
         # Tensor-tensor add: convert second tensor and add
         if not is_host:
@@ -185,7 +187,7 @@ def run(
             # Host storage
             input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
 
-        output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+        output_tensor = ttnn.add(input_tensor_a, input_tensor_b, **op_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

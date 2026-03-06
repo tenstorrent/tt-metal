@@ -8,7 +8,14 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 TIMEOUT = 30
 
@@ -39,11 +46,11 @@ def page_cache(cache, page_block_size, permutation):
 
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("transformer::chunked_scaled_dot_product_attention", all_cases=False)
+model_traced_params = loader.get_suite_parameters("transformer::chunked_scaled_dot_product_attention")
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 8, 32, 64)],
+        "input_a_shape": [(1, 8, 32, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -65,8 +72,30 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -77,18 +106,26 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept any extra parameters (like input_d_*)
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Extract shapes for Q and K from input_shape dict or use defaults
-    if isinstance(input_shape, dict):
-        shape_q = input_shape.get("input_a", (1, 8, 32, 64))
-        shape_k_paged = input_shape.get("input_b", (64, 1, 64, 64))  # [num_pages, nkv, page_size, d]
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config or input_a_memory_config)
+
+    # Extract shapes for Q and K from input_a_shape dict or use defaults
+    if isinstance(input_a_shape, dict):
+        shape_q = input_a_shape.get("input_a", (1, 8, 32, 64))
+        shape_k_paged = input_a_shape.get("input_b", (64, 1, 64, 64))  # [num_pages, nkv, page_size, d]
     else:
-        shape_q = input_shape if isinstance(input_shape, (tuple, list)) else (1, 8, 32, 64)
+        shape_q = input_a_shape if isinstance(input_a_shape, (tuple, list)) else (1, 8, 32, 64)
         # Default paged format
         b, nh, sq, d = shape_q
         page_block_size = 64
@@ -103,14 +140,10 @@ def run(
     num_pages, nkv, page_block_size, _ = shape_k_paged
 
     # Calculate unpaged sequence length from paged dimensions
-    # The paged format has num_pages blocks, each of size page_block_size
-    # For b batches: num_pages = b * max_num_blocks_per_seq
     max_num_blocks_per_seq = num_pages // b
     s = max_num_blocks_per_seq * page_block_size
 
     # Create unpaged K and V for torch reference
-    # These represent the "logical" unpaged KV cache
-    # Shape: [b, nkv, s, d]
     torch_k_unpaged = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_b_dtype or input_a_dtype
     )((b, nkv, s, d))
@@ -118,24 +151,20 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_c_dtype or input_a_dtype
     )((b, nkv, s, d))
 
-    # Create Q - note Q sequence length (sq) may be different from KV sequence length (s)
-    # Q might be a chunk of the full sequence
+    # Create Q
     torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(shape_q)
 
     # Create page table and permutation
-    # The page table maps logical page indices to physical page indices
     max_num_blocks = b * max_num_blocks_per_seq
     permutation = torch.randperm(max_num_blocks)
     reverse_permutation = torch.argsort(permutation)
     torch_page_table = reverse_permutation.reshape(b, max_num_blocks_per_seq)
 
     # Convert K, V to paged format for TTNN operation
-    # This simulates what the actual KV cache would look like in paged format
     torch_k_paged = page_cache(torch_k_unpaged, page_block_size, permutation)
     torch_v_paged = page_cache(torch_v_unpaged, page_block_size, permutation)
 
     # Torch reference: Use unpaged K, V with standard SDPA
-    # Repeat K, V for GQA if needed
     if nkv < nh:
         K_repeated = torch.cat(
             [torch_k_unpaged[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
@@ -180,9 +209,9 @@ def run(
     # Op call - chunk_start_idx is 0 for full sequence
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.chunked_scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, page_table_tensor, 0, memory_config=output_memory_config or input_a_memory_config
+        q_tensor, k_tensor, v_tensor, page_table_tensor, 0, **op_kwargs
     )
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Comparison - use 0.998 PCC threshold as in unit test

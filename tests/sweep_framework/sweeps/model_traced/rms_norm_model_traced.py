@@ -15,11 +15,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-from tests.sweep_framework.master_config_loader_v2 import (
-    MasterConfigLoader,
-    dict_to_memory_config,
-    dict_to_compute_kernel_config,
-)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 import re
 
 
@@ -99,14 +96,6 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    epsilon=1e-5,
-    weight_shape=None,
-    weight_dtype=None,
-    weight_layout=None,
-    weight_memory_config=None,
-    memory_config=None,
-    program_config=None,
-    compute_kernel_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -115,31 +104,47 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    weight_tensor_placement = kwargs.get("weight_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    # Convert compute_kernel_config from dict if needed
-    if isinstance(compute_kernel_config, dict):
-        compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
+    # Build op kwargs — auto-parses compute_kernel_config, memory_config dicts;
+    # auto-filters weight_* named tensor kwargs and infrastructure keys.
+    # Exclude program_config because it needs custom parsing (LayerNorm-specific).
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
 
-    # Convert program_config from dict if needed
+    # Handle program_config with custom parser
+    program_config = kwargs.get("program_config")
     if isinstance(program_config, dict):
         program_config = dict_to_layernorm_program_config(program_config)
+    if program_config is not None:
+        op_kwargs["program_config"] = program_config
 
     # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
+    if output_memory_config is None and "memory_config" in op_kwargs:
+        output_memory_config = op_kwargs.pop("memory_config")
+    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
+    elif "memory_config" in op_kwargs:
+        op_kwargs.pop("memory_config")
+    if output_memory_config is not None:
+        op_kwargs["memory_config"] = output_memory_config
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Determine weight shape
-    if weight_shape is None:
-        w_shape = (input_shape[-1],)
+    # Extract weight named tensor kwargs
+    weight_info = extract_named_tensor_kwargs(kwargs, "weight")
+    if weight_info and weight_info["shape"] is not None:
+        w_shape = (
+            tuple(weight_info["shape"]) if isinstance(weight_info["shape"], (list, tuple)) else weight_info["shape"]
+        )
+        w_dtype = weight_info["dtype"] or input_a_dtype
+        w_layout = weight_info["layout"] or input_a_layout
+        w_mem = weight_info["memory_config"] or ttnn.DRAM_MEMORY_CONFIG
+        w_placement = weight_info["tensor_placement"]
     else:
-        w_shape = tuple(weight_shape) if isinstance(weight_shape, (list, tuple)) else weight_shape
-
-    w_dtype = weight_dtype or input_a_dtype
-    w_layout = weight_layout or input_a_layout
+        w_shape = (input_shape[-1],)
+        w_dtype = input_a_dtype
+        w_layout = input_a_layout
+        w_mem = ttnn.DRAM_MEMORY_CONFIG
+        w_placement = None
 
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         input_shape
@@ -155,7 +160,7 @@ def run(
     else:
         torch_weight_1d = torch_weight
 
-    eps = float(epsilon) if epsilon is not None else 1e-5
+    eps = float(op_kwargs.get("epsilon", 1e-5))
     rms = torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)
     torch_output = torch_input * torch_weight_1d / rms
 
@@ -194,16 +199,14 @@ def run(
     else:
         torch_weight_reshaped = torch_weight
 
-    w_mem = weight_memory_config or ttnn.DRAM_MEMORY_CONFIG
-
-    if is_mesh_device and weight_tensor_placement:
+    if is_mesh_device and w_placement:
         weight_tensor = create_tensor_on_mesh(
             torch_weight_reshaped,
             device,
             w_dtype,
             w_layout,
             w_mem,
-            weight_tensor_placement,
+            w_placement,
         )
     else:
         weight_tensor = ttnn.from_torch(
@@ -215,16 +218,7 @@ def run(
         )
 
     start_time = start_measuring_time()
-
-    rms_kwargs = {"epsilon": eps, "weight": weight_tensor}
-    if output_memory_config is not None:
-        rms_kwargs["memory_config"] = output_memory_config
-    if program_config is not None:
-        rms_kwargs["program_config"] = program_config
-    if compute_kernel_config is not None:
-        rms_kwargs["compute_kernel_config"] = compute_kernel_config
-
-    output_tensor = ttnn.rms_norm(input_tensor, **rms_kwargs)
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight_tensor, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

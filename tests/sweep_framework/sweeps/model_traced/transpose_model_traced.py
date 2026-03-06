@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 TIMEOUT = 300
 
@@ -79,6 +80,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
     dim0 = dim0 or kwargs.get("arg1", 0)
     dim1 = dim1 or kwargs.get("arg2", 1)
@@ -117,7 +119,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1)
+    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

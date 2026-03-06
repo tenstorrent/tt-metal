@@ -12,6 +12,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -88,15 +89,17 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"batch_idx"}, output_memory_config=output_memory_config)
 
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
     # V2 vectors provide page_table as a named tensor (page_table_*) instead of input_c_*
-    if input_c_dtype is None and "page_table_dtype" in kwargs:
-        input_c_dtype = kwargs["page_table_dtype"]
-        input_c_layout = kwargs.get("page_table_layout", ttnn.ROW_MAJOR_LAYOUT)
-        input_c_memory_config = kwargs.get("page_table_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+    page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")
+    if input_c_dtype is None and page_table_kwargs is not None:
+        input_c_dtype = page_table_kwargs["dtype"]
+        input_c_layout = page_table_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
+        input_c_memory_config = page_table_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
 
     # Fallback defaults for missing params
     if input_b_dtype is None:
@@ -124,7 +127,7 @@ def run(
         else:
             shape = input_a_shape
         shape_a = shape_b = shape
-        shape_c = kwargs.get("page_table_shape", shape)
+        shape_c = page_table_kwargs["shape"] if page_table_kwargs else kwargs.get("page_table_shape", shape)
 
     dtype_a = input_a_dtype
     dtype_b = input_b_dtype
@@ -156,42 +159,58 @@ def run(
     # Convert to TTNN tensors
     is_host = storage_type and "HOST" in str(storage_type)
 
-    if is_mesh_device:
-        input_tensor_a = create_tensor_on_mesh(
-            torch_input_tensor_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
-        )
-        input_tensor_b = create_tensor_on_mesh(
-            torch_input_tensor_b,
-            device,
-            dtype_b,
-            layout_b,
-            mem_config_b,
-            kwargs.get("input_b_tensor_placement", input_a_tensor_placement),
-        )
-        input_tensor_c = create_tensor_on_mesh(
-            torch_input_tensor_c,
-            device,
-            dtype_c,
-            layout_c,
-            mem_config_c,
-            kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
-        )
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                dtype_a,
+                layout_a,
+                mem_config_a,
+                input_a_tensor_placement,
+            )
+            input_tensor_b = create_tensor_on_mesh(
+                torch_input_tensor_b,
+                device,
+                dtype_b,
+                layout_b,
+                mem_config_b,
+                kwargs.get("input_b_tensor_placement", input_a_tensor_placement),
+            )
+            input_tensor_c = create_tensor_on_mesh(
+                torch_input_tensor_c,
+                device,
+                dtype_c,
+                layout_c,
+                mem_config_c,
+                kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=dtype_a,
+                layout=layout_a,
+                device=device,
+                memory_config=mem_config_a,
+            )
+            input_tensor_b = ttnn.from_torch(
+                torch_input_tensor_b,
+                dtype=dtype_b,
+                layout=layout_b,
+                device=device,
+                memory_config=mem_config_b,
+            )
+            input_tensor_c = ttnn.from_torch(
+                torch_input_tensor_c,
+                dtype=dtype_c,
+                layout=layout_c,
+                device=device,
+                memory_config=mem_config_c,
+            )
     else:
-        from_torch_kwargs_a = {"dtype": dtype_a, "layout": layout_a}
-        from_torch_kwargs_b = {"dtype": dtype_b, "layout": layout_b}
-        from_torch_kwargs_c = {"dtype": dtype_c, "layout": layout_c}
-
-        if not is_host:
-            from_torch_kwargs_a["device"] = device
-            from_torch_kwargs_a["memory_config"] = mem_config_a
-            from_torch_kwargs_b["device"] = device
-            from_torch_kwargs_b["memory_config"] = mem_config_b
-            from_torch_kwargs_c["device"] = device
-            from_torch_kwargs_c["memory_config"] = mem_config_c
-
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs_a)
-        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs_b)
-        input_tensor_c = ttnn.from_torch(torch_input_tensor_c, **from_torch_kwargs_c)
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=dtype_a, layout=layout_a)
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=layout_b)
+        input_tensor_c = ttnn.from_torch(torch_input_tensor_c, dtype=dtype_c, layout=layout_c)
 
     batch_idx = kwargs.get("batch_idx", 0)
     if batch_idx is None:
@@ -204,6 +223,7 @@ def run(
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
             batch_idx=batch_idx,
+            **op_kwargs,
         )
     except TypeError:
         output_tensor = ttnn.experimental.paged_fill_cache(
@@ -211,7 +231,7 @@ def run(
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
             batch_idx=batch_idx,
-            memory_config=output_mem_config,
+            **op_kwargs,
         )
     # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a

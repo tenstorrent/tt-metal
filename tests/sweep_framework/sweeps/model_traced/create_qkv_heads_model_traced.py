@@ -8,23 +8,30 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("create_qkv_heads", all_cases=False)
+model_traced_params = loader.get_suite_parameters("create_qkv_heads")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 192)],  # Must be divisible for QKV split: 192 = 1 * 3 * 64
+        "input_a_shape": [(1, 1, 32, 192)],  # Must be divisible for QKV split: 192 = 1 * 3 * 64
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -42,18 +49,36 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """Custom device fixture with DispatchCoreConfig to free up more compute cores"""
-    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
-    device_name = ttnn.get_arch_name()
+    """
+    Override default device fixture.
+    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    """
+    mesh_shape = get_mesh_shape()
 
-    yield (device, device_name)
-
-    ttnn.close_device(device)
-    del device
+    if mesh_shape:
+        # Create mesh device based on env var
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        # Single device (default)
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
 
 
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -64,27 +89,25 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept traced_source, traced_machine_info, etc.
+    **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
+    # Extract kwargs
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+
+    # Check if device is a mesh device (from fixture)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # V2 format provides input_a_shape
+    shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     # This operation requires specific input format: QKV interleaved
-    # For simplicity, we'll create random tensors and compute golden output
-    # In real usage, this comes from a matmul with specific weight arrangement
-
     # Traced shape is [batch, 1, seq_len, hidden_dim] where hidden_dim = (num_q_heads + 2*num_kv_heads) * head_dim
-    # The input contains Q, K, V interleaved
     if len(shape) == 4:
-        # Shape is [batch, 1, seq_len, hidden_dim]
         batch, _, seq_len, hidden_dim = shape
     elif len(shape) == 3:
-        # Shape is [batch, seq_len, hidden_dim]
         batch, seq_len, hidden_dim = shape
     else:
         raise ValueError(f"Unexpected input shape: {shape}")
@@ -113,43 +136,52 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
     if not is_host:
-        from_torch_kwargs["device"] = device
-        # Check if memory config is sharded - create_qkv_heads requires tile-aligned shard shapes
-        # If sharded, use interleaved instead to avoid non-tile-aligned shard validation errors
-        is_input_sharded = False
-
-        # Handle dict memory configs (from JSON deserialization in pipeline)
-        if isinstance(input_a_memory_config, dict):
-            # Skip dict memory configs - just use DRAM_MEMORY_CONFIG
-            from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        if is_mesh_device and input_a_tensor_placement:
+            # Use mesh with placement
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
         else:
-            # Handle proper ttnn MemoryConfig objects
-            if hasattr(input_a_memory_config, "is_sharded") and callable(
-                getattr(input_a_memory_config, "is_sharded", None)
-            ):
-                is_input_sharded = input_a_memory_config.is_sharded()
-            elif hasattr(input_a_memory_config, "memory_layout"):
-                # Check memory_layout attribute for sharded types
-                is_input_sharded = input_a_memory_config.memory_layout in [
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ]
+            # Regular single-device tensor
+            # Check if memory config is sharded - create_qkv_heads requires tile-aligned shard shapes
+            is_input_sharded = False
 
-            if is_input_sharded:
-                from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            # Handle dict memory configs (from JSON deserialization in pipeline)
+            if isinstance(input_a_memory_config, dict):
+                actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
             else:
-                from_torch_kwargs["memory_config"] = input_a_memory_config
+                if hasattr(input_a_memory_config, "is_sharded") and callable(
+                    getattr(input_a_memory_config, "is_sharded", None)
+                ):
+                    is_input_sharded = input_a_memory_config.is_sharded()
+                elif hasattr(input_a_memory_config, "memory_layout"):
+                    is_input_sharded = input_a_memory_config.memory_layout in [
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ]
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+                if is_input_sharded:
+                    actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
+                else:
+                    actual_memory_config = input_a_memory_config
+
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=actual_memory_config,
+            )
+    else:
+        # Host storage
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # If output memory config is sharded, use interleaved instead
     actual_output_memory_config = output_memory_config
@@ -157,10 +189,8 @@ def run(
 
     # Handle dict memory configs (from JSON deserialization in pipeline)
     if isinstance(output_memory_config, dict):
-        # Skip dict memory configs - just use DRAM_MEMORY_CONFIG
         actual_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        # Handle proper ttnn MemoryConfig objects
         if hasattr(output_memory_config, "is_sharded") and callable(getattr(output_memory_config, "is_sharded", None)):
             is_output_sharded = output_memory_config.is_sharded()
         elif hasattr(output_memory_config, "memory_layout"):
@@ -182,10 +212,11 @@ def run(
         num_kv_heads=num_kv_heads,
         transpose_k_heads=transpose_k_heads,
         memory_config=actual_output_memory_config,
+        **op_kwargs,
     )
-    q = ttnn.to_torch(q)
-    k = ttnn.to_torch(k)
-    v = ttnn.to_torch(v)
+    q = mesh_tensor_to_torch(q, device if is_mesh_device else None)
+    k = mesh_tensor_to_torch(k, device if is_mesh_device else None)
+    v = mesh_tensor_to_torch(v, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC for all three outputs using check_with_pcc
@@ -209,7 +240,6 @@ def run(
         combined_message = "; ".join(messages)
         pcc_result = (False, combined_message)
     else:
-        # All passed, return the Q PCC result (or we could combine messages)
         pcc_result = pcc_q
 
     return [pcc_result, e2e_perf]

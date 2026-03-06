@@ -8,7 +8,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_compute_kernel_config
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -98,9 +99,7 @@ def run(
         stats_shape_from_trace = None
 
     eps = kwargs.get("epsilon", 1e-5)
-    compute_kernel_config = kwargs.get("compute_kernel_config", None)
-    if isinstance(compute_kernel_config, dict):
-        compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"epsilon"}, output_memory_config=output_memory_config)
     hidden_dim = shape[-1]
 
     # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
@@ -183,10 +182,9 @@ def run(
         )
 
     start_time = start_measuring_time()
-    op_kwargs = {"epsilon": eps, "weight": weight_tensor}
-    if compute_kernel_config is not None:
-        op_kwargs["compute_kernel_config"] = compute_kernel_config
-    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats_tensor, **op_kwargs)
+    output_tensor = ttnn.rms_norm_post_all_gather(
+        input_tensor, stats_tensor, epsilon=eps, weight=weight_tensor, **op_kwargs
+    )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

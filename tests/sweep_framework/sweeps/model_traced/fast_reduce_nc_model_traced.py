@@ -10,7 +10,8 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_compute_kernel_config
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -88,9 +89,7 @@ def run(
 
     # Extract dims from kwargs (from traced config) or use default
     dims = kwargs.get("dims", [0, 1])
-    compute_kernel_config = kwargs.get("compute_kernel_config", None)
-    if isinstance(compute_kernel_config, dict):
-        compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"dims"}, output_memory_config=output_memory_config)
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
@@ -108,29 +107,29 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    if is_mesh_device:
-        input_tensor_a = create_tensor_on_mesh(
-            torch_input_tensor_a, device, input_a_dtype, input_a_layout, input_a_memory_config, input_a_tensor_placement
-        )
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
     else:
-        # Build from_torch arguments based on storage_type
-        from_torch_kwargs = {
-            "dtype": input_a_dtype,
-            "layout": input_a_layout,
-        }
-
-        # Only add device and memory_config if not HOST storage
-        if not is_host:
-            from_torch_kwargs["device"] = device
-            from_torch_kwargs["memory_config"] = input_a_memory_config
-
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    op_kwargs = {"dims": dims, "output": None}
-    if compute_kernel_config is not None:
-        op_kwargs["compute_kernel_config"] = compute_kernel_config
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, **op_kwargs)
+    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, dims=dims, output=None, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)

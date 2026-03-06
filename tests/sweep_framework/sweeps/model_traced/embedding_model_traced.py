@@ -20,6 +20,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -113,6 +114,7 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    op_kwargs = build_op_kwargs(kwargs)
 
     # V2 format provides separate shapes
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -213,7 +215,7 @@ def run(
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config)
+    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()

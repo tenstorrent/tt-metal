@@ -9,9 +9,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -25,11 +31,11 @@ def tilize_with_val_padding(x, output_tensor_shape, pad_value):
     internal to the device representation and are not visible once we convert
     back with ttnn.to_torch.  This matches the behavior exercised in
     tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py, where
-    tilize_with_val_padding round‑trips the input.
+    tilize_with_val_padding round-trips the input.
 
     The sweep therefore uses the input tensor itself as the golden: we are
     validating that the TTNN op preserves values for the traced shapes and
-    memory configs, not that we can re‑implement its internal tilizing logic.
+    memory configs, not that we can re-implement its internal tilizing logic.
     """
     # Logical golden is the original tensor; padded_shape and pad_value only
     # affect internal device layout.
@@ -38,23 +44,22 @@ def tilize_with_val_padding(x, output_tensor_shape, pad_value):
     return x
 
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("tilize_with_val_padding", all_cases=False)
+model_traced_params = loader.get_suite_parameters("tilize_with_val_padding")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],  # tilize_with_val_padding requires ROW_MAJOR_LAYOUT
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "padded_shape": [(1, 1, 64, 64)],  # shape to pad to (must be multiples of 32 for tilize)
         "pad_value": [0.0],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -63,8 +68,30 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -78,20 +105,24 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
     # Handle both sample suite (tuple) and model_traced suite (dict, if ever treated as binary)
-    if isinstance(input_shape, dict) and "self" in input_shape:
+    if isinstance(input_a_shape, dict) and "self" in input_a_shape:
         # This is model_traced suite - dict with 'self' key (shouldn't happen for unary, but handle it)
-        shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
-    elif isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+        shape = input_a_shape["self"] if isinstance(input_a_shape["self"], tuple) else tuple(input_a_shape["self"])
+    elif isinstance(input_a_shape, (tuple, list)):
+        shape = tuple(input_a_shape) if isinstance(input_a_shape, list) else input_a_shape
     else:
-        shape = input_shape
+        shape = input_a_shape
 
     # Ensure padded_shape is also a tuple
     if isinstance(padded_shape, list):
         padded_shape = tuple(padded_shape)
 
-    # Validation: padded_shape must be >= input_shape in each dimension
+    # Validation: padded_shape must be >= input_a_shape in each dimension
     if isinstance(shape, tuple) and isinstance(padded_shape, tuple):
         if len(shape) != len(padded_shape):
             raise ValueError(f"Padded shape rank {len(padded_shape)} must match input shape rank {len(shape)}")
@@ -120,24 +151,30 @@ def run(
     # Use TILE layout for bfloat8_b/bfloat4_b, otherwise use specified layout
     actual_layout = ttnn.TILE_LAYOUT if needs_tile_layout else input_a_layout
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": actual_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
     if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                actual_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=actual_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+    else:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=actual_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.tilize_with_val_padding(
-        input_tensor_a, padded_shape, pad_value, memory_config=output_memory_config
-    )
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.tilize_with_val_padding(input_tensor_a, padded_shape, pad_value, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

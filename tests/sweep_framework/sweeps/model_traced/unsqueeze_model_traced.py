@@ -11,6 +11,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -83,6 +84,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
@@ -107,27 +109,30 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    if is_mesh_device:
-        input_tensor_a = create_tensor_on_mesh(
-            torch_input_tensor_a, device, input_a_dtype, input_a_layout, input_a_memory_config, input_a_tensor_placement
-        )
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
     else:
-        # Build from_torch arguments based on storage_type
-        from_torch_kwargs = {
-            "dtype": input_a_dtype,
-            "layout": input_a_layout,
-        }
-
-        # Only add device and memory_config if not HOST storage
-        if not is_host:
-            from_torch_kwargs["device"] = device
-            from_torch_kwargs["memory_config"] = input_a_memory_config
-
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     # unsqueeze with dim as positional argument (no memory_config support)
-    output_tensor = ttnn.unsqueeze(input_tensor_a, dim)
+    output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

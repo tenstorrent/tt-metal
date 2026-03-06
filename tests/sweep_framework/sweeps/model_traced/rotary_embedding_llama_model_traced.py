@@ -60,6 +60,7 @@ from models.tt_transformers.tt.rope import compute_gather_cos_sin
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -348,6 +349,9 @@ def run(
     """
     torch.manual_seed(0)
 
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
+
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
     if input_shape is None and input_a_shape is not None:
         input_shape = input_a_shape
@@ -634,25 +638,19 @@ def run(
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
 
+    rope_call_kwargs = {"is_decode_mode": is_decode_mode}
     if output_memory_config is not None:
-        output_tensor = ttnn.experimental.rotary_embedding_llama(
-            input_tensor_a,
-            cos_cache_tt,
-            sin_cache_tt,
-            trans_mat_tt,
-            is_decode_mode=is_decode_mode,
-            memory_config=output_memory_config,
-        )
-    else:
-        output_tensor = ttnn.experimental.rotary_embedding_llama(
-            input_tensor_a,
-            cos_cache_tt,
-            sin_cache_tt,
-            trans_mat_tt,
-            is_decode_mode=is_decode_mode,
-        )
+        rope_call_kwargs["memory_config"] = output_memory_config
+    rope_call_kwargs.update(op_kwargs)
+    output_tensor = ttnn.experimental.rotary_embedding_llama(
+        input_tensor_a,
+        cos_cache_tt,
+        sin_cache_tt,
+        trans_mat_tt,
+        **rope_call_kwargs,
+    )
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # --- Check Results ---

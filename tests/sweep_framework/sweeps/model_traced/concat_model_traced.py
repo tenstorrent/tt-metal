@@ -22,6 +22,7 @@ from tests.sweep_framework.master_config_loader_v2 import (
     parse_dtype,
     parse_layout,
 )
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
@@ -105,6 +106,7 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -166,7 +168,7 @@ def run(
     torch_output_tensor = torch.cat(torch_tensors, dim=dim_value)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, memory_config=mem_config)
+    output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, memory_config=mem_config, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
