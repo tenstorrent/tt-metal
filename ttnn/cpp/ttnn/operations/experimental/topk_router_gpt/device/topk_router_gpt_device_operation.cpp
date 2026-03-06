@@ -15,9 +15,17 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(attrs, tensor_args);
 }
 
-void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {
-    // Validation is intentionally minimal for performance.
-    // The Python wrapper ensures correct tensor shapes and dtypes.
+void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Kernel architecture requires exactly 128 experts (4 groups × 32 experts per N-tile)
+    TT_FATAL(
+        attrs.num_experts == 128,
+        "topk_router_gpt only supports num_experts=128 (hardcoded 4-group architecture), got {}",
+        attrs.num_experts);
+
+    // Kernel hardcodes B=32 in dm1 collector (1 B-tile, decode mode only)
+    auto B = tensor_args.input_tensor.logical_shape()[0];
+    TT_FATAL(B == 32, "topk_router_gpt only supports batch_size=32 (hardcoded for decode mode), got {}", B);
 }
 
 spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
