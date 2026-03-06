@@ -121,7 +121,9 @@ def test_forward_pass(
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
 
     # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True, use_old_gate=True)
+    tt_output = run_module_forward(
+        MoE, mode, tt_input, run_config, handle_tensor_parallel=True, use_unoptimized_gate=True
+    )
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

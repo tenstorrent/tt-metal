@@ -338,7 +338,6 @@ class MoEGate(AbstractModule):
         assert num_experts == 256, "num_experts should be 256"
         batch_size_per_device = logits.shape[2]
 
-        batch_size = batch_size_per_device * mesh_device.shape[0]
         reshaped_input_shape = (batch_size_per_device, 16, 16)
 
         # create the shard spec and memory config for the input, logits and output

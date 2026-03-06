@@ -296,11 +296,6 @@ class MoEGate(AbstractModule):
         assert num_experts == 256, "num_experts should be 256"
         batch_size_per_device = logits.shape[2]
 
-        batch_size = batch_size_per_device * mesh_device.shape[0]
-        reshaped_input_shape = (1, 1, batch_size_per_device, 256)
-
-        # logits = ttnn.reshape(logits, reshaped_input_shape)
-
         # create the bias
         scores_correction_bias = ttnn.typecast(cfg["add_score_correction_bias"]["input_tensor_b"], ttnn.bfloat16)
         scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
@@ -309,8 +304,6 @@ class MoEGate(AbstractModule):
         )
         scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
         eps = 1e-20
-        scaling_factor = 2.5
-        enable_sigmoid = True
 
         topk_experts_scores_normalized, topk_experts_indices = ttnn.experimental.deepseek_grouped_gate(
             logits,

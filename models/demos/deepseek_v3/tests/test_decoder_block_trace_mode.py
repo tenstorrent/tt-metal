@@ -181,7 +181,6 @@ def run_test_forward_pass_decoder2d(
         page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
     )
     rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
     # Forward pass
     logger.info("Running TTNN forward pass")

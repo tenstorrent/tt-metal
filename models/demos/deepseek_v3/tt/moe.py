@@ -261,7 +261,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_old_gate: bool = False
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_unoptimized_gate: bool = False
     ) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
@@ -271,7 +271,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
             return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_impl(x, cfg, use_old_gate=use_old_gate)
+        return cls._forward_impl(x, cfg, use_unoptimized_gate=use_unoptimized_gate)
 
     @classmethod
     def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
@@ -293,7 +293,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _forward_impl(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_old_gate: bool = False
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_unoptimized_gate: bool = False
     ) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
@@ -320,16 +320,18 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Note: all_gather is handled by the caller (decoder block or test)
 
         # MoE Gate
-        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg, use_old_gate=use_old_gate)
+        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(
+            x, cfg, use_unoptimized_gate=use_unoptimized_gate
+        )
 
         import inspect
 
-        if "grouped_moe_gate" in inspect.getfile(MoEGate) and not use_old_gate:
+        if "grouped_moe_gate" in inspect.getfile(MoEGate) and not use_unoptimized_gate:
             topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.int32)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.uint16)
-        elif "new_moe_gate" in inspect.getfile(MoEGate) and not use_old_gate:
+        elif "new_moe_gate" in inspect.getfile(MoEGate) and not use_unoptimized_gate:
             topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.L1_MEMORY_CONFIG)
 
@@ -355,9 +357,9 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _fwd_moe_gate(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_old_gate: bool = False
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_unoptimized_gate: bool = False
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        if use_old_gate:
+        if use_unoptimized_gate:
             from models.demos.deepseek_v3.tt.moe_gate import MoEGate as OldMoEGate
 
             return OldMoEGate.forward(x, cfg["moe_gate"])
@@ -524,14 +526,14 @@ class MoE(SharedStateAddOn, AbstractModule):
         x: ttnn.Tensor,
         cfg: RunPrefillConfig,
         handle_tensor_parallel: bool = False,
-        use_old_gate: bool = False,
+        use_unoptimized_gate: bool = False,
     ) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward(x, cfg, use_old_gate=use_old_gate)
+        output = cls.forward(x, cfg, use_unoptimized_gate=use_unoptimized_gate)
 
         # Handle reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
@@ -546,14 +548,14 @@ class MoE(SharedStateAddOn, AbstractModule):
         x: ttnn.Tensor,
         cfg: RunDecodeConfig,
         handle_tensor_parallel: bool = False,
-        use_old_gate: bool = False,
+        use_unoptimized_gate: bool = False,
     ) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward(x, cfg, use_old_gate=use_old_gate)
+        output = cls.forward(x, cfg, use_unoptimized_gate=use_unoptimized_gate)
 
         # Handle reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
