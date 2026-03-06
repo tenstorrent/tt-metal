@@ -44,7 +44,6 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
@@ -56,7 +55,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         tile_c_dim,
         num_faces,
         partial_face,
-        narrow_tile,
+        false,  // narrow_tile,
         0 /*relu_config*/);
 }
 
@@ -107,8 +106,6 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
 
     LLK_ASSERT(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
@@ -121,8 +118,8 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         face_r_dim,
         tile_c_dim,
         num_faces,
-        partial_face,
-        narrow_tile,
+        false,  // partial_face,
+        false,  // narrow_tile,
         num_tiles);
 }
 

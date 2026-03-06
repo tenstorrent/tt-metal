@@ -120,6 +120,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
+    SKIP_FOR_LLK_ASSERTS("Skipping test with LLK asserts enabled");
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Create multiple tensors of various sizes
