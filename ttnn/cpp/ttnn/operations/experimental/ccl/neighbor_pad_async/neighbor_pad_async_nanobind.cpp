@@ -51,14 +51,15 @@ void bind_neighbor_pad_async(nb::module_& mod) {
         nb::arg("padding_right"),
         nb::arg("padding_mode"),
         nb::arg("cluster_axis"),
-        nb::arg("final_semaphore"),
+        nb::arg("neighbor_semaphore"),
         nb::arg("barrier_semaphore"),
         nb::kw_only(),
-        nb::arg("num_links") = 1,
+        nb::arg("num_links") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
         nb::arg("secondary_cluster_axis") = nb::none(),
-        nb::arg("secondary_mesh_shape") = nb::none());
+        nb::arg("secondary_mesh_shape") = nb::none(),
+        nb::arg("persistent_output_buffer") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
