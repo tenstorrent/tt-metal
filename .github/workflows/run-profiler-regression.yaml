@@ -88,6 +88,18 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
+      matrix:
+        test-group: [
+          {name: profiler-sync-midrun, group: sync_midrun},
+          {name: profiler-basic, group: basic},
+          {name: profiler-trace, group: trace},
+          {name: profiler-dispatch, group: dispatch},
+          {name: profiler-events, group: events},
+          {name: profiler-noc-events, group: noc_events},
+          {name: profiler-fabric, group: fabric},
+          {name: profiler-advanced, group: advanced},
+        ]
+    name: ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
         format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
@@ -133,13 +145,13 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher }}
-      - name: Run profiler regression tests
+      - name: Run ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           if [[ "${{ inputs.post_commit_only }}" == "true" ]]; then
-            ./tests/scripts/run_profiler_regressions.sh --post-commit
+            ./tests/scripts/run_profiler_regressions.sh --post-commit --group ${{ matrix.test-group.group }}
           else
-            ./tests/scripts/run_profiler_regressions.sh --full
+            ./tests/scripts/run_profiler_regressions.sh --full --group ${{ matrix.test-group.group }}
           fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

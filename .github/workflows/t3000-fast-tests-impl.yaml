@@ -53,7 +53,22 @@ on:
 
 jobs:
   t3000-fast-tests:
-    name: T3000 fast tests
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {name: t3k-fabric-control-plane, group: fabric_control_plane},
+          {name: t3k-fabric-worker-edm, group: fabric_worker_edm},
+          {name: t3k-fabric-2d-1d, group: fabric_2d_1d},
+          {name: t3k-fabric-validation-telemetry, group: fabric_validation_telemetry},
+          {name: t3k-fabric-microbench, group: fabric_microbench},
+          {name: t3k-multiprocess-2x2, group: multiprocess_2x2},
+          {name: t3k-multiprocess-2x4, group: multiprocess_2x4},
+          {name: t3k-ccl-all-gather, group: ccl_all_gather},
+          {name: t3k-ccl-reduce-scatter, group: ccl_reduce_scatter},
+          {name: t3k-ccl-misc, group: ccl_misc},
+        ]
+    name: ${{ matrix.test-group.name }}
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
@@ -89,16 +104,15 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      - name: Run t3k fabric tests
-        id: t3k-fabric-tests
+      - name: Run ${{ matrix.test-group.name }} tests
+        id: t3k-tests
         timeout-minutes: 20
-        if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
-          run_t3000_ttfabric_tests
+          run_t3000_test_group_${{ matrix.test-group.group }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.t3k-fabric-tests.outcome == 'failure' }}
+        if: ${{ failure() && steps.t3k-tests.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: UJ45FEC7M #Allan Liu
