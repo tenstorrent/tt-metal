@@ -74,8 +74,8 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
 // (round-to-nearest-even, matching hardware pack behavior per
 // tech_reports/data_formats/data_formats.md):
 // - Zero saturation: x <= -13.1875 (GELU(x) rounds to 0 in BF16)
-// - Identity saturation: x >= 3.0 (GELU(x) rounds to x in BF16 with RNE)
-//   Mathematical threshold is ~2.78 but we use 3.0 for clean polynomial boundary
+// - Identity saturation: x >= 2.78125 (GELU(x) rounds to x in BF16 with RNE)
+//   2.78125 is the exact BF16 boundary (0x4032) where GELU first rounds to identity
 // =============================================================================
 
 // Degree-16 CDF polynomial for Phi(x) over [-3, 3]
@@ -117,11 +117,11 @@ template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
 
-    // Identity saturation: x >= 3.0
-    // With RNE rounding, GELU(x) rounds to x for all BF16 values x >= ~2.78.
-    // We use 3.0 as a clean boundary matching the core polynomial endpoint.
-    v_if(x >= 3.0f) { result = x; }
-    // Core CDF region [-3, 3): GELU(x) = x * Phi_core(x)
+    // Identity saturation: x >= 2.78125
+    // With RNE rounding, GELU(x) rounds to x for all BF16 values x >= 2.78125
+    // (BF16 0x4032). Verified by exhaustive sweep with fp64 golden reference.
+    v_if(x >= 2.78125f) { result = x; }
+    // Core CDF region [-3, 2.78125): GELU(x) = x * Phi_core(x)
     v_elseif(x >= -3.0f) {
         sfpi::vFloat phi = PolynomialEvaluator::eval(
             x,
