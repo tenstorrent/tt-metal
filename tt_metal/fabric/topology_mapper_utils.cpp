@@ -17,9 +17,10 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -237,7 +238,47 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     return result;
 }
 
-LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+namespace {
+
+// Extract requested inter-mesh connections and ports from MeshGraphDescriptor (same logic as
+// MeshGraph::initialize_from_mgd).
+std::pair<::tt::tt_fabric::RequestedIntermeshConnections, ::tt::tt_fabric::RequestedIntermeshPorts>
+get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd) {
+    ::tt::tt_fabric::RequestedIntermeshConnections requested_intermesh_connections;
+    ::tt::tt_fabric::RequestedIntermeshPorts requested_intermesh_ports;
+
+    if (!mgd.has_connections_of_type("FABRIC")) {
+        return {requested_intermesh_connections, requested_intermesh_ports};
+    }
+
+    for (::tt::tt_fabric::ConnectionId conn_id : mgd.connections_by_type("FABRIC")) {
+        const auto& connection_data = mgd.get_connection(conn_id);
+        const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
+        const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
+
+        bool is_device_level = (src_instance.kind == ::tt::tt_fabric::NodeKind::Device) &&
+                               (dst_instance.kind == ::tt::tt_fabric::NodeKind::Device);
+
+        if (is_device_level) {
+            const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
+            const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
+            uint32_t src_mesh_id_val = src_mesh_instance.local_id;
+            uint32_t dst_mesh_id_val = dst_mesh_instance.local_id;
+            requested_intermesh_ports[src_mesh_id_val][dst_mesh_id_val].push_back(
+                {src_instance.local_id, dst_instance.local_id, connection_data.count});
+        } else {
+            uint32_t src_mesh_id_val = src_instance.local_id;
+            uint32_t dst_mesh_id_val = dst_instance.local_id;
+            requested_intermesh_connections[src_mesh_id_val][dst_mesh_id_val] = connection_data.count;
+        }
+    }
+    return {requested_intermesh_connections, requested_intermesh_ports};
+}
+
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph_impl(
+    const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>>& mesh_adjacency_graphs,
+    const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,
+    const ::tt::tt_fabric::RequestedIntermeshPorts& requested_intermesh_ports) {
     // This function handles both strict mode (requested_intermesh_ports) and relaxed mode
     // (requested_intermesh_connections) intermesh connections:
     // - Strict mode: Creates fabric node-level exit nodes (LogicalExitNode with mesh_id and fabric_node_id)
@@ -246,30 +287,17 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     // Currently, MGD validation prevents mixing policies, but when this feature is added,
     // this function will need to handle both simultaneously, creating appropriate exit node types
     // based on the connection type.
+    using namespace ::tt::tt_fabric;
 
-    // Build logical adjacency graphs for each mesh using topology solver's function
-    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
-
-    // Build logical multi-mesh adjacency graph
     LogicalMultiMeshGraph logical_multi_mesh_graph;
 
-    // Store mesh adjacency graphs once (no duplication)
     for (const auto& [mesh_id, adjacency_graph] : mesh_adjacency_graphs) {
         logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = adjacency_graph;
     }
 
-    // Build mesh-level adjacency map using MeshIds (lightweight)
-    ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
-
-    // Build exit node adjacency maps (only for strict mode)
+    AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
     std::map<MeshId, AdjacencyGraph<LogicalExitNode>::AdjacencyMap> exit_node_adjacency_maps;
 
-    // Get requested inter-mesh connections (relaxed mode) and ports (strict mode)
-    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
-    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
-
-    // Process requested_intermesh_ports (strict mode) if it exists
-    // Mapping: src_mesh -> dst_mesh -> list of (src_device, dst_device, num_channels)
     if (!requested_intermesh_ports.empty()) {
         for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_ports) {
             MeshId src_mesh_id(src_mesh_id_val);
@@ -364,13 +392,8 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     }
 
     // Build mesh-level graph from adjacency map
-    logical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
 
-    // Convert exit node adjacency maps to graphs
-    // Populated for:
-    // - Strict mode (requested_intermesh_ports): fabric node-level exit nodes
-    // - Relaxed mode (requested_intermesh_connections): mesh-level exit nodes
-    // Initialize exit node graphs for all meshes (even if empty) for consistency
     for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
         auto exit_node_it = exit_node_adjacency_maps.find(mesh_id);
         if (exit_node_it != exit_node_adjacency_maps.end() && !exit_node_it->second.empty()) {
@@ -381,8 +404,28 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
             logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<LogicalExitNode>();
         }
     }
-
     return logical_multi_mesh_graph;
+}
+
+}  // namespace
+
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
+    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto [requested_intermesh_connections, requested_intermesh_ports] =
+        get_requested_intermesh_from_mgd(mesh_graph_descriptor);
+    return build_logical_multi_mesh_adjacency_graph_impl(
+        mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
+}
+
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+    // This function handles both strict mode (requested_intermesh_ports) and relaxed mode
+    // (requested_intermesh_connections) intermesh connections - see build_logical_multi_mesh_adjacency_graph_impl.
+    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
+    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+    return build_logical_multi_mesh_adjacency_graph_impl(
+        mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
 }
 
 /**

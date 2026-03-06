@@ -24,7 +24,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include "physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include <numeric>
 #include <set>
@@ -38,17 +38,6 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
 namespace tt::tt_fabric {
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
-
-/**
- * @brief Determines the maximum number of local Ethernet connections per direction between ASICs in the system.
- *
- * For each ASIC in the provided PhysicalSystemDescriptor, this function examines all neighboring ASICs and counts
- * the number of Ethernet connections to each neighbor that are marked as local (i.e., connection.is_local is true).
- * It returns the maximum number of such local connections found in any direction for any ASIC.
- *
- * @param psd The PhysicalSystemDescriptor representing the system's ASICs and their interconnections.
- * @return The maximum number of local Ethernet connections per direction between any two ASICs.
- */
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
     switch (routing_direction) {

@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <factory_system_descriptor/utils.hpp>

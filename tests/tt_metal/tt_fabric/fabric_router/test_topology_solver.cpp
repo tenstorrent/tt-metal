@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/mock_device.hpp>
 
@@ -114,6 +114,42 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
     EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
     EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_FALSE(adjacency_map_from_graph.find(mesh_id) == adjacency_map_from_graph.end())
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+        }
+    }
+
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {

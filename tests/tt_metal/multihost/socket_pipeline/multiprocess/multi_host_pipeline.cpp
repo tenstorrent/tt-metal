@@ -19,7 +19,7 @@
 #include <chrono>
 #include <numeric>
 #include <optional>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {

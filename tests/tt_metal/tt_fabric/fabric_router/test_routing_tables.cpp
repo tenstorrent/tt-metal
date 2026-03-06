@@ -18,7 +18,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>

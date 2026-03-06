@@ -17,9 +17,17 @@ namespace tt::tt_metal::distributed::multihost {
 class DistributedContext;
 }
 
+namespace tt::fabric::proto {
+class PhysicalSystemDescriptor;
+}
+
 namespace tt::tt_metal {
 
 class PhysicalSystemDescriptor;
+
+std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
+    const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc);
+
 // Emit PhysicalSystemDescriptor to a text proto file
 void emit_physical_system_descriptor_to_text_proto(
     const PhysicalSystemDescriptor& descriptor, const std::optional<std::string>& file_path);

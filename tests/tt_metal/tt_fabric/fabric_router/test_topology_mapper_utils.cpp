@@ -21,7 +21,7 @@
 #include <tt-metalium/cluster.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
