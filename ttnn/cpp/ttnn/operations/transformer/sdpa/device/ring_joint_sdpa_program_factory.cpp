@@ -309,7 +309,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
     const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && Sq_chunk_t / qk_out_subblock_h > 1;
+                                       Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
