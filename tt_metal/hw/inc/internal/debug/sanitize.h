@@ -48,11 +48,7 @@ using debug_sanitize_noc_cast_t = bool;
 using debug_sanitize_noc_which_core_t = bool;
 
 // Helper function to get the core type from noc coords.
-// When cmd_buf_mid_transaction is true, coordinates may be mid virtual-to-physical
-// translation, so a relaxed check is applied: x and y are independently checked
-// against virtual OR physical Tensix ranges before returning UNKNOWN.
-AddressableCoreType get_core_type(
-    uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord, bool cmd_buf_mid_transaction = false) {
+AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
     // Check if the target NOC endpoint is a valid non-Tensix core in the Physical Coordinate Space
     for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
@@ -148,106 +144,6 @@ AddressableCoreType get_core_type(
             y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
             is_virtual_coord = false;
             return AddressableCoreType::TENSIX;
-        }
-    }
-
-    // Coordinates did not match any known core exactly. When the cmd buf is
-    // mid-transaction, this can happen because the hardware is mid-way through
-    // virtual-to-physical coordinate translation - x and y may each independently
-    // be in either the virtual or physical Tensix range. Only apply this relaxed
-    // check when we know the cmd buf is busy (mid-transaction), to avoid false
-    // acceptance of genuinely bad addresses when the cmd buf is idle.
-    // To confirm the hypothesis, we require a proper mixed state (one axis virtual,
-    // other physical) and verify the physical axis is not a harvested coordinate.
-    if (cmd_buf_mid_transaction) {
-        if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
-            bool x_in_virtual = false;
-            bool y_in_virtual = false;
-            bool x_in_physical = false;
-            bool y_in_physical = false;
-#ifdef ARCH_BLACKHOLE
-            uint32_t virtual_end_x = (uint32_t)core_info->noc_size_x - 1;
-            uint32_t virtual_end_y = (uint32_t)core_info->noc_size_y - 1;
-#else
-            uint32_t virtual_end_x = (uint32_t)VIRTUAL_TENSIX_START_X + core_info->worker_grid_size_x - 1;
-            uint32_t virtual_end_y = (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->worker_grid_size_y - 1;
-#endif
-            if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X) &&
-                x <= NOC_0_X(noc_id, core_info->noc_size_x, virtual_end_x)) {
-                x_in_virtual = true;
-            }
-            if (y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y) &&
-                y <= NOC_0_Y(noc_id, core_info->noc_size_y, virtual_end_y)) {
-                y_in_virtual = true;
-            }
-            if (noc_id == 0) {
-                if (x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
-                    x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1)) {
-                    x_in_physical = true;
-                }
-                if (y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
-                    y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
-                    y_in_physical = true;
-                }
-            } else {
-                if (x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
-                    x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1)) {
-                    x_in_physical = true;
-                }
-                if (y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
-                    y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
-                    y_in_physical = true;
-                }
-            }
-            // Must be a valid mixed state: one axis virtual, other physical.
-            // Both-virtual or both-physical would have matched earlier in strict checks.
-            if ((x_in_virtual && y_in_physical) || (x_in_physical && y_in_virtual)) {
-                // Verify each axis maps to a real existing core:
-                // - Physical axis must not be a harvested physical coordinate
-                // - Virtual axis must not be a harvested virtual coordinate
-                // - Neither axis should match a non-worker core coordinate
-                bool valid = true;
-                // Check physical axis against harvested physical coords
-                for (uint32_t idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
-                    uint16_t h = core_info->harvested_coords[idx];
-                    if constexpr (tensix_harvest_axis == 0x1) {
-                        if (y_in_physical && y == NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)h)) {
-                            valid = false;
-                        }
-                    } else if constexpr (tensix_harvest_axis == 0x2) {
-                        if (x_in_physical && x == NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)h)) {
-                            valid = false;
-                        }
-                    }
-                }
-                // Check virtual axis against harvested virtual coords
-                for (uint32_t idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
-                    uint16_t vh = core_info->virtual_harvested_coords[idx];
-                    if constexpr (tensix_harvest_axis == 0x1) {
-                        if (y_in_virtual && y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)vh)) {
-                            valid = false;
-                        }
-                    } else if constexpr (tensix_harvest_axis == 0x2) {
-                        if (x_in_virtual && x == NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)vh)) {
-                            valid = false;
-                        }
-                    }
-                }
-                // Check neither axis matches a non-worker physical core coordinate
-                for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
-                    uint8_t nw_x =
-                        NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->non_worker_cores[idx].x);
-                    uint8_t nw_y =
-                        NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->non_worker_cores[idx].y);
-                    if ((x_in_physical && x == nw_x) || (y_in_physical && y == nw_y)) {
-                        valid = false;
-                    }
-                }
-                if (valid) {
-                    is_virtual_coord = false;
-                    return AddressableCoreType::TENSIX;
-                }
-            }
         }
     }
 
@@ -446,8 +342,7 @@ uint32_t debug_sanitize_noc_addr(
     uint32_t noc_len,
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir,
-    bool check_linked,
-    bool cmd_buf_mid_transaction = false) {
+    bool check_linked) {
     // Different encoding of noc addr depending on multicast vs unitcast
     uint8_t x, y;
     if (multicast) {
@@ -459,7 +354,7 @@ uint32_t debug_sanitize_noc_addr(
     }
     uint64_t noc_local_addr = NOC_LOCAL_ADDR(noc_addr);
     bool is_virtual_coord = false;
-    AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord, cmd_buf_mid_transaction);
+    AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
     // Extra check for multicast
     if (multicast) {
         uint8_t x_end = (uint8_t)NOC_MCAST_ADDR_END_X(noc_addr);
@@ -577,11 +472,9 @@ void debug_sanitize_noc_and_worker_addr(
     uint32_t len,
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir,
-    bool check_linked,
-    bool cmd_buf_mid_transaction = false) {
+    bool check_linked) {
     // Check noc addr, get any extra alignment req for worker.
-    uint32_t alignment_mask = debug_sanitize_noc_addr(
-        noc_id, noc_addr, worker_addr, len, multicast, dir, check_linked, cmd_buf_mid_transaction);
+    uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir, check_linked);
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
@@ -724,10 +617,10 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_id, noc_a, worker_a, l, multicast, dir)        \
     debug_sanitize_noc_and_worker_addr(noc_id, noc_a, worker_a, l, multicast, dir, true); \
     LOG_LEN(l)
-#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_(noc_id, noc_a, worker_a, l, check_linked, ...)                            \
-    debug_sanitize_noc_and_worker_addr(                                                                                \
-        noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked, ##__VA_ARGS__); \
-    LOG_LEN(l);                                                                                                        \
+#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_(noc_id, noc_a, worker_a, l, check_linked)                  \
+    debug_sanitize_noc_and_worker_addr(                                                                 \
+        noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
+    LOG_LEN(l);                                                                                         \
     debug_insert_delay((uint8_t)TransactionRead);
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_id, noc_a, worker_a, l) \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_(noc_id, noc_a, worker_a, l, true)
@@ -736,17 +629,10 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ, true); \
     LOG_LEN(l);                                                                                   \
     debug_insert_delay((uint8_t)TransactionRead);
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(noc_id, noc_a, worker_a, l, check_linked, ...) \
-    debug_sanitize_noc_and_worker_addr(                                                      \
-        noc_id,                                                                              \
-        noc_a,                                                                               \
-        worker_a,                                                                            \
-        l,                                                                                   \
-        DEBUG_SANITIZE_NOC_UNICAST,                                                          \
-        DEBUG_SANITIZE_NOC_WRITE,                                                            \
-        check_linked,                                                                        \
-        ##__VA_ARGS__);                                                                      \
-    LOG_LEN(l);                                                                              \
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(noc_id, noc_a, worker_a, l, check_linked)                  \
+    debug_sanitize_noc_and_worker_addr(                                                                  \
+        noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE, check_linked); \
+    LOG_LEN(l);                                                                                          \
     debug_insert_delay((uint8_t)TransactionWrite)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l) \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(noc_id, noc_a, worker_a, l, true);
@@ -756,41 +642,34 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     LOG_LEN(l);                                                                                    \
     debug_insert_delay((uint8_t)TransactionWrite);
 
-// _WITH_ADDR_STATE macros read coordinates from cmd buf registers. When the cmd
-// buf is mid-transaction, coordinate virtualization translation may be in-flight,
-// so we pass the cmd buf busy status to get_core_type which applies a relaxed
-// check (x and y independently valid in virtual OR physical Tensix range) only
-// when the cmd buf is busy. When idle, strict validation is used.
-// IMPORTANT: check cmd buf readiness BEFORE reading coordinate registers to
-// avoid a race where the cmd buf finishes translation between the reads and
-// the readiness check.
+// _WITH_ADDR_STATE macros read coordinates from cmd buf registers. We wait for
+// the cmd buf to be ready before reading registers, ensuring coordinate
+// virtualization translation has completed and we get the final physical address.
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)                    \
     {                                                                                                                  \
-        bool _mid_txn = !noc_cmd_buf_ready(noc_id, read_cmd_buf);                                                      \
+        while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                                              \
         DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                          \
             noc_id,                                                                                                    \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
                 ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower,         \
             worker_a,                                                                                                  \
             NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_AT_LEN_BE),                                                 \
-            false,                                                                                                     \
-            _mid_txn);                                                                                                 \
+            false);                                                                                                    \
     }
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                          \
     {                                                                                                                  \
-        bool _mid_txn = !noc_cmd_buf_ready(noc_id, read_cmd_buf);                                                      \
+        while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                                              \
         DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                          \
             noc_id,                                                                                                    \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
                 ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower,         \
             worker_a,                                                                                                  \
             l,                                                                                                         \
-            false,                                                                                                     \
-            _mid_txn);                                                                                                 \
+            false);                                                                                                    \
     }
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)            \
     {                                                                                                           \
-        bool _mid_txn = !noc_cmd_buf_ready(noc_id, write_cmd_buf);                                              \
+        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                      \
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
             noc_id,                                                                                             \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE)                    \
@@ -798,12 +677,11 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
                 ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
             worker_a,                                                                                           \
             NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                                         \
-            false,                                                                                              \
-            _mid_txn);                                                                                          \
+            false);                                                                                             \
     }
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                  \
     {                                                                                                           \
-        bool _mid_txn = !noc_cmd_buf_ready(noc_id, write_cmd_buf);                                              \
+        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                      \
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
             noc_id,                                                                                             \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE)                    \
@@ -811,8 +689,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
                 ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
             worker_a,                                                                                           \
             l,                                                                                                  \
-            false,                                                                                              \
-            _mid_txn);                                                                                          \
+            false);                                                                                             \
     }
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)
