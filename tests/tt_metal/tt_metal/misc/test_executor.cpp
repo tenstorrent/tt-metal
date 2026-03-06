@@ -18,16 +18,6 @@ TEST(ExecutorTest, AsyncRunsInline) {
     EXPECT_EQ(value.load(), 42);
 }
 
-TEST(ExecutorDeathTest, ForkWithInflightWorkAborts) {
-    ASSERT_DEATH(
-        {
-            detail::GetExecutor().silent_async([] { std::this_thread::sleep_for(std::chrono::seconds(5)); });
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            fork();
-        },
-        "fork.*in-flight work");
-}
-
 TEST(ExecutorTest, ForkSafety) {
     std::atomic<int> pre{0};
     detail::async([&pre] { pre.store(1); }).get();

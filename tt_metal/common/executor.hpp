@@ -6,6 +6,7 @@
 
 #include <pthread.h>
 #include <taskflow/taskflow.hpp>
+#include <cstdlib>
 #include <thread>
 #include <tt_stl/assert.hpp>
 
@@ -24,6 +25,10 @@ inline Executor& GetExecutor() {
     // Also ensure that no work is in-flight on the main process before forking.
     static Executor* exec = [] {
         auto* e = new Executor(EXECUTOR_NTHREADS);
+        std::atexit([] {
+            delete exec;
+            exec = nullptr;
+        });
         pthread_atfork(
             /*prepare=*/
             [] {
