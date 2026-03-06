@@ -17,7 +17,7 @@ from ttml.common.data import (
     load_shakespeare_text,
     get_batch,
 )
-from ttml.common.utils import set_seed, get_tt_metal_home
+from ttml.common.utils import set_seed, get_tt_metal_home, summary
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
 from ttml.modules import LoraConfig, LoraModel
@@ -164,13 +164,7 @@ def main():
         MemoryUsageTracker.snapshot("LORA_INJECTION")
 
     # ── Trainable parameters ──────────────────────────────────────────────────
-    all_params = model.parameters()
-    train_params = {k: v for k, v in all_params.items() if v.get_requires_grad()}
-
-    print(f"Total params: {len(all_params)}")
-    print(f"Trainable: {len(train_params)}")
-    for name, tensor in sorted(all_params.items()):
-        print(f"  {'*' if name in train_params else ' '} {name}: {tensor.shape()}")
+    summary(model)
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
     adamw_cfg = ttml.optimizers.AdamWConfig.make(LR, 0.9, 0.999, 1e-8, WEIGHT_DECAY)
