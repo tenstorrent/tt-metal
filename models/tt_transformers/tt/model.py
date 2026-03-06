@@ -17,7 +17,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
 class Transformer(LightweightModule):
@@ -62,8 +62,8 @@ class Transformer(LightweightModule):
             embd_cls = Embedding
         self.embd = embd_cls(**embd_kwargs)
 
-        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
-
+        DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -76,7 +76,7 @@ class Transformer(LightweightModule):
         )
 
         if args.rope_theta_local:
-            self.rope_local_setup = RotarySetup(
+            self.rope_local_setup = DefaultRopeSetup(
                 mesh_device,
                 args.max_batch_size,
                 args.head_dim,
@@ -165,6 +165,7 @@ class Transformer(LightweightModule):
         if lm_head_input_mem_cfg.is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
         logits = self.lm_head(logits)
+        logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
@@ -202,21 +203,15 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(
-        self,
-        tokens,
-        start_pos=0,
-        page_table=None,
-        chunk_page_table=None,
-        trace_enabled=False,
-        last_token_idx=None,
-        global_user_id=None,
-    ):
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
+
+        trace_enabled = kwargs.get("trace_enabled", False)
+        last_token_idx = kwargs.get("last_token_idx", None)
 
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
@@ -564,12 +559,9 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(
             tt_logits,
             use_multicore=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
-
-        if not self.args.is_galaxy:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits, None
 
@@ -648,4 +640,6 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        if mode == Mode.PREFILL:
+            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

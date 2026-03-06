@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -284,8 +284,6 @@ struct FabricEriscDatamoverConfig {
     // ----------- Receiver Channels
     // persistent mode field
     std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
@@ -542,13 +540,17 @@ public:
     [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
 
     // Helper for `get_compile_time_args`
-    void get_telemetry_compile_time_args(uint32_t risc_id, std::vector<uint32_t>& ct_args) const;
+    void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
     void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
 
     size_t get_configured_risc_count() const;
+
+    // Returns the resolved kernel build optimization level for this router.
+    // This opt-level is per-builder/router, and should not be shared across builders.
+    [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
 
     void dump_to_log() const {
         // TODO

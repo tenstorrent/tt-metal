@@ -25,6 +25,8 @@ CB Layout:
 """
 
 
+import math
+
 import torch
 
 import ttnn
@@ -34,6 +36,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -58,23 +61,36 @@ class LMHeadSampling:
     """
 
     @staticmethod
-    def golden(input_tensor, vocab_tensor, indices: torch.Tensor | None = None, k: int = 1, p: float = 1.0):
+    def golden(
+        input_tensor,
+        gamma_tensor,
+        vocab_tensor,
+        indices: torch.Tensor | None = None,
+        k: int = 1,
+        p: float = 1.0,
+        epsilon: float = 1e-6,
+    ):
         """
         PyTorch reference implementation for fused LM-head + sampling golden.
 
         Args:
             input_tensor: Input tensor (torch.Tensor) [M, K]
+            gamma_tensor: RMSNorm gamma/weight tensor (torch.Tensor) [M, K]
             vocab_tensor: Vocab tensor (torch.Tensor) [K, N]
             indices: Optional indices tensor used by fused sampling. If provided,
                 golden returns sampled index tensor [1, 1]. If omitted, returns scores.
             k: Sampling k; currently only k=1 supported when indices is provided.
             p: Top-p threshold (unused for k=1 path).
+            epsilon: Small value to avoid division by zero in RMS norm.
 
         Returns:
             - If indices is None: output scores tensor [M, N]
             - If indices is provided: sampled index tensor [1, 1] (uint32)
         """
-        scores = input_tensor @ vocab_tensor
+        variance = input_tensor.pow(2).mean(-1, keepdim=True)
+        normalized = input_tensor * torch.rsqrt(variance + epsilon)
+        rmsnorm_out = normalized * gamma_tensor
+        scores = rmsnorm_out @ vocab_tensor
 
         if k != 1:
             raise NotImplementedError("LMHeadSampling fused golden currently supports only k=1")
@@ -98,6 +114,7 @@ class LMHeadSampling:
     def op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
+        gamma_tensor,
         vocab_tensor,
         output_tensor,
         sender_coord,
@@ -113,8 +130,14 @@ class LMHeadSampling:
         secondary_cluster_axis=None,
         num_links=1,
         fp32_dest_acc_en=False,
+        epsilon=1e-6,
+        rsqrt_fast_approx=False,
         skip_ccl=None,
+        socket_input=None,
         socket_output=None,
+        persistent_mode=False,
+        termination_semaphore=None,
+        persistent_next_iter_semaphore=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -127,6 +150,7 @@ class LMHeadSampling:
         Args:
             input_tensor_mesh: Input tensor mesh [1, K] height-sharded in L1 on a single sender core
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
+            gamma_tensor: RMSNorm gamma tensor [1, K], same tile/layout as input
             vocab_tensor: Vocab weights [K, N_total] width-sharded across matmul cores as [K, N_per_core]
             output_tensor: Pre-allocated output [1, N_total] width-sharded across matmul cores
             indices_tensor: Optional pre-cached global indices tensor, width-sharded like output scores
@@ -139,17 +163,38 @@ class LMHeadSampling:
             num_links: Number of fabric links for CCL
             fp32_dest_acc_en: Whether to enable FP32 accumulation
             skip_ccl: Whether to skip CCL broadcast. If None, defaults to True for single-device meshes.
+            socket_input: Optional socket input endpoint. Supports ttnn.MeshSocket receiver endpoint (D2D input).
             socket_output: Optional socket output endpoint. Supports ttnn.D2HSocket (host output) and
                 ttnn.MeshSocket sender endpoint (D2D output).
+            persistent_mode: Enable persistent execution loop in kernel.
+            termination_semaphore: Global semaphore used to terminate persistent loop (terminate when set to 1).
+            persistent_next_iter_semaphore: Global semaphore used to gate next persistent iteration.
         Returns:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
+
         enable_argmax = True
         socket_mode_none = 0
         socket_mode_d2h = 1
         socket_mode_d2d = 2
         socket_page_size_bytes = 64
+        input_socket_mode_none = 0
+        input_socket_mode_d2d = 2
+
+        if socket_input is None:
+            input_socket_mode_selected = input_socket_mode_none
+        elif isinstance(socket_input, ttnn.MeshSocket):
+            input_socket_mode_selected = input_socket_mode_d2d
+        else:
+            raise TypeError(
+                f"Unsupported socket_input type for lm_head_sampling: {type(socket_input)}. "
+                "Expected ttnn.MeshSocket."
+            )
+
+        if input_socket_mode_selected == 1:
+            raise AssertionError("lm_head_sampling input socket mode=1 is invalid (reserved for output d2h mode)")
+        enable_socket_input = socket_input is not None
         if socket_output is None:
             socket_mode_selected = socket_mode_none
         elif isinstance(socket_output, ttnn.D2HSocket):
@@ -161,10 +206,10 @@ class LMHeadSampling:
                 f"Unsupported socket_output type for lm_head_sampling: {type(socket_output)}. "
                 "Expected ttnn.D2HSocket or ttnn.MeshSocket."
             )
+
         enable_socket_output = socket_output is not None
         if indices_tensor is None or output_index_tensor is None:
             raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
-
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -172,6 +217,11 @@ class LMHeadSampling:
         mesh_cols = mesh_shape[1]
         if skip_ccl is None:
             skip_ccl = mesh_rows * mesh_cols == 1
+        if enable_socket_input:
+            active_input_socket_cores = socket_input.get_active_cores()
+            if len(active_input_socket_cores) != 1:
+                raise ValueError("socket input for lm_head_sampling must have exactly one active core")
+            input_socket_core = active_input_socket_cores[0]
         if enable_socket_output:
             # only for d2h sockets
             if isinstance(socket_output, ttnn.D2HSocket):
@@ -184,13 +234,12 @@ class LMHeadSampling:
         # all clusters. Callers can still override explicitly if needed.
         if not skip_ccl and mesh_cols > 1 and secondary_cluster_axis is None:
             secondary_cluster_axis = 1
-
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
-
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
+        gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
         vocab_tensors_per_device = ttnn.get_device_tensors(vocab_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         indices_tensors_per_device = ttnn.get_device_tensors(indices_tensor) if enable_argmax else None
@@ -198,7 +247,6 @@ class LMHeadSampling:
         scratch_tensors_per_device = (
             ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
         )
-
         if enable_argmax and not skip_ccl:
             if global_semaphore is None or global_stage2_semaphore is None or fabric_scratch_tensor is None:
                 raise ValueError(
@@ -210,7 +258,11 @@ class LMHeadSampling:
                 )
             if argmax_final_mesh_coord is None:
                 raise ValueError("argmax_final_mesh_coord is required for mesh argmax")
-
+        if persistent_mode and persistent_next_iter_semaphore is None:
+            raise ValueError(
+                "persistent_next_iter_semaphore is required when persistent_mode=True "
+                "(must be a global semaphore on the full device grid)"
+            )
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
         barrier_sem_addr = 0
@@ -222,26 +274,28 @@ class LMHeadSampling:
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
-
         global_sem_addr = (
             int(ttnn.get_global_semaphore_address(global_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
         global_stage2_sem_addr = (
             int(ttnn.get_global_semaphore_address(global_stage2_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
-
+        persistent_next_iter_global_sem_addr = (
+            int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore)) if persistent_mode else 0
+        )
         # Calculate packet size and page info for CCL broadcast
         packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
 
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         in0_tile = input_tensor_sample.get_tile()
-
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
         element_size = 2
         tile_id_start = 0
-
+        numel = int(input_shape[0]) * int(input_shape[1])
+        scalar_packed = float_to_uint32(1.0 / math.sqrt(float(numel)))
+        epsilon_packed = float_to_uint32(epsilon)
         # CCL broadcast page info
         bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
         bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
@@ -249,27 +303,33 @@ class LMHeadSampling:
 
         # Matmul shape info from input and vocab tensors
         num_tiles_k = input_shape[1] // in0_tile.tile_shape[1]
-
+        # RMSNorm in this path must match broadcast_rms tile/page interpretation.
+        full_32x32_tile = ttnn.Tile((32, 32))
+        half_16x32_tile = ttnn.Tile((16, 32))
+        is_16x32_tile = (input_shape[1] // full_32x32_tile.tile_shape[1]) % full_32x32_tile.tile_shape[0] != 0
+        rms_interpreted_tile = half_16x32_tile if is_16x32_tile else full_32x32_tile
+        rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
+        rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
+        rms_num_tiles = (input_shape[0] * input_shape[1]) // (rms_tile_height * rms_tile_width)
         # Get output tile info
         output_tensor_sample = output_tensors_per_device[0]
         out_tile = output_tensor_sample.get_tile()
-
         # Get vocab weights info (per-core output width)
         vocab_tensor_sample = vocab_tensors_per_device[0]
         weights_shard_spec = vocab_tensor_sample.memory_config().shard_spec
         n_per_core = weights_shard_spec.shape[1]
         out_w_per_core = n_per_core // out_tile.tile_shape[1]
-
         # Input tile size for mcast data
         input_tile_size = in0_tile.get_tile_size(data_format)
         mcast_data_size_bytes = num_tiles_k * input_tile_size
-
         # ====================================================================
         # CB indices
         # ====================================================================
-        mcast_src_cb = 0  # input_tensor on sender core (tensor-backed)
+        rmsnorm_input_cb = 0  # raw input on sender core (tensor-backed)
         mcast_dst_cb = 1  # Mcast destination = matmul in0 (all mcast grid cores, intermediate)
         matmul_in1_cb = 2  # vocab_tensor weights on matmul cores (tensor-backed)
+        rmsnorm_gamma_cb = 7  # RMSNorm gamma weights on sender core (tensor-backed)
+        mcast_src_cb = 8  # RMSNorm output on sender core (intermediate), consumed by mcast sender
         argmax_winner_cb = 3
         argmax_gather_cb = 4
         argmax_indices_cb = 5
@@ -286,22 +346,19 @@ class LMHeadSampling:
         mcast_data_receiver_semaphore_id = 1
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
-
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                # CCL role calculation (only matters if not skipping CCL)
+                # Sender identity is fixed by sender_coord even when skip_ccl=True.
+                is_sender = (row == sender_row) and (col == sender_col)
                 if skip_ccl:
-                    is_sender = False
                     is_secondary_sender = False
                     is_receiver = False
                 else:
-                    is_sender = (row == sender_row) and (col == sender_col)
                     is_secondary_sender = (
                         secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
                     )
@@ -310,6 +367,7 @@ class LMHeadSampling:
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
+                gamma_tensor_device = gamma_tensors_per_device[device_idx]
                 vocab_tensor_device = vocab_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
                 indices_tensor_device = indices_tensors_per_device[device_idx] if enable_argmax else None
@@ -355,6 +413,23 @@ class LMHeadSampling:
                 mcast_sender_core_grid = input_tensor_device.memory_config().shard_spec.grid
                 assert mcast_sender_core_grid.num_cores() == 1, "input_tensor must be sharded on a single sender core"
                 mcast_sender_core = list(mcast_sender_core_grid.ranges())[0].start
+                recv_socket_on_this_device = False
+                if enable_socket_input:
+                    recv_socket_on_this_device = (
+                        input_socket_core.device_coord == ttnn.MeshCoordinate(row, col)
+                        and input_socket_core.core_coord.x == mcast_sender_core.x
+                        and input_socket_core.core_coord.y == mcast_sender_core.y
+                    )
+                if enable_socket_input and not skip_ccl:
+                    if (row == sender_row and col == sender_col) and not recv_socket_on_this_device:
+                        raise ValueError(
+                            "socket input active core must match sender device/core in multi-device lm_head_sampling"
+                        )
+                    if recv_socket_on_this_device and not (row == sender_row and col == sender_col):
+                        raise ValueError(
+                            "socket input active core must be on sender device/core in multi-device lm_head_sampling"
+                        )
+                input_socket_mode = input_socket_mode_selected if recv_socket_on_this_device else input_socket_mode_none
 
                 # Matmul cores: from vocab_tensor (multiple cores with weight shards)
                 matmul_core_grid = vocab_tensor_device.memory_config().shard_spec.grid
@@ -511,6 +586,7 @@ class LMHeadSampling:
                                     ],
                                 )
                             )
+
                     if emit_socket_on_this_device:
                         if (
                             socket_core.device_coord != ttnn.MeshCoordinate(row, col)
@@ -520,10 +596,35 @@ class LMHeadSampling:
                             raise ValueError(
                                 "socket output active core must match argmax final core and emitting mesh device for lm_head_sampling"
                             )
+
                     argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
+                persistent_target_mesh_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+                persistent_target_device_idx = sender_row * mesh_cols + sender_col
+                persistent_target_device = input_tensors_per_device[persistent_target_device_idx].device()
+                persistent_target_input_core_phys = persistent_target_device.worker_core_from_logical_core(
+                    mcast_sender_core
+                )
+                persistent_target_node = mesh_device.get_fabric_node_id(persistent_target_mesh_coord)
+                persistent_enable = int(persistent_mode and emit_socket_on_this_device)
+
+                # broadcast_rms-style BRISC source selection:
+                # - CCL path: packet CB
+                # - skip_ccl + socket path: rmsnorm input CB
+                # - otherwise BRISC broadcast path is idle
+
+                if not skip_ccl:
+                    brisc_bcast_cb = bcast_pkt_cb
+                    brisc_bcast_num_pages_to_read = bcast_num_pages
+                elif recv_socket_on_this_device:
+                    brisc_bcast_cb = rmsnorm_input_cb
+                    brisc_bcast_num_pages_to_read = rms_num_tiles
+                else:
+                    brisc_bcast_cb = 0
+                    brisc_bcast_num_pages_to_read = 0
+                brisc_is_active = (not skip_ccl) or recv_socket_on_this_device
 
                 # Get NOC coordinates for mcast destination
                 mcast_dest_noc_start = device.worker_core_from_logical_core(mcast_grid.start)
@@ -550,9 +651,13 @@ class LMHeadSampling:
                     ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
+                    ("input_socket_mode", input_socket_mode),
                     # Mcast source (for setup_sharded_buffer on sender core)
                     ("mcast_src_cb", mcast_src_cb),
-                    ("mcast_src_num_pages", num_tiles_k),
+                    ("mcast_src_num_pages", rms_num_tiles),
+                    ("rmsnorm_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_gamma_cb", rmsnorm_gamma_cb),
+                    ("rmsnorm_num_tiles", rms_num_tiles),
                     # Mcast receiver
                     ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
                     ("mcast_dst_cb", mcast_dst_cb),
@@ -589,6 +694,9 @@ class LMHeadSampling:
                     ("argmax_socket_mode", argmax_socket_mode),
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    ("persistent_mode", 1 if persistent_mode else 0),
+                    ("mesh_row", row),
+                    ("mesh_col", col),
                 ]
 
                 # ================================================================
@@ -597,9 +705,10 @@ class LMHeadSampling:
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("bcast_cb0_id", brisc_bcast_cb),
+                    ("bcast_num_pages_to_read", brisc_bcast_num_pages_to_read),
+                    ("bcast_is_sender", int(is_sender) if brisc_is_active else 0),
+                    ("input_socket_mode", input_socket_mode),
                     # Mcast sender
                     ("mcast_dest_noc_start_x", mcast_dest_noc_start.x),
                     ("mcast_dest_noc_start_y", mcast_dest_noc_start.y),
@@ -609,8 +718,10 @@ class LMHeadSampling:
                     ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
                     ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
                     ("mcast_data_size_bytes", mcast_data_size_bytes),
+                    ("rmsnorm_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_num_tiles", rms_num_tiles),
                     ("mcast_src_cb", mcast_src_cb),
-                    ("mcast_src_num_pages", num_tiles_k),
+                    ("mcast_src_num_pages", rms_num_tiles),
                     ("mcast_dst_cb", mcast_dst_cb),
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
                     ("argmax_winner_page_bytes", argmax_winner_page_bytes),
@@ -618,6 +729,9 @@ class LMHeadSampling:
                     ("argmax_socket_mode", argmax_socket_mode),
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    ("persistent_mode", 1 if persistent_mode else 0),
+                    ("mesh_row", row),
+                    ("mesh_col", col),
                 ]
 
                 # ================================================================
@@ -626,11 +740,21 @@ class LMHeadSampling:
                 trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
+                    ("input_socket_mode", input_socket_mode),
+                    ("rmsnorm_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_gamma_cb", rmsnorm_gamma_cb),
+                    ("rmsnorm_output_cb", mcast_src_cb),
+                    ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
+                    ("rmsnorm_num_tiles", rms_num_tiles),
+                    ("rmsnorm_rsqrt_fast_approx", 1 if rsqrt_fast_approx else 0),
                     ("matmul_in0", mcast_dst_cb),  # Matmul reads from mcast destination
                     ("matmul_in1", matmul_in1_cb),
                     ("matmul_out", matmul_out_cb),
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
+                    ("persistent_mode", 1 if persistent_mode else 0),
+                    ("mesh_row", row),
+                    ("mesh_col", col),
                 ]
 
                 # ================================================================
@@ -652,6 +776,15 @@ class LMHeadSampling:
                         int(final_core_phys.y),
                         0,
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
+                        int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
+                        packet_size_bytes if recv_socket_on_this_device else 0,
+                        1 if recv_socket_on_this_device else 0,
+                        persistent_enable,
+                        int(persistent_target_input_core_phys.x),
+                        int(persistent_target_input_core_phys.y),
+                        int(persistent_target_node.mesh_id),
+                        int(persistent_target_node.chip_id),
+                        persistent_next_iter_global_sem_addr,
                     ]
                     dst_nodes = []
                     fabric_node_id = None
@@ -675,7 +808,7 @@ class LMHeadSampling:
 
                     # Secondary axis connection (for sender to secondary sender)
                     if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1)
+                        secondary_coord = ttnn.MeshCoordinate(row, 1 - col)
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
                     num_connections = len(dst_nodes)
@@ -711,16 +844,51 @@ class LMHeadSampling:
                         int(final_core_phys.y),
                         int(scratch_tensors_per_device[device_idx].buffer_address()),
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
+                        int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
+                        packet_size_bytes if recv_socket_on_this_device else 0,
+                        1 if recv_socket_on_this_device else 0,
+                        persistent_enable,
+                        int(persistent_target_input_core_phys.x),
+                        int(persistent_target_input_core_phys.y),
+                        int(persistent_target_node.mesh_id),
+                        int(persistent_target_node.chip_id),
+                        persistent_next_iter_global_sem_addr,
                     ]
 
                 # ================================================================
                 # Circular buffer descriptors
                 # ================================================================
-                # CB 0: Mcast source — In multi-device mode, backed by intermediate_tensor
+                # CB 0: RMSNorm input source — In multi-device mode, backed by intermediate_tensor
                 #       (where CCL broadcast placed the data). In single-device mode,
                 #       backed by input_tensor directly.
-                mcast_src_backing_tensor = input_tensor_device if skip_ccl else intermediate_tensor_device
-                mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mcast_src_cb, mcast_src_backing_tensor)
+                rmsnorm_input_backing_tensor = input_tensor_device if skip_ccl else intermediate_tensor_device
+                rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm_input_cb, rmsnorm_input_backing_tensor
+                )
+                rms_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                rmsnorm_input_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                rmsnorm_input_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
+                # CB 7: RMSNorm gamma — tensor-backed on sender core.
+                rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm_gamma_cb, gamma_tensor_device
+                )
+                rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
+                # CB 8: RMSNorm output — intermediate on sender core, becomes mcast source.
+                rmsnorm_out_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                rmsnorm_out_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=mcast_src_cb,
+                    data_format=data_format,
+                    page_size=rms_tile_size,
+                    tile=rmsnorm_out_tile_descriptor,
+                )
+                rmsnorm_out_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=rms_num_tiles * rms_tile_size,
+                    core_ranges=mcast_sender_core_grid,
+                    format_descriptors=[rmsnorm_out_cb_format],
+                )
 
                 # CB 1: Mcast destination — intermediate buffer on all device grid cores
                 mcast_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
@@ -750,9 +918,11 @@ class LMHeadSampling:
 
                 # CB list
                 cbs_list = [
-                    mcast_src_cb_descriptor,
+                    rmsnorm_input_cb_descriptor,
                     mcast_dst_cb_descriptor,
                     matmul_in1_cb_descriptor,
+                    rmsnorm_gamma_cb_descriptor,
+                    rmsnorm_out_cb_descriptor,
                     matmul_out_cb_descriptor,
                 ]
                 if enable_argmax:
@@ -834,7 +1004,6 @@ class LMHeadSampling:
                             ),
                         ]
                     )
-
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================
@@ -846,12 +1015,17 @@ class LMHeadSampling:
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
                     ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     brisc_common_runtime_args=brisc_bcast_common_args,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
                         fp32_dest_acc_en=fp32_dest_acc_en,
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
+                    trisc_common_runtime_args=[
+                        epsilon_packed,
+                        scalar_packed,
+                    ],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_input_core",
@@ -868,6 +1042,12 @@ class LMHeadSampling:
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_matmul_core",
                             core_range=matmul_core_grid,
+                            value=1,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_rmsnorm_core",
+                            core_range=mcast_sender_core_grid,
                             value=1,
                             other_value=0,
                         ),
@@ -908,6 +1088,7 @@ class LMHeadSampling:
                         ncrisc_args=[(worker_core, [])],
                         brisc_args=[(worker_core, [])] + per_core_brisc_runtime_args,
                     ),
+                    defines=[("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
                 )
 
                 # ================================================================
@@ -1010,14 +1191,27 @@ class LMHeadSampling:
                     program.kernels[sender_kernel_idx].runtime_args[argmax_final_core.x][argmax_final_core.y].extend(
                         fabric_rt_args
                     )
+                if persistent_enable:
+                    persistent_group = kernel_result.get_group_by_arg("is_argmax_final_core", 1)
+                    if persistent_group is None:
+                        raise RuntimeError("Missing argmax final core kernel group for persistent fabric append")
+                    persistent_kernel_idx = persistent_group.brisc_kernel_index
+                    persistent_fabric_rt_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
+                        dst_fabric_node_id=persistent_target_node,
+                        link_idx=0,
+                        program_descriptor=program,
+                        worker_core=argmax_final_core,
+                    )
+                    program.kernels[persistent_kernel_idx].runtime_args[argmax_final_core.x][
+                        argmax_final_core.y
+                    ].extend(persistent_fabric_rt_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
         # Execute generic op
-        io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, vocab_tensor, output_tensor]
+        io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-
         return result

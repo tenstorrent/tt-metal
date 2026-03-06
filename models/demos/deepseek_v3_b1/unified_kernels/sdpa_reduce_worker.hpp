@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 // =============================================================================
 // Per-RISC includes
@@ -191,7 +192,9 @@ struct SdpaChunkSender {
     }
 
     FORCE_INLINE void send_all() const {
+        cb_wait_front(cfg.cb_ms, 1);
         send_ms();
+        cb_wait_front(cfg.cb_l, num_l_chunks * tiles_per_l_chunk);
         for (uint32_t i = 0; i < num_l_chunks; i++) {
             send_l_chunk(i);
         }
@@ -221,6 +224,7 @@ struct SdpaChunkSender {
 template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
+    bool untilize,
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
@@ -232,24 +236,44 @@ ALWI void sdpa_tail_streaming(
     uint32_t cb_l1,
     uint32_t cb_l2,
     uint32_t cb_l_out) {
-    ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
-        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
+    constexpr bool dense = untilize;
+    constexpr uint32_t total_size = num_l_chunks * block_size;
+    ckernel::sdpa_tail_ms_reduce<
+        SDPA_EXP_APPROX_MODE,
+        normalize,
+        untilize ? total_size : block_size,
+        scale_fp32,
+        vector_mode,
+        false,
+        dense>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
-    for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
-        cb_wait_front(cb_l1, (chunk + 1) * block_size);
-        cb_wait_front(cb_l2, (chunk + 1) * block_size);
-        cb_reserve_back(cb_l_out, block_size);
-
-        uint32_t tile_index = chunk * block_size;
-        bool acquire_regs = !(normalize && chunk == 0);
-        ckernel::sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, tile_index, acquire_regs);
-
-        cb_push_back(cb_l_out, block_size);
+    // TODO: Unit test perf seemed better if we operated on all chunks
+    // Retest in streaming context since unit test doesn't need to wait for input
+    if constexpr (untilize) {
+        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
+        cb_wait_front(cb_l1, total_size);
+        cb_wait_front(cb_l2, total_size);
+        cb_reserve_back(cb_l_out, total_size);
+        ckernel::sdpa_tail_l_block<total_size, 1, untilize, dense, false>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        cb_push_back(cb_l_out, total_size);
+        pack_untilize_uninit(cb_l_out);
+    } else {
+        bool acquire_regs = !normalize;
+        for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+            cb_wait_front(cb_l1, (chunk + 1) * block_size);
+            cb_wait_front(cb_l2, (chunk + 1) * block_size);
+            cb_reserve_back(cb_l_out, block_size);
+            uint32_t tile_index = chunk * block_size;
+            ckernel::sdpa_tail_l_block<block_size, 1, untilize, dense, false>(
+                cb_l1, cb_l2, cb_l_out, tile_index, 0, acquire_regs);
+            acquire_regs = true;
+            cb_push_back(cb_l_out, block_size);
+        }
     }
 
-    // Finalize the worker/neighbor MS without popping the previous-round MS.
+    // Postamble only — caller handles MS pops based on round context
+    // (R1 inputs are TRISC-owned, R2 prev MS is BRISC-owned)
     ckernel::sdpa_bcast_col_reuse_postamble();
-    cb_pop_front(cb_prev_max_sum, 1);
 }
 
 ALWI void sdpa_forward_data(
@@ -296,6 +320,7 @@ ALWI void sdpa_forward_data(
 template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
+    bool untilize,
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
@@ -311,9 +336,16 @@ ALWI void sdpa_tail_streaming_conditional(
     bool local_valid) {
     // Only local valid - copy local data to output
     if (!neighbor_valid && local_valid) {
+        // TODO: Can be optimized to just division
         if constexpr (normalize) {
-            sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
-                cb_prev_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l2, cb_l2, cb_l_out);
+            sdpa_tail_streaming<
+                SDPA_EXP_APPROX_MODE,
+                normalize,
+                untilize,
+                block_size,
+                scale_fp32,
+                num_l_chunks,
+                vector_mode>(cb_prev_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l2, cb_l2, cb_l_out);
         } else {
             sdpa_forward_data(cb_prev_max_sum, cb_cur_max_sum, num_l_chunks, cb_l2, cb_l_out, block_size);
         }
@@ -322,9 +354,16 @@ ALWI void sdpa_tail_streaming_conditional(
 
     // Only neighbor valid - copy neighbor data to output
     if (neighbor_valid && !local_valid) {
+        // TODO: Can be optimized to just division
         if constexpr (normalize) {
-            sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
-                cb_worker_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l1, cb_l1, cb_l_out);
+            sdpa_tail_streaming<
+                SDPA_EXP_APPROX_MODE,
+                normalize,
+                untilize,
+                block_size,
+                scale_fp32,
+                num_l_chunks,
+                vector_mode>(cb_worker_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l1, cb_l1, cb_l_out);
         } else {
             sdpa_forward_data(cb_worker_max_sum, cb_cur_max_sum, num_l_chunks, cb_l1, cb_l_out, block_size);
         }
@@ -338,7 +377,7 @@ ALWI void sdpa_tail_streaming_conditional(
     }
 
     // Both valid - perform normal SDPA reduction
-    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
+    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, untilize, block_size, scale_fp32, num_l_chunks, vector_mode>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
 }
 
@@ -361,29 +400,25 @@ struct SdpaReduceWorker {
     template <
         uint32_t cbLocalL,
         uint32_t cbLocalMs,
-        uint32_t cbR1NeighborL,
-        uint32_t cbR1NeighborMs,
-        uint32_t cbR2NeighborL,
-        uint32_t cbR2NeighborMs,
+        uint32_t cbNeighborL,
+        uint32_t cbNeighborMs,
         uint32_t msTileSizeBytes,
         uint32_t lChunkSizeBytes,
         uint32_t numLChunks,
         uint32_t tilesPerLChunk,
-        uint32_t cbPosition,
-        uint32_t positionEnabled>
+        uint32_t positionEnabled,
+        uint32_t perDeviceChunkSize>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_r1_neighbor_l = cbR1NeighborL;
-        static constexpr uint32_t cb_r1_neighbor_ms = cbR1NeighborMs;
-        static constexpr uint32_t cb_r2_neighbor_l = cbR2NeighborL;
-        static constexpr uint32_t cb_r2_neighbor_ms = cbR2NeighborMs;
+        static constexpr uint32_t cb_neighbor_l = cbNeighborL;
+        static constexpr uint32_t cb_neighbor_ms = cbNeighborMs;
         static constexpr uint32_t ms_tile_size_bytes = msTileSizeBytes;
         static constexpr uint32_t l_chunk_size_bytes = lChunkSizeBytes;
         static constexpr uint32_t num_l_chunks = numLChunks;
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t cb_position = cbPosition;
         static constexpr uint32_t position_enabled = positionEnabled;
+        static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
         // Derived constants
         static constexpr uint32_t out_tiles = numLChunks * tilesPerLChunk;
         static constexpr uint32_t total_l_bytes = numLChunks * lChunkSizeBytes;
@@ -412,8 +447,7 @@ struct SdpaReduceWorker {
         uint32_t scatterFaceSize,
         uint32_t scatterRowFaceSize,
         uint32_t scatterNumRows,
-        uint32_t scatterArrivalEnabled = 0,
-        uint32_t scatterArrivalSemaphoreId = 0>
+        uint32_t scatterArrivalEnabled = 0>
     struct WriterCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
@@ -437,65 +471,107 @@ struct SdpaReduceWorker {
         // Optional scatter arrival semaphore: when enabled, signals each destination core
         // after scatter write completes (used by fused ops to synchronize downstream stages)
         static constexpr bool scatter_arrival_enabled = scatterArrivalEnabled != 0;
-        static constexpr uint32_t scatter_arrival_semaphore_id = scatterArrivalSemaphoreId;
     };
 
     // Compute CTArgs (TRISC)
     template <
         uint32_t cbLocalL,
         uint32_t cbLocalMs,
-        uint32_t cbR1NeighborL,
-        uint32_t cbR1NeighborMs,
+        uint32_t cbNeighborL,
+        uint32_t cbNeighborMs,
         uint32_t cbR1ResultL,
         uint32_t cbR1ResultMs,
-        uint32_t cbR2NeighborL,
-        uint32_t cbR2NeighborMs,
         uint32_t cbLOut,
-        uint32_t cbMsOut,
         uint32_t scaleFp32,
         uint32_t tilesPerLChunk,
         uint32_t numLChunks,
-        uint32_t cbPosition,
         uint32_t positionEnabled,
+        uint32_t perDeviceChunkSize,
         uint32_t finalReduction>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_r1_neighbor_l = cbR1NeighborL;
-        static constexpr uint32_t cb_r1_neighbor_ms = cbR1NeighborMs;
+        static constexpr uint32_t cb_neighbor_l = cbNeighborL;
+        static constexpr uint32_t cb_neighbor_ms = cbNeighborMs;
         static constexpr uint32_t cb_r1_result_l = cbR1ResultL;
         static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
-        static constexpr uint32_t cb_r2_neighbor_l = cbR2NeighborL;
-        static constexpr uint32_t cb_r2_neighbor_ms = cbR2NeighborMs;
         static constexpr uint32_t cb_l_out = cbLOut;
-        static constexpr uint32_t cb_ms_out = cbMsOut;
         static constexpr uint32_t scale_fp32 = scaleFp32;
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
         static constexpr uint32_t num_l_chunks = numLChunks;
-        static constexpr uint32_t cb_position = cbPosition;
         static constexpr uint32_t position_enabled = positionEnabled;
+        static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
         static constexpr bool final_reduction = finalReduction;
         // SDPA uses "block_size" terminology
         static constexpr uint32_t block_size = tilesPerLChunk;
     };
 
     // ========================================================================
-    // Op - unified worker operation
-    //
-    // ReaderCT: compile-time args for NCRISC reader
-    // WriterCT: compile-time args for BRISC writer
-    // ComputeCT: compile-time args for TRISC compute
+    // Runtime args structs
     // ========================================================================
-    template <typename ReaderCT, typename WriterCT, typename ComputeCT>
+
+    // Reader args (NCRISC): semaphore and buffer addresses for neighbor data
+    struct ReaderArgs {
+        uint32_t r1_neighbor_sem_addr;
+        uint32_t r2_neighbor_sem_addr;
+        uint32_t r1_recv_buffer_addr;
+        uint32_t r2_recv_buffer_addr;
+        // Position args (only meaningful when position_enabled CTArg is set)
+        uint32_t pos_addr;
+        uint32_t r1_neighbor_device_idx;
+        uint32_t r2_neighbor_device_idx;
+        uint32_t r2_neighbor_r1_neighbor_idx;
+    };
+
+    // Writer args (BRISC): fabric destinations, core coordinates, forwarder config
+    struct WriterArgs {
+        uint32_t r1_dst_mesh_id;
+        uint32_t r1_dst_chip_id;
+        uint32_t r1_neighbor_dst_addr;
+        uint32_t r1_neighbor_sem_addr;
+        uint32_t r2_dst_mesh_id;
+        uint32_t r2_dst_chip_id;
+        uint32_t r2_neighbor_dst_addr;
+        uint32_t r2_neighbor_sem_addr;
+        uint32_t current_core_x;
+        uint32_t current_core_y;
+        uint32_t fwd_core_x;
+        uint32_t fwd_core_y;
+        uint32_t r1_fwd_slot_addr;
+        uint32_t r1_fwd_sem_addr;
+        uint32_t r1_base_slot_idx;
+        uint32_t r2_fwd_slot_addr;
+        uint32_t r2_fwd_sem_addr;
+        uint32_t r2_base_slot_idx;
+        uint32_t scatter_dest_l1_addr;
+        uint32_t scatter_dest_coords_addr;
+        uint32_t scatter_arrival_sem_addr;
+    };
+
+    // Compute args (TRISC): position validity for SDPA reduction
+    struct ComputeArgs {
+        uint32_t pos_addr;
+        uint32_t device_idx;
+        uint32_t r1_neighbor_device_idx;
+        uint32_t r2_neighbor_device_idx;
+        uint32_t r2_neighbor_r1_neighbor_idx;
+    };
+
+    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+
+    // ========================================================================
+    // Op - unified worker operation
+    // ========================================================================
+    template <typename CTArgs>
     class Op {
     public:
-        void operator()() {
+        void operator()([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-            reader_impl();
+            reader_impl(args);
 #elif defined(COMPILE_FOR_BRISC)
-            writer_impl();
+            writer_impl(args);
 #elif defined(COMPILE_FOR_TRISC)
-            compute_impl();
+            compute_impl(args);
 #endif
         }
 
@@ -506,84 +582,63 @@ struct SdpaReduceWorker {
         // ==================================================================
         FORCE_INLINE void prepare_ms_for_compute(
             uint32_t cb_ms, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t recv_buffer_addr) {
+            // The pointer doesn't matter for NCRISC, just need to reserve and push
             cb_reserve_back(cb_ms, 1);
-            noc_semaphore_wait_min(sem_ptr, ReaderCT::MS_SEM_THRESHOLD);
-            tt_memmove<true, false, false, 0>(
-                get_write_ptr(cb_ms), recv_buffer_addr + ReaderCT::total_l_bytes, ReaderCT::ms_tile_size_bytes);
+            noc_semaphore_wait_min(sem_ptr, CTArgs::MS_SEM_THRESHOLD);
             cb_push_back(cb_ms, 1);
         }
 
         FORCE_INLINE void prepare_l_chunk_for_compute(
             uint32_t cb_l, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t l_chunk_idx) {
-            cb_reserve_back(cb_l, ReaderCT::tiles_per_l_chunk);
-            noc_semaphore_wait_min(sem_ptr, ReaderCT::L_SEM_BASE_THRESHOLD + l_chunk_idx);
-            cb_push_back(cb_l, ReaderCT::tiles_per_l_chunk);
+            // The pointer doesn't matter for NCRISC, just need to reserve and push
+            cb_reserve_back(cb_l, CTArgs::tiles_per_l_chunk);
+            noc_semaphore_wait_min(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + l_chunk_idx);
+            cb_push_back(cb_l, CTArgs::tiles_per_l_chunk);
         }
 
         FORCE_INLINE void prepare_data_for_compute(
             uint32_t cb_l, uint32_t cb_ms, uint32_t sem_addr, uint32_t recv_buffer_addr) {
             volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
             prepare_ms_for_compute(cb_ms, sem_ptr, recv_buffer_addr);
-            for (uint32_t i = 0; i < ReaderCT::num_l_chunks; i++) {
+            for (uint32_t i = 0; i < CTArgs::num_l_chunks; i++) {
                 prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
             }
             noc_semaphore_set(sem_ptr, 0);
         }
 
-        void reader_impl() {
-            size_t arg_idx = 0;
-            const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
-
-            // Push local input (aliased CBs, no copy needed)
-            cb_reserve_back(ReaderCT::cb_local_l, ReaderCT::out_tiles);
-            cb_push_back(ReaderCT::cb_local_l, ReaderCT::out_tiles);
-
-            cb_reserve_back(ReaderCT::cb_local_ms, 1);
-            cb_push_back(ReaderCT::cb_local_ms, 1);
-
+        void reader_impl(const ReaderArgs& args) {
             bool r2_neighbor_r1_valid = true;
             bool r1_neighbor_valid = true;
 
-            if constexpr (ReaderCT::position_enabled) {
-                uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
-                cb_reserve_back(ReaderCT::cb_position, 1);
-                uint64_t position_cb_addr = get_write_ptr(ReaderCT::cb_position);
-                volatile tt_l1_ptr uint32_t* position_data_base =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_cb_addr);
-                cb_push_back(ReaderCT::cb_position, 1);
-
-                uint32_t r1_neighbor_val = position_data_base[r1_neighbor_device_idx];
-                uint32_t r2_neighbor_val = position_data_base[r2_neighbor_device_idx];
-                uint32_t r2_neighbor_r1_neighbor_val = position_data_base[r2_neighbor_r1_neighbor_idx];
-                r2_neighbor_r1_valid = (r2_neighbor_val != 0) || (r2_neighbor_r1_neighbor_val != 0);
-                r1_neighbor_valid = (r1_neighbor_val != 0);
+            if constexpr (CTArgs::position_enabled) {
+                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
+                uint32_t position_id = pos_ptr[0];
+                constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
+                r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
+                r2_neighbor_r1_valid = (position_id >= args.r2_neighbor_device_idx * chunk) ||
+                                       (position_id >= args.r2_neighbor_r1_neighbor_idx * chunk);
             }
 
             // Prepare R1 neighbor data for compute
             if (r1_neighbor_valid) {
                 prepare_data_for_compute(
-                    ReaderCT::cb_r1_neighbor_l, ReaderCT::cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+                    CTArgs::cb_neighbor_l, CTArgs::cb_neighbor_ms, args.r1_neighbor_sem_addr, args.r1_recv_buffer_addr);
             } else {
-                cb_reserve_back(ReaderCT::cb_r1_neighbor_ms, 1);
-                cb_push_back(ReaderCT::cb_r1_neighbor_ms, 1);
-                cb_reserve_back(ReaderCT::cb_r1_neighbor_l, ReaderCT::out_tiles);
-                cb_push_back(ReaderCT::cb_r1_neighbor_l, ReaderCT::out_tiles);
+                cb_reserve_back(CTArgs::cb_neighbor_ms, 1);
+                cb_push_back(CTArgs::cb_neighbor_ms, 1);
+                cb_reserve_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
+                cb_push_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
             }
 
             // Prepare R2 neighbor data for compute
             if (r2_neighbor_r1_valid) {
                 prepare_data_for_compute(
-                    ReaderCT::cb_r2_neighbor_l, ReaderCT::cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+                    CTArgs::cb_neighbor_l, CTArgs::cb_neighbor_ms, args.r2_neighbor_sem_addr, args.r2_recv_buffer_addr);
             } else {
-                cb_reserve_back(ReaderCT::cb_r2_neighbor_ms, 1);
-                cb_push_back(ReaderCT::cb_r2_neighbor_ms, 1);
-                cb_reserve_back(ReaderCT::cb_r2_neighbor_l, ReaderCT::out_tiles);
-                cb_push_back(ReaderCT::cb_r2_neighbor_l, ReaderCT::out_tiles);
+                cb_reserve_back(CTArgs::cb_neighbor_ms, 1);
+                cb_push_back(CTArgs::cb_neighbor_ms, 1);
+                cb_reserve_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
+                cb_push_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
             }
         }
 #endif  // COMPILE_FOR_NCRISC
@@ -592,144 +647,87 @@ struct SdpaReduceWorker {
         // ==================================================================
         // BRISC (Writer) - sends data to neighbors, scatters output
         // ==================================================================
-        void writer_impl() {
+        void writer_impl(const WriterArgs& args) {
             using Sender = SdpaChunkSender<
-                WriterCT::cb_packet_slot,
-                WriterCT::l1_alignment,
-                WriterCT::slot_size,
-                WriterCT::ms_tile_size_bytes,
-                WriterCT::l_chunk_size_bytes,
-                WriterCT::num_l_chunks,
-                WriterCT::tiles_per_l_chunk>;
-
-            size_t arg_idx = 0;
-
-            // R1 destination
-            const uint32_t r1_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-
-            // R2 destination
-            const uint32_t r2_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-
-            // Core coordinates
-            const uint32_t current_core_x = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t fwd_core_x = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t fwd_core_y = get_arg_val<uint32_t>(arg_idx++);
-
-            // R1 forwarder slot info
-            const uint32_t r1_fwd_slot_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-            const uint32_t r1_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
-
-            // R2 forwarder slot info
-            const uint32_t r2_fwd_slot_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-            const uint32_t r2_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
+                CTArgs::cb_packet_slot,
+                CTArgs::l1_alignment,
+                CTArgs::slot_size,
+                CTArgs::ms_tile_size_bytes,
+                CTArgs::l_chunk_size_bytes,
+                CTArgs::num_l_chunks,
+                CTArgs::tiles_per_l_chunk>;
 
             // Initialize sender with core coordinates
-            Sender sender{current_core_x, current_core_y, fwd_core_x, fwd_core_y};
+            Sender sender{args.current_core_x, args.current_core_y, args.fwd_core_x, args.fwd_core_y};
 
             // ROUND 1: Send local input to R1 neighbor
             sender.setup_round(
-                {WriterCT::cb_local_l,
-                 WriterCT::cb_local_ms,
-                 r1_dst_mesh_id,
-                 r1_dst_chip_id,
-                 r1_neighbor_dst_addr,
-                 r1_neighbor_sem_addr,
-                 r1_fwd_slot_addr,
-                 r1_fwd_sem_addr,
-                 r1_base_slot_idx});
+                {CTArgs::cb_local_l,
+                 CTArgs::cb_local_ms,
+                 args.r1_dst_mesh_id,
+                 args.r1_dst_chip_id,
+                 args.r1_neighbor_dst_addr,
+                 args.r1_neighbor_sem_addr,
+                 args.r1_fwd_slot_addr,
+                 args.r1_fwd_sem_addr,
+                 args.r1_base_slot_idx});
             sender.send_all();
             sender.finish_round();
 
             // ROUND 2: Send R1 result to R2 neighbor (streaming)
             sender.setup_round(
-                {WriterCT::cb_r1_result_l,
-                 WriterCT::cb_r1_result_ms,
-                 r2_dst_mesh_id,
-                 r2_dst_chip_id,
-                 r2_neighbor_dst_addr,
-                 r2_neighbor_sem_addr,
-                 r2_fwd_slot_addr,
-                 r2_fwd_sem_addr,
-                 r2_base_slot_idx});
+                {CTArgs::cb_r1_result_l,
+                 CTArgs::cb_r1_result_ms,
+                 args.r2_dst_mesh_id,
+                 args.r2_dst_chip_id,
+                 args.r2_neighbor_dst_addr,
+                 args.r2_neighbor_sem_addr,
+                 args.r2_fwd_slot_addr,
+                 args.r2_fwd_sem_addr,
+                 args.r2_base_slot_idx});
             sender.send_streaming();
             sender.finish_round();
 
             // Release the single MS tile from R1 result after R2 streaming send to
             // preserve BRISC/TRISC synchronization semantics from post_sdpa.
-            cb_pop_front(WriterCT::cb_r1_result_ms, 1);
+            cb_pop_front(CTArgs::cb_r1_result_ms, 1);
             noc_async_full_barrier();
 
             // SCATTER PHASE: Distribute output rows to destination cores
-            if constexpr (WriterCT::scatter_num_rows > 0) {
-                const uint32_t scatter_dest_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t scatter_dest_noc_x[WriterCT::scatter_num_rows];
-                uint32_t scatter_dest_noc_y[WriterCT::scatter_num_rows];
-                for (uint32_t i = 0; i < WriterCT::scatter_num_rows; i++) {
-                    scatter_dest_noc_x[i] = get_arg_val<uint32_t>(arg_idx++);
-                    scatter_dest_noc_y[i] = get_arg_val<uint32_t>(arg_idx++);
+            if constexpr (CTArgs::scatter_num_rows > 0) {
+                tt_l1_ptr uint32_t* scatter_dest_coords = (tt_l1_ptr uint32_t*)(args.scatter_dest_coords_addr);
+                uint32_t scatter_dest_noc_x[CTArgs::scatter_num_rows];
+                uint32_t scatter_dest_noc_y[CTArgs::scatter_num_rows];
+                for (uint32_t i = 0; i < CTArgs::scatter_num_rows; i++) {
+                    scatter_dest_noc_x[i] = scatter_dest_coords[i * 2];
+                    scatter_dest_noc_y[i] = scatter_dest_coords[i * 2 + 1];
                 }
 
-                cb_wait_front(WriterCT::cb_l_out, WriterCT::scatter_num_tiles);
-                uint32_t src_base = get_read_ptr(WriterCT::cb_l_out);
+                cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
+                uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
 
-                // Reuse R1 result L buffer as temp scratch
-                uint32_t temp_base = get_read_ptr(WriterCT::cb_r1_result_l);
+                constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
 
-                constexpr uint32_t row_face_words = WriterCT::scatter_row_face_size / sizeof(uint32_t);
-                constexpr uint32_t scatter_payload_bytes =
-                    WriterCT::scatter_num_tiles * WriterCT::scatter_dst_tile_size;
-
-                for (uint32_t row = 0; row < WriterCT::scatter_num_rows; row++) {
-                    for (uint32_t t = 0; t < WriterCT::scatter_num_tiles; t++) {
-                        uint32_t src_tile = src_base + t * WriterCT::scatter_src_tile_size;
-                        uint32_t dst_tile = temp_base + t * WriterCT::scatter_dst_tile_size;
-
-                        // Copy Face 0 row
-                        volatile tt_l1_ptr uint32_t* src_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            src_tile + row * WriterCT::scatter_row_face_size);
-                        volatile tt_l1_ptr uint32_t* dst_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile);
-#pragma GCC unroll 8
-                        for (uint32_t w = 0; w < row_face_words; w++) {
-                            dst_f0[w] = src_f0[w];
-                        }
-
-                        // Copy Face 1 row
-                        volatile tt_l1_ptr uint32_t* src_f1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            src_tile + WriterCT::scatter_face_size + row * WriterCT::scatter_row_face_size);
-                        volatile tt_l1_ptr uint32_t* dst_f1 =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + WriterCT::scatter_row_face_size);
-#pragma GCC unroll 8
-                        for (uint32_t w = 0; w < row_face_words; w++) {
-                            dst_f1[w] = src_f1[w];
-                        }
-                    }
-
+                for (uint32_t row = 0; row < CTArgs::scatter_num_rows; row++) {
                     uint64_t dest_noc_addr =
-                        get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], scatter_dest_l1_addr);
-                    noc_async_write(temp_base, dest_noc_addr, scatter_payload_bytes);
-                    noc_async_writes_flushed();
+                        get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_dest_l1_addr);
+                    noc_async_write(src_addr, dest_noc_addr, scatter_payload_bytes);
+                    src_addr += scatter_payload_bytes;
 
                     // Signal scatter arrival on destination core (used by fused ops
                     // to synchronize downstream stages like matmul1)
-                    if constexpr (WriterCT::scatter_arrival_enabled) {
+                    if constexpr (CTArgs::scatter_arrival_enabled) {
                         uint64_t sem_addr = get_noc_addr(
-                            scatter_dest_noc_x[row],
-                            scatter_dest_noc_y[row],
-                            get_semaphore(WriterCT::scatter_arrival_semaphore_id));
+                            scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_arrival_sem_addr);
                         noc_semaphore_inc(sem_addr, 1);
                     }
                 }
-
-                noc_async_write_barrier();
+                if constexpr (CTArgs::scatter_arrival_enabled) {
+                    noc_async_atomic_barrier();
+                } else {
+                    noc_async_write_barrier();
+                }
+                cb_pop_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
             }
         }
 #endif  // COMPILE_FOR_BRISC
@@ -738,10 +736,11 @@ struct SdpaReduceWorker {
         // ==================================================================
         // TRISC (Compute) - streaming SDPA tail reduction
         // ==================================================================
-        void compute_impl() {
+        void compute_impl([[maybe_unused]] const ComputeArgs& args) {
             constexpr int vector_mode = VectorMode::RC_custom;
 
-            binary_op_init_common(ComputeCT::cb_local_l, ComputeCT::cb_local_l, ComputeCT::cb_l_out);
+            reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
+            pack_reconfig_data_format<true>(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE, false>();
 
             bool local_valid = true;
@@ -751,62 +750,102 @@ struct SdpaReduceWorker {
             [[maybe_unused]] uint32_t device_idx = 0;
             [[maybe_unused]] uint32_t r1_neighbor_device_idx = 0;
             [[maybe_unused]] uint32_t r2_neighbor_device_idx = 0;
+            [[maybe_unused]] uint32_t position_id = 0;
 
-            if constexpr (ComputeCT::position_enabled) {
-                size_t arg_idx = 0;
-                device_idx = get_arg_val<uint32_t>(arg_idx++);
-                r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
+            if constexpr (CTArgs::position_enabled) {
+                device_idx = args.device_idx;
+                r1_neighbor_device_idx = args.r1_neighbor_device_idx;
+                r2_neighbor_device_idx = args.r2_neighbor_device_idx;
 
-                cb_wait_front(ComputeCT::cb_position, 1);
-                uint32_t local_val = read_tile_value(ComputeCT::cb_position, 0, device_idx);
-                uint32_t r1_val = read_tile_value(ComputeCT::cb_position, 0, r1_neighbor_device_idx);
-                uint32_t r2_val = read_tile_value(ComputeCT::cb_position, 0, r2_neighbor_device_idx);
-                uint32_t r2_neighbor_r1_val = read_tile_value(ComputeCT::cb_position, 0, r2_neighbor_r1_neighbor_idx);
-                cb_pop_front(ComputeCT::cb_position, 1);
+                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
+                position_id = pos_ptr[0];
 
-                local_valid = (local_val != 0);
-                r1_neighbor_valid = (r1_val != 0);
-                r2_neighbor_valid = (r2_val != 0) || (r2_neighbor_r1_val != 0);
+                constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
+                local_valid = (position_id >= device_idx * chunk);
+                r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
+                r2_neighbor_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
+                                    (position_id >= args.r2_neighbor_r1_neighbor_idx * chunk);
             }
+
+            uint32_t neighbor_cb_base_rd_ptr = 0;
+            uint32_t neighbor_cb_page_size = 0;
+            UNPACK(({
+                neighbor_cb_base_rd_ptr = unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_l);
+                neighbor_cb_page_size = unified_kernels::get_local_cb_page_size(CTArgs::cb_neighbor_l);
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr + 0 * neighbor_cb_page_size);
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_ms,
+                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size) * neighbor_cb_page_size);
+            }));
 
             // ROUND 1: reduce(local, r1_neighbor) -> r1_result (unnormalized)
             sdpa_tail_streaming_conditional<
                 EXP_APPROX_MODE,
                 false /* no normalize - R1 doesn't normalize */,
-                ComputeCT::block_size,
-                ComputeCT::scale_fp32,
-                ComputeCT::num_l_chunks,
+                false /* untilize - R1 doesn't untilize */,
+                CTArgs::block_size,
+                CTArgs::scale_fp32,
+                CTArgs::num_l_chunks,
                 vector_mode>(
-                ComputeCT::cb_r1_neighbor_ms,
-                ComputeCT::cb_local_ms,
-                ComputeCT::cb_r1_result_ms,
-                ComputeCT::cb_r1_neighbor_l,
-                ComputeCT::cb_local_l,
-                ComputeCT::cb_r1_result_l,
+                CTArgs::cb_neighbor_ms,
+                CTArgs::cb_local_ms,
+                CTArgs::cb_r1_result_ms,
+                CTArgs::cb_neighbor_l,
+                CTArgs::cb_local_l,
+                CTArgs::cb_r1_result_l,
                 r1_neighbor_valid,
                 local_valid);
+
+            // Pop R1 input MS CBs — TRISC-owned, no BRISC race.
+            // cb_r1_neighbor_ms: incoming from neighbor, consumed only by TRISC
+            // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
+            // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
+            cb_pop_front(CTArgs::cb_neighbor_ms, 1);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+
+            UNPACK(({
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_l,
+                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_ms,
+                    neighbor_cb_base_rd_ptr +
+                        (2 * CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+            }));
 
             // ROUND 2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
             bool local_r1_valid = local_valid || r1_neighbor_valid;
             bool r2_neighbor_r1_valid = r2_neighbor_valid;
 
+            // TODO: This is because only the reduction can currently perform untilize
+            static_assert(CTArgs::final_reduction, "Final reduction must be enabled");
             sdpa_tail_streaming_conditional<
                 EXP_APPROX_MODE,
-                ComputeCT::final_reduction,
-                ComputeCT::block_size,
-                ComputeCT::scale_fp32,
-                ComputeCT::num_l_chunks,
+                CTArgs::final_reduction,
+                true /* untilize */,
+                CTArgs::block_size,
+                CTArgs::scale_fp32,
+                CTArgs::num_l_chunks,
                 vector_mode>(
-                ComputeCT::cb_r2_neighbor_ms,
-                ComputeCT::cb_r1_result_ms,
-                ComputeCT::cb_ms_out,
-                ComputeCT::cb_r2_neighbor_l,
-                ComputeCT::cb_r1_result_l,
-                ComputeCT::cb_l_out,
+                CTArgs::cb_neighbor_ms,
+                CTArgs::cb_r1_result_ms,
+                0,  // sdpa tail does not output MS when normalizing
+                CTArgs::cb_neighbor_l,
+                CTArgs::cb_r1_result_l,
+                CTArgs::cb_l_out,
                 r2_neighbor_r1_valid,
                 local_r1_valid);
+
+            // Pop R2 worker MS CB — incoming from neighbor, consumed only by TRISC.
+            // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
+            // after send_streaming() reads it for R2 forwarding.
+            cb_pop_front(CTArgs::cb_neighbor_ms, 1);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+            UNPACK(({
+                unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr);
+                unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_ms, neighbor_cb_base_rd_ptr);
+            }));
         }
 #endif  // COMPILE_FOR_TRISC
     };

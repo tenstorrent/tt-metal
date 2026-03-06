@@ -35,23 +35,33 @@ void kernel_main() {
         using ReaderCTArgs = Worker::ReaderCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_ms"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_ms"),
+            get_named_compile_time_arg_val("cb_neighbor_l"),
+            get_named_compile_time_arg_val("cb_neighbor_ms"),
             get_named_compile_time_arg_val("ms_tile_size_bytes"),
             get_named_compile_time_arg_val("l_chunk_size_bytes"),
             get_named_compile_time_arg_val("num_l_chunks"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
-            get_named_compile_time_arg_val("cb_position"),
-            get_named_compile_time_arg_val("position_enabled")>;
+            get_named_compile_time_arg_val("position_enabled"),
+            get_named_compile_time_arg_val("per_device_chunk_size")>;
 
-        // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
+        unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_ms, 1);
 
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op();
+        uint32_t per_core_rta_arg_idx = 0;
+        Worker::ReaderArgs reader_args{
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+        };
+        if constexpr (ReaderCTArgs::position_enabled) {
+            reader_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
+        Worker::Op<ReaderCTArgs> op;
+        op(reader_args);
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -60,8 +70,16 @@ void kernel_main() {
             get_named_compile_time_arg_val("fwd_slot_size"),
             get_named_compile_time_arg_val("fwd_r2_buffer_offset")>;
 
+        uint32_t per_core_rta_arg_idx = 0;
+        Fwd::ForwarderArgs fwd_args{
+            .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
+        };
         Fwd::Op<FwdCTArgs> op;
-        op();
+        op(fwd_args);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -70,9 +88,6 @@ void kernel_main() {
     // ========================================================================
     if constexpr (is_worker) {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
-
-        // Dummy ReaderCT and ComputeCT - not used by BRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         using WriterCTArgs = Worker::WriterCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
@@ -95,10 +110,34 @@ void kernel_main() {
             get_named_compile_time_arg_val("scatter_row_face_size"),
             get_named_compile_time_arg_val("scatter_num_rows")>;
 
-        using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op();
+        uint32_t per_core_rta_arg_idx = 0;
+        Worker::WriterArgs writer_args{
+            .r1_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .current_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .current_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fwd_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fwd_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r1_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx),
+            // scatter_arrival_enabled=0, so this is not used
+            .scatter_arrival_sem_addr = 0,
+        };
+        per_core_rta_arg_idx += WriterCTArgs::scatter_num_rows * 2;  // x, y value per dest
+        Worker::Op<WriterCTArgs> op;
+        op(writer_args);
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -107,8 +146,16 @@ void kernel_main() {
             get_named_compile_time_arg_val("fwd_slot_size"),
             get_named_compile_time_arg_val("fwd_r2_buffer_offset")>;
 
+        uint32_t per_core_rta_arg_idx = 0;
+        Fwd::ForwarderArgs fwd_args{
+            .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
+        };
         Fwd::Op<FwdCTArgs> op;
-        op();
+        op(fwd_args);
     }
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -118,33 +165,35 @@ void kernel_main() {
     if constexpr (is_worker) {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
-        // Dummy ReaderCT and WriterCT - not used by TRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         using ComputeCTArgs = Worker::ComputeCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_ms"),
+            get_named_compile_time_arg_val("cb_neighbor_l"),
+            get_named_compile_time_arg_val("cb_neighbor_ms"),
             get_named_compile_time_arg_val("cb_r1_result_l"),
             get_named_compile_time_arg_val("cb_r1_result_ms"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_ms"),
             get_named_compile_time_arg_val("cb_l_out"),
-            get_named_compile_time_arg_val("cb_ms_out"),
             get_named_compile_time_arg_val("scale_fp32"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("num_l_chunks"),
-            get_named_compile_time_arg_val("cb_position"),
             get_named_compile_time_arg_val("position_enabled"),
+            get_named_compile_time_arg_val("per_device_chunk_size"),
             get_named_compile_time_arg_val("final_reduction")>;
 
         // Initialize compute engine for unified kernel
-        compute_kernel_hw_startup(0, 0, 0);
+        deepseek_compute_kernel_init();
 
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op();
+        Worker::ComputeArgs compute_args;
+        if constexpr (ComputeCTArgs::position_enabled) {
+            uint32_t per_core_rta_arg_idx = 0;
+            compute_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
+        Worker::Op<ComputeCTArgs> op;
+        op(compute_args);
     }
     // else: forwarder TRISC is no-op
 #endif

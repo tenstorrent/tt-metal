@@ -78,6 +78,7 @@ class LinearConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
+    output_tile: "tt.tt_metal.Tile | None" = None
 
 
 @dataclass
@@ -127,6 +128,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     num_workers_per_link: int | None = None
+    use_broadcast: bool | None = None
 
 
 @dataclass

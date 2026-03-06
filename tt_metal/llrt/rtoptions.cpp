@@ -19,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 // NOLINTBEGIN(bugprone-branch-clone)
 
@@ -70,38 +71,38 @@ enum class EnvVarID {
     // ========================================
     // DEBUG & TESTING
     // ========================================
-    TT_METAL_WATCHER_TEST_MODE,          // Enable watcher test mode
-    TT_METAL_KERNEL_MAP,                 // Enable kernel build mapping
-    TT_METAL_DISPATCH_DATA_COLLECTION,   // Enable dispatch debug data collection
-    TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
-    TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
-    TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
-    TT_METAL_DISABLE_XIP_DUMP,           // Disable XIP dump
+    TT_METAL_WATCHER_TEST_MODE,         // Enable watcher test mode
+    TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
+    TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
+    TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
+    TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
+    TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE, // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,         // Path to channel trimming profile YAML for import
-    TT_METAL_FORCE_REINIT,                  // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,     // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,               // Disable DMA operations
-    TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
-    RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,          // Disable use of SFPLOADMACRO instructions
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
+    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
+    TT_METAL_ENABLE_ERISC_IRAM,                // Enable ERISC IRAM (inverted logic)
+    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -148,6 +149,8 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1,          // Disable write-only L1 sanitization
     TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
     TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
+    TT_METAL_WATCHER_DISABLE_ETH,                             // Disable watcher on ethernet cores
+    TT_METAL_WATCHER_DISABLE_CB_SANITIZE,                     // Disable watcher circular buffer sanitization
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
 
     // ========================================
@@ -193,6 +196,7 @@ enum class EnvVarID {
     // FABRIC CONFIGURATION
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
+    TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
 
     // ========================================
     // JIT BUILD CONFIGURATION
@@ -504,12 +508,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_SKIP_LOADING_FW=1
         case EnvVarID::TT_METAL_SKIP_LOADING_FW: this->skip_loading_fw = true; break;
 
-        // TT_METAL_SKIP_DELETING_BUILT_CACHE
-        // Skip deleting built cache files on cleanup.
-        // Default: false (delete cache)
-        // Usage: export TT_METAL_SKIP_DELETING_BUILT_CACHE=1
-        case EnvVarID::TT_METAL_SKIP_DELETING_BUILT_CACHE: this->skip_deleting_built_cache = true; break;
-
         // ========================================
         // HARDWARE CONFIGURATION
         // ========================================
@@ -562,8 +560,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // construction uses the captured profile to disable unused sender/receiver channels.
         // Default: empty (no profile import)
         // Usage: export TT_METAL_FABRIC_TRIMMING_PROFILE=/path/to/channel_trimming_capture.yaml
-        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PROFILE:
-            this->fabric_trimming_profile_path = std::string(value);
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PROFILE: this->fabric_trimming_profile_path = std::string(value); break;
+
+        // TT_METAL_FABRIC_TRIMMING_OVERRIDE
+        // Path to a global override YAML file for channel trimming. When set, override entries
+        // replace capture-driven decisions for specified VCs (force-enable/disable channels).
+        // Can be used with or without TT_METAL_FABRIC_TRIMMING_PROFILE.
+        // Default: empty (no override)
+        // Usage: export TT_METAL_FABRIC_TRIMMING_OVERRIDE=/path/to/override.yaml
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_OVERRIDE:
+            this->fabric_trimming_override_path = std::string(value);
             break;
 
         // RELIABILITY_MODE
@@ -1053,6 +1059,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_disabled_features.insert(this->watcher_dispatch_str);
             break;
 
+        // TT_METAL_WATCHER_DISABLE_ETH
+        // Disables watcher on ethernet cores when set to any value.
+        // Default: enabled
+        // Usage: export TT_METAL_WATCHER_DISABLE_ETH=1
+        case EnvVarID::TT_METAL_WATCHER_DISABLE_ETH:
+            this->watcher_disabled_features.insert(this->watcher_eth_str);
+            break;
+
+        // TT_METAL_WATCHER_DISABLE_CB_SANITIZE
+        // Disables watcher circular buffer out-of-bounds sanitization when set to any value.
+        // Default: enabled
+        // Usage: export TT_METAL_WATCHER_DISABLE_CB_SANITIZE=1
+        case EnvVarID::TT_METAL_WATCHER_DISABLE_CB_SANITIZE:
+            this->watcher_disabled_features.insert(this->watcher_cb_sanitize_str);
+            break;
+
         // TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION
         // Enables NoC sanitization for linked transactions to catch more subtle errors.
         // Default: false (linked transaction sanitization disabled)
@@ -1289,6 +1311,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
             }
             break;
+
+        // TT_METAL_FABRIC_OPT_LEVEL
+        // Override the compiler optimization level for fabric router kernels.
+        // When set, this overrides the automatic VC1-based selection.
+        // Default: not set (automatic: O3 when VC1 inactive, Os when VC1 active)
+        // Usage: export TT_METAL_FABRIC_OPT_LEVEL=O3  (or O0, O1, O2, Os, Oz, Ofast)
+        case EnvVarID::TT_METAL_FABRIC_OPT_LEVEL: {
+            auto opt = enchantum::cast<tt::tt_metal::KernelBuildOptLevel>(std::string_view(value));
+            if (opt.has_value()) {
+                this->fabric_kernel_opt_level = opt;
+                log_info(tt::LogMetal, "Fabric kernel optimization level override: -{}", value);
+            } else {
+                TT_THROW(
+                    "Invalid TT_METAL_FABRIC_OPT_LEVEL value: '{}'. Valid values: O0, O1, O2, O3, Os, Oz, Ofast",
+                    value);
+            }
+            break;
+        }
+
         // TT_METAL_DISABLE_XIP_DUMP
         // Disable XIP dump
         // Default: false
@@ -1345,7 +1386,9 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
         watcher_dispatch_str,
-        watcher_eth_link_status_str};
+        watcher_eth_str,
+        watcher_eth_link_status_str,
+        watcher_cb_sanitize_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
@@ -1706,6 +1749,8 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_ring_buffer_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_eth_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_cb_sanitize_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());

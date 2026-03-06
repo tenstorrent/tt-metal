@@ -79,7 +79,14 @@ def test_forward_pass(
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
     weight_config = get_test_weight_config(
-        LMHead, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        LMHead,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_lm_head",
+        real_weights=False,
     )
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
@@ -97,6 +104,7 @@ def test_forward_pass(
 
     # TTNN forward pass
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+
     tt_output = run_module_forward(LMHead, mode, tt_input, run_config)
 
     expected_output_memory_config = run_config["output_memory_config"]

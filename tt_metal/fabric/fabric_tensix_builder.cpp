@@ -179,7 +179,7 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
 }
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    // Initialize channel mappings and configurations, skipping the rest initialization if there are no ethernet found
     if (!initialize_channel_mappings()) {
         return;
     }
@@ -493,6 +493,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& hal = tt_metal::MetalContext::instance().hal();
     const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
+
+    // Guard against division by zero
+    TT_FATAL(
+        num_used_riscs_per_tensix_ > 0,
+        "num_used_riscs_per_tensix_ must be greater than 0, but got {}",
+        num_used_riscs_per_tensix_);
 
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =

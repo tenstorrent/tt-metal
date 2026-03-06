@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,9 @@ def run_test_forward_pass_decoder2d(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_decoder_block",
+        real_weights=module_path is not None,
+        layer_id=module_path,
     )
     model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
     model_state = DecoderBlockClass.create_state(
@@ -199,12 +203,18 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     include_decode_random_pos_ids=True,  # include decode random position_ids case
 )
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {
+            "fabric_config": optimal_topology,
+        }
     ],
     indirect=True,
 )

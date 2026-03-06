@@ -10,7 +10,6 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/mock_device.hpp>
@@ -115,6 +114,83 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
     EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
     EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+        }
+    }
+
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+
+            for (const auto& neighbor : adj_graph.get_neighbors(adj_graph.get_nodes()[i])) {
+                EXPECT_TRUE(
+                    std::find(
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).begin(),
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end(),
+                        neighbor) != adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end())
+                    << "Mesh " << mesh_id.get() << " should have neighbor " << neighbor << " for node "
+                    << adj_graph.get_nodes()[i];
+            }
+        }
+    }
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
@@ -523,6 +599,43 @@ TEST_F(TopologySolverTest, ConstraintIndexDataBasic) {
 
     const auto& candidates_1 = constraint_data.get_candidates(1);
     EXPECT_TRUE(candidates_1.empty());  // Empty means all are valid
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataForbiddenWithoutRestrictions) {
+    using namespace tt::tt_fabric::detail;
+
+    // Target with no required constraints + forbidden pairs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // No required constraints; add forbidden pair (1, 10)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_forbidden_constraint(1, 10);
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Target 1 (index 0): restricted empty, forbidden includes global 10 (index 0)
+    EXPECT_TRUE(constraint_data.restricted_global_indices[0].empty());
+    EXPECT_EQ(constraint_data.forbidden_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.forbidden_global_indices[0][0], 0u);
+
+    // is_valid_mapping: (0, 0) forbidden, (0, 1) valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 0));  // Target 1 -> Global 10: forbidden
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 1));   // Target 1 -> Global 11: valid
+
+    // Target 2 (index 1): no restrictions, no forbidden
+    EXPECT_TRUE(constraint_data.forbidden_global_indices[1].empty());
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 0));
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));
 }
 
 TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
@@ -2856,6 +2969,54 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenContradiction) {
     // Verify the constraint is still valid after the failed attempt
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
     EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenWithoutSeeding) {
+    // Test add_forbidden_constraint when target has NO valid_mappings_ entry (no required constraints).
+    // Forbidden pairs are stored in forbidden_pairs_ and applied without seeding.
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    // No add_required_constraint - valid_mappings_ is empty for all targets
+
+    // Add forbidden constraint for target 1 -> global 10 (no valid_mappings_ for target 1)
+    EXPECT_TRUE(constraints.add_forbidden_constraint(1, 10));
+
+    // Verify forbidden_pairs_ was populated
+    const auto& forbidden = constraints.get_forbidden_pairs();
+    EXPECT_EQ(forbidden.size(), 1u);
+    EXPECT_TRUE(forbidden.count({1, 10}) == 1u);
+
+    // Verify is_valid_mapping rejects the forbidden pair
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 11));  // Other mappings still valid
+}
+
+TEST_F(TopologySolverTest, SolveWithForbiddenConstraintsOnlyNoSeeding) {
+    // Solve topology mapping with ONLY forbidden constraints (no required constraints).
+    // Verifies add_forbidden_constraint works without seeding valid_mappings_.
+    using namespace tt::tt_fabric;
+
+    // Target graph: 1 -- 2 (2 nodes, edge between them)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Global graph: 10 -- 11 (2 nodes, same structure)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No required constraints - only forbidden
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_forbidden_constraint(1, 10);  // Target 1 cannot map to global 10
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Mapping with forbidden-only constraints should succeed";
+    // Target 1 must map to 11 (10 is forbidden), target 2 must map to 10
+    EXPECT_EQ(result.target_to_global.at(1), 11) << "Target 1 should map to 11 (10 is forbidden)";
+    EXPECT_EQ(result.target_to_global.at(2), 10) << "Target 2 should map to 10";
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsForbiddenAfterTrait) {
