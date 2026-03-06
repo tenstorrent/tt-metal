@@ -104,7 +104,7 @@ def get_loss_over_devices(loss):
     """Aggregate loss over all devices and return mean."""
     device = ttml.autograd.AutoContext.get_instance().get_device()
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-    loss_numpy = loss.to_numpy(composer=composer)
+    loss_numpy = loss.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
     return loss_numpy.mean()
 
 
