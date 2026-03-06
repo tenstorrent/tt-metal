@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TT-Metal Compile Time Metrics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+            background: #f8f9fa;
+            color: #1a1a2e;
+        }
+        h1 { margin-bottom: 4px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+        .chart-container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        canvas { max-height: 600px; }
+        .stats {
+            display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap;
+        }
+        .stat {
+            background: #fff;
+            border-radius: 12px;
+            padding: 16px 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            flex: 1; min-width: 150px;
+        }
+        .stat .label { font-size: 12px; color: #888; text-transform: uppercase; }
+        .stat .value { font-size: 24px; font-weight: 700; color: #7C3AED; }
+        .stat .value.cpu { color: #0891b2; }
+        .stat .value.delta-pos { color: #dc2626; }
+        .stat .value.delta-neg { color: #16a34a; }
+    </style>
+</head>
+<body>
+    <h1>&#x1f527; TT-Metal Compile Time Tracker</h1>
+    <p class="subtitle">
+        Full compilation &mdash; no PCH, no Unity builds, no ccache, 32 cores
+        &bull; Ubuntu 24.04 &bull; Clang 20 &bull; Release
+    </p>
+    <div class="chart-container">
+        <canvas id="chart"></canvas>
+    </div>
+    <div class="stats">
+        <div class="stat"><div class="label">Latest Wall</div><div class="value" id="latest-wall">&mdash;</div></div>
+        <div class="stat"><div class="label">&Delta; Wall</div><div class="value" id="delta-wall">&mdash;</div></div>
+        <div class="stat"><div class="label">Latest CPU</div><div class="value cpu" id="latest-cpu">&mdash;</div></div>
+        <div class="stat"><div class="label">&Delta; CPU</div><div class="value" id="delta-cpu">&mdash;</div></div>
+        <div class="stat"><div class="label">Samples</div><div class="value" id="count">&mdash;</div></div>
+    </div>
+    <script>
+        function fmt(s) {
+            var m = Math.floor(s / 60);
+            return m + 'm ' + (s % 60) + 's';
+        }
+        function setDelta(elId, curr, prev) {
+            var el = document.getElementById(elId);
+            var diff = curr - prev;
+            var sign = diff >= 0 ? '+' : '';
+            el.textContent = sign + diff + 's';
+            el.className = 'value ' + (diff > 0 ? 'delta-pos' : diff < 0 ? 'delta-neg' : '');
+        }
+        fetch('data/compile_time.csv')
+            .then(function (r) { return r.text(); })
+            .then(function (csv) {
+                var lines = csv.trim().split('\n');
+                var data = lines.slice(1).map(function (l) {
+                    var c = l.split(',');
+                    return {
+                        date: new Date(c[0]),
+                        sha: c[1].substring(0, 7),
+                        wall: parseFloat(c[2]),
+                        cpu: parseFloat(c[3]),
+                        branch: c[4],
+                        run: c[5]
+                    };
+                });
+
+                var last = data[data.length - 1];
+
+                // Latest
+                document.getElementById('latest-wall').textContent = fmt(last.wall);
+                document.getElementById('latest-cpu').textContent = fmt(last.cpu);
+
+                // Deltas
+                if (data.length >= 2) {
+                    var prev = data[data.length - 2];
+                    setDelta('delta-wall', last.wall, prev.wall);
+                    setDelta('delta-cpu', last.cpu, prev.cpu);
+                }
+
+                // Sample count
+                document.getElementById('count').textContent = data.length;
+
+                new Chart(document.getElementById('chart'), {
+                    type: 'line',
+                    data: {
+                        labels: data.map(function (d) { return d.date; }),
+                        datasets: [
+                            {
+                                label: 'Wall Time (s)',
+                                data: data.map(function (d) { return d.wall; }),
+                                borderColor: '#7C3AED',
+                                backgroundColor: 'rgba(124, 58, 237, 0.08)',
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 4,
+                                pointHoverRadius: 7,
+                                yAxisID: 'y-wall'
+                            },
+                            {
+                                label: 'CPU Time (s)',
+                                data: data.map(function (d) { return d.cpu; }),
+                                borderColor: '#0891b2',
+                                backgroundColor: 'rgba(8, 145, 178, 0.08)',
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 4,
+                                pointHoverRadius: 7,
+                                yAxisID: 'y-cpu'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    afterBody: function (ctx) {
+                                        var d = data[ctx[0].dataIndex];
+                                        return 'SHA: ' + d.sha + '  Branch: ' + d.branch;
+                                    }
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Compilation Time Over Time',
+                                font: { size: 18 }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: { unit: 'day' },
+                                title: { display: true, text: 'Date' }
+                            },
+                            'y-wall': {
+                                type: 'linear',
+                                position: 'left',
+                                title: { display: true, text: 'Wall Time (s)', color: '#7C3AED' },
+                                ticks: { color: '#7C3AED' },
+                                beginAtZero: false
+                            },
+                            'y-cpu': {
+                                type: 'linear',
+                                position: 'right',
+                                title: { display: true, text: 'CPU Time (s)', color: '#0891b2' },
+                                ticks: { color: '#0891b2' },
+                                grid: { drawOnChartArea: false },
+                                beginAtZero: false
+                            }
+                        }
+                    }
+                });
+            });
+    </script>
+</body>
+</html>

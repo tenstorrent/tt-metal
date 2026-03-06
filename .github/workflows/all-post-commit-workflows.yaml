@@ -53,6 +53,11 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
+      run-compile-time-tracker:
+        required: false
+        type: boolean
+        default: false
+        description: "Run compile time tracker workflow"
       enable-watcher:
         required: false
         type: boolean
@@ -148,6 +153,11 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
+      run-compile-time-tracker:
+        required: false
+        default: false
+        type: boolean
+        description: "Run compile time tracker workflow"
       enable-watcher:
         required: false
         default: false
@@ -382,3 +392,8 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
+
+  compile-time-tracker:
+    if: ${{ inputs.run-compile-time-tracker || false }}
+    uses: ./.github/workflows/compile-time-tracker.yaml
+    secrets: inherit

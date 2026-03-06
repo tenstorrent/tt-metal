@@ -1,0 +1,120 @@
+name: "Compile Time Tracker"
+
+# Track full compilation time over time.
+# Builds with PCH and Unity disabled, no ccache, 32 cores.
+# Results are pushed to https://github.com/tenstorrent/tt-metal-compile-time-tracker
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_call:
+
+jobs:
+  track-compile-time:
+    name: "⏱️ Track Compile Time"
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 120
+    container:
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
+      env:
+        TRACY_NO_INVARIANT_CHECK: 1
+        TRACY_NO_ISA_EXTENSIONS: 1
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 500
+          fetch-tags: true
+
+      - name: 🔧 Configure git safe.directory
+        run: |
+          git config --global --add safe.directory /work
+
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache@v4
+        with:
+          path: .cpmcache
+          key: cpm-compile-tracker-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: |
+            cpm-compile-tracker-
+            cpm-
+
+      - name: 🔧 CMake configure (no PCH, no Unity, no ccache)
+        run: |
+          ./build_metal.sh \
+            --build-dir build \
+            --build-type Release \
+            --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake \
+            --disable-pch \
+            --disable-unity-builds \
+            --build-all \
+            --configure-only
+
+      - name: ⏱️ Timed Compile (32 cores)
+        id: compile
+        timeout-minutes: 90
+        run: |
+          echo "Starting compilation at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # Capture wall time (SECONDS) and CPU time (/usr/bin/time user+sys)
+          SECONDS=0
+          /usr/bin/time -o /tmp/cpu_time.txt -f '%U %S' cmake --build build --parallel 32
+          wall_time=$SECONDS
+
+          read user_time sys_time < /tmp/cpu_time.txt
+          cpu_time=$(awk "BEGIN {printf \"%.0f\", $user_time + $sys_time}")
+
+          echo "wall_time=${wall_time}" >> "$GITHUB_OUTPUT"
+          echo "cpu_time=${cpu_time}" >> "$GITHUB_OUTPUT"
+
+          wall_fmt="$((wall_time / 60))m $((wall_time % 60))s"
+          cpu_fmt="$((cpu_time / 60))m $((cpu_time % 60))s"
+          echo "## ⏱️ Wall Time: ${wall_time}s (${wall_fmt})  |  CPU Time: ${cpu_time}s (${cpu_fmt})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ⬇️ Checkout metrics repo (gh-pages)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-metal-compile-time-tracker
+          token: ${{ secrets.WILDER_PAT }}
+          ref: gh-pages
+          path: metrics-repo
+
+      - name: 📊 Append compile time to CSV and push
+        run: |
+          cd metrics-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          COMMIT_SHA="${{ github.sha }}"
+          WALL_TIME="${{ steps.compile.outputs.wall_time }}"
+          CPU_TIME="${{ steps.compile.outputs.cpu_time }}"
+          BRANCH="${{ github.ref_name }}"
+          RUN_ID="${{ github.run_id }}"
+
+          echo "${DATE},${COMMIT_SHA},${WALL_TIME},${CPU_TIME},${BRANCH},${RUN_ID}" >> data/compile_time.csv
+          echo "Appended: ${DATE},${COMMIT_SHA::7},wall=${WALL_TIME}s,cpu=${CPU_TIME}s,${BRANCH},${RUN_ID}"
+
+          git add data/compile_time.csv
+          git commit -m "Add compile time: wall=${WALL_TIME}s cpu=${CPU_TIME}s @ ${COMMIT_SHA::7}"
+
+          # Retry with rebase in case of concurrent pushes
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "✅ Pushed on attempt ${attempt}"
+              break
+            fi
+            echo "⚠️ Push failed (attempt ${attempt}/3), rebasing and retrying..."
+            git pull --rebase
+          done
