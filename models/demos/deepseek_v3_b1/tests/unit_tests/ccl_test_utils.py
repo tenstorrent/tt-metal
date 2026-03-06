@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared CCL unit-test helpers for DeepSeek B1 tests."""
 
 from dataclasses import dataclass
