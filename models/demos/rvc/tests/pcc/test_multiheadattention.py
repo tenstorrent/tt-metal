@@ -45,14 +45,14 @@ def test_multiheadattention(device, window_size):
     )
 
     parameters = {
-        "encoder.attn.conv_q.weight": torch_mha.conv_q.weight,
-        "encoder.attn.conv_q.bias": torch_mha.conv_q.bias,
-        "encoder.attn.conv_k.weight": torch_mha.conv_k.weight,
-        "encoder.attn.conv_k.bias": torch_mha.conv_k.bias,
-        "encoder.attn.conv_v.weight": torch_mha.conv_v.weight,
-        "encoder.attn.conv_v.bias": torch_mha.conv_v.bias,
-        "encoder.attn.conv_o.weight": torch_mha.conv_o.weight,
-        "encoder.attn.conv_o.bias": torch_mha.conv_o.bias,
+        "encoder.attn.linear_q.weight": torch_mha.linear_q.weight,
+        "encoder.attn.linear_q.bias": torch_mha.linear_q.bias,
+        "encoder.attn.linear_k.weight": torch_mha.linear_k.weight,
+        "encoder.attn.linear_k.bias": torch_mha.linear_k.bias,
+        "encoder.attn.linear_v.weight": torch_mha.linear_v.weight,
+        "encoder.attn.linear_v.bias": torch_mha.linear_v.bias,
+        "encoder.attn.linear_o.weight": torch_mha.linear_o.weight,
+        "encoder.attn.linear_o.bias": torch_mha.linear_o.bias,
     }
     if window_size is not None:
         parameters["encoder.attn.emb_rel_k"] = torch_mha.emb_rel_k
