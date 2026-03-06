@@ -739,7 +739,12 @@ class WanConv2d(Module):
             pad_value=0,
             dtype=dtype,
         )
-        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0)
+        self.bias = Parameter(
+            total_shape=[1, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
 
         self.mask_cache = {}
 
