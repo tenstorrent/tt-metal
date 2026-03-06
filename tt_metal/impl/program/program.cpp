@@ -1786,7 +1786,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
 
         TT_FATAL(
-            state.offset < max_size,
+            state.offset <= max_size,
             "Program size ({}) too large for kernel config buffer ({}) on {}",
             state.offset,
             max_size,
