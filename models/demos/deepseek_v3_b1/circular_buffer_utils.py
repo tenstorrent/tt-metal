@@ -81,8 +81,8 @@ class CircularBufferIdManager:
         """
         descs = []
         for cb_id, (data_format, tile_desc) in self._id_to_format.items():
-            tile = ttnn.Tile([tile_desc.height, tile_desc.width])
-            page_size = tile.get_tile_size(data_format)
+            # Minimal page size for dummy descriptors
+            page_size = 1
 
             fmt = ttnn.CBFormatDescriptor(
                 buffer_index=cb_id,
