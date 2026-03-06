@@ -1,6 +1,7 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const https = require('https');
+const fs = require('fs');
 
 /**
  * Send a Slack message to a thread
@@ -66,7 +67,7 @@ async function sendSlackMessage(channelId, botToken, message, threadTs) {
 
 async function run() {
   try {
-    const regressedWorkflowsJson = core.getInput('regressed_workflows', { required: true });
+    const regressedWorkflowsPath = core.getInput('regressed_workflows_path', { required: true });
     const githubToken = core.getInput('github_token', { required: true });
     const slackTs = core.getInput('slack_ts') || '';
     const slackChannelId = core.getInput('slack_channel_id') || '';
@@ -82,6 +83,11 @@ async function run() {
     // while still defaulting to main when invoked from main.
     const dispatchRef = github.context.ref || 'refs/heads/main';
 
+    if (!fs.existsSync(regressedWorkflowsPath)) {
+      throw new Error(`Regressed workflows file not found: ${regressedWorkflowsPath}`);
+    }
+
+    const regressedWorkflowsJson = fs.readFileSync(regressedWorkflowsPath, 'utf8');
     const regressedWorkflows = JSON.parse(regressedWorkflowsJson);
     const octokit = github.getOctokit(githubToken);
 
