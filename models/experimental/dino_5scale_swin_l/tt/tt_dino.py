@@ -508,6 +508,8 @@ class TtDINO:
         for layer_id in range(len(hidden_states)):
             hidden_state = hidden_states[layer_id]
             reference = references[layer_id]
+            if isinstance(reference, ttnn.Tensor):
+                reference = ttnn.to_torch(reference)
 
             # Classification: Linear(256, 80) on device
             cls_w = self.cls_branches[layer_id]["weight"]
