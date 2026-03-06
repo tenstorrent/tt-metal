@@ -78,9 +78,11 @@ class CircularBufferIdManager:
         CB configuration is applied at runtime via a reconfig tensor.
         """
         descs = []
+        i = 0
         for cb_id, (data_format, tile_desc) in self._id_to_format.items():
+            i += 1
             tile = ttnn.Tile([tile_desc.height, tile_desc.width])
-            page_size = tile.get_tile_size(data_format)
+            page_size = 16
 
             fmt = ttnn.CBFormatDescriptor(
                 buffer_index=cb_id,
@@ -93,6 +95,7 @@ class CircularBufferIdManager:
             desc.core_ranges = core_ranges
             desc.format_descriptors = [fmt]
             descs.append(desc)
+        print(f"Built {i} dummy CB descriptors")
         return descs
 
 

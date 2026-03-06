@@ -401,22 +401,23 @@ void to_string_row_major(
     }
 }
 
+// buffer and strides maybe unsused
 template <typename T>
 void to_string(
     std::stringstream& ss,
-    tt::stl::Span<const T> buffer,
+    [[maybe_unused]] tt::stl::Span<const T> buffer,
     const tt::tt_metal::Shape& shape,
-    const tt::tt_metal::Strides& strides,
+    [[maybe_unused]] const tt::tt_metal::Strides& strides,
     DataType dtype,
     Layout layout) {
     ss << TENSOR_TYPE_STRING << "(";
 
-    if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
-        ss << "...";
-    } else {
-        bool use_scientific = should_use_scientific_notation<T>(buffer);
-        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank(), 0, use_scientific);
-    }
+    // if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
+    //     ss << "...";
+    // } else {
+    //     bool use_scientific = should_use_scientific_notation<T>(buffer);
+    //     to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank(), 0, use_scientific);
+    // }
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
        << ", layout=" << fmt::format("{}", layout) << ")";
 }

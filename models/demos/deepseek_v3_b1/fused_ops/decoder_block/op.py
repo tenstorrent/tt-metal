@@ -240,11 +240,17 @@ class DecoderBlock:
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         extra_defines=None,
     ):
+        print("Starting decoder block op")
+
         def _patch_named_compile_time_args(named_args, overrides):
             """Replace selected named compile-time args while preserving order."""
             return [(name, overrides.get(name, value)) for name, value in named_args]
 
+        def _coord_str(mesh_coord):
+            return f"({getattr(mesh_coord, 'row', 0)},{getattr(mesh_coord, 'col', 0)})"
+
         # Phase 1: Build AttentionBlock program context
+        print("Building AttentionBlock program context")
         full_device_grid, attn_ctxs = AttentionBlock.get_program_context(
             input_tensor_mesh,
             intermediate_tensor_mesh,
@@ -293,6 +299,7 @@ class DecoderBlock:
         )
 
         # Phase 2: Build MoE program context with reconfig enabled
+        print("Building MoE program context")
         moe = MoeOp(
             shared_residual_mcast_src_tensor,
             gate_mm_weights_tensor=gate_mm_weights_tensor,
@@ -354,11 +361,21 @@ class DecoderBlock:
         # Phase 3: Merge per-device and execute
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
+        print("Merging per-device and executing")
         for ac in attn_ctxs:
             coord = ac["mesh_coord"]
             row = getattr(coord, "row", 0)
             col = getattr(coord, "col", 0)
             chip_id = row * moe_ctx.mesh_cols + col
+            local_moe_fabric_node_id = moe_ctx.mesh_device.get_fabric_node_id(coord)
+            reduce_root_fabric_node_id = (
+                moe_ctx.mesh_device.get_fabric_node_id(reduce_root_coord) if reduce_root_coord is not None else None
+            )
+            print(
+                f"[decoder_block] coord={_coord_str(coord)} chip_id={chip_id} "
+                f"moe_local_fabric_node={local_moe_fabric_node_id} "
+                f"reduce_root_fabric_node={reduce_root_fabric_node_id}"
+            )
 
             moe._setup_per_device_args(chip_id, 1, reduce_root_coord, coord, row, col)
             reconfig_addr = moe.reconfig_tensor.buffer_address()
@@ -473,6 +490,11 @@ class DecoderBlock:
             # AttentionBlock fabric connections (CCL broadcast)
             wc = ac.get("broadcast_worker_core")
             dn = ac.get("dst_nodes", [])
+            if not skip_ccl:
+                print(
+                    f"[decoder_block] coord={_coord_str(coord)} "
+                    f"bcast_src_fabric_node={ac.get('fabric_node_id')} bcast_dst_nodes={dn}"
+                )
             if not skip_ccl and dn and len(dn) > 0:
                 for idx, kernel in enumerate(program.kernels):
                     if kernel.core_ranges.contains(wc) and (
@@ -491,6 +513,12 @@ class DecoderBlock:
             if ac.get("sdpa"):
                 sdpa = ac["sdpa"]
                 sdpa_forwarder_cores = ac["sdpa_forwarder_cores"]
+                print(
+                    f"[decoder_block] coord={_coord_str(coord)} "
+                    f"sdpa_src_fabric_node={sdpa['fabric_node_id']} "
+                    f"sdpa_fwd_fabric_node={sdpa['fwd_fabric_node_id']} "
+                    f"sdpa_bwd_fabric_node={sdpa['bwd_fabric_node_id']}"
+                )
 
                 for group in kr.groups:
                     if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
@@ -559,6 +587,12 @@ class DecoderBlock:
                 ccl = ac["ccl"]
                 ccl_sender_core = ac["ccl_sender_core"]
                 gather_core = ac["gather_core"]
+                print(
+                    f"[decoder_block] coord={_coord_str(coord)} "
+                    f"ccl_src_fabric_node={ccl['fabric_node_id']} "
+                    f"ccl_neighbor_fabric_node={ccl['neighbor_fabric_node_id']} "
+                    f"ccl_sender_link={ccl['sender_link']}"
+                )
 
                 ccl_sender_group = kr.get_group_by_arg("is_ccl_sender_core", 1)
                 ccl_receiver_group = kr.get_group_by_arg("is_ccl_receiver_core", 1)
@@ -596,10 +630,16 @@ class DecoderBlock:
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
 
             # MOE fabric connections (reduce-to-one)
+            if moe_ctx.enable_reduce_to_one:
+                print(
+                    f"[decoder_block] coord={_coord_str(coord)} "
+                    f"moe_reduce_src_fabric_node={local_moe_fabric_node_id} "
+                    f"moe_reduce_root_fabric_node={reduce_root_fabric_node_id}"
+                )
             moe._setup_fabric_connections(coord, row, col, reduce_root_coord, kr, program)
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
+        print("Executing generic op")
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         if moe_ctx.enable_reduce_to_one:
