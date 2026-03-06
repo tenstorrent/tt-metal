@@ -449,10 +449,17 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _reset_sampling_state(self, sampling_params: SamplingParams, batch_size: int, batch_size_per_row: int) -> None:
         sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         self.sampling_generator.reset_sampling_params(sampling_params)
+        seed = getattr(sampling_params, "seed", None)
+        if seed is not None:
+            user_ids = list(range(batch_size))
+            self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
         self.sampling_generator.reset_prompt_tokens(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
         self.sampling_generator.reset_output_state(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
 
-    def _sample_tokens_device(self, logits: ttnn.Tensor, enable_trace: bool = False) -> ttnn.Tensor:
+    def _sample_tokens_device(
+        self, logits: ttnn.Tensor, enable_trace: bool = False, user_slots: list[int] | None = None
+    ) -> ttnn.Tensor:
+        self.sampling_generator.seed_manager.get_new_values(user_slots)
         tt_out = self.sampling_generator.sample(logits, enable_trace=enable_trace)
 
         if isinstance(tt_out, tuple):
@@ -508,7 +515,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         return rope_tensors, tt_positions
 
-    def _get_page_tables(self) -> ttnn.Tensor | Tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _get_page_tables(self) -> tuple[ttnn.Tensor, ...]:
         if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
             return self.page_tables_tt
 
@@ -543,8 +550,8 @@ class DeepseekGenerator(WarmupForwardMixin):
                 If False, gather logits to host.
 
         Returns:
-            - torch.Tensor with shape [1, 1, B, V] when sample_on_device is False.
-            - ttnn.Tensor with shape [1, 1, B, V] when sample_on_device is True.
+            - torch.Tensor when sample_on_device is False.
+            - ttnn.Tensor when sample_on_device is True.
         """
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
@@ -708,12 +715,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.signpost:
                     signpost(header="prefill")
                 profiler.start("inference_prefill")
-                last_logits = []
+                prefill_tokens = []
                 for user_id in range(num_of_users):
                     if lengths[user_id] == 0:
                         logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
                         pad_token = self.tokenizer.pad_token_id if self.tokenizer is not None else 0
-                        last_logits.append(torch.tensor(int(pad_token), dtype=torch.int64))
+                        prefill_tokens.append(torch.tensor(int(pad_token), dtype=torch.int64))
                         continue
                     logger.info(f"Running prefill for user_id: {user_id}")
                     prompt_len = int(lengths[user_id].item())
@@ -732,16 +739,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                         tokens_batched[user_id], user_id=user_id, sample_on_device=self.sample_on_device
                     )
                     assert prefill_logits is not None
-                    logger.info(f"prefill_logits.shape: {prefill_logits.shape}")
 
                     if self.sample_on_device:
                         # Device sampling
-                        prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len)
-                        logger.info(f"prefill_logits.shape after slice: {prefill_logits.shape}")
-                        prefill_logits = self._expand_prefill_logits(prefill_logits)
-                        logger.info(f"prefill_logits.shape after expand: {prefill_logits.shape}")
-                        prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits)
-                        logger.info(f"prefill_logits_sampled_device.shape: {prefill_logits_sampled_device.shape}")
+                        prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
+                        prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
                         prefill_logits_sampled_host = self._tokens_from_device(
                             prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
                         )
@@ -756,15 +758,15 @@ class DeepseekGenerator(WarmupForwardMixin):
                         # Sample only from the actual last prompt position for this user.
                         last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
                         pred_token = self._sample_greedy_on_host(last_token_logits)
-                    last_logits.append(torch.tensor(pred_token, dtype=torch.int64))
+                    prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
                     self.ccl.reset_sem_counters()
-                last_logits = torch.stack(last_logits)
+                prefill_tokens = torch.stack(prefill_tokens)
                 profiler.end("inference_prefill")
                 if self.signpost:
                     signpost(header="prefill")
 
             if not self.profile_decode:
-                assert len(last_logits) == num_of_users
+                assert len(prefill_tokens) == num_of_users
 
             logger.info(
                 f"Finished prefill for all users..."
@@ -786,7 +788,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     next_tokens = next_tokens_override
                 else:
                     # Prefill already produced one token per user.
-                    next_tokens = last_logits
+                    next_tokens = prefill_tokens
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
@@ -1008,7 +1010,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         ttnn.deallocate(tt_tokens)
         return logits
 
-    def _slice_last_token_logits(self, logits: ttnn.Tensor, prompt_len: int) -> ttnn.Tensor:
+    def _slice_last_token_logits(
+        self, logits: ttnn.Tensor, prompt_len: int, *, expand_to_batch: bool = False
+    ) -> ttnn.Tensor:
         last_idx = max(prompt_len - 1, 0)
         shard_len = logits.shape[2]
         local_idx = last_idx % shard_len
@@ -1038,16 +1042,12 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             ttnn.deallocate(gathered)
 
-        return last_logits
+        if expand_to_batch and last_logits.shape[2] == 1 and self.batch_size_per_row > 1:
+            expanded = ttnn.repeat(last_logits, (1, 1, self.batch_size_per_row, 1))
+            ttnn.deallocate(last_logits)
+            last_logits = expanded
 
-    def _expand_prefill_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        if logits.shape[2] == self.batch_size_per_row:
-            return logits
-        if logits.shape[2] == 1:
-            expanded = ttnn.repeat(logits, (1, 1, self.batch_size_per_row, 1))
-            ttnn.deallocate(logits)
-            return expanded
-        return logits
+        return last_logits
 
     def _capture_decode_trace(
         self,

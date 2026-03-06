@@ -49,6 +49,7 @@ def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
     sampling.reset_output_state(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
+    sampling.seed_manager.reset_seed(params.seed, list(range(batch_size)))
     sampling.seed_manager.get_new_values()
     tt_tokens, _ = sampling.sample(tt_input, enable_trace=False)
     device_tokens = _extract_all_tokens(tt_tokens, mesh_device, USERS_PER_ROW)
@@ -126,15 +127,18 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
     sampling.reset_output_state(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
+    sampling.seed_manager.reset_seed(params.seed, list(range(batch_size)))
 
     sampled_tokens = []
     try:
         for _ in range(num_samples):
             sampling.seed_manager.get_new_values()
-            tt_tokens, _ = sampling.sample(tt_input, enable_trace=False)
+            tt_tokens, tt_log_probs = sampling.sample(tt_input, enable_trace=False)
             device_tokens = _extract_all_tokens(tt_tokens, mesh_device, USERS_PER_ROW)
             sampled_tokens.append(int(device_tokens[0].item()))
             ttnn.deallocate(tt_tokens)
+            if tt_log_probs is not None:
+                ttnn.deallocate(tt_log_probs)
     finally:
         ttnn.deallocate(tt_input)
 
