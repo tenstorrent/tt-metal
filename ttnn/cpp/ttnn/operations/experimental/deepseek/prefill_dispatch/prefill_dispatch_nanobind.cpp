@@ -33,6 +33,7 @@ void bind_prefill_dispatch(nb::module_& mod) {
             weights_tensor (ttnn.Tensor): Router weights of shape (num_chips, seq_len, num_experts_per_tok)
             indices_tensor (ttnn.Tensor): Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
             chip_to_n_routed_expert_offset_tensor (ttnn.Tensor): Base offset for each expert from each chip in the dispatched buffer, shape (num_chips, n_routed_experts), dtype int32
+            expert_dispatch_table_tensor (ttnn.Tensor): Expert dispatch table mapping expert ID to destination chip ID, shape (num_chips_rep, n_routed_experts), dtype int32
 
         Keyword Args:
             num_chips (int): Number of chips in the system
@@ -76,6 +77,7 @@ void bind_prefill_dispatch(nb::module_& mod) {
                const ttnn::Tensor& weights_tensor,
                const ttnn::Tensor& indices_tensor,
                const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
+               const ttnn::Tensor& expert_dispatch_table_tensor,
                uint32_t num_chips,
                uint32_t experts_per_chip,
                uint32_t n_routed_experts,
@@ -92,6 +94,7 @@ void bind_prefill_dispatch(nb::module_& mod) {
                     weights_tensor,
                     indices_tensor,
                     chip_to_n_routed_expert_offset_tensor,
+                    expert_dispatch_table_tensor,
                     num_chips,
                     experts_per_chip,
                     n_routed_experts,
@@ -108,6 +111,7 @@ void bind_prefill_dispatch(nb::module_& mod) {
             nb::arg("weights_tensor").noconvert(),
             nb::arg("indices_tensor").noconvert(),
             nb::arg("chip_to_n_routed_expert_offset_tensor").noconvert(),
+            nb::arg("expert_dispatch_table_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("num_chips"),
             nb::arg("experts_per_chip"),

@@ -26,6 +26,9 @@ void PrefillDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.chip_to_n_routed_expert_offset_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Chip to expert offset tensor must be ROW_MAJOR layout");
+    TT_FATAL(
+        tensor_args.expert_dispatch_table_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Expert dispatch table tensor must be ROW_MAJOR layout");
 
     // Validate input tensor dtypes
     TT_FATAL(
@@ -44,6 +47,10 @@ void PrefillDispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.chip_to_n_routed_expert_offset_tensor.dtype() == DataType::INT32,
         "Chip to expert offset tensor must be INT32, got {}",
         tensor_args.chip_to_n_routed_expert_offset_tensor.dtype());
+    TT_FATAL(
+        tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
+        "Expert dispatch table tensor must be INT32, got {}",
+        tensor_args.expert_dispatch_table_tensor.dtype());
 
     // Validate output memory config is DRAM interleaved (not sharded)
     TT_FATAL(
@@ -142,6 +149,7 @@ prefill_dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
+    const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t num_chips,
     uint32_t experts_per_chip,
     uint32_t n_routed_experts,
@@ -171,6 +179,7 @@ prefill_dispatch(
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,
             .indices_tensor = indices_tensor,
-            .chip_to_n_routed_expert_offset_tensor = chip_to_n_routed_expert_offset_tensor});
+            .chip_to_n_routed_expert_offset_tensor = chip_to_n_routed_expert_offset_tensor,
+            .expert_dispatch_table_tensor = expert_dispatch_table_tensor});
 }
 }  // namespace ttnn::prim

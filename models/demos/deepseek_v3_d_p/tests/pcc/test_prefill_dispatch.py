@@ -14,6 +14,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
+    create_expert_dispatch_table,
     create_fabric_router_config,
     get_gate_outputs,
     initialize_predictable_test_inputs,
@@ -196,7 +197,7 @@ def test_ttnn_dispatch(
     print("\n")
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips_sp, capacity_factor
+        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_devices, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
@@ -226,6 +227,8 @@ def test_ttnn_dispatch(
         )
         logger.info("Using RANDOM test data")
 
+    logger.info(f"[TORCH INPUTS] x.shape={x.shape}, weights.shape={weights.shape}, indices.shape={indices.shape}")
+
     # x and indices: replicated across EP ranks
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
@@ -237,45 +240,61 @@ def test_ttnn_dispatch(
     # weights shape: (num_ep_ranks, num_chips_sp, seq_len, num_experts_per_tok)
     # For 1D mesh (num_chips_rep=1): squeeze the EP rank dimension and use replicated mapper
     # For 2D mesh: shard both axes
-    if num_chips_rep > 1:
-        # For sp_axis=0: mesh axis 0 (rows) = num_chips_sp, mesh axis 1 (cols) = num_ep_ranks
-        #   dims = (1, 0): shard tensor dim 1 (num_chips_sp) on mesh axis 0, tensor dim 0 (num_ep_ranks) on mesh axis 1
-        # For sp_axis=1: mesh axis 0 (rows) = num_ep_ranks, mesh axis 1 (cols) = num_chips_sp
-        #   dims = (0, 1): shard tensor dim 0 (num_ep_ranks) on mesh axis 0, tensor dim 1 (num_chips_sp) on mesh axis 1
-        if sp_axis == 0:
-            weights_dims = (1, 0)
-        else:
-            weights_dims = (0, 1)
-        mesh_mapper_weights = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            mesh_shape=mesh_device.shape,
-            dims=weights_dims,
-        )
-        weights_for_ttnn = weights
-    else:
-        # For 1D mesh, squeeze the num_ep_ranks dimension since it's 1
-        mesh_mapper_weights = mesh_mapper_replicated
-        weights_for_ttnn = weights.squeeze(0)  # Remove the num_ep_ranks=1 dimension
+    # if num_chips_rep > 1:
+    #     # For sp_axis=0: mesh axis 0 (rows) = num_chips_sp, mesh axis 1 (cols) = num_ep_ranks
+    #     #   dims = (1, 0): shard tensor dim 1 (num_chips_sp) on mesh axis 0, tensor dim 0 (num_ep_ranks) on mesh axis 1
+    #     # For sp_axis=1: mesh axis 0 (rows) = num_ep_ranks, mesh axis 1 (cols) = num_chips_sp
+    #     #   dims = (0, 1): shard tensor dim 0 (num_ep_ranks) on mesh axis 0, tensor dim 1 (num_chips_sp) on mesh axis 1
+    #     if sp_axis == 0:
+    #         weights_dims = (1, 0)
+    #     else:
+    #         weights_dims = (0, 1)
+    #     mesh_mapper_weights = ttnn.ShardTensor2dMesh(
+    #         mesh_device,
+    #         mesh_shape=mesh_device.shape,
+    #         dims=weights_dims,
+    #     )
+    #     weights_for_ttnn = weights
+    # else:
+    #     # For 1D mesh, squeeze the num_ep_ranks dimension since it's 1
+    #     mesh_mapper_weights = mesh_mapper_replicated
+    #     weights_for_ttnn = weights.squeeze(0)  # Remove the num_ep_ranks=1 dimension
+
+    # logger.info(f"[TORCH->TTNN] weights_for_ttnn.shape={weights_for_ttnn.shape}")
 
     tt_x = ttnn.from_torch(
         x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
+    logger.info(f"[TTNN] tt_x.shape={tt_x.shape}")
+
     tt_weights = ttnn.from_torch(
-        weights_for_ttnn,
-        mesh_mapper=mesh_mapper_weights,
+        weights,
+        mesh_mapper=mesh_mapper_replicated,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
+    logger.info(f"[TTNN] tt_weights.shape={tt_weights.shape}")
+
     tt_indices = ttnn.from_torch(
         indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
     )
+    logger.info(f"[TTNN] tt_indices.shape={tt_indices.shape}")
 
     logger.warning(f"{x.shape=}, {weights.shape=}, {indices.shape=}")
     logger.warning(f"{tt_x.shape=}, {tt_weights.shape=}, {tt_indices.shape=}")
     # ttnn.visualize_tensor(tt_x)
     # ttnn.visualize_tensor(tt_weights)
     # ttnn.visualize_tensor(tt_indices)
+
+    # Create expert dispatch table
+    expert_dispatch_table = create_expert_dispatch_table(
+        n_routed_experts=n_routed_experts,
+        num_chips_sp=num_chips_sp,
+        num_chips_rep=num_chips_rep,
+    )
+    logger.info(f"{expert_dispatch_table.shape=}")
+    logger.info(f"expert_dispatch_table:\n{expert_dispatch_table}")
 
     # Initialize torch dispatch module with num_ep_ranks support
     torch_dispatch_module = TorchDispatchModule(
@@ -288,6 +307,7 @@ def test_ttnn_dispatch(
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
         num_ep_ranks=num_chips_rep,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     tt_dispatch_module = TtDispatchModule(
@@ -314,6 +334,9 @@ def test_ttnn_dispatch(
         seq_len_per_chip,
         num_experts_per_tok,
     )
+    logger.info(f"[TORCH GATE] chip_to_n_routed_expert_offset.shape={chip_to_n_routed_expert_offset.shape}")
+    logger.info(f"[TORCH GATE] chip_to_routed_expert_tokens.shape={chip_to_routed_expert_tokens.shape}")
+    logger.info(f"[TORCH GATE] cum_sum.shape={cum_sum.shape}")
 
     # Forward pass through TTNN dispatch
     logger.info(f"{x.shape=}")
@@ -323,11 +346,21 @@ def test_ttnn_dispatch(
     tt_chip_to_n_routed_expert_offset = TtDispatchModule.shard_offset_tensor(
         mesh_device, chip_to_n_routed_expert_offset
     )
-    tt_dispatched, tt_metadata = tt_dispatch_module(tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset)
+    logger.info(f"[TTNN GATE] tt_chip_to_n_routed_expert_offset.shape={tt_chip_to_n_routed_expert_offset.shape}")
+
+    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
+    logger.info(f"[TTNN] tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
+
+    tt_dispatched, tt_metadata = tt_dispatch_module(
+        tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset, tt_expert_dispatch_table
+    )
+    logger.info(f"[TTNN OUTPUT] tt_dispatched.shape={tt_dispatched.shape}")
+    logger.info(f"[TTNN OUTPUT] tt_metadata.shape={tt_metadata.shape}")
 
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
-    logger.info(f"Torch dispatch: {torch_dispatched.shape=}, {torch_metadata.shape=}")
+    logger.info(f"[TORCH OUTPUT] torch_dispatched.shape={torch_dispatched.shape}")
+    logger.info(f"[TORCH OUTPUT] torch_metadata.shape={torch_metadata.shape}")
 
     # Convert TTNN outputs to torch for comparison
     mesh_composer = ttnn.create_mesh_composer(
@@ -339,7 +372,9 @@ def test_ttnn_dispatch(
     logger.warning(f"{torch_dispatched[0].shape=} {torch_metadata[0].shape=}")
     logger.warning(f"{tt_dispatched.shape=} {tt_metadata.shape=}")
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
+    logger.info(f"[TTNN->TORCH] tt_out_dispatched.shape={tt_out_dispatched.shape}")
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
+    logger.info(f"[TTNN->TORCH] tt_out_metadata.shape={tt_out_metadata.shape}")
     logger.warning(f"{tt_out_dispatched.shape=} {tt_out_metadata.shape=}")
 
     assert (
@@ -367,7 +402,16 @@ def test_ttnn_dispatch(
         metadata = torch_metadata[r]
         for dst_chip_id in range(num_chips_sp):
             for expert_id in range(experts_per_chip):
-                count = chip_to_routed_expert_tokens[dst_chip_id, expert_id].item()
+                # Compute global expert ID and check if it's present in this EP rank
+                global_expert_id = dst_chip_id * experts_per_chip + expert_id
+                if expert_dispatch_table[r, global_expert_id].item() == -1:
+                    # Expert not present in this EP rank, skip comparison
+                    logger.info(
+                        f"⏭️ {r} Data {dst_chip_id=} {expert_id=} (expert {global_expert_id} not in EP rank {r})"
+                    )
+                    continue
+
+                count = chip_to_routed_expert_tokens[r, dst_chip_id, expert_id].item()
                 out = tt_out_dispatched[r, dst_chip_id, expert_id, :count, :]
                 ref = dispatched[dst_chip_id, expert_id, :count, :]
                 if torch.allclose(out, ref, atol=1e-6):
@@ -392,7 +436,16 @@ def test_ttnn_dispatch(
         metadata = torch_metadata[r]
         for dst_chip_id in range(num_chips_sp):
             for expert_id in range(experts_per_chip):
-                count = chip_to_routed_expert_tokens[dst_chip_id, expert_id].item()
+                # Compute global expert ID and check if it's present in this EP rank
+                global_expert_id = dst_chip_id * experts_per_chip + expert_id
+                if expert_dispatch_table[r, global_expert_id].item() == -1:
+                    # Expert not present in this EP rank, skip comparison
+                    logger.info(
+                        f"⏭️ {r} Metadata {dst_chip_id=} {expert_id=} (expert {global_expert_id} not in EP rank {r})"
+                    )
+                    continue
+
+                count = chip_to_routed_expert_tokens[r, dst_chip_id, expert_id].item()
                 out = tt_out_metadata[r, dst_chip_id, expert_id, :count, 1:4]
                 ref = metadata[dst_chip_id, expert_id, :count, 1:4]
 

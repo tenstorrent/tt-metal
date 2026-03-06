@@ -13,6 +13,57 @@ from loguru import logger
 import ttnn
 
 
+def create_expert_dispatch_table(
+    n_routed_experts: int,
+    num_chips_sp: int,
+    num_chips_rep: int = 1,
+) -> torch.Tensor:
+    """
+    Create expert dispatch table mapping experts to destination chips in dispatch axis.
+
+    This table translates expert ID to logical location of the expert in the dispatch axis.
+    -1 means the expert is not present in that EP rank and should be ignored.
+
+    The chip mapping uses the same formula as the kernel: chip_id = expert_id // experts_per_chip
+    where experts_per_chip = n_routed_experts // num_chips_sp.
+
+    Args:
+        n_routed_experts: Total number of routed experts
+        num_chips_sp: Number of chips in dispatch/SP axis
+        num_chips_rep: Number of EP ranks (token replication axis)
+
+    Returns:
+        expert_dispatch_table: Shape (num_chips_rep, n_routed_experts)
+            Values are logical chip IDs (0 to num_chips_sp-1) or -1 if not present
+
+    Example:
+        # num_chips=8, num_chips_sp=4, num_chips_rep=2, n_experts=16
+        # experts_per_rank = 16/2 = 8, experts_per_chip = 8/4 = 2
+        # EP rank 0 handles experts 0-7, EP rank 1 handles experts 8-15
+        # chip_id = local_expert_id // 2 (local within each rank)
+        expert_dispatch_table = [
+            [ 0, 0, 1, 1,  2, 2, 3, 3, -1,-1,-1,-1, -1,-1,-1,-1], # rank 0: experts 0-7 → chips 0-3
+            [-1,-1,-1,-1, -1,-1,-1,-1,  0, 0, 1, 1,  2, 2, 3, 3], # rank 1: experts 8-15 → chips 0-3
+        ]
+    """
+    # Each EP rank handles a subset of experts, distributed across SP chips
+    experts_per_rank = n_routed_experts // num_chips_rep
+    experts_per_chip = experts_per_rank // num_chips_sp  # Experts per chip within each EP rank
+
+    table = torch.full((num_chips_rep, n_routed_experts), -1, dtype=torch.int32)
+    for rank in range(num_chips_rep):
+        rank_start = rank * experts_per_rank
+        rank_end = rank_start + experts_per_rank
+        for expert_id in range(rank_start, rank_end):
+            # Use local expert ID within the rank to compute chip mapping
+            local_expert_id = expert_id - rank_start
+            chip_id = local_expert_id // experts_per_chip
+            table[rank, expert_id] = chip_id
+
+    logger.info(f"[create_expert_dispatch_table] OUTPUT: table.shape={table.shape}")
+    return table
+
+
 def get_gate_outputs(
     indices: torch.Tensor,
     num_chips: int,
@@ -55,8 +106,15 @@ def get_gate_outputs(
     # Compute cumulative offsets
     cum_sum = torch.cumsum(chip_to_n_routed_expert_counter, dim=0)
     chip_to_n_routed_expert_offset = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
-    chip_to_routed_expert_tokens = cum_sum[-1].view(num_chips, experts_per_chip).to(torch.int32)
+    chip_to_routed_expert_tokens = (
+        cum_sum[-1].view(n_routed_experts // experts_per_chip // num_chips, num_chips, experts_per_chip).to(torch.int32)
+    )
 
+    logger.info(f"[get_gate_outputs] OUTPUT SHAPES:")
+    logger.info(f"  chip_to_n_routed_expert_counter.shape={chip_to_n_routed_expert_counter.shape}")
+    logger.info(f"  chip_to_n_routed_expert_offset.shape={chip_to_n_routed_expert_offset.shape}")
+    logger.info(f"  chip_to_routed_expert_tokens.shape={chip_to_routed_expert_tokens.shape}")
+    logger.info(f"  cum_sum.shape={cum_sum.shape}")
     return chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, cum_sum
 
 
@@ -118,7 +176,7 @@ def initialize_test_inputs(
     input_shape = (num_chips, seq_len_per_chip, hidden_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    weights_shape = (num_ep_ranks, num_chips, seq_len_per_chip, num_experts_per_tok)
+    weights_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
 
     weights = torch.randn(weights_shape, dtype=torch.bfloat16)
@@ -140,6 +198,10 @@ def initialize_test_inputs(
             expert_activations.max().item() <= max_dispatched_tokens_per_expert
         ), f"Expected max activations per expert to be <= {max_dispatched_tokens_per_expert}, got {expert_activations.max().item()}"
 
+    logger.info(f"[initialize_test_inputs] OUTPUT SHAPES:")
+    logger.info(f"  x.shape={x.shape}")
+    logger.info(f"  weights.shape={weights.shape}")
+    logger.info(f"  indices.shape={indices.shape}")
     return x, weights, indices
 
 
@@ -186,14 +248,14 @@ def initialize_predictable_test_inputs(
     x = torch.arange(num_chips * seq_len_per_chip * hidden_dim, dtype=torch.float32).reshape(input_shape)
     x = x.to(torch.bfloat16)
 
-    weights_shape = (num_ep_ranks, num_chips, seq_len_per_chip, num_experts_per_tok)
+    weights_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
 
     # Predictable weights: rank 0 = [1,2,3,4], rank 1 = [5,6,7,8], etc.
     weights = torch.zeros(weights_shape, dtype=torch.bfloat16)
-    for r in range(num_ep_ranks):
-        for k in range(num_experts_per_tok):
-            weights[r, :, :, k] = float(r * num_experts_per_tok + k + 1)
+
+    for k in range(num_experts_per_tok):
+        weights[:, :, k] = float(num_experts_per_tok + k + 1)
 
     # Round-robin indices pattern
     indices = torch.zeros(indices_shape, dtype=torch.int32)
@@ -209,6 +271,10 @@ def initialize_predictable_test_inputs(
                     indices[chip, token, k] = n_routed_experts - 1 - (expert_idx % n_routed_experts)  # reverse order
                 expert_idx += 1
 
+    logger.info(f"[initialize_predictable_test_inputs] OUTPUT SHAPES:")
+    logger.info(f"  x.shape={x.shape}")
+    logger.info(f"  weights.shape={weights.shape}")
+    logger.info(f"  indices.shape={indices.shape}")
     return x, weights, indices
 
 
