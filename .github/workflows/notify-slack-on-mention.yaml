@@ -22,14 +22,11 @@ jobs:
       - name: Check for @ mentions
         id: check-mention
         run: |
-          BODY=$(cat <<'EOF'
-          ${{ github.event.comment.body || github.event.issue.body || github.event.pull_request.body }}
-          EOF
-          )
+          BODY=$(jq -r '(.comment.body // .issue.body // .pull_request.body // "")' "$GITHUB_EVENT_PATH")
 
-          if echo "$BODY" | grep -qP '@[a-zA-Z0-9][-a-zA-Z0-9]*'; then
+          if echo "$BODY" | grep -qP '(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*'; then
             echo "has_mention=true" >> "$GITHUB_OUTPUT"
-            MENTIONED=$(echo "$BODY" | grep -oP '@[a-zA-Z0-9][-a-zA-Z0-9]*' | sed 's/^@//' | sort -u | paste -sd ',' )
+            MENTIONED=$(echo "$BODY" | grep -oP '(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*' | sed 's/^@//' | sort -u | paste -sd ',')
             echo "mentioned=$MENTIONED" >> "$GITHUB_OUTPUT"
           else
             echo "has_mention=false" >> "$GITHUB_OUTPUT"
@@ -92,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           EVENT_NAME="${{ github.event_name }}"
-          SENDER="${{ github.event.sender.login }}"
+          SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
           REPO="${{ github.repository }}"
           MENTIONED_CSV="${{ steps.check-mention.outputs.mentioned }}"
           SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
@@ -184,70 +181,62 @@ jobs:
 
           NL=$'\n'
 
-          if [ "$EVENT_NAME" = "issue_comment" ]; then
-            COMMENT_BODY=$(cat <<'EOF'
-          ${{ github.event.comment.body }}
-          EOF
-          )
-            ISSUE_TITLE="${{ github.event.issue.title }}"
-            ISSUE_NUMBER="${{ github.event.issue.number }}"
-            COMMENT_URL="${{ github.event.comment.html_url }}"
+          # Safely read event data via jq from GITHUB_EVENT_PATH
+          EVENT_JSON="$GITHUB_EVENT_PATH"
 
-            if [ -n "${{ github.event.issue.pull_request }}" ]; then
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            BODY_TEXT=$(jq -r '.comment.body // ""' "$EVENT_JSON")
+            ISSUE_TITLE=$(jq -r '.issue.title // ""' "$EVENT_JSON")
+            ISSUE_NUMBER=$(jq -r '.issue.number // ""' "$EVENT_JSON")
+            COMMENT_URL=$(jq -r '.comment.html_url // ""' "$EVENT_JSON")
+            HAS_PR=$(jq -r '.issue.pull_request // empty' "$EVENT_JSON")
+
+            if [ -n "$HAS_PR" ]; then
               CONTEXT_TYPE="PR"
             else
               CONTEXT_TYPE="Issue"
             fi
 
             HEADER=":speech_balloon: *New mention on ${CONTEXT_TYPE}* <${COMMENT_URL}|#${ISSUE_NUMBER} - ${ISSUE_TITLE}>"
-            BODY_TEXT="${COMMENT_BODY}"
 
           elif [ "$EVENT_NAME" = "issues" ]; then
-            ACTION="${{ github.event.action }}"
-            ISSUE_TITLE="${{ github.event.issue.title }}"
-            ISSUE_NUMBER="${{ github.event.issue.number }}"
-            ISSUE_URL="${{ github.event.issue.html_url }}"
-            ISSUE_BODY=$(cat <<'EOF'
-          ${{ github.event.issue.body }}
-          EOF
-          )
+            ACTION=$(jq -r '.action // ""' "$EVENT_JSON")
+            BODY_TEXT=$(jq -r '.issue.body // ""' "$EVENT_JSON")
+            ISSUE_TITLE=$(jq -r '.issue.title // ""' "$EVENT_JSON")
+            ISSUE_NUMBER=$(jq -r '.issue.number // ""' "$EVENT_JSON")
+            ISSUE_URL=$(jq -r '.issue.html_url // ""' "$EVENT_JSON")
 
             if [ "$ACTION" = "opened" ]; then
               HEADER=":memo: *New issue with mention* <${ISSUE_URL}|#${ISSUE_NUMBER} - ${ISSUE_TITLE}>"
             else
               HEADER=":pencil2: *Issue edited with mention* <${ISSUE_URL}|#${ISSUE_NUMBER} - ${ISSUE_TITLE}>"
             fi
-            BODY_TEXT="${ISSUE_BODY}"
 
           elif [ "$EVENT_NAME" = "pull_request_target" ]; then
-            ACTION="${{ github.event.action }}"
-            PR_TITLE="${{ github.event.pull_request.title }}"
-            PR_NUMBER="${{ github.event.pull_request.number }}"
-            PR_URL="${{ github.event.pull_request.html_url }}"
-            PR_BODY=$(cat <<'EOF'
-          ${{ github.event.pull_request.body }}
-          EOF
-          )
+            ACTION=$(jq -r '.action // ""' "$EVENT_JSON")
+            BODY_TEXT=$(jq -r '.pull_request.body // ""' "$EVENT_JSON")
+            PR_TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_JSON")
+            PR_NUMBER=$(jq -r '.pull_request.number // ""' "$EVENT_JSON")
+            PR_URL=$(jq -r '.pull_request.html_url // ""' "$EVENT_JSON")
 
             if [ "$ACTION" = "opened" ]; then
               HEADER=":twisted_rightwards_arrows: *New PR with mention* <${PR_URL}|#${PR_NUMBER} - ${PR_TITLE}>"
             else
               HEADER=":pencil2: *PR edited with mention* <${PR_URL}|#${PR_NUMBER} - ${PR_TITLE}>"
             fi
-            BODY_TEXT="${PR_BODY}"
 
           elif [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
-            COMMENT_BODY=$(cat <<'EOF'
-          ${{ github.event.comment.body }}
-          EOF
-          )
-            PR_TITLE="${{ github.event.pull_request.title }}"
-            PR_NUMBER="${{ github.event.pull_request.number }}"
-            COMMENT_URL="${{ github.event.comment.html_url }}"
+            BODY_TEXT=$(jq -r '.comment.body // ""' "$EVENT_JSON")
+            PR_TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_JSON")
+            PR_NUMBER=$(jq -r '.pull_request.number // ""' "$EVENT_JSON")
+            COMMENT_URL=$(jq -r '.comment.html_url // ""' "$EVENT_JSON")
 
             HEADER=":speech_balloon: *New review comment with mention* on PR <${COMMENT_URL}|#${PR_NUMBER} - ${PR_TITLE}>"
-            BODY_TEXT="${COMMENT_BODY}"
           fi
+
+          # Escape Slack special sequences in user-supplied body to prevent injection
+          BODY_TEXT=$(echo "$BODY_TEXT" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+          BODY_TEXT=$(echo "$BODY_TEXT" | sed 's/<!here>/&lt;!here&gt;/g; s/<!channel>/&lt;!channel&gt;/g; s/<!everyone>/&lt;!everyone&gt;/g')
 
           # Trim body text if too long
           if [ ${#BODY_TEXT} -gt 2000 ]; then
