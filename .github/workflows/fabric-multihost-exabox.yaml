@@ -128,7 +128,7 @@ jobs:
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
 
-          mpirun --pernode /opt/venv/bin/pip install $(find /ci/artifacts | grep whl)
+          mpirun --pernode uv pip install --python /opt/venv/bin/python $(find /ci/artifacts | grep whl)
 
       - name: Run Physical discovery test
         timeout-minutes: 10
