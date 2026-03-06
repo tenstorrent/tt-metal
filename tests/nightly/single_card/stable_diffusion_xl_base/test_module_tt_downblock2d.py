@@ -1,1 +1,1 @@
-../../../../models/experimental/stable_diffusion_xl_base/tests/pcc/test_module_tt_downblock2d.py
+../../../../models/demos/stable_diffusion_xl_base/tests/pcc/test_module_tt_downblock2d.py
