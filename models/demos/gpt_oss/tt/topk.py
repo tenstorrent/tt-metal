@@ -148,7 +148,12 @@ class TopKRouter:
         return expert_indices, expert_weights
 
     def _fused_call(self, hidden_states, use_throughput_experts):
-        """Forward pass using fused matmul+topk+softmax kernel."""
+        """Forward pass using fused matmul+topk+softmax kernel.
+
+        Note: Fused op only supports throughput experts (sparse [B,k] output).
+        """
+        assert use_throughput_experts, "Fused topk_router_gpt requires use_throughput_experts=True"
+
         # Typecast to bf16 if needed (fused op requires bf16 input)
         needs_typecast = hidden_states.dtype != ttnn.bfloat16
         if needs_typecast:
@@ -178,15 +183,4 @@ class TopKRouter:
         # Slice to the actual k columns.
         expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
         expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
-
-        if use_throughput_experts:
-            return expert_indices, expert_weights
-        else:
-            # Non-throughput: scatter weights to dense [B, num_experts] format
-            zeros = ttnn.zeros(
-                [B, self.num_experts],
-                dtype=ttnn.bfloat16,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            return expert_indices, ttnn.scatter(zeros, dim=1, index=expert_indices, src=expert_weights)
+        return expert_indices, expert_weights
