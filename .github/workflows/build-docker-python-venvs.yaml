@@ -21,12 +21,29 @@ on:
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
-        value: ${{ fromJson(inputs.platform-data).ci_build_venv_tag }}
+        value: ${{ jobs.metadata.outputs.ci_build_venv_tag }}
       ci-test-venv-tag:
         description: "Docker tag for ci-test venv image"
-        value: ${{ fromJson(inputs.platform-data).ci_test_venv_tag }}
+        value: ${{ jobs.metadata.outputs.ci_test_venv_tag }}
 
 jobs:
+  metadata:
+    name: "Venv metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
+      ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
+    steps:
+      - name: Extract venv tags
+        id: metadata
+        env:
+          PLATFORM_DATA: ${{ inputs.platform-data }}
+        run: |
+          set -euo pipefail
+          echo "$PLATFORM_DATA" | jq -e 'type == "object"' > /dev/null
+          echo "ci_build_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
+
   build:
     name: "🐍 Build missing venvs"
     if: |

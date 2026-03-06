@@ -34,25 +34,60 @@ on:
         description: "JSON from preflight containing all platform tags and existence flags"
     outputs:
       ci-build-tag:
-        value: ${{ fromJson(inputs.platform-data).ci_build_tag }}
+        value: ${{ jobs.metadata.outputs.ci_build_tag }}
       ci-test-tag:
-        value: ${{ fromJson(inputs.platform-data).ci_test_tag }}
+        value: ${{ jobs.metadata.outputs.ci_test_tag }}
       dev-tag:
-        value: ${{ fromJson(inputs.platform-data).dev_tag }}
+        value: ${{ jobs.metadata.outputs.dev_tag }}
       basic-dev-tag:
-        value: ${{ fromJson(inputs.platform-data).basic_dev_tag }}
+        value: ${{ jobs.metadata.outputs.basic_dev_tag }}
       basic-ttnn-runtime-tag:
-        value: ${{ fromJson(inputs.platform-data).basic_ttnn_tag }}
+        value: ${{ jobs.metadata.outputs.basic_ttnn_tag }}
       manylinux-tag:
-        value: ${{ fromJson(inputs.platform-data).manylinux_tag }}
+        value: ${{ jobs.metadata.outputs.manylinux_tag }}
       tool-tags:
-        value: ${{ inputs.tool-tags }}
+        value: ${{ jobs.metadata.outputs.tool_tags }}
       python-ci-build-venv-tag:
-        value: ${{ fromJson(inputs.platform-data).ci_build_venv_tag }}
+        value: ${{ jobs.metadata.outputs.ci_build_venv_tag }}
       python-ci-test-venv-tag:
-        value: ${{ fromJson(inputs.platform-data).ci_test_venv_tag }}
+        value: ${{ jobs.metadata.outputs.ci_test_venv_tag }}
 
 jobs:
+  metadata:
+    name: "Artifact metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      ci_build_tag: ${{ steps.metadata.outputs.ci_build_tag }}
+      ci_test_tag: ${{ steps.metadata.outputs.ci_test_tag }}
+      dev_tag: ${{ steps.metadata.outputs.dev_tag }}
+      basic_dev_tag: ${{ steps.metadata.outputs.basic_dev_tag }}
+      basic_ttnn_tag: ${{ steps.metadata.outputs.basic_ttnn_tag }}
+      manylinux_tag: ${{ steps.metadata.outputs.manylinux_tag }}
+      ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
+      ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
+      tool_tags: ${{ steps.metadata.outputs.tool_tags }}
+    steps:
+      - name: Extract workflow metadata
+        id: metadata
+        env:
+          PLATFORM_DATA: ${{ inputs.platform-data }}
+          TOOL_TAGS_INPUT: ${{ inputs.tool-tags }}
+        run: |
+          set -euo pipefail
+
+          echo "$PLATFORM_DATA" | jq -e 'type == "object"' > /dev/null
+          TOOL_TAGS=$(echo "$TOOL_TAGS_INPUT" | jq -ce '.')
+
+          echo "ci_build_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
+          echo "dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
+          echo "basic_dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')" >> "$GITHUB_OUTPUT"
+          echo "basic_ttnn_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')" >> "$GITHUB_OUTPUT"
+          echo "manylinux_tag=$(echo "$PLATFORM_DATA" | jq -r '.manylinux_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_build_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
+          echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
+
   # Build venv images if needed (required by main images)
   venvs:
     name: "🐍 Python venvs"
@@ -67,7 +102,7 @@ jobs:
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
   ubuntu:
     name: "🐳 Ubuntu images"
-    needs: [venvs]
+    needs: [metadata, venvs]
     if: |
       always() && !failure() && !cancelled() &&
       fromJson(inputs.platform-data).distro == 'ubuntu' &&
@@ -89,11 +124,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate tool tags input
+        env:
+          TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOOL_TAGS" ]; then
+            echo "::error::tool-tags input is empty"
+            exit 1
+          fi
+          if ! echo "$TOOL_TAGS" | jq -e 'type == "object"' > /dev/null; then
+            echo "::error::tool-tags input is empty or invalid JSON"
+            exit 1
+          fi
+          echo "tool-tags input validated successfully"
+
       - name: Prepare bake overrides
         id: bake
         env:
           PLATFORM_DATA: ${{ inputs.platform-data }}
-          TOOL_TAGS: ${{ inputs.tool-tags }}
+          TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
         run: |
           set -euo pipefail
 
@@ -176,6 +226,7 @@ jobs:
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
     name: "🐳 ManyLinux image"
+    needs: [metadata]
     if: |
       inputs.build-manylinux == true &&
       fromJson(inputs.platform-data).manylinux_exists != true
@@ -194,11 +245,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate tool tags input
+        env:
+          TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOOL_TAGS" ]; then
+            echo "::error::tool-tags input is empty"
+            exit 1
+          fi
+          if ! echo "$TOOL_TAGS" | jq -e 'type == "object"' > /dev/null; then
+            echo "::error::tool-tags input is empty or invalid JSON"
+            exit 1
+          fi
+          echo "tool-tags input validated successfully"
+
       - name: Prepare bake overrides
         id: bake
         env:
           PLATFORM_DATA: ${{ inputs.platform-data }}
-          TOOL_TAGS: ${{ inputs.tool-tags }}
+          TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
         run: |
           set -euo pipefail
 

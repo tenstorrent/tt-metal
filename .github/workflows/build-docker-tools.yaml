@@ -20,10 +20,25 @@ on:
         description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
     outputs:
       tool-tags:
-        description: "JSON object containing all tool image tags"
-        value: ${{ fromJson(inputs.tool-data).tool_tags }}
+        description: "Compact JSON string containing all tool image tags"
+        value: ${{ jobs.metadata.outputs.tool_tags }}
 
 jobs:
+  metadata:
+    name: "Tool metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      tool_tags: ${{ steps.metadata.outputs.tool_tags }}
+    steps:
+      - name: Extract tool tags JSON
+        id: metadata
+        env:
+          TOOL_DATA: ${{ inputs.tool-data }}
+        run: |
+          set -euo pipefail
+          TOOL_TAGS=$(echo "$TOOL_DATA" | jq -ce '.tool_tags')
+          echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
+
   build:
     name: "🔧 Build missing tools"
     if: fromJson(inputs.tool-data).any_missing == true
