@@ -26,7 +26,7 @@ void kernel_main() {
     // Generate helper tiles once at the start
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
 
-#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
+#ifdef CAUSAL_MASK
     // Generate causal mask tile ONCE - will be reused for every diagonal
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
     generate_causal_mask_tile(cb_attn_mask);
