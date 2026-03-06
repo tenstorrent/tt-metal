@@ -330,7 +330,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
 // Quasar has only 1 NOC -- dynamic NOC is not supported.
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
@@ -460,7 +460,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
@@ -470,7 +470,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
@@ -480,7 +480,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
@@ -500,7 +500,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
@@ -552,7 +552,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 
 template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_init() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 // set noc local memory state for a single kernel from the global state
@@ -574,12 +574,12 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
 template <NocBarrierType barrier_type, uint32_t status_register, typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
@@ -1608,7 +1608,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS, typename T = void>
 inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <bool write, bool posted>
