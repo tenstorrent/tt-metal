@@ -31,6 +31,7 @@ namespace experimental {
 
 size_t GetNumAvailableDevices(const std::shared_ptr<MetaliumEnv>& env);
 
+size_t GetNumPCIeDevices(const std::shared_ptr<MetaliumEnv>& env);
 }
 
 namespace experimental::quasar {

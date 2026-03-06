@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <numeric>
+#include <cstring>
 
 // Prefer to use API rather than internals in this
 // test as we are testing end to end functionality
@@ -18,12 +20,125 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 
 #include <umd/device/types/arch.hpp>
 #include "device/mock_device_util.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+
+constexpr int kExitBadContextId = 1;
+constexpr int kExitBadNumDevices = 2;
+constexpr int kExitBadMeshSize = 3;
+constexpr int kExitWorkFailed = 5;
+constexpr int kExitBufferVerificationFailed = 10;
+
+// Helper function to perform buffer operations and kernel launch on a MeshDevice.
+// Uses a sharded MeshBuffer so this works on both single- and multi-device meshes.
+void PerformDeviceWork(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t data_pattern,
+    const std::string& process_name,
+    const std::string& kernel_identifier) {
+    constexpr uint32_t kElementsPerShard = 1024;
+    constexpr uint32_t kShardSize = kElementsPerShard * sizeof(uint32_t);
+
+    const size_t num_rows = mesh_device->num_rows();
+    const size_t num_cols = mesh_device->num_cols();
+    const size_t num_devices = mesh_device->num_devices();
+
+    distributed::ShardedBufferConfig buffer_config{
+        .global_size = kShardSize * num_devices,
+        .global_buffer_shape = {kElementsPerShard * num_rows, num_cols},
+        .shard_shape = {kElementsPerShard, 1},
+        .shard_orientation = ShardOrientation::ROW_MAJOR,
+    };
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = kShardSize,
+        .buffer_type = BufferType::DRAM,
+    };
+    auto mesh_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+
+    std::vector<uint32_t> write_data(kElementsPerShard * num_devices);
+    std::iota(write_data.begin(), write_data.end(), data_pattern);
+
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(mesh_cq, mesh_buffer, write_data, false);
+
+    std::vector<uint32_t> read_data;
+    distributed::EnqueueReadMeshBuffer(mesh_cq, read_data, mesh_buffer, true);
+
+    if (read_data != write_data) {
+        throw std::runtime_error("Buffer read/write verification failed");
+    }
+
+    auto program = CreateProgram();
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    auto core_grid = mesh_device->compute_with_storage_grid_size();
+    auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+
+    std::string kernel_src = "void kernel_main() {\n    // " + kernel_identifier + "\n}";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        core_range,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_cq, workload, true);
+
+    log_info(tt::LogTest, "{}: Successfully completed buffer ops and kernel launch", process_name);
+}
+
+[[noreturn]] void RunChildWithVisibleDevices(
+    const std::string& visible_devices,
+    size_t expected_num_chips,
+    uint32_t data_pattern,
+    const std::string& child_name) {
+    setenv("TT_VISIBLE_DEVICES", visible_devices.c_str(), 1);
+
+    auto child_env = std::make_shared<MetaliumEnv>();
+    int child_context_id = tt::tt_metal::experimental::CreateContext(child_env);
+    if (child_context_id != SILICON_CONTEXT_ID) {
+        _exit(kExitBadContextId);
+    }
+
+    auto child_num_devices = tt::tt_metal::experimental::GetNumAvailableDevices(child_env);
+    log_info(tt::LogTest, "{}: TT_VISIBLE_DEVICES={}, num_devices={}", child_name, visible_devices, child_num_devices);
+    if (child_num_devices != expected_num_chips) {
+        _exit(kExitBadNumDevices);
+    }
+
+    auto child_mesh_shape = MetalContext::instance(child_context_id).get_system_mesh().shape();
+    auto child_mesh_device =
+        distributed::MeshDevice::create(child_context_id, distributed::MeshDeviceConfig(child_mesh_shape));
+    if (child_mesh_device->num_devices() != expected_num_chips) {
+        _exit(kExitBadMeshSize);
+    }
+    log_info(tt::LogTest, "{}: opened MeshDevice with {} device(s)", child_name, child_mesh_device->num_devices());
+
+    try {
+        PerformDeviceWork(child_mesh_device, data_pattern, child_name, child_name + " kernel");
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "{}: Work failed: {}", child_name, e.what());
+        if (std::string(e.what()).find("Buffer read/write verification failed") != std::string::npos) {
+            _exit(kExitBufferVerificationFailed);
+        }
+        _exit(kExitWorkFailed);
+    }
+
+    _exit(0);
+}
+
+}  // namespace
 
 TEST(MetalContextIntegrationTest, HelloWorld) {
     auto mesh_shape = tt_metal::distributed::SystemMesh::instance().shape();
@@ -247,7 +362,6 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
     }
 
     if (pid == 0) {
-        // Child: create and verify a mock mesh device
         close(pipe_fd[1]);
 
         auto mock_env = std::make_shared<MetaliumEnv>(
@@ -309,5 +423,78 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
     silicon_mesh_device.reset();
     tt::tt_metal::experimental::DestroyAllContexts();
 }
+
+TEST(MetalContextIntegrationTest, ForkWithDisjointDevices) {
+    size_t num_mmio_devices = 0;
+    size_t num_available_devices = 0;
+    {
+        auto env = std::make_shared<MetaliumEnv>();
+        auto context_id = tt::tt_metal::experimental::CreateContext(env);
+        EXPECT_EQ(context_id, SILICON_CONTEXT_ID);
+        num_mmio_devices = tt::tt_metal::experimental::GetNumPCIeDevices(env);
+        num_available_devices = tt::tt_metal::experimental::GetNumAvailableDevices(env);
+        log_info(tt::LogTest, "System has {} PCIe devices, {} total chips", num_mmio_devices, num_available_devices);
+    }
+    tt::tt_metal::experimental::DestroyAllContexts();
+
+    if (num_mmio_devices < 2) {
+        GTEST_SKIP() << "ForkWithDisjointDevices requires at least 2 MMIO devices, found " << num_mmio_devices;
+    }
+
+    // Split PCIe devices into two halves
+    size_t half = num_mmio_devices / 2;
+    std::string first_half_devices;
+    std::string second_half_devices;
+    for (size_t i = 0; i < num_mmio_devices; i++) {
+        auto& target = (i < half) ? first_half_devices : second_half_devices;
+        if (!target.empty()) {
+            target += ",";
+        }
+        target += std::to_string(i);
+    }
+    size_t chips_per_pcie_device = num_available_devices / num_mmio_devices;
+    size_t expected_chips_first_half = half * chips_per_pcie_device;
+    size_t expected_chips_second_half = (num_mmio_devices - half) * chips_per_pcie_device;
+    log_info(
+        tt::LogTest,
+        "Splitting: child 1 gets PCIe devices [{}] ({} chips), child 2 gets [{}] ({} chips)",
+        first_half_devices,
+        expected_chips_first_half,
+        second_half_devices,
+        expected_chips_second_half);
+
+    pid_t pid1 = fork();
+    if (pid1 == -1) {
+        FAIL() << "Failed to fork first child";
+    }
+    if (pid1 == 0) {
+        RunChildWithVisibleDevices(first_half_devices, expected_chips_first_half, 0x12340000, "Child 1");
+    }
+
+    pid_t pid2 = fork();
+    if (pid2 == -1) {
+        FAIL() << "Failed to fork second child";
+    }
+    if (pid2 == 0) {
+        RunChildWithVisibleDevices(second_half_devices, expected_chips_second_half, 0x56780000, "Child 2");
+    }
+
+    auto wait_for_child = [](pid_t pid, const std::string& name) {
+        int status = 0;
+        ASSERT_EQ(waitpid(pid, &status, 0), pid);
+        ASSERT_TRUE(WIFEXITED(status));
+        EXPECT_EQ(WEXITSTATUS(status), 0)
+            << name << " exited with code " << WEXITSTATUS(status) << " (" << kExitBadContextId << "=context_id"
+            << ", " << kExitBadNumDevices << "=num_devices"
+            << ", " << kExitBadMeshSize << "=mesh_size"
+            << ", " << kExitWorkFailed << "=work_failed"
+            << ", " << kExitBufferVerificationFailed << "=buffer_verification)";
+    };
+
+    wait_for_child(pid1, "Child 1");
+    wait_for_child(pid2, "Child 2");
+}
+
+TEST(MetalContextIntegrationTest, OpenTwoMeshDevicesWithSystemMesh) {}
 
 }  // namespace tt::tt_metal

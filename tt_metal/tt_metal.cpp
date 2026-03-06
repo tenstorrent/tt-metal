@@ -1587,6 +1587,10 @@ size_t GetNumAvailableDevices(const std::shared_ptr<MetaliumEnv>& env) {
     return MetaliumEnvAccessor(*env).get_cluster().number_of_user_devices();
 }
 
+size_t GetNumPCIeDevices(const std::shared_ptr<MetaliumEnv>& env) {
+    return MetaliumEnvAccessor(*env).get_cluster().number_of_pci_devices();
+}
+
 namespace detail {
 
 std::map<ChipId, IDevice*> CreateDevices(
