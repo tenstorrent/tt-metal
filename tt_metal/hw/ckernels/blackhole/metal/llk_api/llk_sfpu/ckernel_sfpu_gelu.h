@@ -28,26 +28,19 @@ namespace sfpu {
 //   2.78125 is the exact BF16 boundary (0x4032) where GELU first rounds to identity
 // =============================================================================
 
-// Degree-16 CDF polynomial for Phi(x) over [-3, 3]
+// Degree-15 CDF polynomial for Phi(x) over [-3, 3]
 // Phi(x) is an even function offset by 0.5: Phi(x) = 0.5 + odd_function(x)
-// So even-degree coefficients (c2, c4, ...) are effectively zero
+// Only odd-power coefficients are non-zero; evaluated via u=x^2 factoring
+// to avoid wasting SFPU cycles on zero even-power coefficients.
 constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
 constexpr float GELU_CDF_CORE_C1 = 3.989383512e-01f;
-constexpr float GELU_CDF_CORE_C2 = 0.0f;
 constexpr float GELU_CDF_CORE_C3 = -6.646870751e-02f;
-constexpr float GELU_CDF_CORE_C4 = 0.0f;
 constexpr float GELU_CDF_CORE_C5 = 9.938328774e-03f;
-constexpr float GELU_CDF_CORE_C6 = 0.0f;
 constexpr float GELU_CDF_CORE_C7 = -1.161210602e-03f;
-constexpr float GELU_CDF_CORE_C8 = 0.0f;
 constexpr float GELU_CDF_CORE_C9 = 1.049019822e-04f;
-constexpr float GELU_CDF_CORE_C10 = 0.0f;
 constexpr float GELU_CDF_CORE_C11 = -6.925923839e-06f;
-constexpr float GELU_CDF_CORE_C12 = 0.0f;
 constexpr float GELU_CDF_CORE_C13 = 2.924021994e-07f;
-constexpr float GELU_CDF_CORE_C14 = 0.0f;
 constexpr float GELU_CDF_CORE_C15 = -5.785760528e-09f;
-constexpr float GELU_CDF_CORE_C16 = 0.0f;
 
 // Degree-8 SHIFTED CDF polynomial for Phi(x) over [-5, -3]
 // Evaluate p(t) where t = x + 4, so t in [-1, 1] for x in [-5, -3]
@@ -72,26 +65,21 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     // (BF16 0x4032). Verified by exhaustive sweep with fp64 golden reference.
     v_if(x >= 2.78125f) { result = x; }
     // Core CDF region [-3, 2.78125): GELU(x) = x * Phi_core(x)
+    // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ...)))
+    // Factored via u=x^2 to eliminate zero even-power coefficients (47% fewer SFPU ops)
     v_elseif(x >= -3.0f) {
-        sfpi::vFloat phi = PolynomialEvaluator::eval(
-            x,
-            GELU_CDF_CORE_C0,
+        sfpi::vFloat u = x * x;
+        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
+            u,
             GELU_CDF_CORE_C1,
-            GELU_CDF_CORE_C2,
             GELU_CDF_CORE_C3,
-            GELU_CDF_CORE_C4,
             GELU_CDF_CORE_C5,
-            GELU_CDF_CORE_C6,
             GELU_CDF_CORE_C7,
-            GELU_CDF_CORE_C8,
             GELU_CDF_CORE_C9,
-            GELU_CDF_CORE_C10,
             GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C12,
             GELU_CDF_CORE_C13,
-            GELU_CDF_CORE_C14,
-            GELU_CDF_CORE_C15,
-            GELU_CDF_CORE_C16);
+            GELU_CDF_CORE_C15);
+        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
     }
     // Left CDF region [-5, -3): GELU(x) = x * Phi_left(x+4)
