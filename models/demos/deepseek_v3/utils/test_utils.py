@@ -687,8 +687,15 @@ def get_test_weight_config(
     else:
         weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
     per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
+    dtype_tag = ModuleClass.get_dtype_tag(hf_config)
     return get_weight_config(
-        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+        ModuleClass,
+        hf_config,
+        state_dicts,
+        per_test_weight_cache_path,
+        mesh_device,
+        force_recalculate,
+        dtype_tag=dtype_tag,
     )
 
 

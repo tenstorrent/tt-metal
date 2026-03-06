@@ -51,6 +51,9 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
+# Weight dtype used for KV-B projection matrices, referenced by RowBatchedModel.get_dtype_tag
+WKV_B_WEIGHT_DTYPE = ttnn.bfloat8_b
+
 
 def pad_n_to_dram_banks(n, tile_size=32, num_dram_banks=12):
     """Pad n dimension to be divisible by tile_size * num_dram_banks (default 32 and 12 respectively)."""
@@ -428,7 +431,7 @@ class MLA1D(AbstractModule):
             torch_metaweight.transpose(-2, -1),
             shard_dims=dims,
             mesh_device=mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=WKV_B_WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
             memory_config=memory_config,
             padding_needed=padding_needed,

@@ -18,6 +18,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
+# Key used to store cache-level metadata in config.json.  This entry is
+# never a weight and must be skipped by path-validation and normalization.
+_META_KEY = "_meta"
+
 
 @contextmanager
 def locked_file(file_path: Path, mode: str = "r", exclusive: bool = False):
@@ -102,7 +106,24 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
         return None
 
     logger.info(f"Using weights cached at {weight_cache_path}")
-    return normalize_weight_config_paths(weight_cache_path, weight_config)
+    normalized = normalize_weight_config_paths(weight_cache_path, weight_config)
+    # Strip _meta — it is only stored on disk for discoverability and must not
+    # be exposed to callers (it would break create_run_config merging).
+    if isinstance(normalized, dict):
+        normalized = {k: v for k, v in normalized.items() if k != _META_KEY}
+    return normalized
+
+
+def _load_raw_weight_config(config_path: Path) -> WeightConfig | None:
+    """Load a config.json without validating or normalising paths.
+
+    Returns the raw parsed config (SavedWeights with relative paths) or
+    ``None`` if the file does not exist.
+    """
+    if not config_path.exists():
+        return None
+    with locked_file(config_path, "r", exclusive=False) as f:
+        return json.load(f, object_hook=try_decode_saved_weight)
 
 
 def get_weight_config(
@@ -115,20 +136,32 @@ def get_weight_config(
     random_weights: bool = False,
     model_path: str | None = None,
     single_layer: str | None = None,
+    dtype_tag: str | None = None,
 ):
     """
     Get weight configuration, either from cache or by converting weights.
+
+    When ``dtype_tag`` is provided (non-None) an **accumulating** cache is used.
+    The cache lives at ``{weight_cache_path}/mesh_{R}x{C}/{dtype_tag}/`` — there is
+    no ``{N}_layers/`` component.  A single ``config.json`` grows over time: if a
+    previous run cached 5 layers and the caller now needs 10, the loader reuses the
+    existing 5 and converts only the missing 5, then saves a 10-layer config.
+    Conversely, if 10 layers are cached and only 5 are needed, the config is sliced
+    in-memory and no conversion happens.
 
     Args:
         ModuleClass: The module class to convert weights for
         hf_config: HuggingFace model configuration
         state_dicts: Optional pre-loaded state dicts. If None, will be loaded based on random_weights/model_path.
-        weight_cache_path: Path to cache weights
+        weight_cache_path: Base path to cache weights (before mesh/dtype subdirs are appended)
         mesh_device: TTNN mesh device
-        force_recalculate: Force recalculation even if cached weights exist
+        force_recalculate: Force full recalculation even if cached weights exist
         random_weights: If True, generate random weights from reference model
         model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
         single_layer: Optional single layer name (used for validation with random weights)
+        dtype_tag: String identifying the weight data formats used (auto-derived from
+            ``ModuleClass.get_dtype_tag``).  When non-None the accumulating cache is used;
+            when None the legacy ``{N}_layers/mesh_{R}x{C}/`` layout is used unchanged.
 
     Returns:
         Weight configuration dictionary
@@ -138,49 +171,123 @@ def get_weight_config(
     if mesh_device is None:
         raise ValueError("mesh_device must be provided")
 
-    weight_cache_path = (
-        weight_cache_path
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    )
-    config_path = weight_cache_path / "config.json"
+    mesh_dir_name = f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    n = hf_config.num_hidden_layers
 
-    # Try to load from cache
-    cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
-    if cached_config is not None:
-        return cached_config
+    if dtype_tag is not None:
+        # Accumulating cache layout: no {N}_layers/ component.
+        # mesh_cache_path is the root for resolving relative weight paths
+        # (config_helpers.py anchors path stripping at "mesh_").
+        mesh_cache_path = weight_cache_path / mesh_dir_name
+        dtype_cache_path = mesh_cache_path / dtype_tag
+        config_path = dtype_cache_path / "config.json"
 
-    # Cache miss - need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
-    if state_dicts is None:
-        logger.info("State dict was not provided, preparing from random weights or model path")
-        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+        # Load whatever is already on disk (raw, unvalidated).
+        existing_config = None if force_recalculate else _load_raw_weight_config(config_path)
 
-        model_state = prepare_model_state_dict(
-            hf_config=hf_config,
-            random_weights=random_weights,
-            model_path=model_path,
-            single_layer=single_layer,
+        if existing_config is not None:
+            num_cached = ModuleClass.get_num_cached_layers(existing_config)
+            if num_cached >= n:
+                # Enough layers cached — validate, slice, and return without any conversion.
+                try:
+                    validate_weight_config_paths(mesh_cache_path, existing_config)
+                except ValueError as e:
+                    logger.warning(f"Cache validation failed, will recalculate weights: {e}")
+                    existing_config = None
+                else:
+                    sliced = ModuleClass.slice_weight_config(existing_config, hf_config)
+                    if sliced is None:
+                        sliced = existing_config
+                    logger.info(
+                        f"Using {num_cached}-layer cache at {dtype_cache_path} "
+                        f"(need {n} layers, dtype_tag={dtype_tag})"
+                    )
+                    return normalize_weight_config_paths(
+                        mesh_cache_path, {k: v for k, v in sliced.items() if k != _META_KEY}
+                    )
+            else:
+                logger.info(
+                    f"Cache has {num_cached} layers but {n} are needed — augmenting " f"(dtype_tag={dtype_tag})"
+                )
+        elif force_recalculate:
+            logger.info("Forcing recalculating weights")
+        else:
+            logger.info(f"No cache found at {config_path}, converting weights")
+
+        # Need to produce (more) weights — prepare state dicts if not supplied.
+        if state_dicts is None:
+            logger.info("State dict was not provided, preparing from random weights or model path")
+            from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+            model_state = prepare_model_state_dict(
+                hf_config=hf_config,
+                random_weights=random_weights,
+                model_path=model_path,
+                single_layer=single_layer,
+            )
+            state_dicts = (model_state,)
+
+        # Augment: reuse existing layers and convert only the missing ones.
+        # When existing_config is None this is equivalent to a full conversion.
+        logger.info(f"Writing weights to {dtype_cache_path}")
+        weight_config = ModuleClass.augment_weight_config(
+            hf_config, state_dicts, existing_config, dtype_cache_path, mesh_device
         )
-        state_dicts = (model_state,)
 
-    # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
+        validate_weight_config_paths(mesh_cache_path, weight_config)
 
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+        num_saved = ModuleClass.get_num_cached_layers(weight_config)
+        config_to_save = {
+            _META_KEY: {
+                "num_cached_layers": num_saved,
+                "dtype_tag": dtype_tag,
+                "mesh": mesh_dir_name,
+            },
+            **weight_config,
+        }
+        with locked_file(config_path, "w", exclusive=True) as f:
+            json.dump(config_to_save, f, cls=WeightConfigEncoder)
 
-    # Validate the converted weight config
-    validate_weight_config_paths(weight_cache_path, weight_config)
+        sliced = ModuleClass.slice_weight_config(weight_config, hf_config)
+        if sliced is None:
+            sliced = weight_config
+        logger.info("Done converting weights to TTNN SavedWeight format")
+        return normalize_weight_config_paths(mesh_cache_path, sliced)
 
-    # Save config with relative paths for portability
-    # Use exclusive lock to prevent concurrent writes and corruption
-    with locked_file(config_path, "w", exclusive=True) as f:
-        json.dump(weight_config, f, cls=WeightConfigEncoder)
+    else:
+        # Legacy layout: {N}_layers/mesh_{R}x{C}/config.json — exact match only.
+        layers_dir_name = f"{n}_layers"
+        mesh_cache_path = weight_cache_path / layers_dir_name / mesh_dir_name
+        dtype_cache_path = mesh_cache_path
+        config_path = mesh_cache_path / "config.json"
 
-    # Return normalized config with absolute paths for runtime use
-    normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
-    logger.info("Done converting weights to TTNN SavedWeight format")
-    return normalized_config
+        cached_config = _try_load_cached_config(config_path, mesh_cache_path, force_recalculate)
+        if cached_config is not None:
+            return cached_config
+
+        if state_dicts is None:
+            logger.info("State dict was not provided, preparing from random weights or model path")
+            from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+            model_state = prepare_model_state_dict(
+                hf_config=hf_config,
+                random_weights=random_weights,
+                model_path=model_path,
+                single_layer=single_layer,
+            )
+            state_dicts = (model_state,)
+
+        logger.info(f"Caching weights at {dtype_cache_path}")
+        logger.info("Converting weights to TTNN SavedWeight format...")
+        weight_config = ModuleClass.convert_weights(hf_config, state_dicts, dtype_cache_path, mesh_device)
+
+        validate_weight_config_paths(mesh_cache_path, weight_config)
+
+        with locked_file(config_path, "w", exclusive=True) as f:
+            json.dump(weight_config, f, cls=WeightConfigEncoder)
+
+        logger.info("Done converting weights to TTNN SavedWeight format")
+        return normalize_weight_config_paths(mesh_cache_path, weight_config)
 
 
 def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, path_prefix: str = "") -> None:
@@ -203,6 +310,8 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
         raise ValueError(f"Invalid weight config type: {type(weight_config)}")
 
     for key, entry in entries:
+        if key == _META_KEY:
+            continue
         if entry is None:
             continue
         current_prefix = f"{path_prefix}.{key}" if path_prefix else str(key)
@@ -249,7 +358,9 @@ def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) 
     """
     if isinstance(weight_config, dict):
         return {
-            key: normalize_weight_config_paths(root_path, value) if value is not None else None
+            key: value
+            if key == _META_KEY
+            else (normalize_weight_config_paths(root_path, value) if value is not None else None)
             for key, value in weight_config.items()
         }
     elif isinstance(weight_config, (list, tuple)):

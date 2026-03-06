@@ -32,6 +32,9 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 
+# Weight dtype for LM head matrix, referenced by RowBatchedModel.get_dtype_tag
+LM_HEAD_WEIGHT_DTYPE = ttnn.bfloat4_b
+
 
 class LMHead1D(AbstractModule):
     """TT implementation of Language model head for Deepseek V3."""
@@ -74,7 +77,7 @@ class LMHead1D(AbstractModule):
                     weight_tensor,
                     shard_dims=(None, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=LM_HEAD_WEIGHT_DTYPE,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )

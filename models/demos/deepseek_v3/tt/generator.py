@@ -234,6 +234,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             random_weights=self.random_weights,
             model_path=self.model_path,
             single_layer=self.single_layer,
+            dtype_tag=RowBatchedModel.get_dtype_tag(self.hf_config),
         )
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:

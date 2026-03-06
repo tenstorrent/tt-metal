@@ -26,6 +26,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 
+# Weight dtypes for expert FFN matrices, referenced by RowBatchedModel.get_dtype_tag
+EXPERT_UP_WEIGHT_DTYPE = ttnn.bfloat8_b
+EXPERT_DOWN_WEIGHT_DTYPE = ttnn.bfloat4_b
+
 
 class Experts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
@@ -73,7 +77,7 @@ class Experts(AbstractModule):
                     .transpose(-1, -2),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,
+                    dtype=EXPERT_UP_WEIGHT_DTYPE if hf_name == "up_proj" else EXPERT_DOWN_WEIGHT_DTYPE,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
