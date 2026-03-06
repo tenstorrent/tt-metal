@@ -48,42 +48,6 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
 
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
-    if (not detail::is_block_format(input.dtype())) {
-        return false;
-    }
-
-    using enum BinaryOpType;
-
-    return op != ADD and op != SUB and op != MUL;
-}
-
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[maybe_unused]] float other) {
-    return detail::needs_typecast_to_bfloat16(op, input);
-}
-
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, const Tensor& other) {
-    if (not detail::is_block_format(input.dtype())) {
-        return false;
-    }
-
-    using enum BinaryOpType;
-
-    if (op != ADD and op != SUB and op != MUL) {
-        return true;
-    }
-
-    const auto& input_shape = input.logical_shape();
-    const auto& other_shape = other.logical_shape();
-
-    return (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1);
-}
-
-inline bool needs_typecast_to_bfloat16(
-    [[maybe_unused]] BinaryOpType op, [[maybe_unused]] float input, [[maybe_unused]] const Tensor& other) {
-    return false;
-}
-
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
@@ -232,7 +196,8 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
             return true;
         }
     }
-    return false;
+    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return true now
+    return true;
 }
 
 }  // namespace detail
@@ -242,22 +207,22 @@ bool is_legacy_only(
     const auto& rhs,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
+    [[maybe_unused]] tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    [[maybe_unused]] tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
     if (detail::any_sharded_block_format(lhs, rhs) or detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
-        TT_FATAL(
-            lhs_activations.size() <= 1,
-            "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
-            "but note there may be issues");
-        TT_FATAL(
-            rhs_activations.empty(),
-            "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
-            "there may be issues");
-        return true;
+        // TT_FATAL(
+        //     lhs_activations.size() <= 1,
+        //     "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
+        //     "but note there may be issues");
+        // TT_FATAL(
+        //     rhs_activations.empty(),
+        //     "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
+        //     "there may be issues");
+        // return true;
     }
-
+    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return false now
     return false;
 }
 
@@ -337,73 +302,46 @@ inline auto invoke_binary_ng(
     }
     const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
 
-    const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
-
     if (dtype.has_value() && output_preallocated) {
         TT_FATAL(*dtype == out_dtype, "If both output dtype and output tensor are provided, their dtypes should match");
     }
 
-    const auto typecast_a = detail::needs_typecast_to_bfloat16(binary_op_type, lhs, rhs);
-    const auto typecast_b = detail::needs_typecast_to_bfloat16(binary_op_type, rhs, lhs);
-    const auto typecast_out = detail::is_block_format(out_dtype);
-
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
-    if (not typecast_a and not typecast_b) {
-        const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
-        const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
-        const auto input_a = detail::to_layout(lhs, Layout::TILE);
-        const auto input_b = detail::to_layout(rhs, Layout::TILE);
+    const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
+    const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
 
-        if (input_a_rm and input_b_rm) {
-            // we don't support to_layout with optional output tensor
-            TT_FATAL(
-                !output_preallocated,
-                "Optional output tensor with Row Major input is not supported right now for Elementwise "
-                "operations");
-        }
-
-        auto result = ttnn::prim::binary_ng(
-            input_a,
-            input_b,
-            binary_op_type,
-            out_dtype,
-            memory_config,
-            output,
-            fast_and_approximate_mode,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            std::nullopt,
-            sub_core_grids);
-
-        // if both inputs are in row major, convert the output to row major
-        // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-        // since it leads to better perf
-        if (input_a_rm and input_b_rm) {
-            return detail::to_layout(result, Layout::ROW_MAJOR);
-        }
-
-        return result;
+    if (input_a_rm and input_b_rm) {
+        // we don't support to_layout with optional output tensor
+        TT_FATAL(
+            !output_preallocated,
+            "Optional output tensor with Row Major input is not supported right now for Elementwise "
+            "operations");
     }
-    const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
-    const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
-    const auto output_tensor =
-        output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
+    const auto input_a = detail::to_layout(lhs, Layout::TILE);
+    const auto input_b = detail::to_layout(rhs, Layout::TILE);
 
-    Tensor result = ttnn::prim::binary_ng(
+    auto result = ttnn::prim::binary_ng(
         input_a,
         input_b,
         binary_op_type,
-        input_a.dtype(),
+        out_dtype,
         memory_config,
-        output_tensor,
+        output,
         fast_and_approximate_mode,
         lhs_activations,
         rhs_activations,
         post_activations,
         std::nullopt,
         sub_core_grids);
-    return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
+
+    // if both inputs are in row major, convert the output to row major
+    // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+    // since it leads to better perf
+    if (input_a_rm and input_b_rm) {
+        return detail::to_layout(result, Layout::ROW_MAJOR);
+    }
+
+    return result;
 }
 }  // namespace detail
 
