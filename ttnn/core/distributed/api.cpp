@@ -86,14 +86,6 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     return {tensor};
 }
 
-Tensor get_single_device_tensor_at_coord(
-    const Tensor& tensor, const MeshCoordinate& coord, tt::tt_metal::TensorTopology tensor_topology) {
-    TT_FATAL(is_device_tensor(tensor), "Expected device tensor, got {}", tensor.storage_type());
-    const auto& device_storage = tensor.device_storage();
-    return Tensor(
-        device_storage.reduce_to_single_device_storage(coord), tensor.tensor_spec(), std::move(tensor_topology));
-}
-
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {
     TT_FATAL(tensor_shards.size() == mesh_shape.mesh_size(), "Number of tensor shards must match mesh size");
     const auto& reference_shard = tensor_shards.at(0);
