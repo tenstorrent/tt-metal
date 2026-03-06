@@ -224,6 +224,8 @@ class PipelineBlock:
 
     # Returns sender socket feeding exit node
     def get_upstream_socket(self):
+        if self.my_mesh_id == self.num_procs - 1:
+            return self.host_io.get_upstream_socket()
         return self.exit_socket_interface.get_upstream_socket()
 
     # Returns receiver socket draining entry node

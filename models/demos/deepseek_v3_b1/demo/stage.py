@@ -105,6 +105,8 @@ class PassthroughStage(StageKind):
             downstream_d2d_socket_fifo_size=down_fifo,
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
+            d2h_socket_fifo_size=down_fifo,
+            d2h_socket_page_size=down_page,
         )
 
 
