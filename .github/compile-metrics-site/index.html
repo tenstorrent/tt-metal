@@ -17,7 +17,34 @@
             color: #1a1a2e;
         }
         h1 { margin-bottom: 4px; }
-        .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 16px; }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .toolbar label { font-size: 13px; color: #555; font-weight: 600; }
+        .toolbar select {
+            padding: 6px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            background: #fff;
+            font-size: 14px;
+            color: #1a1a2e;
+            cursor: pointer;
+        }
+        .toolbar select:focus { outline: 2px solid #7C3AED; outline-offset: 1px; }
+        .no-data {
+            display: none;
+            text-align: center;
+            padding: 48px;
+            color: #888;
+            font-size: 15px;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
         .chart-container {
             background: #fff;
             border-radius: 12px;
@@ -45,10 +72,17 @@
 <body>
     <h1>&#x1f527; TT-Metal Compile Time Tracker</h1>
     <p class="subtitle">
-        Full compilation &mdash; no PCH, no Unity builds, no ccache, 32 cores
+        Full compilation &mdash; no PCH, no Unity builds, no ccache, 16 cores
         &bull; Ubuntu 24.04 &bull; Clang 20 &bull; Release
     </p>
-    <div class="chart-container">
+
+    <div class="toolbar">
+        <label for="branch-filter">Branch:</label>
+        <select id="branch-filter"></select>
+    </div>
+
+    <div class="no-data" id="no-data">No data for this branch yet.</div>
+    <div class="chart-container" id="chart-container">
         <canvas id="chart"></canvas>
     </div>
     <div class="stats">
@@ -58,6 +92,7 @@
         <div class="stat"><div class="label">&Delta; CPU</div><div class="value" id="delta-cpu">&mdash;</div></div>
         <div class="stat"><div class="label">Samples</div><div class="value" id="count">&mdash;</div></div>
     </div>
+
     <script>
         function fmt(s) {
             var m = Math.floor(s / 60);
@@ -70,11 +105,131 @@
             el.textContent = sign + diff + 's';
             el.className = 'value ' + (diff > 0 ? 'delta-pos' : diff < 0 ? 'delta-neg' : '');
         }
+        function resetStat(elId, extraClass) {
+            var el = document.getElementById(elId);
+            el.textContent = '\u2014';
+            el.className = 'value' + (extraClass ? ' ' + extraClass : '');
+        }
+
+        var chartInstance = null;
+        var allData = [];
+
+        function render(branch) {
+            var data = allData.filter(function (d) { return d.branch === branch; });
+
+            var noDataEl = document.getElementById('no-data');
+            var containerEl = document.getElementById('chart-container');
+
+            if (data.length === 0) {
+                noDataEl.style.display = 'block';
+                containerEl.style.display = 'none';
+                resetStat('latest-wall');
+                resetStat('delta-wall');
+                resetStat('latest-cpu', 'cpu');
+                resetStat('delta-cpu');
+                document.getElementById('count').textContent = '0';
+                return;
+            }
+            noDataEl.style.display = 'none';
+            containerEl.style.display = 'block';
+
+            var last = data[data.length - 1];
+            document.getElementById('latest-wall').textContent = fmt(last.wall);
+            document.getElementById('latest-cpu').textContent = fmt(last.cpu);
+            document.getElementById('count').textContent = data.length;
+
+            if (data.length >= 2) {
+                var prev = data[data.length - 2];
+                setDelta('delta-wall', last.wall, prev.wall);
+                setDelta('delta-cpu', last.cpu, prev.cpu);
+            } else {
+                resetStat('delta-wall');
+                resetStat('delta-cpu');
+            }
+
+            if (chartInstance) {
+                chartInstance.destroy();
+                chartInstance = null;
+            }
+
+            chartInstance = new Chart(document.getElementById('chart'), {
+                type: 'line',
+                data: {
+                    labels: data.map(function (d) { return d.date; }),
+                    datasets: [
+                        {
+                            label: 'Wall Time (s)',
+                            data: data.map(function (d) { return d.wall; }),
+                            borderColor: '#7C3AED',
+                            backgroundColor: 'rgba(124, 58, 237, 0.08)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4,
+                            pointHoverRadius: 7,
+                            yAxisID: 'y-wall'
+                        },
+                        {
+                            label: 'CPU Time (s)',
+                            data: data.map(function (d) { return d.cpu; }),
+                            borderColor: '#0891b2',
+                            backgroundColor: 'rgba(8, 145, 178, 0.08)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4,
+                            pointHoverRadius: 7,
+                            yAxisID: 'y-cpu'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                afterBody: function (ctx) {
+                                    var d = data[ctx[0].dataIndex];
+                                    return 'SHA: ' + d.sha + '  Branch: ' + d.branch;
+                                }
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Compilation Time — ' + branch,
+                            font: { size: 18 }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'day' },
+                            title: { display: true, text: 'Date' }
+                        },
+                        'y-wall': {
+                            type: 'linear',
+                            position: 'left',
+                            title: { display: true, text: 'Wall Time (s)', color: '#7C3AED' },
+                            ticks: { color: '#7C3AED' },
+                            beginAtZero: false
+                        },
+                        'y-cpu': {
+                            type: 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'CPU Time (s)', color: '#0891b2' },
+                            ticks: { color: '#0891b2' },
+                            grid: { drawOnChartArea: false },
+                            beginAtZero: false
+                        }
+                    }
+                }
+            });
+        }
+
         fetch('data/compile_time.csv')
             .then(function (r) { return r.text(); })
             .then(function (csv) {
                 var lines = csv.trim().split('\n');
-                var data = lines.slice(1).map(function (l) {
+                allData = lines.slice(1).map(function (l) {
                     var c = l.split(',');
                     return {
                         date: new Date(c[0]),
@@ -86,95 +241,29 @@
                     };
                 });
 
-                var last = data[data.length - 1];
+                // Build sorted unique branch list, with 'main' first
+                var branchSet = {};
+                allData.forEach(function (d) { branchSet[d.branch] = true; });
+                var branches = Object.keys(branchSet).sort(function (a, b) {
+                    if (a === 'main') return -1;
+                    if (b === 'main') return 1;
+                    return a.localeCompare(b);
+                });
 
-                // Latest
-                document.getElementById('latest-wall').textContent = fmt(last.wall);
-                document.getElementById('latest-cpu').textContent = fmt(last.cpu);
+                var select = document.getElementById('branch-filter');
+                branches.forEach(function (b) {
+                    var opt = document.createElement('option');
+                    opt.value = b;
+                    opt.textContent = b;
+                    select.appendChild(opt);
+                });
 
-                // Deltas
-                if (data.length >= 2) {
-                    var prev = data[data.length - 2];
-                    setDelta('delta-wall', last.wall, prev.wall);
-                    setDelta('delta-cpu', last.cpu, prev.cpu);
-                }
+                // Default to 'main' if present, else first branch
+                select.value = branches.indexOf('main') >= 0 ? 'main' : branches[0];
+                render(select.value);
 
-                // Sample count
-                document.getElementById('count').textContent = data.length;
-
-                new Chart(document.getElementById('chart'), {
-                    type: 'line',
-                    data: {
-                        labels: data.map(function (d) { return d.date; }),
-                        datasets: [
-                            {
-                                label: 'Wall Time (s)',
-                                data: data.map(function (d) { return d.wall; }),
-                                borderColor: '#7C3AED',
-                                backgroundColor: 'rgba(124, 58, 237, 0.08)',
-                                fill: true,
-                                tension: 0.3,
-                                pointRadius: 4,
-                                pointHoverRadius: 7,
-                                yAxisID: 'y-wall'
-                            },
-                            {
-                                label: 'CPU Time (s)',
-                                data: data.map(function (d) { return d.cpu; }),
-                                borderColor: '#0891b2',
-                                backgroundColor: 'rgba(8, 145, 178, 0.08)',
-                                fill: true,
-                                tension: 0.3,
-                                pointRadius: 4,
-                                pointHoverRadius: 7,
-                                yAxisID: 'y-cpu'
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        interaction: {
-                            mode: 'index',
-                            intersect: false
-                        },
-                        plugins: {
-                            tooltip: {
-                                callbacks: {
-                                    afterBody: function (ctx) {
-                                        var d = data[ctx[0].dataIndex];
-                                        return 'SHA: ' + d.sha + '  Branch: ' + d.branch;
-                                    }
-                                }
-                            },
-                            title: {
-                                display: true,
-                                text: 'Compilation Time Over Time',
-                                font: { size: 18 }
-                            }
-                        },
-                        scales: {
-                            x: {
-                                type: 'time',
-                                time: { unit: 'day' },
-                                title: { display: true, text: 'Date' }
-                            },
-                            'y-wall': {
-                                type: 'linear',
-                                position: 'left',
-                                title: { display: true, text: 'Wall Time (s)', color: '#7C3AED' },
-                                ticks: { color: '#7C3AED' },
-                                beginAtZero: false
-                            },
-                            'y-cpu': {
-                                type: 'linear',
-                                position: 'right',
-                                title: { display: true, text: 'CPU Time (s)', color: '#0891b2' },
-                                ticks: { color: '#0891b2' },
-                                grid: { drawOnChartArea: false },
-                                beginAtZero: false
-                            }
-                        }
-                    }
+                select.addEventListener('change', function () {
+                    render(select.value);
                 });
             });
     </script>
