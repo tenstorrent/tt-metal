@@ -84,10 +84,11 @@ class TestBarkSemantic:
         # Reference forward
         ref_logits = run_semantic_forward(hf_model, input_ids)
 
-        # Validate shapes match
+        # Validate shapes match (TTNN outputs 4D [B,1,S,V], ref is 3D [B,S,V])
+        tt_logits_3d = tt_logits_torch.squeeze(0)
         assert (
-            tt_logits_torch.squeeze(0).shape == ref_logits.shape
-        ), f"Shape mismatch: TTNN={tt_logits_torch.squeeze(0).shape}, Ref={ref_logits.shape}"
+            tt_logits_3d.shape == ref_logits.shape
+        ), f"Shape mismatch: TTNN={tt_logits_3d.shape}, Ref={ref_logits.shape}"
 
     def test_semantic_pcc(self, device, hf_model):
         """Test PCC between TTNN and PyTorch semantic models."""
