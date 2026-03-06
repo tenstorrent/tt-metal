@@ -181,13 +181,12 @@ protected:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     uint32_t max_cbs_{};
 
-protected:
     Config config_;
 };
 
-class MeshDeviceFixture2x4DispatchAgnostic : public MeshDeviceFixtureBase {
+class MeshDeviceFixture4x8DispatchAgnostic : public MeshDeviceFixtureBase {
 protected:
-    MeshDeviceFixture2x4DispatchAgnostic() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}}) {}
+    MeshDeviceFixture4x8DispatchAgnostic() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}}) {}
 
     void SetUp() override {
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
