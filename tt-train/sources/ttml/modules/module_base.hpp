@@ -47,8 +47,6 @@ public:
 
     [[nodiscard]] const std::string& get_name() const;
     [[nodiscard]] serialization::NamedParameters parameters() const;
-    [[nodiscard]] const std::map<std::string, ModuleBasePtr>& named_modules() const;
-    [[nodiscard]] const std::map<std::string, autograd::TensorPtr>& named_tensors() const;
 
     void train();
     void eval();

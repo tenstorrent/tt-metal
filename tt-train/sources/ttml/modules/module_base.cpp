@@ -53,14 +53,6 @@ const std::string& ModuleBase::get_name() const {
     return m_name;
 }
 
-const std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() const {
-    return m_named_modules;
-}
-
-const std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() const {
-    return m_named_tensors;
-}
-
 serialization::NamedParameters ModuleBase::parameters() const {
     serialization::NamedParameters params;
 

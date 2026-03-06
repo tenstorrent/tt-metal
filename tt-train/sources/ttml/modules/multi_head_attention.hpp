@@ -18,9 +18,8 @@ class MultiHeadAttention : public ttml::modules::ModuleBase {
 private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
-
-    ModuleBasePtr m_qkv_linear;
-    ModuleBasePtr m_out_linear;
+    std::shared_ptr<LinearLayer> m_qkv_linear;
+    std::shared_ptr<LinearLayer> m_out_linear;
     std::shared_ptr<DropoutLayer> m_dropout;
 
 public:
