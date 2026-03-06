@@ -747,7 +747,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-        kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+        kernel_properties.max_num_rt_args = max_runtime_args_ / 4;
         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
         this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
@@ -779,7 +779,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
             // and the max kernel size to ensure that the kernel can fit in the ring buffer
             KernelProperties kernel_properties;
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-            kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+            kernel_properties.max_num_rt_args = max_runtime_args_ / 4;
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
             this->create_kernel(program, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;
@@ -945,7 +945,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-        kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+        kernel_properties.max_num_rt_args = max_runtime_args_ / 4;
         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
         this->workloads[i].add_program(device_range_, std::move(program));
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
@@ -1003,7 +1003,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             // and the max kernel size to ensure that the kernel can fit in the ring buffer
             KernelProperties kernel_properties;
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-            kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
+            kernel_properties.max_num_rt_args = max_runtime_args_ / 4;
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
             this->create_kernel(program, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;
