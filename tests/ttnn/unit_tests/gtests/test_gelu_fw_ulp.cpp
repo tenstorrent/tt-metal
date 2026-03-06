@@ -778,6 +778,238 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
         << pos_tail_non_identity_count << " positive tail values returned non-identity";
 }
 
+// Research test: locate every BF16 value with ULP > 1 and print full detail.
+// Also analyzes the boundary neighborhood at x=-5 (exp/left-CDF boundary)
+// to determine whether shifting the boundary could eliminate ULP=2 values.
+TEST_F(GeluFwUlpTest, LocateULP2Values) {
+    // Collect all valid BF16 values
+    std::vector<float> input_values;
+    input_values.reserve(70000);
+
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if ((bf16_bits & bf16_ulp_fw::BF16_EXP_MASK) == bf16_ulp_fw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_fw::BF16_MANTISSA_MASK) != 0) {
+            continue;
+        }
+        if (bf16_bits == bf16_ulp_fw::BF16_POS_INF || bf16_bits == bf16_ulp_fw::BF16_NEG_INF) {
+            continue;
+        }
+        if (bf16_ulp_fw::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+        input_values.push_back(bf16_ulp_fw::bf16_bits_to_float(bf16_bits));
+    }
+
+    const size_t valid_count = input_values.size();
+    const size_t tile_size = tt::constants::TILE_HW;
+    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
+    input_values.resize(padded_size, 0.0f);
+
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+    std::vector<::bfloat16> bf16_inputs;
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto result = ttnn::gelu(input_tensor, false);
+    auto output_cpu = ttnn::from_device(result);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Collect all ULP > 1 values
+    struct ULP2Entry {
+        float x;
+        uint16_t x_bits;
+        float actual;
+        uint16_t actual_bits;
+        float expected;
+        uint16_t expected_bits;
+        int32_t ulp;
+        std::string region;
+    };
+    std::vector<ULP2Entry> ulp2_entries;
+
+    // Also collect detailed info for all values near x=-5 boundary
+    struct BoundaryEntry {
+        float x;
+        uint16_t x_bits;
+        float actual;
+        float expected;
+        int32_t ulp;
+        std::string region;
+    };
+    std::vector<BoundaryEntry> boundary_entries;
+
+    for (size_t i = 0; i < valid_count; ++i) {
+        float x = bf16_ulp_fw::bf16_bits_to_float(bf16_ulp_fw::float_to_bf16_bits(input_values[i]));
+        float actual = static_cast<float>(output_vec[i]);
+        float expected = bf16_ulp_fw::gelu_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
+        if (ulp < 0) {
+            continue;
+        }
+
+        // Determine region
+        std::string region;
+        if (x <= -13.1875f) {
+            region = "saturation";
+        } else if (x <= -5.0f) {
+            region = "exp-based";
+        } else if (x < -3.0f) {
+            region = "left-CDF";
+        } else if (x < 2.78125f) {
+            region = "core-CDF";
+        } else {
+            region = "identity";
+        }
+
+        if (ulp > 1) {
+            ulp2_entries.push_back(
+                {x,
+                 bf16_ulp_fw::float_to_bf16_bits(x),
+                 actual,
+                 bf16_ulp_fw::float_to_bf16_bits(actual),
+                 expected,
+                 bf16_ulp_fw::float_to_bf16_bits(expected),
+                 ulp,
+                 region});
+        }
+
+        // Collect values in the exp/left-CDF overlap research zone
+        if (x >= -7.0f && x <= -3.0f) {
+            boundary_entries.push_back({x, bf16_ulp_fw::float_to_bf16_bits(x), actual, expected, ulp, region});
+        }
+    }
+
+    // Print all ULP > 1 values
+    std::cout << "\n============================================================\n";
+    std::cout << "ALL BF16 VALUES WITH ULP > 1\n";
+    std::cout << "============================================================\n";
+    std::cout << std::setw(12) << "x" << std::setw(10) << "x_bits" << std::setw(15) << "expected" << std::setw(10)
+              << "exp_bits" << std::setw(15) << "actual" << std::setw(10) << "act_bits" << std::setw(6) << "ULP"
+              << std::setw(12) << "region\n";
+    std::cout << std::string(90, '-') << "\n";
+
+    for (const auto& e : ulp2_entries) {
+        std::cout << std::setw(12) << std::scientific << std::setprecision(4) << e.x << "  0x" << std::hex
+                  << std::setfill('0') << std::setw(4) << e.x_bits << std::dec << std::setfill(' ') << std::setw(15)
+                  << std::scientific << std::setprecision(4) << e.expected << "  0x" << std::hex << std::setfill('0')
+                  << std::setw(4) << e.expected_bits << std::dec << std::setfill(' ') << std::setw(15)
+                  << std::scientific << std::setprecision(4) << e.actual << "  0x" << std::hex << std::setfill('0')
+                  << std::setw(4) << e.actual_bits << std::dec << std::setfill(' ') << std::setw(6) << e.ulp
+                  << std::setw(12) << e.region << "\n";
+    }
+    std::cout << "\nTotal ULP > 1 values: " << ulp2_entries.size() << "\n";
+
+    // Print boundary neighborhood
+    std::cout << "\n============================================================\n";
+    std::cout << "BOUNDARY NEIGHBORHOOD: x in [-7, -3]\n";
+    std::cout << "(exp/left-CDF boundary research zone)\n";
+    std::cout << "============================================================\n";
+    std::cout << std::setw(12) << "x" << std::setw(10) << "x_bits" << std::setw(15) << "expected" << std::setw(15)
+              << "actual" << std::setw(6) << "ULP" << std::setw(12) << "region\n";
+    std::cout << std::string(70, '-') << "\n";
+
+    // Sort by x value for readability
+    std::sort(boundary_entries.begin(), boundary_entries.end(), [](const BoundaryEntry& a, const BoundaryEntry& b) {
+        return a.x < b.x;
+    });
+
+    for (const auto& e : boundary_entries) {
+        std::string marker = (e.ulp > 1) ? " <<< ULP>1" : "";
+        std::cout << std::setw(12) << std::fixed << std::setprecision(4) << e.x << "  0x" << std::hex
+                  << std::setfill('0') << std::setw(4) << e.x_bits << std::dec << std::setfill(' ') << std::setw(15)
+                  << std::scientific << std::setprecision(4) << e.expected << std::setw(15) << e.actual << std::setw(6)
+                  << e.ulp << std::setw(12) << e.region << marker << "\n";
+    }
+
+    // Analyze: for each ULP>1 value, check what ULP it would get from the OTHER region's formula
+    std::cout << "\n============================================================\n";
+    std::cout << "BOUNDARY SHIFT ANALYSIS\n";
+    std::cout << "Can shifting the x=-5 boundary eliminate ULP=2 values?\n";
+    std::cout << "============================================================\n";
+
+    // Find the range of ULP>1 values
+    if (!ulp2_entries.empty()) {
+        float min_x = ulp2_entries[0].x;
+        float max_x = ulp2_entries[0].x;
+        for (const auto& e : ulp2_entries) {
+            min_x = std::min(min_x, e.x);
+            max_x = std::max(max_x, e.x);
+        }
+        std::cout << "ULP>1 value range: [" << std::fixed << std::setprecision(4) << min_x << ", " << max_x << "]\n";
+
+        // Count how many are on each side of x=-5
+        int exp_side = 0, cdf_side = 0;
+        for (const auto& e : ulp2_entries) {
+            if (e.x <= -5.0f) {
+                exp_side++;
+            } else {
+                cdf_side++;
+            }
+        }
+        std::cout << "  In exp-based region (x <= -5): " << exp_side << " values\n";
+        std::cout << "  In left-CDF region (x > -5):   " << cdf_side << " values\n";
+
+        // Suggest: if all ULP>1 values are near x=-5, shifting might help
+        if (min_x >= -5.5f && max_x <= -4.5f) {
+            std::cout << "\nAll ULP>1 values cluster near x=-5 boundary.\n";
+            std::cout << "Shifting the boundary might eliminate them.\n";
+            std::cout << "Candidate boundaries to try:\n";
+
+            // List BF16 values between min_x and max_x as potential boundaries
+            for (const auto& e : boundary_entries) {
+                if (e.x >= min_x - 0.25f && e.x <= max_x + 0.25f) {
+                    std::cout << "  x=" << std::fixed << std::setprecision(4) << e.x << " (0x" << std::hex
+                              << std::setfill('0') << std::setw(4) << e.x_bits << std::dec << std::setfill(' ')
+                              << ") ULP=" << e.ulp << " [" << e.region << "]\n";
+                }
+            }
+        }
+    } else {
+        std::cout << "No ULP>1 values found!\n";
+    }
+    std::cout << "============================================================\n";
+
+    // Regression guard: ensure ULP never exceeds 2 for any BF16 value
+    EXPECT_LE(ulp2_entries.size(), 2u) << "Expected at most 2 values with ULP > 1; got " << ulp2_entries.size();
+    for (const auto& e : ulp2_entries) {
+        EXPECT_LE(e.ulp, 2) << "ULP too high at x=" << e.x << ": " << e.ulp;
+    }
+}
+
+// Special values: +inf, -inf, NaN, +0, -0
+TEST_F(GeluFwUlpTest, SpecialValues) {
+    struct SpecialCase {
+        std::string name;
+        float input;
+        uint16_t expected_bits;
+    };
+
+    // GELU(+inf)=+inf, GELU(-inf)=0, GELU(0)=0
+    std::vector<SpecialCase> cases = {
+        {"positive zero", 0.0f, 0x0000},
+        {"-inf → 0", -std::numeric_limits<float>::infinity(), 0x0000},
+        {"+inf → +inf", std::numeric_limits<float>::infinity(), bf16_ulp_fw::BF16_POS_INF},
+    };
+
+    for (const auto& sc : cases) {
+        float actual = run_gelu_fw_single(*device_, sc.input);
+        uint16_t actual_bits = bf16_ulp_fw::float_to_bf16_bits(actual);
+
+        EXPECT_EQ(actual_bits, sc.expected_bits)
+            << sc.name << ": expected 0x" << std::hex << sc.expected_bits << ", got 0x" << actual_bits;
+    }
+}
+
 // Correctness guard: key points spanning all 6 kernel code paths.
 TEST_F(GeluFwUlpTest, SummaryStatistics) {
     std::cout << "\n========================================\n";
