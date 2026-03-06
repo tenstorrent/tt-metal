@@ -277,26 +277,27 @@ def create_dataset_from_text(
 
 
 def collate_fn(
-    samples: list, batch_size: int, sequence_length: int
+    samples: list, sequence_length: int
 ) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function matching C++ collate_fn.
 
     Args:
         samples: List of (sequence, target) tuples
-        batch_size: Batch size
         sequence_length: Sequence length
     """
-    # Flatten samples into data and targets
+    actual_batch_size = len(samples)
     data = []
     targets = []
-    for seq, target in samples[:batch_size]:
+    for seq, target in samples:
         data.extend(seq)
         targets.extend(target)
 
-    # Create NumPy arrays directly with the correct final shape
-    # This avoids device reshape operations which add overhead
-    data_np = np.array(data, dtype=np.uint32).reshape(batch_size, 1, 1, sequence_length)
-    targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, sequence_length)
+    data_np = np.array(data, dtype=np.uint32).reshape(
+        actual_batch_size, 1, 1, sequence_length
+    )
+    targets_np = np.array(targets, dtype=np.uint32).reshape(
+        actual_batch_size, sequence_length
+    )
 
     # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
     data_tensor = ttml.autograd.Tensor.from_numpy(
@@ -332,7 +333,7 @@ def train_step(
     scheduler_step: int,
     input_tokens: ttml.autograd.Tensor,
     target_tokens: ttml.autograd.Tensor,
-    mask: ttml.autograd.Tensor,
+    mask: Optional[ttml.autograd.Tensor],
     gradient_accumulator: GradientAccumulator,
     use_clip_grad_norm: bool,
     clip_grad_norm_max_norm: float,
@@ -342,6 +343,8 @@ def train_step(
     """Single training step matching C++ implementation with proper gradient accumulation.
 
     Args:
+        mask: Optional attention mask. Pass None to let the SDPA kernel use its
+              native causal mask path (matching C++ which passes std::nullopt).
         batch_size: Optional cached batch size (if None, will extract from input_tokens)
         memory_snapshot_fn: Optional callback function to take memory snapshots.
                            Should accept a name string as argument.
@@ -355,7 +358,8 @@ def train_step(
     if gradient_accumulator.should_zero_grad():
         optimizer.zero_grad()
 
-    # Forward pass with causal mask (matching C++: run_model(model, features, masks))
+    # Forward pass (matching C++: run_model(model, features, masks))
+    # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
     # Compute loss
@@ -1468,14 +1472,11 @@ def main():
             np.random.shuffle(indices)
 
             for batch_start in range(0, dataset_len, batch_size):
-                batch_end = batch_start + batch_size
-                if batch_end > dataset_len:
-                    continue  # Skip incomplete batches
+                batch_end = min(batch_start + batch_size, dataset_len)
 
                 batch_samples = [dataset[i] for i in indices[batch_start:batch_end]]
-                input_tokens, target_tokens = collate_fn(
-                    batch_samples, batch_size, seq_len
-                )
+                input_tokens, target_tokens = collate_fn(batch_samples, seq_len)
+                actual_batch_size = batch_end - batch_start
 
                 loss_float, step_time, should_step = train_step(
                     model,
@@ -1484,11 +1485,11 @@ def main():
                     global_step,
                     input_tokens,
                     target_tokens,
-                    mask,
+                    None,
                     gradient_accumulator,
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
-                    batch_size=batch_size,
+                    batch_size=actual_batch_size,
                     memory_snapshot_fn=memory_snapshot if args.track_memory else None,
                 )
 
