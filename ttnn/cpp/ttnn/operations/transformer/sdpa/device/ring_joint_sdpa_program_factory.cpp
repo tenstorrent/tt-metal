@@ -292,6 +292,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
+    TT_FATAL(
+        Sq_chunk_t % qk_out_subblock_h == 0,
+        "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
+        Sq_chunk_t,
+        qk_out_subblock_h);
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
