@@ -99,35 +99,20 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
             continue;
         }
 
-        // Create TensorTopology for single device
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
-        for (size_t i = 0; i < mesh_shape.dims(); i++) {
-            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, {mesh_coord}};
-
-        // Create single-device tensors
-        auto query_tensor = ttnn::distributed::get_single_device_tensor_at_coord(query, mesh_coord, tensor_topology);
-        auto key_tensor = ttnn::distributed::get_single_device_tensor_at_coord(key, mesh_coord, tensor_topology);
-        auto value_tensor = ttnn::distributed::get_single_device_tensor_at_coord(value, mesh_coord, tensor_topology);
-        auto output_tensor = ttnn::distributed::get_single_device_tensor_at_coord(output, mesh_coord, tensor_topology);
-        auto intermediates_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(intermediates, mesh_coord, tensor_topology);
-
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
             .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
-            .query = query_tensor,
-            .key = key_tensor,
-            .value = value_tensor,
+            .query = query,
+            .key = key,
+            .value = value,
             .mask = std::nullopt,  // No explicit mask - use mask_type
-            .preallocated_intermediate = intermediates_tensor,
-            .preallocated_output = output_tensor};
+            .preallocated_intermediate = intermediates,
+            .preallocated_output = output};
 
-        sdpa_fw::device::tensor_return_value_t sdpa_return_value{output_tensor, intermediates_tensor};
+        sdpa_fw::device::tensor_return_value_t sdpa_return_value{output, intermediates};
 
         // Create the program
         auto cached_program =
@@ -188,35 +173,20 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
         (void)should_execute;  // Already filtered in create_mesh_workload
 
-        // Create TensorTopology
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
-        for (size_t i = 0; i < mesh_shape.dims(); i++) {
-            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, {start_coord}};
-
-        // Create single-device tensors
-        auto query_tensor = ttnn::distributed::get_single_device_tensor_at_coord(query, start_coord, tensor_topology);
-        auto key_tensor = ttnn::distributed::get_single_device_tensor_at_coord(key, start_coord, tensor_topology);
-        auto value_tensor = ttnn::distributed::get_single_device_tensor_at_coord(value, start_coord, tensor_topology);
-        auto output_tensor = ttnn::distributed::get_single_device_tensor_at_coord(output, start_coord, tensor_topology);
-        auto intermediates_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(intermediates, start_coord, tensor_topology);
-
         // Create SDPA attributes and tensor args
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
             .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
-            .query = query_tensor,
-            .key = key_tensor,
-            .value = value_tensor,
+            .query = query,
+            .key = key,
+            .value = value,
             .mask = mask_opt,
-            .preallocated_intermediate = intermediates_tensor,
-            .preallocated_output = output_tensor};
+            .preallocated_intermediate = intermediates,
+            .preallocated_output = output};
 
-        sdpa_fw::tensor_return_value_t sdpa_return_value{output_tensor, intermediates_tensor};
+        sdpa_fw::tensor_return_value_t sdpa_return_value{output, intermediates};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_fw::SDPAForwardProgramFactory::shared_variables_t sdpa_shared_vars{
