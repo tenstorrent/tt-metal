@@ -39,6 +39,8 @@ Run the tests with
 You should be attentive of device hangs when running tests, especially for new / just implemented operations and kernels.
 Watch the bash output at all times, if pytest console output stops, suspect a hang.
 
+To reset the device, simply use `tt-smi -r`. You DO NOT need to specifiy the device ID.
+
 ## Code Organization
 
 ### Key Directories
