@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Constexpr
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
@@ -32,7 +31,6 @@ void kernel_main() {
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         cb_reserve_back(cb_id_in0, num_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        // DPRINT << "l1_write_addr: 0x" << HEX() << l1_write_addr << DEC() << ENDL();
         for (uint32_t k = 0; k < tile_height; k++) {
             // Need an inner loop for pages within row. Only relevant for ND-sharded case on multicore
             // (otherwise this loop only has 1 iteration).
