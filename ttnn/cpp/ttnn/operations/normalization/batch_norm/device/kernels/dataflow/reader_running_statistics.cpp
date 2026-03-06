@@ -41,16 +41,16 @@ void kernel_main() {
     uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
-    uint32_t one_u;
-    float momentum_f;
+    uint32_t one_u = 0;
     const float one_f = 1.0f;
     std::memcpy(&one_u, &one_f, sizeof(uint32_t));  // Alternative for std::bit_cast
-    std::memcpy(&momentum_f, &momentum, sizeof(float));
     fill_cb_with_value(cb_id_one, one_u);
 
     // momentum
     cb_reserve_back(cb_id_momentum, onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
+    float momentum_f = 0;
+    std::memcpy(&momentum_f, &momentum, sizeof(float));  // Alternative for std::bit_cast
     FILL_WITH_VALUE_FLOAT(cb_id_momentum, momentum_f);
 #endif
 #ifdef FILL_WITH_VALUE

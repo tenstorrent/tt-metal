@@ -932,7 +932,7 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);
     bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
-    uint32_t e_u = std::bit_cast<uint32_t>(eps);
+    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     for (size_t i = 0; i < mcast_groups.size(); ++i) {
         auto group = mcast_groups[i];
@@ -1070,7 +1070,7 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         } else {
             writer_mcast_sender_args.push_back(packed_winv_value_group_2);
         }
-        writer_mcast_sender_args.push_back(e_u);
+        writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);

@@ -25,10 +25,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
-    uint32_t scaler_u;
+    uint32_t scaler = 0;
     const float one_f = 1.0f;
-    std::memcpy(&scaler_u, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
-    fill_cb_with_value(cb_id_in1, scaler_u);
+    std::memcpy(&scaler, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
+    fill_cb_with_value(cb_id_in1, scaler);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);

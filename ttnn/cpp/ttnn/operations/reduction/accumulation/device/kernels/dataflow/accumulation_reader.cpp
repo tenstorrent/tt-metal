@@ -36,11 +36,9 @@ void kernel_main() {
     cb_start_obj.reserve_back(ONE_TILE);
     uint32_t data_start_addr = cb_start_obj.get_write_ptr();
 
-    int32_t acc_start_val_u;
     const float one_f = 1.0f;
-    std::memcpy(&acc_start_val_u, &one_f, sizeof(int32_t));
-
-    const int32_t ACC_START_VALUE_F32{acc_start_val_u};
+    int32_t ACC_START_VALUE_F32 = 0;
+    std::memcpy(&ACC_START_VALUE_F32, &one_f, sizeof(int32_t));
     constexpr int32_t ACC_START_VALUE_F16{0x3F80};
     // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those (issue
     // #21108)
