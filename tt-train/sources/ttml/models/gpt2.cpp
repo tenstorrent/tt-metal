@@ -61,8 +61,6 @@ Transformer::Transformer(const TransformerConfig &config) {
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
 
-    fmt::print("Rebuild does update");
-
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(

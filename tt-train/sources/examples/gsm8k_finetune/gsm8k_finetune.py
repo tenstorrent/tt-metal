@@ -587,18 +587,19 @@ def train():
             total_steps % training_config.eval_every == 0
             or total_steps + 1 == training_config.steps
         ):
-            last_val_loss = validate(
-                tt_model,
-                tokenizer,
-                val_batch_generator,
-                testing_data,
-                loss_fn,
-                causal_mask,
-                logits_mask_tensor,
-                max_sequence_length,
-                total_steps,
-            )
-            val_losses.append(last_val_loss)
+            # last_val_loss = validate(
+            #     tt_model,
+            #     tokenizer,
+            #     val_batch_generator,
+            #     testing_data,
+            #     loss_fn,
+            #     causal_mask,
+            #     logits_mask_tensor,
+            #     max_sequence_length,
+            #     total_steps,
+            # )
+            # val_losses.append(last_val_loss)
+            pass
 
         with open("output.txt", "a") as f:
             f.write(
