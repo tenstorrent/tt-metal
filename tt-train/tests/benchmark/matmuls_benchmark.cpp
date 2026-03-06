@@ -266,7 +266,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
 
     std::vector<BenchmarkResult> results;
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         results.clear();
 
         // Create inputs once per shape so each grid config sees identical tensors
