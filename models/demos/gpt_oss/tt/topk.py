@@ -10,8 +10,6 @@ transformation followed by top-k selection to assign tokens to experts.
 
 """
 
-import os
-
 import torch
 
 import ttnn
@@ -82,17 +80,13 @@ class TopKRouter:
         )
 
         # Fused op support: matmul + topk + softmax in one kernel
-        # Enable via TOPK_FUSED_OP=1 environment variable
-        self.use_fused_op = os.environ.get("TOPK_FUSED_OP", "0") == "1"
+        # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
+        # each), so it requires exactly 128 experts. Enable automatically when possible.
+        self.use_fused_op = self.num_experts == 128
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
         # needs the full [1, num_experts] bias replicated on every device)
-        # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts.  Silently fall back to the
-        # non-fused path for any other expert count.
-        if self.use_fused_op and self.num_experts != 128:
-            self.use_fused_op = False
         if self.use_fused_op:
             self._bias_torch = state_dict["bias"].unsqueeze(0).to(torch.bfloat16)
         else:

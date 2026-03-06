@@ -17,7 +17,7 @@ import ttnn
 from loguru import logger
 
 
-def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4, untilize_output=False):
+def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
     """Run the fused op and return the torch result."""
     # Pre-broadcast bias to [B, N] so all tile rows contain the bias vector.
     torch_bias_bcast = torch_bias.expand(B, N).contiguous()
@@ -31,7 +31,6 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4, un
         bias_tensor=tt_bias,
         k=k,
         num_experts=N,
-        untilize_output=untilize_output,
     )
 
     # Convert to torch (slice to actual k cols since outputs are padded to k_padded)
@@ -152,37 +151,10 @@ def main():
         logger.info(f"  Weight row sums - mean: {row_sums.mean():.4f}")
 
         # ================================================================
-        # Test 4: Untilized (ROW_MAJOR) output — verify matches tile output
+        # Test 4: Verify indices are uint16 dtype
         # ================================================================
         logger.info("=" * 60)
-        logger.info("TEST 4: untilize_output=True (ROW_MAJOR output)")
-        torch.manual_seed(42)
-        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
-        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
-        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
-
-        # Run with TILE output (reference)
-        weights_tile, indices_tile = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k)
-        # Run with ROW_MAJOR output
-        weights_rm, indices_rm = run_fused_op(
-            device, torch_input, torch_weight, torch_bias, B, K, N, k, untilize_output=True
-        )
-
-        logger.info(f"  TILE indices row 0: {indices_tile[0].tolist()}")
-        logger.info(f"  RM   indices row 0: {indices_rm[0].tolist()}")
-        logger.info(f"  TILE weights row 0: {[f'{w:.4f}' for w in weights_tile[0].tolist()]}")
-        logger.info(f"  RM   weights row 0: {[f'{w:.4f}' for w in weights_rm[0].tolist()]}")
-
-        rm_idx_match = (indices_rm == indices_tile).all().item()
-        rm_weight_pcc = compute_pcc(weights_tile, weights_rm)
-        logger.info(f"  Indices exact match (RM vs TILE): {rm_idx_match}")
-        logger.info(f"  Weight PCC (RM vs TILE): {rm_weight_pcc:.6f}")
-
-        # ================================================================
-        # Test 5: Verify indices are uint16 dtype
-        # ================================================================
-        logger.info("=" * 60)
-        logger.info("TEST 5: Verify indices_rm dtype is uint16")
+        logger.info("TEST 4: Verify indices_rm dtype is uint16")
         torch.manual_seed(42)
         torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
         torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
@@ -219,10 +191,10 @@ def main():
         logger.info(f"  Weight PCC: {tc_weight_pcc:.6f}")
 
         # ================================================================
-        # Test 6: Verify outputs match PyTorch reference
+        # Test 5: Verify outputs match PyTorch reference
         # ================================================================
         logger.info("=" * 60)
-        logger.info("TEST 6: Verify outputs match PyTorch reference")
+        logger.info("TEST 5: Verify outputs match PyTorch reference")
         torch.manual_seed(99)  # Different seed from other tests
         torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
         torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
@@ -242,22 +214,23 @@ def main():
         logger.info(f"  Indices match: {dispatch_idx_match}")
         logger.info(f"  Weights PCC: {dispatch_wgt_pcc:.6f}")
 
-        hrm_pass = dispatch_wgt_pcc >= 0.95
-
         # ================================================================
         # Summary
         # ================================================================
         logger.info("=" * 60)
-        rm_pass = rm_idx_match and rm_weight_pcc >= 0.999
-        tc_pass = tc_idx_match and tc_weight_pcc >= 0.95
-        if weight_pcc >= 0.95 and idx_match_pct >= 90 and rm_pass and tc_pass and hrm_pass:
+        if (
+            weight_pcc >= 0.95
+            and idx_match_pct >= 90
+            and tc_idx_match
+            and tc_weight_pcc >= 0.95
+            and dispatch_wgt_pcc >= 0.95
+        ):
             logger.info("PASSED")
         else:
             logger.error(
                 f"FAILED: weight_pcc={weight_pcc:.4f}, idx_match={idx_match_pct:.1f}%, "
-                f"rm_idx_match={rm_idx_match}, rm_weight_pcc={rm_weight_pcc:.4f}, "
                 f"tc_idx_match={tc_idx_match}, tc_weight_pcc={tc_weight_pcc:.4f}, "
-                f"dispatch_idx_match={dispatch_idx_match}, dispatch_wgt_pcc={dispatch_wgt_pcc:.4f}"
+                f"dispatch_wgt_pcc={dispatch_wgt_pcc:.4f}"
             )
 
     finally:

@@ -14,7 +14,6 @@ namespace ttnn::operations::experimental::topk_router_gpt {
 struct operation_attributes_t {
     uint32_t k;              // Number of top experts per token (4)
     uint32_t num_experts;    // Total number of experts (128)
-    bool untilize_output;    // If true, write output in ROW_MAJOR format
 };
 
 struct tensor_args_t {

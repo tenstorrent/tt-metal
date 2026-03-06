@@ -79,8 +79,6 @@ void kernel_main() {
     uint32_t worker_gather_slot = get_arg_val<uint32_t>(13);
     uint32_t n_tile_id = get_arg_val<uint32_t>(14);
     uint32_t num_groups = get_arg_val<uint32_t>(15);
-    uint32_t untilize_out = get_arg_val<uint32_t>(16);
-    uint32_t rm_page_size = get_arg_val<uint32_t>(17);
 
     constexpr uint32_t CB_PARTIAL_RECV = tt::CBIndex::c_2;
     constexpr uint32_t CB_LOCAL_OUT = tt::CBIndex::c_3;
@@ -260,91 +258,51 @@ void kernel_main() {
     cb_wait_front(CB_FINAL_OUT, 2);
     uint32_t final_out_l1 = get_read_ptr(CB_FINAL_OUT);
 
-    // 7. Write output to DRAM
-    if (untilize_out) {
-        // Software untilize: rearrange 2 tiles (face layout) → row-major in CB17
-        constexpr uint32_t CB_RM_OUT = tt::CBIndex::c_17;
-        cb_reserve_back(CB_RM_OUT, 2);
-        uint32_t rm_buf = get_write_ptr(CB_RM_OUT);
-
-        volatile tt_l1_ptr uint16_t* src0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1);
-        volatile tt_l1_ptr uint16_t* src1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1 + tile_size);
-        volatile tt_l1_ptr uint16_t* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rm_buf);
-
-        for (uint32_t row = 0; row < 32; row++) {
-            for (uint32_t col = 0; col < 32; col++) {
-                uint32_t face = ((row >= 16) ? 2u : 0u) + ((col >= 16) ? 1u : 0u);
-                uint32_t idx = face * 256 + (row & 15) * 16 + (col & 15);
-                dst[row * 64 + col] = src0[idx];
-                dst[row * 64 + 32 + col] = src1[idx];
-            }
-        }
-
-        // Write 32 row-major pages (128 bytes each) to DRAM
-        const InterleavedAddrGen</*DRAM=*/true> rm_addrgen = {
-            .bank_base_address = output_addr, .page_size = rm_page_size};
-        for (uint32_t page = 0; page < 32; page++) {
-            uint64_t noc_addr = get_noc_addr(page, rm_addrgen);
-            noc_async_write(rm_buf + page * rm_page_size, noc_addr, rm_page_size);
-        }
-        noc_async_write_barrier();
-    } else {
-        // Tile-based output path
-        const InterleavedAddrGenFast</*DRAM=*/true> output_addrgen = {
-            .bank_base_address = output_addr, .page_size = tile_size, .data_format = get_dataformat(CB_FINAL_OUT)};
-        noc_async_write_tile(0, output_addrgen, final_out_l1);
-        noc_async_write_tile(1, output_addrgen, final_out_l1 + tile_size);
-        noc_async_write_barrier();
-    }
-
-    // 8. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
+    // 7. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
     //    Extracts k values per row from face-layout tiles, converts indices
     //    from bf16 to uint16, and writes to DRAM as row-major pages.
-    uint32_t produce_dispatch = get_arg_val<uint32_t>(18);
-    if (produce_dispatch) {
-        uint32_t indices_rm_addr = get_arg_val<uint32_t>(19);
-        uint32_t weights_rm_addr = get_arg_val<uint32_t>(20);
-        uint32_t k_padded = get_arg_val<uint32_t>(21);
-        // DRAM-aligned page size from buffer allocation — the allocator pads
-        // pages to DRAM_ALIGNMENT (32 bytes on WH), so InterleavedAddrGen must
-        // use this stride, not the raw data size (k_padded * 2).
-        uint32_t aligned_page_size = get_arg_val<uint32_t>(22);
+    uint32_t indices_rm_addr = get_arg_val<uint32_t>(16);
+    uint32_t weights_rm_addr = get_arg_val<uint32_t>(17);
+    uint32_t k_padded = get_arg_val<uint32_t>(18);
+    // DRAM-aligned page size from buffer allocation — the allocator pads
+    // pages to DRAM_ALIGNMENT (32 bytes on WH), so InterleavedAddrGen must
+    // use this stride, not the raw data size (k_padded * 2).
+    uint32_t aligned_page_size = get_arg_val<uint32_t>(19);
 
-        uint32_t data_size = k_padded * 2;  // actual data bytes per page (16 for k_padded=8)
+    uint32_t data_size = k_padded * 2;  // actual data bytes per page (16 for k_padded=8)
 
-        constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
-        cb_reserve_back(CB_DISPATCH, 1);
-        uint32_t scratch = get_write_ptr(CB_DISPATCH);
-        uint32_t idx_base = scratch;
-        uint32_t wgt_base = scratch + 32 * k_padded * 2;
+    constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
+    cb_reserve_back(CB_DISPATCH, 1);
+    uint32_t scratch = get_write_ptr(CB_DISPATCH);
+    uint32_t idx_base = scratch;
+    uint32_t wgt_base = scratch + 32 * k_padded * 2;
 
-        volatile tt_l1_ptr uint16_t* idx_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_base);
-        volatile tt_l1_ptr uint16_t* wgt_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wgt_base);
+    volatile tt_l1_ptr uint16_t* idx_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_base);
+    volatile tt_l1_ptr uint16_t* wgt_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wgt_base);
 
-        // src0 = weights tile (tile 0), src1 = indices tile (tile 1)
-        volatile tt_l1_ptr uint16_t* src0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1);
-        volatile tt_l1_ptr uint16_t* src1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1 + tile_size);
+    // src0 = weights tile (tile 0), src1 = indices tile (tile 1)
+    volatile tt_l1_ptr uint16_t* src0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1);
+    volatile tt_l1_ptr uint16_t* src1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1 + tile_size);
 
-        for (uint32_t row = 0; row < 32; row++) {
-            for (uint32_t col = 0; col < topk_k; col++) {
-                uint32_t fi = tile_elem_idx(row, col);
-                wgt_buf[row * k_padded + col] = src0[fi];
-                idx_buf[row * k_padded + col] = (uint16_t)bf16_to_f32(src1[fi]);
-            }
-            for (uint32_t col = topk_k; col < k_padded; col++) {
-                wgt_buf[row * k_padded + col] = 0;
-                idx_buf[row * k_padded + col] = 0;
-            }
+    for (uint32_t row = 0; row < 32; row++) {
+        for (uint32_t col = 0; col < topk_k; col++) {
+            uint32_t fi = tile_elem_idx(row, col);
+            wgt_buf[row * k_padded + col] = src0[fi];
+            idx_buf[row * k_padded + col] = (uint16_t)bf16_to_f32(src1[fi]);
         }
-
-        const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = aligned_page_size};
-        const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = aligned_page_size};
-        for (uint32_t p = 0; p < 32; p++) {
-            noc_async_write(idx_base + p * data_size, get_noc_addr(p, idx_ag), data_size);
-            noc_async_write(wgt_base + p * data_size, get_noc_addr(p, wgt_ag), data_size);
+        for (uint32_t col = topk_k; col < k_padded; col++) {
+            wgt_buf[row * k_padded + col] = 0;
+            idx_buf[row * k_padded + col] = 0;
         }
-        noc_async_write_barrier();
     }
+
+    const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = aligned_page_size};
+    const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = aligned_page_size};
+    for (uint32_t p = 0; p < 32; p++) {
+        noc_async_write(idx_base + p * data_size, get_noc_addr(p, idx_ag), data_size);
+        noc_async_write(wgt_base + p * data_size, get_noc_addr(p, wgt_ag), data_size);
+    }
+    noc_async_write_barrier();
 
     cb_pop_front(CB_FINAL_OUT, 2);
 }
