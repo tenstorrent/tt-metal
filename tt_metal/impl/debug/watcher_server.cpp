@@ -37,6 +37,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
+#include "common/filesystem_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -264,7 +265,7 @@ void WatcherServer::Impl::create_log_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
-    std::filesystem::create_directories(output_dir);
+    tt::filesystem::safe_create_directories(output_dir);
     std::string fname = output_dir.string() + LOG_FILE_NAME;
     if (rtoptions.get_watcher_skip_logging()) {
         fname = "/dev/null";
@@ -313,7 +314,7 @@ void WatcherServer::Impl::create_kernel_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
-    std::filesystem::create_directories(output_dir);
+    tt::filesystem::safe_create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
     FILE* f = fopen(fname.c_str(), fmode);
     if (!f) {
@@ -330,7 +331,7 @@ void WatcherServer::Impl::create_kernel_file() {
 void WatcherServer::Impl::create_kernel_elf_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
-    std::filesystem::create_directories(output_dir);
+    tt::filesystem::safe_create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
     FILE* f = fopen(fname.c_str(), "w");
     if (!f) {

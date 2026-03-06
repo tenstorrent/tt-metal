@@ -4,13 +4,18 @@
 
 #include "depend.hpp"
 #include "common/stable_hash.hpp"
+#include "jit_build_utils.hpp"
 
+#include <cerrno>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <istream>
 #include <iterator>
 #include <tt-logger/tt-logger.hpp>
+#include <unistd.h>
+
+#include "common/filesystem_utils.hpp"
 
 namespace tt::jit_build {
 
@@ -62,6 +67,10 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
+    // Validate stream is in good state before hashing
+    if (!file) {
+        return 0;
+    }
     tt::FNV1a hasher;
     hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return hasher.digest();
@@ -81,22 +90,24 @@ void write_dependency_hashes(
         return;
     }
     for (const auto& dep : iter->second) {
-        // Need to handle two cases:
-        // 1. file is an absolute path
-        // 2. file is a path relative to out_dir
         std::filesystem::path dep_path(dep);
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
         }
-        std::ifstream dep_file(dep_path, std::ios::binary);
-        auto hash = hash_file_content(dep_file);
-        if (dep_file.fail() && !dep_file.eof()) {
+
+        uint64_t hash = 0;
+        bool success = tt::filesystem::retry_on_estale([&]() {
+            errno = 0;
+            std::ifstream dep_file(dep_path, std::ios::binary);
+            hash = hash_file_content(dep_file);
+            return !dep_file.fail() || dep_file.eof();
+        });
+
+        if (!success) {
             log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
             hash_file.setstate(std::ios::badbit);
             return;
         }
-        // Always write absolute path to the hash file, so when reading back we don't need to
-        // worry about relative paths
         hash_file << dep_path << '\t' << hash << '\n';
     }
 }
@@ -108,23 +119,38 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
     }
     std::filesystem::path dep_path = obj_path;
     dep_path.replace_extension(".d");
-    std::ofstream hash_file(hash_path);
-    if (!hash_file.is_open()) {
+
+    std::ofstream hash_file;
+    bool opened = tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
+        hash_file.open(hash_path);
+        return hash_file.is_open();
+    });
+    if (!opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
         return;
     }
-    std::ifstream dep_file(dep_path);
-    if (!dep_file.is_open()) {
+
+    std::ifstream dep_file;
+    opened = tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
+        dep_file.open(dep_path);
+        return dep_file.is_open();
+    });
+    if (!opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path.string());
         hash_file.setstate(std::ios::badbit);
-    } else {
+    }
+
+    if (dep_file.is_open()) {
         auto dependencies = parse_dependency_file(dep_file);
         write_dependency_hashes(dependencies, out_dir, obj, hash_file);
     }
     hash_file.close();
     if (hash_file.fail()) {
-        // Don't leave incomplete hash file
-        std::filesystem::remove(hash_path);
+        utils::safe_remove(hash_path);
+    } else {
+        ::sync();
     }
 }
 
@@ -138,9 +164,15 @@ bool dependencies_up_to_date(std::istream& hash_file) {
             log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
             return false;
         }
-        std::ifstream dep_file(dep, std::ios::binary);
+
+        std::ifstream dep_file;
+        tt::filesystem::retry_on_estale([&]() {
+            errno = 0;
+            dep_file.open(dep, std::ios::binary);
+            return dep_file.is_open();
+        });
+
         if (!dep_file.is_open()) {
-            // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
             log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
             return false;
         }
@@ -160,13 +192,19 @@ bool dependencies_up_to_date(std::istream& hash_file) {
         log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
         return false;
     }
-    // "No dependencies" means "always rebuild".  This shouldn't happen with a properly generated dependency file.
     return count > 0;
 }
 
 bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
     std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
-    std::ifstream hash_file(hash_path);
+
+    std::ifstream hash_file;
+    tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
+        hash_file.open(hash_path);
+        return hash_file.is_open();
+    });
+
     if (!hash_file.is_open()) {
         log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());
         return false;

@@ -15,8 +15,13 @@ Owner:
     adjordjevic-TT
 """
 
+import errno
+import logging
 import os
+import shutil
+import tempfile
 import threading
+import time
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
@@ -25,6 +30,8 @@ from ttexalens.tt_exalens_lib import parse_elf
 script_config = ScriptConfig(
     data_provider=True,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ElfsCache:
@@ -47,6 +54,47 @@ class ElfsCache:
         self._cache: dict[str, ParsedElfFile] = {}
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _is_estale_error(exc: Exception) -> bool:
+        if isinstance(exc, OSError) and exc.errno == errno.ESTALE:
+            return True
+        return "stale file handle" in str(exc).lower()
+
+    def _parse_elf_with_estale_retry(self, elf_path: str) -> ParsedElfFile | None:
+        """Parse ELF, retrying with backoff (up to 10s) when ESTALE is encountered."""
+        last_exc = None
+        max_retries = 4
+        backoff_delays = [1.0, 2.0, 3.0, 4.0]
+
+        try:
+            return parse_elf(elf_path, self.context)
+        except Exception as exc:
+            if not self._is_estale_error(exc):
+                raise
+            last_exc = exc
+
+        for attempt in range(max_retries):
+            delay = backoff_delays[attempt]
+            logger.info(
+                "Retrying ELF parse due to stale file handle (refreshing file handle), "
+                "attempt %d/%d, waiting %.1fs...",
+                attempt + 1,
+                max_retries,
+                delay,
+            )
+            time.sleep(delay)
+            try:
+                with tempfile.TemporaryDirectory(prefix="tt-triage-elf-") as tmp_dir:
+                    local_elf_path = os.path.join(tmp_dir, os.path.basename(elf_path))
+                    shutil.copy2(elf_path, local_elf_path)
+                    return parse_elf(local_elf_path, self.context)
+            except Exception as exc:
+                if not self._is_estale_error(exc):
+                    raise
+                last_exc = exc
+
+        raise last_exc
+
     def __getitem__(self, elf_path: str) -> ParsedElfFile:
         """
         Get a ParsedElfFile from cache or parse and cache it if not present.
@@ -64,7 +112,14 @@ class ElfsCache:
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:
-                parsed_elf = parse_elf(elf_path, self.context)
+                try:
+                    parsed_elf = self._parse_elf_with_estale_retry(elf_path)
+                except Exception as exc:
+                    if self._is_estale_error(exc):
+                        raise TTTriageError(
+                            f"Failed to parse ELF file {elf_path} due to stale file handle on filesystem: {exc}"
+                        ) from exc
+                    raise
                 if not parsed_elf:
                     raise TTTriageError(
                         f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."

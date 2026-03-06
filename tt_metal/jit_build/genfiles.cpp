@@ -531,7 +531,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
-    fs::create_directories(options.path);
+    jit_build::utils::safe_create_directories(options.path);
     generate_all_descriptors(env, options);
 }
 // clang-format on
