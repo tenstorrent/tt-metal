@@ -18,14 +18,11 @@ namespace tt::tt_fabric {
 /**
  * Multi-pool channel allocator coordinator/manager.
  *
- * The `MultiPoolChannelAllocator` manages multiple channel allocators (pools), where each
- * pool can be either a static or elastic allocator. This design centralizes memory
- * management across pools, enabling future optimizations like memory balancing across pools.
+ * The `MultiPoolChannelAllocator` manages multiple channel allocators (pools).
+ * This design centralizes memory management across pools.
  *
  * Key Design Principles:
  * - Single owner of all pool allocators
- * - Supports heterogeneous pool types (static and elastic)
- * - Enables future memory balancing across pools from a central location
  * - Coordinator pattern: doesn't inherit from FabricChannelAllocator, but manages multiple instances
  *
  * The allocator emits compile-time arguments in the following format:
@@ -42,7 +39,7 @@ public:
     /**
      * Construct a multi-pool allocator with the given pool allocators.
      *
-     * @param pool_allocators Vector of individual pool allocators (static or elastic)
+     * @param pool_allocators Vector of individual pool allocators
      * @param pool_types Types of each pool (must match allocators)
      */
     MultiPoolChannelAllocator(
@@ -124,7 +121,6 @@ inline std::ostream& operator<<(std::ostream& os, const MultiPoolChannelAllocato
         os << "    type: ";
         switch (pool_type) {
             case FabricChannelPoolType::STATIC: os << "STATIC\n"; break;
-            case FabricChannelPoolType::ELASTIC: os << "ELASTIC\n"; break;
             default: os << "UNKNOWN (" << static_cast<uint32_t>(pool_type) << ")\n"; break;
         }
 

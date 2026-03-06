@@ -8,7 +8,6 @@
 #include "api/dataflow/dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
-// NOTE: fabric_router_elastic_channels_ct_args.hpp removed - elastic channels not yet emitted from host
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
@@ -182,8 +181,8 @@ constexpr std::array<FabricChannelPoolType, NUM_SENDER_CHANNELS> SENDER_TO_POOL_
 static_assert(
     all_elements_satisfy(
         SENDER_TO_POOL_TYPE,
-        [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }),
-    "SENDER_TO_POOL_TYPE must be less than or equal to FabricChannelPoolType::ELASTIC");
+        [](FabricChannelPoolType pool_type) { return pool_type == FabricChannelPoolType::STATIC; }),
+    "SENDER_TO_POOL_TYPE must be FabricChannelPoolType::STATIC");
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_IDX =
     channel_pools_args::receiver_channel_to_pool_index;
 static_assert(
@@ -195,7 +194,7 @@ constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> RECEIVER_TO_P
     CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + NUM_RECEIVER_CHANNELS,
     NUM_RECEIVER_CHANNELS>();
 static_assert(all_elements_satisfy(RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) {
-    return pool_type <= FabricChannelPoolType::ELASTIC;
+    return pool_type == FabricChannelPoolType::STATIC;
 }));
 
 // Parse remote channel pool data (after channel-to-pool mappings)
@@ -222,7 +221,7 @@ constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> REMOTE_RECEIV
         REMOTE_CHANNEL_MAPPINGS_START_IDX + NUM_RECEIVER_CHANNELS,
         NUM_RECEIVER_CHANNELS>();
 static_assert(all_elements_satisfy(REMOTE_RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) {
-    return pool_type <= FabricChannelPoolType::ELASTIC;
+    return pool_type == FabricChannelPoolType::STATIC;
 }));
 
 // Calculate how many args the remote channel pool consumes
@@ -620,42 +619,19 @@ constexpr bool local_chip_noc_equals_downstream_noc =
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
 static constexpr uint8_t forward_and_local_write_noc_vc = NAMED_CT_ARG("EDM_NOC_VC");
 
-// ----------------------------------------------------------------------------- //
-// --------------------------------- PLACEHOLDER ------------------------------- //
-// ---------------------- UNTIL ELASTIC CHANNELS IMPLEMENTED ------------------- //
-// --------------------------------- ISSUE #26311 ------------------------------ //
-constexpr size_t CHUNK_N_PKTS = 0;
-constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
-    initialize_array<NUM_SENDER_CHANNELS, bool, false>();
-
-// Helper to extract num_slots from a channel's pool (returns 0 for non-static pools)
+// Helper to extract num_slots from a channel's pool
 template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t ChannelIdx>
 constexpr size_t get_channel_num_slots() {
     constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
-    constexpr auto pool_type = static_cast<FabricChannelPoolType>(ChannelPoolCollection::channel_pool_types[pool_idx]);
-
-    // If static pool, extract num_slots; otherwise default to 0
-    if constexpr (pool_type == FabricChannelPoolType::STATIC) {
-        using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
-        return PoolType::num_slots;
-    } else {
-        return 0;
-    }
+    using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
+    return PoolType::num_slots;
 }
 
-// Helper to extract remote_num_slots from a channel's pool (returns 0 for non-static pools)
 template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t ChannelIdx>
 constexpr size_t get_channel_remote_num_slots() {
     constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
-    constexpr auto pool_type = static_cast<FabricChannelPoolType>(ChannelPoolCollection::channel_pool_types[pool_idx]);
-
-    // If static pool, extract remote_num_slots; otherwise default to 0
-    if constexpr (pool_type == FabricChannelPoolType::STATIC) {
-        using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
-        return PoolType::remote_num_slots;
-    } else {
-        return 0;
-    }
+    using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
+    return PoolType::remote_num_slots;
 }
 
 // Build array by inspecting each channel's pool

@@ -9,9 +9,7 @@
 
 enum class FabricChannelPoolType {
     STATIC = 0,
-    ELASTIC = 1,
 };
-
 
 template <typename DERIVED>
 struct CtArgConsumer {
@@ -31,23 +29,6 @@ struct StaticChannelPool : public CtArgConsumer<StaticChannelPool<CT_ARG_IDX_BAS
 
     static constexpr size_t GET_NUM_ARGS_CONSUMED() { return 4; }
 };
-
-template <size_t CT_ARG_IDX_BASE>
-struct ElasticChannelPool : public CtArgConsumer<ElasticChannelPool<CT_ARG_IDX_BASE>> {
-    static constexpr size_t num_chunks = get_compile_time_arg_val(CT_ARG_IDX_BASE);
-    static constexpr size_t num_slots_per_chunk = get_compile_time_arg_val(CT_ARG_IDX_BASE + 1);
-
-    static constexpr size_t ARGS_PER_CHUNK = 1;
-    static constexpr size_t CHUNKS_CT_ARGS_IDX_BASE = CT_ARG_IDX_BASE + 2;
-
-    static constexpr std::array<size_t, num_chunks> chunk_base_addresses = fill_array_with_next_n_args<size_t, CHUNKS_CT_ARGS_IDX_BASE, num_chunks>();
-
-    static constexpr size_t GET_NUM_ARGS_CONSUMED() {
-        return 2 + num_chunks * ARGS_PER_CHUNK;
-    }
-};
-
-
 
 // Helper to build pools tuple recursively - uses array of pool types
 template <size_t CT_ARG_IDX, size_t NumPools, typename PoolTypesArray, size_t... Indices>
@@ -69,12 +50,8 @@ struct PoolsBuilderImpl<CT_ARG_IDX, NumPools, PoolTypesArray, CurrentIdx, RestIn
     static constexpr FabricChannelPoolType current_pool_type =
         static_cast<FabricChannelPoolType>(current_pool_type_val);
 
-    // Determine current pool type
-    using CurrentPoolType = typename std::conditional<
-        current_pool_type_val == static_cast<size_t>(FabricChannelPoolType::STATIC),
-        StaticChannelPool<CT_ARG_IDX>,
-        ElasticChannelPool<CT_ARG_IDX>
-    >::type;
+    static_assert(current_pool_type == FabricChannelPoolType::STATIC, "Only STATIC pool type is supported");
+    using CurrentPoolType = StaticChannelPool<CT_ARG_IDX>;
 
     static constexpr size_t next_ct_arg_idx = CT_ARG_IDX + CurrentPoolType::GET_NUM_ARGS_CONSUMED();
 

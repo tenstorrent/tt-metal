@@ -55,31 +55,25 @@ void MultiPoolChannelAllocator::emit_ct_args(
     };
 
     // Step 1: Emit number of pools
-    // a bit hacky for now
     size_t num_pools = 0;
     for (const auto& pool_allocator : pool_allocators_) {
-        if (implements_static_channel_allocator(pool_allocator.get())) {
-            auto [num_sender_channels, num_receiver_channels] =
-                get_static_channel_allocator_num_channels(pool_allocator.get());
-            num_pools += num_sender_channels + num_receiver_channels;
-        } else {
-            num_pools++;
-        }
+        TT_FATAL(
+            implements_static_channel_allocator(pool_allocator.get()), "Only static channel allocators are supported");
+        auto [num_sender_channels, num_receiver_channels] =
+            get_static_channel_allocator_num_channels(pool_allocator.get());
+        num_pools += num_sender_channels + num_receiver_channels;
     }
     ct_args.push_back(static_cast<uint32_t>(num_pools));
 
     // Step 2: Emit array of pool types
     for (size_t i = 0; i < pool_types_.size(); ++i) {
         FabricChannelPoolType pool_type = pool_types_[i];
-        if (pool_type == FabricChannelPoolType::STATIC) {
-            auto [num_sender_channels, num_receiver_channels] =
-                get_static_channel_allocator_num_channels(pool_allocators_[i].get());
-            size_t num_channels = num_sender_channels + num_receiver_channels;
-            for (size_t j = 0; j < num_channels; ++j) {
-                ct_args.push_back(static_cast<uint32_t>(FabricChannelPoolType::STATIC));
-            }
-        } else {
-            ct_args.push_back(static_cast<uint32_t>(pool_type));
+        TT_FATAL(pool_type == FabricChannelPoolType::STATIC, "Only STATIC pool type is supported");
+        auto [num_sender_channels, num_receiver_channels] =
+            get_static_channel_allocator_num_channels(pool_allocators_[i].get());
+        size_t num_channels = num_sender_channels + num_receiver_channels;
+        for (size_t j = 0; j < num_channels; ++j) {
+            ct_args.push_back(static_cast<uint32_t>(FabricChannelPoolType::STATIC));
         }
     }
 

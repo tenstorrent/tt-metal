@@ -298,30 +298,8 @@ using PerfTelemetryRecorder = std::conditional_t<
     LowResolutionBandwidthTelemetry,
     std::conditional_t<PERF_TELEMETRY_DISABLED, bool, std::nullptr_t>>;
 
-// Currently, we enable elastic channels in an all-or-nothing manner for router -> router
-// connections.
-
-constexpr bool ANY_SENDER_CHANNELS_ARE_ELASTIC() {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        if (IS_ELASTIC_SENDER_CHANNEL[i]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-constexpr bool PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC = ANY_SENDER_CHANNELS_ARE_ELASTIC();
-
-// Stubbed out the elastic channel writer adapter until elastic channels implemented
-// Issue: https://github.com/tenstorrent/tt-metal/issues/26311
-template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
-struct RouterElasticChannelWriterAdapter {};
-
 template <uint8_t SENDER_NUM_BUFFERS>
-using RouterToRouterSender = std::conditional_t<
-    PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC,
-    tt::tt_fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
-    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
+using RouterToRouterSender = tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>;
 
 constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;

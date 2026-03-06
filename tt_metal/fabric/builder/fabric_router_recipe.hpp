@@ -17,7 +17,6 @@ namespace tt::tt_fabric {
  */
 enum class FabricChannelPoolType : uint32_t {
     STATIC = 0,
-    ELASTIC = 1,
 };
 
 /**
@@ -43,7 +42,6 @@ struct ChannelPoolDefinition {
  * Key Constraints:
  * - Static pools: Multiple channels can map to a single static pool, but each channel
  *   gets a dedicated 1-to-1 allocation within that pool (no sharing)
- * - Elastic pools: Multiple channels can map to the same elastic pool and share memory dynamically
  *
  * The recipe validates these constraints during construction.
  */

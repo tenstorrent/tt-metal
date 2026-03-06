@@ -1570,11 +1570,6 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     return build_connection_to_fabric_channel(0, channel_id, channel_id);  // Default to VC0
 }
 
-// TODO: take the downstream sender channel, based on the VC index, and use it to construct our
-// `to_sender_channel_adapter` The `to_sender_channel_adapter` type is resolved based on the type of the downstream
-// sender channel it is connecting to.
-//   downstream == static? => instantiate static_sender_channel_adapter
-//   downstream == elastic? => instantiate elastic_sender_channel_adapter
 void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     FabricDatamoverBuilderBase* downstream_builder,
     uint32_t upstream_vc_idx,
