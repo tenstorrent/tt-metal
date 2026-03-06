@@ -120,7 +120,7 @@ void print_tile_rows(
 }
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
+    // DPRINT << "======" << ENDL();
     for (uint16_t r = 0; r < 32; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -137,7 +137,7 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
                       untilize)
                << ENDL();
     }
-    DPRINT << "++++++" << ENDL();
+    // DPRINT << "++++++" << ENDL();
 }
 
 }  // namespace tt::compute::common
