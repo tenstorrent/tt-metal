@@ -416,8 +416,12 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 }
 
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name) {
-    std::string golden_file_base = golden_name.empty() ? test_name : golden_name;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    // Skip golden file comparison only when not using mock (real devices); check against golden only in mock tests
+    if (!rtoptions.get_mock_enabled()) {
+        return;
+    }
+    std::string golden_file_base = golden_name.empty() ? test_name : golden_name;
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
