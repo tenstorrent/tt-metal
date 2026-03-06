@@ -366,9 +366,7 @@ def train():
     print("Loading tokenizer and config...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
-    tokenizer = AutoTokenizer.from_pretrained(
-        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
-    )
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
     yaml_config = load_config(
         CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
@@ -418,7 +416,7 @@ def train():
     # Download safetensors
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
-        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+        repo_id="gpt2",
         filename="model.safetensors",
     )
 
@@ -443,8 +441,8 @@ def train():
 
     # Load dataset
     print("Loading GSM8K dataset...")
-    training_data = datasets.load_dataset("gsm8k", "main", split="train")
-    testing_data = datasets.load_dataset("gsm8k", "main", split="test")
+    training_data = datasets.load_dataset("openai/gsm8k", "main", split="train")
+    testing_data = datasets.load_dataset("openai/gsm8k", "main", split="test")
 
     training_data = tokenize_dataset(training_data, tokenizer)
     testing_data = tokenize_dataset(testing_data, tokenizer)
@@ -480,7 +478,7 @@ def train():
     causal_mask = build_causal_mask(max_sequence_length)
 
     causal_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
 
     logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
@@ -589,18 +587,19 @@ def train():
             total_steps % training_config.eval_every == 0
             or total_steps + 1 == training_config.steps
         ):
-            last_val_loss = validate(
-                tt_model,
-                tokenizer,
-                val_batch_generator,
-                testing_data,
-                loss_fn,
-                causal_mask,
-                logits_mask_tensor,
-                max_sequence_length,
-                total_steps,
-            )
-            val_losses.append(last_val_loss)
+            # last_val_loss = validate(
+            #     tt_model,
+            #     tokenizer,
+            #     val_batch_generator,
+            #     testing_data,
+            #     loss_fn,
+            #     causal_mask,
+            #     logits_mask_tensor,
+            #     max_sequence_length,
+            #     total_steps,
+            # )
+            # val_losses.append(last_val_loss)
+            pass
 
         with open("output.txt", "a") as f:
             f.write(
@@ -625,7 +624,10 @@ def train():
     axs.set_ylabel("Loss")
     axs.legend()
     plt.savefig("training_curves.png")
-    plt.show()
+    # plt.show()
+
+    # Cleanup
+    ttml.autograd.AutoContext.get_instance().close_device()
 
 
 if __name__ == "__main__":
