@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
@@ -32,7 +32,6 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
     SharedExpert,
-    Tiles,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 
@@ -186,22 +185,9 @@ def create_decoder_block_tensors(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
 
-    # ── MoE residual mcast source tensor (on sender core) ──
+    # ── MoE input core (same as gather core (12,9) — attention output IS the MoE input) ──
     input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
     input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
-    ttnn_residual_mcast_src = ttnn.from_torch(
-        torch.randn((M, K), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-        tile=Tiles.TILE_1x32,
-        mesh_mapper=mesh_mapper,
-    )
 
     # ── Gate indices (via prepare_weights utility) ──
     ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
@@ -440,19 +426,20 @@ def create_decoder_block_tensors(
         mesh_mapper=shard_mesh_mapper,
     )
 
-    output_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_attention_block_output = ttnn.from_torch(
-        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
+    # ── Attention block output / MoE residual input (overlapped with sdpa_kv_cache_buffer) ──
+    # These are temporally disjoint: the kv cache on core (12,9) is done after SDPA,
+    # so the attention output and MoE residual input can reuse that L1 region.
+    a_tile_size = a_tile.get_tile_size(ttnn.bfloat16)  # 1×32 tile → 64 bytes
+    num_output_tiles = output_size // 32  # 7168 / 32 = 224 tiles
+    attn_output_overlapped = OverlappedTensor(
+        fused_tensor=sdpa_kv_cache_buffer,
+        tensor_shape=(M, output_size),
+        shard_shape=(M, output_size),
+        core_range_set=gather_core_grid,
         dtype=ttnn.bfloat16,
-        memory_config=output_mem,
-        mesh_mapper=shard_mesh_mapper,
+        tile_shape=(1, 32),
+        byte_offset=0,
+        total_size=num_output_tiles * a_tile_size,
     )
 
     # ── SDPA worker/forwarder tensors ──
@@ -590,7 +577,10 @@ def create_decoder_block_tensors(
     )
 
     # ── Shared expert mcast grid ──
-    sender_core_from_residual = ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
+    def _unwrap(t):
+        return t.fused_tensor if isinstance(t, OverlappedTensor) else t
+
+    sender_core_from_residual = _unwrap(attn_output_overlapped).memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
     return {
@@ -629,9 +619,9 @@ def create_decoder_block_tensors(
         "ttnn_sdpa_output_l": ttnn_sdpa_output_l,
         "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
         "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
-        "ttnn_attention_block_output": ttnn_attention_block_output,
-        # MoE tensors
-        "ttnn_residual_mcast_src": ttnn_residual_mcast_src,
+        "ttnn_attention_block_output": attn_output_overlapped,
+        # MoE tensors (attention_block_output IS the MoE residual input — overlapped with kv cache)
+        "ttnn_residual_mcast_src": attn_output_overlapped,
         "ttnn_gate_bias": layer.gate_bias,
         "ttnn_gate_indices": ttnn_gate_indices,
         "gate_output_scores_tensor": gate_output_scores_tensor,

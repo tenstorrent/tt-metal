@@ -1899,12 +1899,10 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
     }
 #endif
-
+    DPRINT << " DONE ARGS" << ENDL();
 #ifdef COMPILE_TEST_ONLY
     return;
 #endif
-
-    DPRINT << " DONE ARGS" << ENDL();
 
     // ====================================================================
     // Mcast: Initialize persistent mcast

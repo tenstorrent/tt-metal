@@ -795,21 +795,33 @@ class MoeRoutedExpertOp:
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
+        # Supports both plain ttnn.Tensor and OverlappedTensor (when overlapped with kv cache).
         # ==================================================================
-        data_format = shared_residual_mcast_src_tensor.dtype
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+
+        residual_is_overlapped = isinstance(shared_residual_mcast_src_tensor, OverlappedTensor)
+        if residual_is_overlapped:
+            ot = shared_residual_mcast_src_tensor
+            data_format = ot.dtype
+            K = ot.tensor_shape[1]
+            input_core_grid = ot.core_range_set
+            _underlying = ot.fused_tensor
+        else:
+            data_format = shared_residual_mcast_src_tensor.dtype
+            K = shared_residual_mcast_src_tensor.shape[1]
+            input_core_grid = shared_residual_mcast_src_tensor.memory_config().shard_spec.grid
+            _underlying = shared_residual_mcast_src_tensor
         TILE_1x32 = ttnn.Tile((1, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
-        K = shared_residual_mcast_src_tensor.shape[1]
         num_tiles_k = K // TILE_1x32.tile_shape[1]
 
-        input_core_grid = shared_residual_mcast_src_tensor.memory_config().shard_spec.grid
         sender_core = list(input_core_grid.ranges())[0].start
 
-        mesh_device = shared_residual_mcast_src_tensor.device()
+        mesh_device = _underlying.device()
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
-        device = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0].device()
+        device = ttnn.get_device_tensors(_underlying)[0].device()
 
         gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
@@ -925,9 +937,15 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Residual Mcast (raw input from sender → residual CB on mcast grid)
         # ==================================================================
-        residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            residual_mcast_src_cb, shared_residual_mcast_src_tensor
-        )
+        if residual_is_overlapped:
+            residual_fused_device0 = ttnn.get_device_tensors(shared_residual_mcast_src_tensor.fused_tensor)[0]
+            residual_mcast_src_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                residual_mcast_src_cb, shared_residual_mcast_src_tensor, residual_fused_device0
+            )
+        else:
+            residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                residual_mcast_src_cb, shared_residual_mcast_src_tensor
+            )
         # Override tile to 32x32 for RMSNorm compute (mcast just sends raw bytes, doesn't care)
         residual_mcast_src_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         residual_mcast_src_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
@@ -938,7 +956,7 @@ class MoeRoutedExpertOp:
             sender_core=sender_core,
             mcast_grid=mcast_grid,
             src_cb=residual_mcast_src_cb,
-            src_tensor=shared_residual_mcast_src_tensor,
+            src_tensor=_underlying,
             dst_cb=residual_mcast_dst_cb,
             dst_tensor=None,
             sender_semaphore_addr=mcast_data_sender_semaphore_addr,
@@ -954,9 +972,14 @@ class MoeRoutedExpertOp:
         # Reuse residual_mcast_src tensor for CB descriptor (same core, shape, dtype);
         # overridden by _overlap_cbs_with_sdpa_buffer in production.
         # ==================================================================
-        rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            rmsnorm_output_cb, shared_residual_mcast_src_tensor
-        )
+        if residual_is_overlapped:
+            rmsnorm_output_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                rmsnorm_output_cb, shared_residual_mcast_src_tensor, residual_fused_device0
+            )
+        else:
+            rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                rmsnorm_output_cb, shared_residual_mcast_src_tensor
+            )
         rmsnorm_output_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
 
@@ -4026,8 +4049,19 @@ class MoeOp:
             cb_id_context=cb_id_context,
         )
 
-        device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
-        input_tile = device_tensor.get_tile()
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+
+        _residual_underlying = (
+            shared_residual_mcast_src_tensor.fused_tensor
+            if isinstance(shared_residual_mcast_src_tensor, OverlappedTensor)
+            else shared_residual_mcast_src_tensor
+        )
+        device_tensor = ttnn.get_device_tensors(_residual_underlying)[0]
+        input_tile = (
+            device_tensor.get_tile()
+            if not isinstance(shared_residual_mcast_src_tensor, OverlappedTensor)
+            else ttnn.Tile(shared_residual_mcast_src_tensor.tile_shape)
+        )
         input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
 
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
@@ -4081,7 +4115,7 @@ class MoeOp:
         self.ctx = MoeContext(
             routed_ctx=routed_ctx,
             shared_ctx=shared_ctx,
-            mesh_device=shared_residual_mcast_src_tensor.device(),
+            mesh_device=_residual_underlying.device(),
             full_device_grid=routed_ctx.full_device_grid,
             mesh_rows=routed_ctx.mesh_rows,
             mesh_cols=routed_ctx.mesh_cols,
@@ -4211,9 +4245,16 @@ class MoeOp:
         io_tensors += [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor as _OT
+
+        _residual_io = (
+            ctx.shared_residual_mcast_src_tensor.fused_tensor
+            if isinstance(ctx.shared_residual_mcast_src_tensor, _OT)
+            else ctx.shared_residual_mcast_src_tensor
+        )
         io_tensors += [
             ctx.rmsnorm_gamma_tensor.fused_tensor,
-            ctx.shared_residual_mcast_src_tensor,
+            _residual_io,
             ctx.shared_gate_weights_fused_tensor,
             ctx.shared_down_weights_tensor,
             ctx.sdpa_kv_cache_buffer,

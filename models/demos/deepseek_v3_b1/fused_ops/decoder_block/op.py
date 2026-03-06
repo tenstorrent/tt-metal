@@ -334,6 +334,11 @@ class DecoderBlock:
         moe_ctx = moe.ctx
 
         # Build unified IO tensors
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+
+        def _unwrap(t):
+            return t.fused_tensor if isinstance(t, OverlappedTensor) else t
+
         attn_io = [
             input_tensor_mesh,
             intermediate_tensor_mesh,
@@ -349,12 +354,8 @@ class DecoderBlock:
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
-            attention_block_output_tensor,
+            _unwrap(attention_block_output_tensor),
         ]
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
-
-        def _unwrap(t):
-            return t.fused_tensor if isinstance(t, OverlappedTensor) else t
 
         io_tensors = attn_io + [_unwrap(t) for t in moe.io_tensors]
 

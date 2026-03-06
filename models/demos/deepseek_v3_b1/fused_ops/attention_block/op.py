@@ -11,6 +11,7 @@ import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
+    OverlappedTensor,
 )
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     cb_descriptor_from_overlapped_tensor,
@@ -294,7 +295,13 @@ class AttentionBlock:
         post_sdpa_gather3_output_tensors_per_device = ttnn.get_device_tensors(post_sdpa_gather3_output_tensor)
         post_sdpa_intermediate_tensors_per_device = ttnn.get_device_tensors(post_sdpa_intermediate_tensor)
 
-        attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
+        attention_block_output_is_overlapped = isinstance(attention_block_output_tensor, OverlappedTensor)
+        if attention_block_output_is_overlapped:
+            attention_block_output_fused_per_device = ttnn.get_device_tensors(
+                attention_block_output_tensor.fused_tensor
+            )
+        else:
+            attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
 
         assert (
             attention_block_semaphores is not None
@@ -1885,7 +1892,10 @@ class AttentionBlock:
                 post_sdpa_weights2_fused_tensor_device = post_sdpa_weights2_fused_tensors_per_device[device_idx]
                 post_sdpa_gather3_output_tensor_device = post_sdpa_gather3_output_tensors_per_device[device_idx]
                 post_sdpa_intermediate_tensor_device = post_sdpa_intermediate_tensors_per_device[device_idx]
-                attention_block_output_tensor_device = attention_block_output_tensors_per_device[device_idx]
+                if attention_block_output_is_overlapped:
+                    attention_block_output_fused_device = attention_block_output_fused_per_device[device_idx]
+                else:
+                    attention_block_output_tensor_device = attention_block_output_tensors_per_device[device_idx]
 
                 # Get worker core from per-device input tensor shard grid
                 device_local = input_tensor_device.device()
@@ -2735,10 +2745,17 @@ class AttentionBlock:
                 sdpa_kv_cache_running_offset_mcast_core += ccl_temp_cb_descriptor.total_size
                 post_sdpa_cb_list.append(ccl_temp_cb_descriptor)
 
-                # CB 12: CCL output (from sharded tensor)
-                attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    attention_block_output_cb, attention_block_output_tensor_device
-                )
+                # CB 12: CCL output (from sharded tensor or overlapped region)
+                if attention_block_output_is_overlapped:
+                    attention_block_output_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                        attention_block_output_cb,
+                        attention_block_output_tensor,
+                        attention_block_output_fused_device,
+                    )
+                else:
+                    attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        attention_block_output_cb, attention_block_output_tensor_device
+                    )
                 attention_block_output_cb_descriptor.core_ranges = gather_core_grid
                 attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
@@ -3748,7 +3765,9 @@ class AttentionBlock:
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
-            attention_block_output_tensor,
+            attention_block_output_tensor.fused_tensor
+            if isinstance(attention_block_output_tensor, OverlappedTensor)
+            else attention_block_output_tensor,
         ]
         full_device_grid, attention_block_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
