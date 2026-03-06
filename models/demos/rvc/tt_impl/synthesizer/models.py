@@ -177,11 +177,10 @@ class TextEncoder:
             n_layers=n_layers,
             kernel_size=kernel_size,
         )
-        self.proj = Conv1d(
+        self.proj_linear = Linear(
             device=device,
-            in_channels=hidden_channels,
-            out_channels=out_channels * 2,
-            kernel_size=1,
+            in_features=hidden_channels,
+            out_features=out_channels * 2,
         )
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
@@ -189,7 +188,12 @@ class TextEncoder:
         if self.use_f0 and self.emb_pitch is not None:
             self.emb_pitch.load_parameters(parameters, prefix=f"{prefix}emb_pitch.")
         self.encoder.load_parameters(parameters, prefix=f"{prefix}encoder.")
-        self.proj.load_parameters(parameters, key="proj", prefix=prefix)
+        proj_key = (
+            "proj_linear"
+            if (f"{prefix}proj_linear.weight" if prefix else "proj_linear.weight") in parameters
+            else "proj"
+        )
+        self.proj_linear.load_parameters(parameters, key=proj_key, prefix=prefix)
 
     def __call__(self, phone: ttnn.Tensor, pitch: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         x0 = self.emb_phone(phone)
@@ -198,7 +202,7 @@ class TextEncoder:
         x1 = x0 * math.sqrt(self.hidden_channels)
         x2 = ttnn.leaky_relu(x1, negative_slope=0.1)
         x = self.encoder(x2)
-        stats = _to_nlc(self.proj(x))
+        stats = self.proj_linear(x)
         m = ttnn.slice(stats, (0, 0, 0), (stats.shape[0], stats.shape[1], self.out_channels))
         logs = ttnn.slice(
             stats,
@@ -298,19 +302,23 @@ class Generator:
             stride=1,
             padding=3,
         )
-        self.cond = None
+        self.cond_linear = None
         if gin_channels != 0:
-            self.cond = Conv1d(
+            self.cond_linear = Linear(
                 device=device,
-                in_channels=gin_channels,
-                out_channels=upsample_initial_channel,
-                kernel_size=1,
+                in_features=gin_channels,
+                out_features=upsample_initial_channel,
             )
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.conv_pre.load_parameters(parameters, key="conv_pre", prefix=prefix)
-        if self.cond is not None:
-            self.cond.load_parameters(parameters, key="cond", prefix=prefix)
+        if self.cond_linear is not None:
+            cond_key = (
+                "cond_linear"
+                if (f"{prefix}cond_linear.weight" if prefix else "cond_linear.weight") in parameters
+                else "cond"
+            )
+            self.cond_linear.load_parameters(parameters, key=cond_key, prefix=prefix)
         for i, up in enumerate(self.ups):
             up.load_parameters(parameters, key=f"ups.{i}", prefix=prefix)
         for i, rb in enumerate(self.resblocks):
@@ -319,8 +327,8 @@ class Generator:
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x = _to_nlc(self.conv_pre(x))
-        if g is not None and self.cond is not None:
-            x = x + _to_nlc(self.cond(g))
+        if g is not None and self.cond_linear is not None:
+            x = x + self.cond_linear(g)
 
         for i in range(self.num_upsamples):
             x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
@@ -436,7 +444,7 @@ class GeneratorNSF:
         )
 
         self.ups: list[ConvTranspose1d] = []
-        self.noise_convs: list[Conv1d] = []
+        self.noise_convs: list[Conv1d | Linear] = []
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes, strict=True)):
             c_cur = upsample_initial_channel // (2 ** (i + 1))
             self.ups.append(
@@ -463,11 +471,10 @@ class GeneratorNSF:
                 )
             else:
                 self.noise_convs.append(
-                    Conv1d(
+                    Linear(
                         device=device,
-                        in_channels=1,
-                        out_channels=c_cur,
-                        kernel_size=1,
+                        in_features=1,
+                        out_features=c_cur,
                     )
                 )
 
@@ -486,16 +493,16 @@ class GeneratorNSF:
             stride=1,
             padding=3,
         )
-        self.cond = Conv1d(
-            device=device,
-            in_channels=gin_channels,
-            out_channels=upsample_initial_channel,
-            kernel_size=1,
-        )
+        self.cond_linear = Linear(device=device, in_features=gin_channels, out_features=upsample_initial_channel)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.conv_pre.load_parameters(parameters, key="conv_pre", prefix=prefix)
-        self.cond.load_parameters(parameters, key="cond", prefix=prefix)
+        cond_key = (
+            "cond_linear"
+            if (f"{prefix}cond_linear.weight" if prefix else "cond_linear.weight") in parameters
+            else "cond"
+        )
+        self.cond_linear.load_parameters(parameters, key=cond_key, prefix=prefix)
         self.m_source.load_parameters(parameters, prefix=f"{prefix}m_source.")
         for i, up in enumerate(self.ups):
             up.load_parameters(parameters, key=f"ups.{i}", prefix=prefix)
@@ -510,14 +517,17 @@ class GeneratorNSF:
 
         x0 = _to_nlc(self.conv_pre(x))
         if g is not None:
-            x = x0 + _to_nlc(self.cond(g))
+            x = x0 + self.cond_linear(g)
         else:
             x = x0
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x0 = x
             x1 = ttnn.leaky_relu(x0, negative_slope=self.lrelu_slope)
             x = _to_nlc(ups(x1))
-            x_source = _to_nlc(noise_convs(har_source_tt))
+            if isinstance(noise_convs, Linear):
+                x_source = noise_convs(har_source_tt)
+            else:
+                x_source = _to_nlc(noise_convs(har_source_tt))
             x = x + x_source
             xs = self.resblocks[i * self.num_kernels](x)
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):

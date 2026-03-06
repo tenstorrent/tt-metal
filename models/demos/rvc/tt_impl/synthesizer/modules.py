@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.demos.rvc.tt_impl.conv1d import Conv1d
+from models.demos.rvc.tt_impl.linear import Linear
 
 LRELU_SLOPE = 0.1
 
@@ -78,15 +79,14 @@ class WN:
         self.n_layers = n_layers
         self.gin_channels = gin_channels
         self.in_layers: list[Conv1d] = []
-        self.res_skip_layers: list[Conv1d] = []
+        self.res_skip_layers: list[Linear] = []
 
-        self.cond_layer: Conv1d | None = None
+        self.cond_layer: Linear | None = None
         if gin_channels != 0:
-            self.cond_layer = Conv1d(
+            self.cond_layer = Linear(
                 device=device,
-                in_channels=gin_channels,
-                out_channels=2 * hidden_channels * n_layers,
-                kernel_size=1,
+                in_features=gin_channels,
+                out_features=2 * hidden_channels * n_layers,
             )
 
         for i in range(n_layers):
@@ -105,11 +105,10 @@ class WN:
 
             res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
             self.res_skip_layers.append(
-                Conv1d(
+                Linear(
                     device=device,
-                    in_channels=hidden_channels,
-                    out_channels=res_skip_channels,
-                    kernel_size=1,
+                    in_features=hidden_channels,
+                    out_features=res_skip_channels,
                 )
             )
 
@@ -127,7 +126,7 @@ class WN:
         if g is not None:
             if self.cond_layer is None:
                 raise ValueError("g is provided but gin_channels is 0.")
-            g_proj = _conv_output_to_nlc(self.cond_layer(g))
+            g_proj = self.cond_layer(g)
 
         for i, (in_layer, res_skip_layer) in enumerate(zip(self.in_layers, self.res_skip_layers, strict=True)):
             x_in = _conv_output_to_nlc(in_layer(x))
@@ -152,7 +151,7 @@ class WN:
             )
             acts = ttnn.tanh(t_act) * ttnn.sigmoid(s_act)
 
-            res_skip_acts = _conv_output_to_nlc(res_skip_layer(acts))
+            res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
                 res_acts = ttnn.slice(
                     res_skip_acts,
@@ -280,11 +279,10 @@ class ResidualCouplingLayer:
         if channels % 2 != 0:
             raise ValueError("channels should be divisible by 2")
         self.half_channels = channels // 2
-        self.pre = Conv1d(
+        self.pre_linear = Linear(
             device=device,
-            in_channels=self.half_channels,
-            out_channels=hidden_channels,
-            kernel_size=1,
+            in_features=self.half_channels,
+            out_features=hidden_channels,
         )
         self.enc = WN(
             device=device,
@@ -296,25 +294,32 @@ class ResidualCouplingLayer:
             conv_config=conv_config,
             compute_config=compute_config,
         )
-        self.post = Conv1d(
+        self.post_linear = Linear(
             device=device,
-            in_channels=hidden_channels,
-            out_channels=self.half_channels,
-            kernel_size=1,
+            in_features=hidden_channels,
+            out_features=self.half_channels,
         )
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         enc_prefix = f"{prefix}enc." if prefix else "enc."
-        self.pre.load_parameters(parameters, key="pre", prefix=prefix)
+        pre_key = (
+            "pre_linear" if (f"{prefix}pre_linear.weight" if prefix else "pre_linear.weight") in parameters else "pre"
+        )
+        post_key = (
+            "post_linear"
+            if (f"{prefix}post_linear.weight" if prefix else "post_linear.weight") in parameters
+            else "post"
+        )
+        self.pre_linear.load_parameters(parameters, key=pre_key, prefix=prefix)
         self.enc.load_parameters(parameters, prefix=enc_prefix)
-        self.post.load_parameters(parameters, key="post", prefix=prefix)
+        self.post_linear.load_parameters(parameters, key=post_key, prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x0 = ttnn.slice(x, (0, 0, 0), (x.shape[0], x.shape[1], self.half_channels))
         x1 = ttnn.slice(x, (0, 0, self.half_channels), (x.shape[0], x.shape[1], 2 * self.half_channels))
-        h = _conv_output_to_nlc(self.pre(x0))
+        h = self.pre_linear(x0)
         h = self.enc(h, g=g)
-        stats = _conv_output_to_nlc(self.post(h))
+        stats = self.post_linear(h)
         x1 = x1 - stats
         x0 = ttnn.to_layout(x0, ttnn.TILE_LAYOUT)
         x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT)
