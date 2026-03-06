@@ -27,6 +27,10 @@ DEFAULT_PREFILL_LEN = int(os.getenv("DEEPSEEK_V3_MTP_PREFILL_LEN", "16"))
 DEFAULT_VERIFY_STEPS = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", "16"))
 
 
+def _debug_mtp_enabled() -> bool:
+    return os.getenv("DEBUG_MTP", "0") == "1"
+
+
 def _get_reference_path(mesh_device: ttnn.MeshDevice, num_steps: int) -> Path:
     return REFERENCE_DIR / f"mtp_full_model_seq{num_steps}_mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}.pt"
 
@@ -41,6 +45,29 @@ def _get_start_token_id(hf_config) -> int:
             eos_id = eos_id[0] if eos_id else None
         bos_id = eos_id
     return int(bos_id) if bos_id is not None else 1
+
+
+def _assert_reference_start_tokens(payload: dict, gen: DeepseekGenerator, context: str) -> None:
+    if "start_tokens" not in payload:
+        return
+    start_tokens = payload["start_tokens"].to(torch.long)
+    expected_start_id = _get_start_token_id(gen.hf_config)
+    expected_tokens = (torch.arange(gen.batch_size, dtype=torch.long) + expected_start_id) % gen.hf_config.vocab_size
+
+    if start_tokens.shape != expected_tokens.shape or not torch.equal(start_tokens, expected_tokens):
+        mismatch_idx = (start_tokens != expected_tokens).nonzero(as_tuple=False).flatten()[:8]
+        mismatch_preview = []
+        for idx in mismatch_idx.tolist():
+            mismatch_preview.append(
+                f"{idx}: ref={int(start_tokens[idx].item())} expected={int(expected_tokens[idx].item())}"
+            )
+        msg = (
+            f"{context}: reference start_tokens do not match current generator ordering. "
+            f"expected_start_id={expected_start_id} batch_size={gen.batch_size} "
+            f"mismatch_count={int((start_tokens != expected_tokens).sum().item())} "
+            f"mismatches={mismatch_preview}"
+        )
+        pytest.fail(msg)
 
 
 def _prepare_generator(
@@ -415,6 +442,7 @@ def test_mtp_accept_rate_and_perf(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
+    """Validate MTP-only predictor accept rate and throughput against reference IO."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
     reference_path = _get_reference_path(mesh, num_steps)
@@ -451,6 +479,7 @@ def test_mtp_accept_rate_and_perf(
             pytest.skip(
                 f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
             )
+        _assert_reference_start_tokens(payload, gen, context="MTP prefill priming")
 
         total_matches = 0
         total_count = 0
@@ -541,6 +570,7 @@ def test_mtp_prefill_priming(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
+    """Validate prefill priming for MTP (user0) and post-prefill accept rate."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
     reference_path = _get_reference_path(mesh, num_steps)
@@ -579,6 +609,7 @@ def test_mtp_prefill_priming(
             pytest.skip(
                 f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
             )
+        _assert_reference_start_tokens(payload, gen, context="MTP verify batching")
 
         # Build a prompt for user 0 using reference tokens: t0 + t1..t{L-1}
         prompt_tokens = torch.empty((prompt_len,), dtype=torch.long)
@@ -664,6 +695,7 @@ def test_mtp_verify_batching_aliasing(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
+    """Validate verify-lane batching + page-table aliasing correctness and accept rate."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
     reference_path = _get_reference_path(mesh, num_steps)
@@ -699,40 +731,95 @@ def test_mtp_verify_batching_aliasing(
                 f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
             )
 
-        batch_size = gen.batch_size
+        batch_size = gen.batch_size  # total batch across all mesh rows
+        # Per-shard batch size (users per DP shard within a mesh row).
         batch_per_shard = int(gen.batch_size_per_row // gen.dp_factor)
         if batch_per_shard < 2:
             pytest.skip(f"Verify aliasing requires at least 2 lanes per shard; batch_per_shard={batch_per_shard}.")
 
+        # Interleaved layout: per mesh row, prompt/spec lanes alternate -> half the users are prompts.
         prompts_per_row = gen.batch_size_per_row // 2
-        num_prompts = prompts_per_row * mesh.shape[0]
+        # Total prompt lanes across mesh rows (can be capped for debugging).
+        full_num_prompts = prompts_per_row * mesh.shape[0]
+        max_prompts_env = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_MAX_PROMPTS", "0"))
+        num_prompts = min(full_num_prompts, max_prompts_env) if max_prompts_env > 0 else full_num_prompts
+        if max_prompts_env > 0:
+            logger.info(
+                "Capping verify prompts: requested_max={} full_num_prompts={} -> num_prompts={}",
+                max_prompts_env,
+                full_num_prompts,
+                num_prompts,
+            )
         if num_prompts <= 0:
             pytest.skip("No prompt lanes available for verify batching test.")
         if 2 * num_prompts > batch_size:
             pytest.skip(f"Need at least 2x prompt lanes; batch_size={batch_size}, num_prompts={num_prompts}.")
 
+        # Map each prompt index to interleaved prompt/spec user IDs within the batch.
         prompt_user_ids_list: list[int] = []
         spec_user_ids_list: list[int] = []
         for i in range(num_prompts):
             row = i // prompts_per_row
             col = i % prompts_per_row
             base = row * gen.batch_size_per_row
-            prompt_uid = base + 2 * col
-            spec_uid = prompt_uid + 1
+            prompt_uid = base + 2 * col  # even lane = prompt
+            spec_uid = prompt_uid + 1  # odd lane = spec/verify
             prompt_user_ids_list.append(prompt_uid)
             spec_user_ids_list.append(spec_uid)
         prompt_user_ids = torch.tensor(prompt_user_ids_list, dtype=torch.long)
         spec_user_ids = torch.tensor(spec_user_ids_list, dtype=torch.long)
+        logger.info("prompt_user_ids: {}", prompt_user_ids.tolist())
+        logger.info("spec_user_ids: {}", spec_user_ids.tolist())
 
+        # Need at least two future steps for next and next-next token checks.
         steps_available = hidden_states.shape[0] - 2
         if steps_available <= 0:
             pytest.skip("Not enough reference steps for verify batching test.")
-        steps_to_check = min(DEFAULT_VERIFY_STEPS, steps_available)
+        steps_to_check = min(DEFAULT_VERIFY_STEPS, steps_available)  # keep test short
 
+        # Build aliased page tables so spec lanes share prompt-lane KV cache pages.
         decode_page_tables = gen._build_mtp_verify_page_tables(
             num_prompts=num_prompts, verify_offset=0, interleaved=True
         )
+        logger.info("decode_page_tables layers: {}", len(decode_page_tables))
+        if len(decode_page_tables) > 0:
+            try:
+                logger.info("decode_page_tables[0] shape: {}", tuple(decode_page_tables[0].shape))
+            except Exception as exc:
+                logger.info("decode_page_tables[0] shape: <unavailable> ({})", exc)
+        debug_mtp = _debug_mtp_enabled()
+        alias_debug = debug_mtp
+        if alias_debug and len(decode_page_tables) > 0:
+            try:
+                pt0_host = ttnn.to_torch(
+                    decode_page_tables[0],
+                    mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0),
+                )
+                # If replicated across devices, slice to one replica.
+                num_devices = mesh.shape[0] * mesh.shape[1]
+                if num_devices > 1 and pt0_host.shape[0] % num_devices == 0:
+                    rows_per_device = pt0_host.shape[0] // num_devices
+                    pt0_host = pt0_host.reshape(num_devices, rows_per_device, -1)[0]
+                row0 = pt0_host[0].tolist()[:8] if pt0_host.shape[0] > 0 else []
+                row1 = pt0_host[1].tolist()[:8] if pt0_host.shape[0] > 1 else []
+                row2 = pt0_host[2].tolist()[:8] if pt0_host.shape[0] > 2 else []
+                row3 = pt0_host[3].tolist()[:8] if pt0_host.shape[0] > 3 else []
+                eq01 = bool(pt0_host.shape[0] > 1 and torch.equal(pt0_host[0], pt0_host[1]))
+                eq23 = bool(pt0_host.shape[0] > 3 and torch.equal(pt0_host[2], pt0_host[3]))
+                logger.info(
+                    "decode_page_tables[0] host alias debug shape={} row0[:8]={} row1[:8]={} row2[:8]={} row3[:8]={} eq01={} eq23={}",
+                    tuple(int(dim) for dim in pt0_host.shape),
+                    row0,
+                    row1,
+                    row2,
+                    row3,
+                    eq01,
+                    eq23,
+                )
+            except Exception as exc:
+                logger.info("decode_page_tables[0] host alias debug failed: {}", exc)
 
+        # Helper: compute an aliased page table (odd rows alias previous even rows).
         def _build_alias_page_table(base_page_table: torch.Tensor) -> torch.Tensor:
             alias = base_page_table.clone()
             num_rows = int(alias.shape[0])
@@ -740,6 +827,7 @@ def test_mtp_verify_batching_aliasing(
                 alias[row] = alias[row - 1]
             return alias
 
+        # Helper: map a global lane index to device index and local lane within the shard.
         def _lane_to_device_and_local(lane: int) -> tuple[int, int]:
             batch_per_shard = int(gen.batch_size_per_row // gen.dp_factor)
             row = lane // gen.batch_size_per_row
@@ -749,15 +837,75 @@ def test_mtp_verify_batching_aliasing(
             device_idx = row * gen.dp_factor + shard_col
             return device_idx, local_lane
 
-        enable_kv_log = os.getenv("DEEPSEEK_V3_MTP_KV_LOG", "0") == "1"
-        enable_verify_table = os.getenv("DEEPSEEK_V3_MTP_VERIFY_TABLE", "1") == "1"
+        # (lane sanity checks moved below, after logging flags are set)
+
+        # Debug toggles for KV cache snapshots and verify table prints.
+        enable_kv_log = False
+        enable_verify_table = debug_mtp
         min_verify_accept_rate = float(os.getenv("DEEPSEEK_V3_MTP_VERIFY_MIN_ACCEPT_RATE", "0.75"))
+        compare_base = False
+        compare_steps = 0
         log_host_rank_env = os.getenv("TT_LOG_HOST_RANK")
         log_host_rank = int(log_host_rank_env) if log_host_rank_env not in (None, "") else None
         host_rank = int(os.getenv("TT_MESH_HOST_RANK", "0"))
         if log_host_rank is not None and host_rank != log_host_rank:
+            enable_kv_log = False
             enable_verify_table = False
+        if debug_mtp:
+            logger.info(
+                "DEBUG_MTP enabled: compare_base={} compare_steps={} enable_verify_table={} enable_kv_log={} compare_base_reason={} kv_log_reason={}",
+                compare_base,
+                compare_steps,
+                enable_verify_table,
+                enable_kv_log,
+                "disabled because device-side KV snapshot cloning OOMs in verify debug runs",
+                "disabled because full KV host dumps stall before verify decode",
+            )
 
+        # Sanity-check prompt/spec lane aliasing within each shard.
+        mapping_rows: list[str] = []
+        for i in range(num_prompts):
+            prompt_uid = int(prompt_user_ids[i].item())
+            spec_uid = int(spec_user_ids[i].item())
+            prompt_dev, prompt_local = _lane_to_device_and_local(prompt_uid)
+            spec_dev, spec_local = _lane_to_device_and_local(spec_uid)
+
+            if enable_verify_table:
+                mapping_rows.append(
+                    f"{i:>3} | p={prompt_uid:>4} -> (dev={prompt_dev:>2}, lane={prompt_local:>2}) "
+                    f"| s={spec_uid:>4} -> (dev={spec_dev:>2}, lane={spec_local:>2})"
+                )
+
+            assert prompt_dev == spec_dev, (
+                f"Prompt/spec lanes must be on same device: prompt_uid={prompt_uid} dev={prompt_dev}, "
+                f"spec_uid={spec_uid} dev={spec_dev}"
+            )
+            assert (
+                prompt_local % 2 == 0
+            ), f"Prompt lane should be even local_lane: prompt_uid={prompt_uid} local_lane={prompt_local}"
+            assert spec_local == prompt_local + 1, (
+                f"Spec lane must alias adjacent local lane: prompt_uid={prompt_uid} local_lane={prompt_local}, "
+                f"spec_uid={spec_uid} local_lane={spec_local}"
+            )
+
+        if enable_verify_table and mapping_rows:
+            logger.info("MTP verify lane mapping:\n{}", "\n".join(mapping_rows))
+        if gen.base_page_table_host is None:
+            _ = gen._get_page_tables()
+        base_page_table = gen.base_page_table_host.to(torch.int32)
+        alias_page_table = _build_alias_page_table(base_page_table)
+        logger.info(
+            "base_page_table_host shape={} values={}",
+            tuple(int(dim) for dim in base_page_table.shape),
+            base_page_table.tolist(),
+        )
+        logger.info(
+            "alias_page_table_host shape={} values={}",
+            tuple(int(dim) for dim in alias_page_table.shape),
+            alias_page_table.tolist(),
+        )
+
+        # Optional KV cache logger for specific prompt/spec lanes at specific positions.
         def _dump_kv_cache(tag: str, step_idx: int, prompt_lane: int, spec_lane: int) -> None:
             if not enable_kv_log:
                 return
@@ -811,8 +959,8 @@ def test_mtp_verify_batching_aliasing(
                     vec,
                 )
 
-            prompt_pos = step_idx + 1
-            spec_pos = step_idx + 2
+            prompt_pos = step_idx + 1  # position for prompt-lane token
+            spec_pos = step_idx + 2  # position for spec-lane token
             logger.info(
                 "{} cache snapshot: step={} prompt_pos={} spec_pos={} block_size={} kv_dim={}",
                 tag,
@@ -843,36 +991,83 @@ def test_mtp_verify_batching_aliasing(
             "after_seed_decode", step_idx=0, prompt_lane=int(prompt_user_ids[0]), spec_lane=int(spec_user_ids[0])
         )
 
-        prompt_matches = 0
-        prompt_count = 0
-        verify_matches = 0
-        verify_count = 0
+        prompt_matches = 0  # count of correct prompt-lane next-token predictions
+        prompt_count = 0  # total prompt-lane comparisons
+        verify_matches = 0  # count of correct verify-lane next-next predictions (accepted only)
+        verify_count = 0  # total accepted prompt lanes
+
+        # breakpoint()
 
         for step in range(steps_to_check):
             # Current token is reference next_tokens[step] at position step+1 (post-prefill alignment).
-            prompt_tokens = next_tokens[step]
-            positions_prompt = torch.full((batch_size,), step + 1, dtype=torch.int32)
+            prompt_tokens = next_tokens[step].to(torch.int32)
+            positions_prompt = torch.full((batch_size,), step + 1, dtype=torch.int32)  # prompt pos = t+1
 
-            spec_logits = gen._mtp_predict_logits(
+            # MTP predicts next-next tokens from hidden[t] and token[t+1] for all lanes.
+            spec_next_logits = gen._mtp_predict_logits(
                 hidden_states=hidden_states[step],
                 tokens_step=prompt_tokens,
                 positions=positions_prompt,
             )
-            spec_tokens = torch.argmax(spec_logits, dim=-1).to(torch.int32)
-            spec_after_spec_tokens = None
-            if enable_verify_table:
-                positions_after_spec = torch.full((batch_size,), step + 2, dtype=torch.int32)
-                spec_after_spec_logits = gen._mtp_predict_logits(
-                    hidden_states=hidden_states[step + 1],
-                    tokens_step=next_tokens[step + 1],
-                    positions=positions_after_spec,
-                )
-                spec_after_spec_tokens = torch.argmax(spec_after_spec_logits, dim=-1).to(torch.int32)
+            spec_next_all = torch.argmax(spec_next_logits, dim=-1).to(prompt_tokens.dtype)
+            spec_next_prompt = spec_next_all[prompt_user_ids]
+            spec_prev_prompt = spec_next_prompt  # no carry-over in reference-aligned mode
 
+            # MTP prediction from hidden[t+1] for table visibility only.
+            positions_after_spec = torch.full((batch_size,), step + 2, dtype=torch.int32)
+            spec_after_spec_logits = gen._mtp_predict_logits(
+                hidden_states=hidden_states[step + 1],
+                tokens_step=next_tokens[step + 1],
+                positions=positions_after_spec,
+            )
+            spec_after_spec_all = torch.argmax(spec_after_spec_logits, dim=-1).to(torch.int32)
+            spec_after_prompt = spec_after_spec_all[prompt_user_ids]
+
+            # Build 2x-batch verification input:
+            # prompt lanes = token[t+1] at pos t+1; spec lanes = predicted token at pos t+2.
             batched_tokens = prompt_tokens.clone()
             batched_positions = positions_prompt.clone()
-            batched_tokens[spec_user_ids] = spec_tokens[prompt_user_ids]
+            batched_tokens[spec_user_ids] = spec_prev_prompt
             batched_positions[spec_user_ids] = positions_prompt[prompt_user_ids] + 1
+
+            gt_next = next_tokens[step + 1][prompt_user_ids]  # reference next token
+            gt_after_spec = next_tokens[step + 2][prompt_user_ids]  # reference next-next token
+
+            if compare_base and step < compare_steps:
+                kv_cache_current = gen.get_kv_cache()
+                kv_cache_snapshot = [ttnn.clone(tensor) for tensor in kv_cache_current]
+                logits_base_tt = gen._decode_step_tt(
+                    tokens_step=batched_tokens,
+                    positions=batched_positions,
+                    batch_size_per_row=gen.batch_size_per_row,
+                    page_tables=gen._get_page_tables(),
+                    return_hidden=False,
+                )
+                logits_base = ttnn.to_torch(
+                    logits_base_tt,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(-2, -1), mesh_shape=mesh.shape),
+                )
+                ttnn.deallocate(logits_base_tt)
+                gen.ccl.reset_sem_counters()
+
+                logits_base = logits_base.squeeze(0).squeeze(0)
+                pred_base_all = torch.argmax(logits_base, dim=-1).to(torch.int32)
+                pred_base_prompt = pred_base_all[prompt_user_ids]
+
+                base_mismatch = (pred_base_prompt != gt_next).nonzero(as_tuple=False).flatten().tolist()
+                if base_mismatch:
+                    logger.info(
+                        "MTP verify base compare step {}: base mismatches at prompt indices {}",
+                        step,
+                        base_mismatch,
+                    )
+                else:
+                    logger.info("MTP verify base compare step {}: base matches all prompt lanes", step)
+
+                # Restore caches to the snapshot so the aliased decode sees the original state.
+                gen.set_kv_cache(kv_cache_snapshot)
+                for tensor in kv_cache_current:
+                    ttnn.deallocate(tensor)
 
             if step == 0:
                 _dump_kv_cache(
@@ -898,8 +1093,8 @@ def test_mtp_verify_batching_aliasing(
 
             logits_2b = logits_2b.squeeze(0).squeeze(0)
             pred_all = torch.argmax(logits_2b, dim=-1).to(torch.int32)
-            pred_next = pred_all[prompt_user_ids]
-            pred_after_spec = pred_all[spec_user_ids]
+            pred_next = pred_all[prompt_user_ids]  # base-model next-token prediction
+            pred_after_spec = pred_all[spec_user_ids]  # base-model next-next prediction
 
             if step == 0:
                 _dump_kv_cache(
@@ -909,33 +1104,61 @@ def test_mtp_verify_batching_aliasing(
                     spec_lane=int(spec_user_ids[0]),
                 )
 
-            gt_next = next_tokens[step + 1][prompt_user_ids]
-            gt_after_spec = next_tokens[step + 2][prompt_user_ids]
-
             if enable_verify_table:
-                header = "step | user | pos | next_pred | next_spec | pred_after_spec | spec_after_spec | accept/reject"
-                rows = [header]
-                spec_after_prompt = (
-                    spec_after_spec_tokens[prompt_user_ids] if spec_after_spec_tokens is not None else None
-                )
+                header_cols = [
+                    "step",
+                    "req",
+                    "row",
+                    "pos",
+                    "next_pred",
+                    "match_gt",
+                    "spec_prev",
+                    "next_spec",
+                    "pred_after_spec",
+                    "spec_after_spec",
+                    "accept/reject",
+                ]
+                col_widths = [4, 4, 4, 4, 9, 9, 9, 9, 14, 14, 13]
+
+                def _fmt_row(values: list[object]) -> str:
+                    return "\t".join(f"{str(v):>{w}}" for v, w in zip(values, col_widths, strict=True))
+
+                rows = [_fmt_row(header_cols)]
                 for i in range(num_prompts):
                     user_id = int(prompt_user_ids[i].item())
                     pos_id = int(positions_prompt[user_id].item())
                     next_pred_val = int(pred_next[i].item())
-                    next_spec_val = int(spec_tokens[user_id].item())
+                    gt_next_val = int(gt_next[i].item())
+                    match_gt_val = "MATCH" if next_pred_val == gt_next_val else "MISMATCH"
+                    spec_prev_val = int(spec_prev_prompt[i].item())
+                    next_spec_val = int(spec_next_prompt[i].item())
                     pred_after_val = int(pred_after_spec[i].item())
-                    spec_after_val = int(spec_after_prompt[i].item()) if spec_after_prompt is not None else -1
-                    verdict = "ACCEPT" if next_pred_val == next_spec_val else "REJECT"
+                    spec_after_val = int(spec_after_prompt[i].item())
+                    verdict = "ACCEPT" if next_pred_val == spec_prev_val else "REJECT"
                     rows.append(
-                        f"{step} | {user_id} | {pos_id} | {next_pred_val} | {next_spec_val} | "
-                        f"{pred_after_val} | {spec_after_val} | {verdict}"
+                        _fmt_row(
+                            [
+                                step,
+                                i,
+                                user_id,
+                                pos_id,
+                                next_pred_val,
+                                match_gt_val,
+                                spec_prev_val,
+                                next_spec_val,
+                                pred_after_val,
+                                spec_after_val,
+                                verdict,
+                            ]
+                        )
                     )
                 logger.info("MTP verify table:\n{}", "\n".join(rows))
 
             prompt_matches += int((pred_next == gt_next).sum().item())
             prompt_count += int(gt_next.numel())
 
-            accepted_mask = spec_tokens[prompt_user_ids] == gt_next
+            # Accept if base-model next token matches the carried-over spec token.
+            accepted_mask = pred_next == spec_prev_prompt
             if accepted_mask.any():
                 verify_matches += int((pred_after_spec[accepted_mask] == gt_after_spec[accepted_mask]).sum().item())
                 verify_count += int(accepted_mask.sum().item())
@@ -944,12 +1167,12 @@ def test_mtp_verify_batching_aliasing(
         accept_rate = verify_count / max(prompt_count, 1)
         logger.info(f"MTP verify batching prompt match rate: {prompt_matches}/{prompt_count} = {prompt_rate:.3f}")
         logger.info(f"MTP verify batching accept rate: {verify_count}/{prompt_count} = {accept_rate:.3f}")
-        assert accept_rate >= min_verify_accept_rate, (
-            f"MTP verify batching accept rate {accept_rate:.3f} below required minimum " f"{min_verify_accept_rate:.3f}"
-        )
         assert (
             prompt_matches == prompt_count
         ), f"Prompt-lane mismatch under verify batching: {prompt_matches}/{prompt_count}"
+        assert accept_rate >= min_verify_accept_rate, (
+            f"MTP verify batching accept rate {accept_rate:.3f} below required minimum " f"{min_verify_accept_rate:.3f}"
+        )
 
         if verify_count > 0:
             verify_rate = verify_matches / verify_count

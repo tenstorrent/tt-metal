@@ -53,6 +53,10 @@ from models.demos.deepseek_v3.utils.run_config import (
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
+def _debug_mtp_enabled() -> bool:
+    return os.getenv("DEBUG_MTP", "0") == "1"
+
+
 def pad_n_to_dram_banks(n, tile_size=32, num_dram_banks=12):
     """Pad n dimension to be divisible by tile_size * num_dram_banks (default 32 and 12 respectively)."""
     lcm = tile_size * num_dram_banks
@@ -1888,12 +1892,32 @@ class MLA1D(AbstractModule):
             if num_devices > 1 and page_table_host.shape[0] % num_devices == 0:
                 rows_per_device = page_table_host.shape[0] // num_devices
                 page_table_host = page_table_host.reshape(num_devices, rows_per_device, -1)[0]
+            if _debug_mtp_enabled():
+                try:
+                    row0 = page_table_host[0].tolist()[:8] if page_table_host.shape[0] > 0 else []
+                    row1 = page_table_host[1].tolist()[:8] if page_table_host.shape[0] > 1 else []
+                    row2 = page_table_host[2].tolist()[:8] if page_table_host.shape[0] > 2 else []
+                    row3 = page_table_host[3].tolist()[:8] if page_table_host.shape[0] > 3 else []
+                    eq01 = bool(page_table_host.shape[0] > 1 and torch.equal(page_table_host[0], page_table_host[1]))
+                    eq23 = bool(page_table_host.shape[0] > 3 and torch.equal(page_table_host[2], page_table_host[3]))
+                    logger.info(
+                        "MTP alias debug (page_table_host shape={}): row0[:8]={} row1[:8]={} row2[:8]={} row3[:8]={} eq01={} eq23={}",
+                        tuple(int(dim) for dim in page_table_host.shape),
+                        row0,
+                        row1,
+                        row2,
+                        row3,
+                        eq01,
+                        eq23,
+                    )
+                except Exception as exc:
+                    logger.info("MTP alias debug failed: {}", exc)
             alias_mask = cls._compute_alias_mask_from_host(page_table_host)
             cache[key] = alias_mask
             return alias_mask
 
-        debug_enabled = os.getenv("DEEPSEEK_MTP_KV_DEBUG", "0") == "1"
-        debug_max_calls = int(os.getenv("DEEPSEEK_MTP_KV_DEBUG_MAX_CALLS", "1"))
+        debug_enabled = _debug_mtp_enabled()
+        debug_max_calls = 4
         debug_active = False
         if debug_enabled:
             call_count = int(getattr(cls, "_kv_debug_call_count", 0))
@@ -1908,14 +1932,10 @@ class MLA1D(AbstractModule):
                     stage="before",
                 )
 
-        mask_debug_enabled = os.getenv("DEEPSEEK_MTP_UPDATE_MASK_DEBUG", "0") == "1"
-        mask_debug_max_calls = int(os.getenv("DEEPSEEK_MTP_UPDATE_MASK_DEBUG_MAX_CALLS", "1"))
+        mask_debug_enabled = _debug_mtp_enabled()
+        mask_debug_max_calls = 4
         mask_debug_active = False
-        if mask_debug_enabled:
-            call_count = int(getattr(cls, "_kv_mask_debug_call_count", 0))
-            if call_count < mask_debug_max_calls:
-                setattr(cls, "_kv_mask_debug_call_count", call_count + 1)
-                mask_debug_active = True
+        mask_debug_kind = "non_alias"
 
         mesh_device = kvpe_cache.device()
         if mesh_device is None:
@@ -1923,6 +1943,27 @@ class MLA1D(AbstractModule):
 
         # Split KVPE cache updates into prompt and speculation lanes to avoid aliasing races.
         alias_mask = _get_alias_mask(page_table)
+        alias_mask_any = bool(alias_mask.any().item())
+        alias_any_logged = getattr(cls, "_mtp_alias_mask_any_logged", False)
+        if alias_mask_any and not alias_any_logged:
+            setattr(cls, "_mtp_alias_mask_any_logged", True)
+            try:
+                alias_mask_list = alias_mask.to(torch.int32).tolist()
+            except Exception:
+                alias_mask_list = "<unavailable>"
+            logger.info("MTP alias_mask.any() detected: {}", alias_mask_list)
+        if mask_debug_enabled:
+            if alias_mask_any:
+                alias_call_count = int(getattr(cls, "_kv_mask_alias_debug_call_count", 0))
+                if alias_call_count < mask_debug_max_calls:
+                    setattr(cls, "_kv_mask_alias_debug_call_count", alias_call_count + 1)
+                    mask_debug_active = True
+                    mask_debug_kind = "alias"
+            else:
+                non_alias_call_count = int(getattr(cls, "_kv_mask_non_alias_debug_call_count", 0))
+                if non_alias_call_count < 1:
+                    setattr(cls, "_kv_mask_non_alias_debug_call_count", non_alias_call_count + 1)
+                    mask_debug_active = True
         per_shard = int(alias_mask.numel())
         num_devices = mesh_shape[1] if row_idx is not None else (mesh_shape[0] * mesh_shape[1])
         logical_shape = (
@@ -1945,7 +1986,7 @@ class MLA1D(AbstractModule):
                 alias_mask_list = "<unavailable>"
             logger.info(
                 "MTP update mask setup: alias_mask={} per_shard={} total_elems={} logical_shape={} num_devices={} "
-                "num_devices_eff={} is_sharded={} row_idx={}",
+                "num_devices_eff={} is_sharded={} row_idx={} kind={}",
                 alias_mask_list,
                 per_shard,
                 total_elems,
@@ -1954,6 +1995,7 @@ class MLA1D(AbstractModule):
                 num_devices_eff,
                 is_sharded,
                 row_idx,
+                mask_debug_kind,
             )
 
         def _log_split_fallback(reason: str) -> None:
@@ -2029,23 +2071,36 @@ class MLA1D(AbstractModule):
 
                 if mask_debug_active:
                     try:
-                        prompt_mask_list = prompt_mask_host.reshape(num_devices_eff, -1).tolist()
-                        spec_mask_list = spec_mask_host.reshape(num_devices_eff, -1).tolist()
-                    except Exception:
-                        prompt_mask_list = "<unavailable>"
-                        spec_mask_list = "<unavailable>"
-                    logger.info(
-                        "MTP update mask prompt_mask (devices={}, per_shard_padded={}): {}",
-                        num_devices_eff,
-                        per_shard_padded,
-                        prompt_mask_list,
-                    )
-                    logger.info(
-                        "MTP update mask spec_mask (devices={}, per_shard_padded={}): {}",
-                        num_devices_eff,
-                        per_shard_padded,
-                        spec_mask_list,
-                    )
+                        positions_host = ttnn.to_torch(
+                            position_idxs,
+                            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+                        ).to(torch.int32)
+                        raw_positions_shape = tuple(int(dim) for dim in positions_host.shape)
+                        raw_positions_numel = int(positions_host.numel())
+                        positions_host = positions_host.reshape(-1)
+                        if raw_positions_numel < total_elems:
+                            raise RuntimeError(
+                                f"positions_host.numel()={raw_positions_numel} smaller than total_elems={total_elems}"
+                            )
+                        positions_host = positions_host[:total_elems].reshape(mask_shape)
+                        prompt_pos_host = positions_host.clone()
+                        spec_pos_host = positions_host.clone()
+                        prompt_pos_host[prompt_mask_host == 0] = -1
+                        spec_pos_host[spec_mask_host == 0] = -1
+                        logger.info(
+                            "MTP split update tensors [{}]: raw_shape={} raw_numel={} positions={} prompt_mask={} "
+                            "spec_mask={} prompt_pos={} spec_pos={}",
+                            mask_debug_kind,
+                            raw_positions_shape,
+                            raw_positions_numel,
+                            positions_host.reshape(num_devices_eff, -1).tolist(),
+                            prompt_mask_host.reshape(num_devices_eff, -1).tolist(),
+                            spec_mask_host.reshape(num_devices_eff, -1).tolist(),
+                            prompt_pos_host.reshape(num_devices_eff, -1).tolist(),
+                            spec_pos_host.reshape(num_devices_eff, -1).tolist(),
+                        )
+                    except Exception as exc:
+                        logger.info("MTP split update tensor debug failed: {}", exc)
 
                 mask_mesh_mapper = (
                     ttnn.ShardTensorToMesh(mesh_device, dim=0)
@@ -2126,9 +2181,9 @@ class MLA1D(AbstractModule):
         stage: str,
     ) -> None:
         try:
-            prompt_idx = int(os.getenv("DEEPSEEK_MTP_KV_DEBUG_PROMPT_IDX", "0"))
-            spec_idx = int(os.getenv("DEEPSEEK_MTP_KV_DEBUG_SPEC_IDX", "1"))
-            dump_dir = os.getenv("DEEPSEEK_MTP_KV_DUMP_DIR", "")
+            prompt_idx = 0
+            spec_idx = 1
+            dump_dir = ""
             mesh_device = kvpe_cache.device()
             if mesh_device is None:
                 logger.warning("KV debug: mesh device unavailable; skipping snapshot.")

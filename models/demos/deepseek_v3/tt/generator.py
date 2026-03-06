@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -37,6 +36,10 @@ from models.demos.deepseek_v3.utils.weight_config import (
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 MAX_SEQ_LEN = 2048
+
+
+def _debug_mtp_enabled() -> bool:
+    return os.getenv("DEBUG_MTP", "0") == "1"
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -788,6 +791,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(tt_positions)
         return decode_out
+
     def _build_mtp_verify_page_tables(
         self,
         num_prompts: int,
@@ -813,7 +817,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if prompt_indices is None:
             prompt_indices = list(range(num_prompts))
-        debug_page_table = os.getenv("DEEPSEEK_MTP_PAGE_TABLE_DEBUG", "0") == "1"
+        debug_page_table = _debug_mtp_enabled()
         if debug_page_table:
             logger.info(
                 "MTP base page table (shape={}): {}",
@@ -887,7 +891,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if prompt_indices is None:
             prompt_indices = list(range(num_prompts))
-        debug_page_table = os.getenv("DEEPSEEK_MTP_PAGE_TABLE_DEBUG", "0") == "1"
+        debug_page_table = _debug_mtp_enabled()
         if debug_page_table:
             logger.info(
                 "MTP base MTP page table (shape={}): {}",
@@ -1281,10 +1285,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                 decode_step_user_tokens: List[List[int]] = []
                 mtp_accept_rate = None
                 mtp_accepts = None
-                debug_mtp = bool(int(os.getenv("DEEPSEEK_MTP_DEBUG", "0")))
-                debug_mtp_steps = int(os.getenv("DEEPSEEK_MTP_DEBUG_STEPS", "3"))
+                debug_mtp = bool(int(os.getenv("DEBUG_MTP", "0")))
+                debug_mtp_steps = 3
                 debug_mtp_step_idx = 0
-                mtp_step_trace = bool(int(os.getenv("DEEPSEEK_MTP_STEP_TRACE", "0")))
+                mtp_step_trace = debug_mtp
                 if use_mtp_path:
                     if self.mtp_skip_on_accept is None:
                         skip_accept_decode = os.getenv("DEEPSEEK_MTP_DISABLE_SKIP_ACCEPT", "0") != "1"
@@ -1308,7 +1312,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 f"Invalid DEEPSEEK_MTP_VERIFY_OFFSET={verify_offset} for "
                                 f"num_prompts={num_of_prompts}, num_users={num_of_users}"
                             )
-                    if os.getenv("DEEPSEEK_MTP_PAGE_TABLE_DEBUG", "0") == "1":
+                    if _debug_mtp_enabled():
                         batch_per_shard = even_int_div(self.batch_size_per_row, self.dp_factor)
                         mesh_rows = int(self.mesh_device.shape[0])
                         logger.info(
