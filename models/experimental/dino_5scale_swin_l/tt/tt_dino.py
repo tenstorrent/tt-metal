@@ -25,8 +25,21 @@ from models.experimental.dino_5scale_swin_l.tt.tt_encoder import TtDINOEncoder
 from models.experimental.dino_5scale_swin_l.tt.tt_decoder import (
     TtDINODecoder,
     TtRegBranch,
-    inverse_sigmoid_torch,
+    inverse_sigmoid_ttnn,
 )
+
+# Tile alignment for ttnn.concat (TILE layout requires aligned dims)
+TILE_ALIGN = 32
+
+
+def _tile_aligned_hw(H: int, W: int) -> int:
+    """Return padded H*W: tile-aligned and divisible by H (for encoder value reshape)."""
+    hw = H * W
+    padded = (hw + TILE_ALIGN - 1) // TILE_ALIGN * TILE_ALIGN
+    if padded % H != 0:
+        padded = ((hw + H - 1) // H) * H
+        padded = (padded + TILE_ALIGN - 1) // TILE_ALIGN * TILE_ALIGN
+    return padded
 
 
 def sine_positional_encoding(
@@ -241,73 +254,109 @@ class TtDINO:
         mlvl_feats_tt: List[ttnn.Tensor],
     ) -> Dict[str, Any]:
         """
-        Flatten and positional encoding on device; concat on host (ttnn.concat
-        requires TILE; spatial dims are not always tile-aligned).
+        Flatten and positional encoding on device; concat on device with padding
+        so that each level's H*W is tile-aligned (ttnn.concat requires TILE).
+        Slices out valid [B, N, 256] before returning so encoder/pre_decoder see unpadded sequence.
 
-        Args:
-            mlvl_feats_tt: list of 5 NCHW ttnn tensors from neck [B, 256, H_i, W_i]
-
-        Returns same keys as pre_transformer, with feat_flatten and feat_pos as
-        ttnn tensors, and spatial_shapes/level_start_index/valid_ratios as torch.
+        Returns feat_flatten, feat_pos as ttnn tensors [B, N, 256]; level_start_index is unpadded.
         """
-        logger.info("Pre-transformer (TT): flatten + PE on device...")
+        logger.info("Pre-transformer (TT): flatten + pad + PE + concat on device...")
         sh0 = tuple(mlvl_feats_tt[0].shape)
         B, C = int(sh0[0]), int(sh0[1])
-        feat_flat_list_tt: List[ttnn.Tensor] = []
-        pos_torch_list: List[torch.Tensor] = []
+        feat_padded_list: List[ttnn.Tensor] = []
+        pos_padded_list: List[ttnn.Tensor] = []
         spatial_shapes_list: List[List[int]] = []
+        padded_hw_list: List[int] = []
+        hw_list: List[int] = []
 
         for lvl, feat_tt in enumerate(mlvl_feats_tt):
             sh = tuple(feat_tt.shape)
             H, W = int(sh[2]), int(sh[3])
+            hw = H * W
+            padded_hw = _tile_aligned_hw(H, W)
             spatial_shapes_list.append([H, W])
+            padded_hw_list.append(padded_hw)
+            hw_list.append(hw)
 
             # Flatten on device: (B, C, H, W) -> (B, H*W, C)
             feat_tt = ttnn.to_layout(feat_tt, ttnn.ROW_MAJOR_LAYOUT)
             feat_tt = ttnn.permute(feat_tt, (0, 2, 3, 1))
-            feat_flat_tt = ttnn.reshape(feat_tt, (B, H * W, C))
-            feat_flat_list_tt.append(feat_flat_tt)
+            feat_flat_tt = ttnn.reshape(feat_tt, (B, hw, C))
+            if padded_hw > hw:
+                pad_count = padded_hw - hw
+                zeros_tt = ttnn.zeros(
+                    (B, pad_count, C),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=self._dram_cfg,
+                )
+                feat_flat_tt = ttnn.concat([feat_flat_tt, zeros_tt], dim=1)
+                ttnn.deallocate(zeros_tt)
+            feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
+            feat_padded_list.append(feat_flat_tt)
 
-            # PE on device: cached [1, H*W, 256] + level_embed; then to host and expand to B
+            # PE on device: cached [1, H*W, 256] + level_embed, then pad and expand to B
             pos_tt = self._get_pe_tt(int(H), int(W))
             level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
             pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
-            pos_torch = ttnn.to_torch(ttnn.from_device(pos_tt)).float()
-            ttnn.deallocate(pos_tt)
-            pos_torch = pos_torch.repeat(B, 1, 1)  # [1, H*W, 256] -> [B, H*W, 256]
-            pos_torch_list.append(pos_torch)
+            if padded_hw > hw:
+                pad_count = padded_hw - hw
+                zeros_pos = ttnn.zeros(
+                    (1, pad_count, C),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=self._dram_cfg,
+                )
+                pos_tt = ttnn.concat([pos_tt, zeros_pos], dim=1)
+                ttnn.deallocate(zeros_pos)
+            pos_tt = ttnn.repeat(pos_tt, (B, 1, 1))
+            pos_tt = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
+            pos_padded_list.append(pos_tt)
 
-        # Concat on host (ttnn.concat requires TILE; H*W often not tile-aligned)
-        feat_torch_list = [ttnn.to_torch(ttnn.from_device(t)) for t in feat_flat_list_tt]
-        for t in feat_flat_list_tt:
+        # Concat on device (all levels are tile-aligned)
+        feat_flatten_padded = ttnn.concat(feat_padded_list, dim=1)
+        feat_pos_padded = ttnn.concat(pos_padded_list, dim=1)
+        for t in feat_padded_list:
+            ttnn.deallocate(t)
+        for t in pos_padded_list:
             ttnn.deallocate(t)
 
-        feat_flatten = torch.cat(feat_torch_list, dim=1)
-        feat_pos = torch.cat(pos_torch_list, dim=1)
+        N = sum(hw_list)
+        N_padded = sum(padded_hw_list)
         spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+        # Slice out valid [B, N, C] so encoder/pre_decoder see unpadded sequence
+        padded_starts = [0] + list(torch.tensor(padded_hw_list, dtype=torch.long).cumsum(0)[:-1].tolist())
+        if N_padded > N:
+            feat_segments = []
+            pos_segments = []
+            for lvl in range(len(hw_list)):
+                start = padded_starts[lvl]
+                end = start + hw_list[lvl]
+                feat_segments.append(ttnn.slice(feat_flatten_padded, [0, start, 0], [B, end, C]))
+                pos_segments.append(ttnn.slice(feat_pos_padded, [0, start, 0], [B, end, C]))
+            feat_flatten_tt = ttnn.concat(feat_segments, dim=1)
+            feat_pos_tt = ttnn.concat(pos_segments, dim=1)
+            ttnn.deallocate(feat_flatten_padded)
+            ttnn.deallocate(feat_pos_padded)
+            for t in feat_segments:
+                ttnn.deallocate(t)
+            for t in pos_segments:
+                ttnn.deallocate(t)
+        else:
+            feat_flatten_tt = feat_flatten_padded
+            feat_pos_tt = feat_pos_padded
+
         level_start_index = torch.cat(
             [
                 spatial_shapes.new_zeros((1,)),
                 spatial_shapes.prod(1).cumsum(0)[:-1],
             ]
         )
-        valid_ratios = feat_flatten.new_ones(B, len(mlvl_feats_tt), 2)
+        valid_ratios = torch.ones(B, len(mlvl_feats_tt), 2, dtype=torch.float32)
 
-        feat_flatten_tt = ttnn.from_torch(
-            feat_flatten.to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        feat_pos_tt = ttnn.from_torch(
-            feat_pos.to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        logger.info(
-            f"Pre-transformer (TT): feat_flatten {tuple(feat_flatten.shape)}, "
-            f"spatial_shapes {spatial_shapes.tolist()}"
-        )
+        logger.info(f"Pre-transformer (TT): feat_flatten [B={B}, N={N}], " f"spatial_shapes {spatial_shapes.tolist()}")
         return {
             "feat_flatten": feat_flatten_tt,
             "feat_pos": feat_pos_tt,
@@ -488,50 +537,72 @@ class TtDINO:
     def forward_heads(
         self,
         hidden_states: List[ttnn.Tensor],
-        references: List[torch.Tensor],
+        references: List[torch.Tensor | ttnn.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Apply classification and regression heads to decoder outputs.
+        All head computation (cls linear, reg branch, inverse_sigmoid, add, sigmoid)
+        is done on device; results are stacked on device and converted to torch once at the end.
 
         Args:
             hidden_states: list of 6 ttnn [B, num_queries, 256] (normed decoder outputs)
-            references: list of 7 torch [B, num_queries, 4] (initial + per-layer)
+            references: list of 7 [B, num_queries, 4]: references[0] torch, references[1:] ttnn
 
         Returns:
             all_cls: [num_layers, B, num_queries, num_classes] float32
             all_coords: [num_layers, B, num_queries, 4] float32 (sigmoid coords)
         """
-        logger.info("Detection heads: computing class logits and bbox coords...")
-        all_cls = []
-        all_coords = []
+        logger.info("Detection heads: computing class logits and bbox coords on device...")
+        all_cls_tt: List[ttnn.Tensor] = []
+        all_coords_tt: List[ttnn.Tensor] = []
 
         for layer_id in range(len(hidden_states)):
             hidden_state = hidden_states[layer_id]
             reference = references[layer_id]
-            if isinstance(reference, ttnn.Tensor):
-                reference = ttnn.to_torch(reference)
 
-            # Classification: Linear(256, 80) on device
+            # Classification: Linear(256, num_classes) on device
             cls_w = self.cls_branches[layer_id]["weight"]
             cls_b = self.cls_branches[layer_id]["bias"]
             cls_out_tt = ttnn.linear(hidden_state, cls_w, bias=cls_b)
-            cls_out = ttnn.to_torch(cls_out_tt).float()[:, : self.num_queries, :]
-            ttnn.deallocate(cls_out_tt)
+            all_cls_tt.append(cls_out_tt)
 
-            # Regression: reg_branch on device + inverse_sigmoid(reference)
+            # Regression: reg_branch on device
             reg_out_tt = self.reg_branches_head[layer_id](hidden_state)
-            reg_out = ttnn.to_torch(reg_out_tt).float()[:, : self.num_queries, :]
+            # Reference to device, inverse_sigmoid on device, then add + sigmoid on device
+            # references[0] is torch (initial); references[1:] are ttnn from decoder
+            if isinstance(reference, torch.Tensor):
+                ref_tt = ttnn.from_torch(
+                    reference.to(torch.bfloat16),
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=self._dram_cfg,
+                )
+                ref_inv_tt = inverse_sigmoid_ttnn(ref_tt, eps=1e-3)
+                ttnn.deallocate(ref_tt)
+            else:
+                ref_tt = reference
+                ref_inv_tt = inverse_sigmoid_ttnn(ref_tt, eps=1e-3)
+            coords_tt = ttnn.sigmoid(ttnn.add(reg_out_tt, ref_inv_tt))
+            ttnn.deallocate(ref_inv_tt)
             ttnn.deallocate(reg_out_tt)
+            all_coords_tt.append(coords_tt)
+            logger.info(f"  Head layer {layer_id}: cls and coords on device")
 
-            ref_inv = inverse_sigmoid_torch(reference, eps=1e-3)
-            coords = (reg_out + ref_inv).sigmoid()
+        # Stack on device: [num_layers, B, num_queries, C]
+        stacked_cls_tt = ttnn.stack(all_cls_tt, dim=0)
+        stacked_coords_tt = ttnn.stack(all_coords_tt, dim=0)
+        for t in all_cls_tt:
+            ttnn.deallocate(t)
+        for t in all_coords_tt:
+            ttnn.deallocate(t)
 
-            all_cls.append(cls_out)
-            all_coords.append(coords)
-            logger.info(f"  Head layer {layer_id}: cls {cls_out.shape}, coords {coords.shape}")
-
-        all_cls = torch.stack(all_cls, dim=0)
-        all_coords = torch.stack(all_coords, dim=0)
+        # Single host transfer and convert to float32
+        _cls_t: torch.Tensor = ttnn.to_torch(stacked_cls_tt)
+        all_cls = _cls_t.float()[:, :, : self.num_queries, :]
+        _coords_t: torch.Tensor = ttnn.to_torch(stacked_coords_tt)
+        all_coords = _coords_t.float()[:, :, : self.num_queries, :]
+        ttnn.deallocate(stacked_cls_tt)
+        ttnn.deallocate(stacked_coords_tt)
         logger.info(f"Detection heads done: cls {all_cls.shape}, coords {all_coords.shape}")
 
         return all_cls, all_coords
@@ -575,7 +646,10 @@ class TtDINO:
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
 
-        pre_dec = self.pre_decoder(memory_tt, pre_trans["spatial_shapes"])
+        pre_dec = self.pre_decoder(
+            memory_tt,
+            pre_trans["spatial_shapes"],
+        )
 
         logger.info("Running decoder...")
         hidden_states, references = self.decoder(
@@ -679,7 +753,10 @@ class TtDINO:
             N = pre_trans["spatial_shapes"].prod(1).sum().item()
             encoder_memory_torch = ttnn.to_torch(memory_tt).float()[:, :N, :]
 
-        pre_dec = self.pre_decoder(memory_tt, pre_trans["spatial_shapes"])
+        pre_dec = self.pre_decoder(
+            memory_tt,
+            pre_trans["spatial_shapes"],
+        )
 
         logger.info("Running decoder...")
         hidden_states, references = self.decoder(
