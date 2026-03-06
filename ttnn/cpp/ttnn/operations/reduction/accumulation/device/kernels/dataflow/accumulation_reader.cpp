@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
+
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
@@ -9,15 +11,6 @@
 #include "experimental/tensor.h"
 
 #include "../accumulation_common.hpp"
-
-namespace {
-
-constexpr union {
-    float f;
-    int32_t u;
-} caster{.f = 1.0f};
-
-}  // namespace
 
 void kernel_main() {
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
@@ -43,7 +36,11 @@ void kernel_main() {
     cb_start_obj.reserve_back(ONE_TILE);
     uint32_t data_start_addr = cb_start_obj.get_write_ptr();
 
-    const int32_t ACC_START_VALUE_F32{caster.u};
+    int32_t acc_start_val_u;
+    const float one_f = 1.0f;
+    std::memcpy(&acc_start_val_u, &one_f, sizeof(int32_t));
+
+    const int32_t ACC_START_VALUE_F32{acc_start_val_u};
     constexpr int32_t ACC_START_VALUE_F16{0x3F80};
     // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those (issue
     // #21108)
