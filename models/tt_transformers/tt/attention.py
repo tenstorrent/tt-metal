@@ -1173,7 +1173,6 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
-                batch_size=batch_size,
             )
 
         return output_11SH
