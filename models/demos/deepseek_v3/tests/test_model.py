@@ -543,6 +543,7 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     decode_position_ids,
+    num_hidden_layers,
     hf_config_short,
     cache_path,
     mesh_device,
@@ -551,7 +552,7 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    hf_config_short.num_hidden_layers = 5
+    hf_config_short.num_hidden_layers = num_hidden_layers
 
     if mode != "decode":
         decode_position_ids = None

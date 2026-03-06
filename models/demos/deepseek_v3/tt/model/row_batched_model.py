@@ -35,6 +35,158 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 class RowBatchedModel(SharedStateAddOn, AbstractModule):
     @classmethod
+    def get_dtype_tag(cls, hf_config: PretrainedConfig) -> str:
+        """Derive a cache tag from the weight dtypes used by RowBatchedModel.
+
+        The tag is assembled from module-level dtype constants defined in the
+        constituent weight-conversion modules.  Updating those constants
+        automatically changes the tag, preventing stale-cache collisions.
+        """
+        from models.demos.deepseek_v3.tt.experts import EXPERT_DOWN_WEIGHT_DTYPE, EXPERT_UP_WEIGHT_DTYPE
+        from models.demos.deepseek_v3.tt.lm_head1d import LM_HEAD_WEIGHT_DTYPE
+        from models.demos.deepseek_v3.tt.mla.mla1d import WKV_B_WEIGHT_DTYPE
+
+        _abbrev = {
+            ttnn.bfloat16: "bf16",
+            ttnn.bfloat8_b: "bf8b",
+            ttnn.bfloat4_b: "bf4b",
+            ttnn.float32: "fp32",
+        }
+
+        def abbrev(dtype: ttnn.DataType) -> str:
+            return _abbrev.get(dtype, dtype.name.lower())
+
+        return (
+            f"wkv-{abbrev(WKV_B_WEIGHT_DTYPE)}"
+            f"_exp-up-{abbrev(EXPERT_UP_WEIGHT_DTYPE)}"
+            f"_exp-dn-{abbrev(EXPERT_DOWN_WEIGHT_DTYPE)}"
+            f"_lmh-{abbrev(LM_HEAD_WEIGHT_DTYPE)}"
+        )
+
+    @classmethod
+    def get_num_cached_layers(cls, weight_config: WeightConfig) -> int:
+        """Return the number of transformer layers present in weight_config."""
+        return len(weight_config.get("mlp_decoder_block", [])) + len(weight_config.get("moe_decoder_block", []))
+
+    @classmethod
+    def augment_weight_config(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: list[dict[str, torch.Tensor]],
+        existing_config: WeightConfig | None,
+        output_path: Path,
+        mesh_device: ttnn.MeshDevice,
+    ) -> WeightConfig:
+        """Produce a weight config for hf_config.num_hidden_layers layers.
+
+        Reuses layers already present in existing_config and converts only the
+        missing ones.  Shared weights (embedding, norm, lm_head) are reused if
+        present; otherwise converted fresh.
+        """
+        assert (
+            hf_config.first_k_dense_replace <= hf_config.num_hidden_layers
+        ), "Number of non-MoE blocks cannot be greater than the total number of blocks."
+        (state_dict,) = state_dicts
+
+        n = hf_config.num_hidden_layers
+        k = hf_config.first_k_dense_replace
+
+        existing_mlp: list = existing_config.get("mlp_decoder_block", []) if existing_config else []
+        existing_moe: list = existing_config.get("moe_decoder_block", []) if existing_config else []
+        target_mlp = min(n, k)
+        target_moe = max(0, n - k)
+
+        # Convert only missing MLP layers.
+        new_mlp = list(existing_mlp)
+        for layer_idx in tqdm(
+            range(len(existing_mlp), target_mlp),
+            desc="Converting MLP layers",
+        ):
+            new_mlp.append(
+                DecoderBlock2D.convert_weights(
+                    hf_config,
+                    (sub_state_dict(state_dict, f"model.layers.{layer_idx}."),),
+                    output_path / f"mlp_decoder_block_{layer_idx}",
+                    mesh_device,
+                )
+            )
+
+        # Convert only missing MoE layers.
+        new_moe = list(existing_moe)
+        for i in tqdm(
+            range(len(existing_moe), target_moe),
+            desc="Converting MoE layers",
+        ):
+            layer_idx = k + i
+            new_moe.append(
+                MoEDecoderBlock2D.convert_weights(
+                    hf_config,
+                    (sub_state_dict(state_dict, f"model.layers.{layer_idx}."),),
+                    output_path / f"moe_decoder_block_{layer_idx}",
+                    mesh_device,
+                )
+            )
+
+        # Reuse or convert shared weights.
+        if existing_config and "embedding" in existing_config:
+            embedding = existing_config["embedding"]
+        else:
+            embedding = Embedding2D.convert_weights(
+                hf_config,
+                (sub_state_dict(state_dict, "model.embed_tokens."),),
+                output_path / "embedding",
+                mesh_device,
+            )
+
+        if existing_config and "norm" in existing_config:
+            norm = existing_config["norm"]
+        else:
+            norm = DistributedRMSNorm.convert_weights(
+                hf_config,
+                [sub_state_dict(state_dict, "model.norm.")] * mesh_device.shape[0],
+                output_path / "norm",
+                mesh_device,
+            )
+
+        if existing_config and "lm_head" in existing_config:
+            lm_head = existing_config["lm_head"]
+        else:
+            lm_head = LMHead1D.convert_weights(
+                hf_config,
+                [sub_state_dict(state_dict, "lm_head.")],
+                output_path / "lm_head",
+                mesh_device,
+            )
+
+        return {
+            "embedding": embedding,
+            "mlp_decoder_block": new_mlp,
+            "moe_decoder_block": new_moe,
+            "norm": norm,
+            "lm_head": lm_head,
+        }
+
+    @classmethod
+    def slice_weight_config(cls, weight_config: WeightConfig, hf_config: PretrainedConfig) -> WeightConfig:
+        """Slice a larger weight config down to hf_config.num_hidden_layers.
+
+        Keeps the shared weights (embedding, norm, lm_head) unchanged and
+        truncates the per-layer lists to the requested number of layers.
+        ``_meta`` is intentionally excluded from the result; the caller is
+        responsible for writing fresh metadata if needed.
+        """
+        n = hf_config.num_hidden_layers
+        k = hf_config.first_k_dense_replace
+        return {
+            key: val
+            for key, val in weight_config.items()
+            if key not in ("_meta", "mlp_decoder_block", "moe_decoder_block")
+        } | {
+            "mlp_decoder_block": weight_config["mlp_decoder_block"][: min(n, k)],
+            "moe_decoder_block": weight_config["moe_decoder_block"][: max(0, n - k)],
+        }
+
+    @classmethod
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,

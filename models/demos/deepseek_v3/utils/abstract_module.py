@@ -178,6 +178,76 @@ class AbstractModule(ABC):
         raise NotImplementedError(f"Subclasses of {AbstractModule.__name__} must implement the convert_weights method")
 
     @classmethod
+    def get_dtype_tag(cls, hf_config: PretrainedConfig) -> str | None:
+        """Return a string tag identifying the weight data formats used by this module.
+
+        Subclasses that participate in the dtype-tagged cache system must override
+        this to return a non-None string derived deterministically from the module's
+        weight conversion dtype choices (and optionally from hf_config parameters
+        that influence those choices).  The tag becomes a path component in the
+        weight cache, so different dtype configurations produce separate, non-colliding
+        cache directories.
+
+        Returns:
+            A non-None string tag (e.g. ``"wkv-bf8b_exp-bf8b-bf4b_lmh-bf4b"``) for
+            modules that implement the dtype-tagged cache, or ``None`` to opt out and
+            use the legacy untagged cache path.
+        """
+        return None
+
+    @classmethod
+    def slice_weight_config(cls, weight_config: WeightConfig, hf_config: PretrainedConfig) -> WeightConfig | None:
+        """Return a weight config sliced to hf_config.num_hidden_layers from a larger cache.
+
+        Called by the weight-config loader when a cache with more layers than requested
+        is found and the loader wants to reuse it without re-converting weights.
+        Subclasses that store per-layer weight lists must override this to truncate
+        those lists appropriately.
+
+        Args:
+            weight_config: Full weight config loaded from the larger cache (paths already
+                validated relative to that cache's root).
+            hf_config: Config for the *target* model (fewer layers than the source cache).
+
+        Returns:
+            A new weight config referencing only the required layers, or ``None`` if
+            this module does not support subset loading (forces weight re-conversion).
+        """
+        return None
+
+    @classmethod
+    def get_num_cached_layers(cls, weight_config: WeightConfig) -> int:
+        """Return the number of transformer layers present in *weight_config*.
+
+        Used by the accumulating cache to decide whether the on-disk cache is
+        sufficient for the requested number of layers or needs to be augmented.
+
+        Subclasses that store per-layer weight lists must override this.
+        The default returns 0 (opt-out — forces full conversion).
+        """
+        return 0
+
+    @classmethod
+    def augment_weight_config(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        existing_config: WeightConfig | None,
+        output_path: Path,
+        mesh_device: "ttnn.MeshDevice",
+    ) -> WeightConfig:
+        """Return a weight config with exactly ``hf_config.num_hidden_layers`` layers.
+
+        Reuses entries from *existing_config* (if provided) and converts only the
+        missing layers.  When *existing_config* is ``None`` this is equivalent to a
+        full conversion via ``convert_weights``.
+
+        Subclasses that participate in the accumulating cache must override this.
+        The default falls back to ``convert_weights`` (ignores existing_config).
+        """
+        return cls.convert_weights(hf_config, state_dicts, output_path, mesh_device)
+
+    @classmethod
     def create_state(cls, hf_config: PretrainedConfig, *args, **kwargs) -> ModelState:
         """Create a new state for the module.
         Subclasses may override this method to initialize the state of the module, which is typically used to

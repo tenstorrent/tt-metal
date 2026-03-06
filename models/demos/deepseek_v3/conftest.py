@@ -27,6 +27,19 @@ def pytest_addoption(parser):
         action="store_true",
         help="Reset weight configs for tests",
     )
+    parser.addoption(
+        "--num-hidden-layers",
+        type=int,
+        default=None,
+        help="Override the number of hidden layers to test (default: runs [5, 6])",
+    )
+
+
+def pytest_generate_tests(metafunc):
+    if "num_hidden_layers" in metafunc.fixturenames:
+        override = metafunc.config.getoption("--num-hidden-layers", default=None)
+        values = [override] if override is not None else [5]
+        metafunc.parametrize("num_hidden_layers", values)
 
 
 def automatically_detect_current_device_type() -> str:
