@@ -137,6 +137,32 @@ def _is_layout_dict(value: Any) -> bool:
     return isinstance(value, dict) and value.get("type") == "Layout"
 
 
+def _parse_sdpa_program_config(value: dict):
+    """Parse an SDPAProgramConfig dict into a ttnn.transformer.SDPAProgramConfig object."""
+    import re
+    import ttnn
+
+    val_str = str(value.get("value", ""))
+    if "SDPAProgramConfig" not in val_str:
+        return None
+
+    # Parse: SDPAProgramConfig(compute_with_storage_grid_size=(x=8,y=8), ...q_chunk_size=64, k_chunk_size=64, exp_approx_mode=0)
+    grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", val_str)
+    q_chunk_m = re.search(r"q_chunk_size=(\d+)", val_str)
+    k_chunk_m = re.search(r"k_chunk_size=(\d+)", val_str)
+    exp_m = re.search(r"exp_approx_mode=(\d+)", val_str)
+
+    if not grid_m or not q_chunk_m or not k_chunk_m:
+        return None
+
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+        q_chunk_size=int(q_chunk_m.group(1)),
+        k_chunk_size=int(k_chunk_m.group(1)),
+        exp_approx_mode=bool(int(exp_m.group(1))) if exp_m else False,
+    )
+
+
 def parse_dict_value(key: str, value: Any) -> Any:
     """Parse a dict value into the appropriate ttnn object based on its structure.
 
@@ -151,6 +177,11 @@ def parse_dict_value(key: str, value: Any) -> Any:
         elif _is_compute_kernel_config_dict(value):
             return dict_to_compute_kernel_config(value)
         elif _is_program_config_dict(value):
+            # Try SDPA program config first
+            if "SDPA" in str(value.get("type", "")) or "SDPA" in str(value.get("value", "")):
+                result = _parse_sdpa_program_config(value)
+                if result is not None:
+                    return result
             return dict_to_program_config(value)
         elif _is_core_grid_dict(value):
             return dict_to_core_grid(value)

@@ -177,26 +177,40 @@ def run(
     torch_k_paged = page_cache(torch_k_unpaged, page_block_size, permutation)
     torch_v_paged = page_cache(torch_v_unpaged, page_block_size, permutation)
 
-    # Torch reference: Use unpaged K, V with standard SDPA
+    # Torch reference: Use unpaged K, V with chunked causal attention
+    # chunk_start_idx tells us where in the full sequence this chunk starts
+    # Q attends to K/V from positions [0, chunk_start_idx + sq]
+    kv_end = min(chunk_start_idx + sq, s)
+    torch_k_chunk = torch_k_unpaged[:, :, :kv_end, :]
+    torch_v_chunk = torch_v_unpaged[:, :, :kv_end, :]
+
     if nkv < nh:
         K_repeated = torch.cat(
-            [torch_k_unpaged[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+            [torch_k_chunk[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
         )
         V_repeated = torch.cat(
-            [torch_v_unpaged[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+            [torch_v_chunk[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
         )
     else:
-        K_repeated = torch_k_unpaged
-        V_repeated = torch_v_unpaged
+        K_repeated = torch_k_chunk
+        V_repeated = torch_v_chunk
 
-    # Ensure all tensors are float32 for torch SDPA (bfloat8_b stays float32, bfloat16 needs cast)
+    # Build causal mask for chunked attention:
+    # Q position i (absolute: chunk_start_idx + i) can attend to K position j if j <= chunk_start_idx + i
+    q_positions = torch.arange(chunk_start_idx, chunk_start_idx + sq).unsqueeze(1)  # [sq, 1]
+    k_positions = torch.arange(kv_end).unsqueeze(0)  # [1, kv_end]
+    causal_mask = (k_positions <= q_positions).unsqueeze(0).unsqueeze(0)  # [1, 1, sq, kv_end]
+    # Convert to float mask (0 for allowed, -inf for masked)
+    attn_mask = torch.where(causal_mask, 0.0, float("-inf"))
+
+    # Ensure all tensors are float32 for torch SDPA
     torch_output = torch.nn.functional.scaled_dot_product_attention(
         torch_q.to(torch.float32),
         K_repeated.to(torch.float32),
         V_repeated.to(torch.float32),
-        attn_mask=None,
+        attn_mask=attn_mask.to(torch.float32),
         dropout_p=0.0,
-        is_causal=True,
+        is_causal=False,  # We provide explicit mask
     )
 
     # Create TTNN tensors with paged K, V

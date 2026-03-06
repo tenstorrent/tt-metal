@@ -83,7 +83,9 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     output_memory_config = kwargs.get("output_memory_config", None)
-    op_kwargs = build_op_kwargs(kwargs, exclude={"num_heads"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"num_heads", "compute_with_storage_grid_size"}, output_memory_config=output_memory_config
+    )
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
