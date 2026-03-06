@@ -298,7 +298,7 @@ def validate(
     return np.mean(cur_val_losses)
 
 
-class TokenizedDataset(torch.utils.data.Dataset):
+class TokenizedDataset:
     """
     A simple Dataset class for tokenized data.
 
@@ -412,8 +412,12 @@ def train():
 
     # Load dataset
     print("Loading GSM8K dataset...")
-    training_data = datasets.load_dataset("gsm8k", "main", split="train")
-    testing_data = datasets.load_dataset("gsm8k", "main", split="test")
+    training_data = datasets.load_dataset(
+        "gsm8k", "main", split="train", ignore_verifications=True
+    )
+    testing_data = datasets.load_dataset(
+        "gsm8k", "main", split="test", ignore_verifications=True
+    )
 
     training_data = tokenize_dataset(training_data, tokenizer)
     testing_data = tokenize_dataset(testing_data, tokenizer)

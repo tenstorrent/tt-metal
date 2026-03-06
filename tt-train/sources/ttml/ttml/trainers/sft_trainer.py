@@ -130,7 +130,7 @@ class SFTTrainer:
             for _ in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
                 loss = self._compute_loss(batch)
-                micro_losses.append(float(loss.to_numpy().mean()))
+                micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32).mean()))
 
                 scaled = ttml.ops.binary.mul(
                     loss, 1.0 / cfg.gradient_accumulation_steps
@@ -186,7 +186,7 @@ class SFTTrainer:
         with no_grad():
             for batch in self.eval_dataloader:
                 loss = self._compute_loss(batch)
-                losses.append(float(loss.to_numpy().mean()))
+                losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32).mean()))
         self.model.train()
         return float(np.mean(losses))
 
