@@ -18,7 +18,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/cluster.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
