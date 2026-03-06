@@ -1099,8 +1099,12 @@ class TTNNExperts(TTNNModule):
             # Update seq_len to include padding
             seq_len = num_tokens // batch_size_per_device
 
+        print("OG shape input : ", x.shape)
         # 1. Prepare tensors for all-to-all dispatch (convert to ROW_MAJOR)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+        print("OG shape : ", x_rm.shape)
+        print("reshape : ", batch_size_per_device, 1, seq_len, self.hidden_size)
 
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, self.hidden_size))
 
@@ -1437,8 +1441,34 @@ class TTNNDeepseekV2MoE(TTNNModule):
             hidden_states_4d = hidden_states
             batch, _, seq, hidden = hidden_states_4d.shape
             orig_shape = [batch, seq, hidden]
-
+        print("hidden_states : ", hidden_states.shape)
+        print("hidden_states_4d : ", hidden_states_4d.shape)
         topk_idx, topk_weight, _ = self.gate(hidden_states)
+        hidden_states_4d = ttnn.experimental.reduce_scatter_minimal_async(
+            hidden_states_4d,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            cluster_axis=1,
+            topology=ttnn.Topology.Ring,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+        # hidden_states_4d = ttnn.experimental.all_gather_async(
+        #     hidden_states_4d,
+        #     dim=3,
+        #     cluster_axis=1,
+        #     topology=ttnn.Topology.Ring,
+        #     multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+        #     num_links=1
+        # )
+        composer = ttnn.concat_mesh_to_tensor_composer(self.device, dim=-1)
+        hidden_states_4d = ttnn.aggregate_tensor(hidden_states_4d, composer)
+        print("hidden_states_4d after reduce_scatter_minimal_async : ", hidden_states_4d.shape)
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
         if hasattr(routed_output, "to_ttnn"):
             routed_output = routed_output.to_ttnn

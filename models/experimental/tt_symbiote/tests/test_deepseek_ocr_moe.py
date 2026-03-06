@@ -132,14 +132,9 @@ def test_deepseek_ocr_moe_full(mesh_device, ocr_moe_layer):
     set_device(ttnn_moe, mesh_device)
     ttnn_moe.preprocess_weights()
     ttnn_moe.move_weights_to_device()
-    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    inputs = TorchTTNNTensor(inputs)
-    # inputs = ttnn.from_torch(
-    #                     inputs,
-    #                     dtype=ttnn.bfloat16,
-    #                     layout=ttnn.TILE_LAYOUT,
-    #                     device=mesh_device)
+    # inputs = TorchTTNNTensor(inputs)
+    inputs = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     tt_output = ttnn_moe(inputs)
 
     assert not getattr(
