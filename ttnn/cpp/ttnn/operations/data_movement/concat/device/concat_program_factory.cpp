@@ -51,7 +51,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             num_output_pages = dst_buffer->num_pages();
             single_page_size = dst_buffer->aligned_page_size();
             const uint32_t shard_width = output_nd_shard_spec.value().shard_shape[-1];
-            num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
+            num_pages_in_row = tt::div_up(output.logical_shape()[-1], shard_width);
         } else {
             num_output_pages = output.physical_volume() / output.padded_shape()[-1];
             single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
