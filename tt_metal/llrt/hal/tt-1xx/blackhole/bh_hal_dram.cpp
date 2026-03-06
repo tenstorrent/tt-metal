@@ -36,7 +36,7 @@ HalCoreInfoType create_dram_mem_map() {
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_DRISC_MAILBOX_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_DRISC_MAILBOX_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = GET_DRISC_MAILBOX_ADDRESS_HOST(launch);

@@ -568,8 +568,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     fprintf(reader.f, "%s: ", core_str.c_str());
 
     uint64_t mailbox_addr =
-        MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX) +
-        hal.get_l1_noc_offset(programmable_core_type);
+        hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
     uint32_t mailbox_read_size =
