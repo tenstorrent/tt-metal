@@ -417,7 +417,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                                             size_t& vc1_sender_buffer_slots,
                                             size_t& vc1_receiver_buffer_slots) {
         bool vc1_needed = (num_vc1_sender_channels > 0) || (num_vc1_receiver_channels > 0);
+        log_info(tt::LogFabric, "DIAG get_optimal_num_slots_per_vc: vc0_senders={}, vc0_receivers={}, vc1_senders={}, vc1_receivers={}, vc1_needed={}, channel_buffer_size={}, available_space={}, num_options={}",
+            num_vc0_sender_channels, num_vc0_receiver_channels, num_vc1_sender_channels, num_vc1_receiver_channels,
+            vc1_needed, this->channel_buffer_size_bytes, this->available_channel_buffering_space, buffer_slot_options.size());
         bool found_valid_option = false;
+        size_t option_idx = 0;
         for (auto& option : buffer_slot_options) {
             vc0_sender_buffer_slots = option.vc0_sender_slots;
             vc0_receiver_buffer_slots = option.vc0_receiver_slots;
@@ -431,6 +435,10 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 bool skip_due_to_vc1_receiver = (num_vc1_receiver_channels > 0) && (vc1_receiver_buffer_slots == 0);
 
                 if (skip_due_to_vc1_sender || skip_due_to_vc1_receiver) {
+                    log_info(tt::LogFabric, "DIAG   option {}: slots=({},{},{},{}) SKIPPED (vc1 skip: sender={}, receiver={})",
+                        option_idx, vc0_sender_buffer_slots, vc0_receiver_buffer_slots, vc1_sender_buffer_slots, vc1_receiver_buffer_slots,
+                        skip_due_to_vc1_sender, skip_due_to_vc1_receiver);
+                    option_idx++;
                     continue;  // Skip this option - VC1 is needed but this option doesn't support it
                 }
             }
@@ -445,10 +453,16 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                                     vc1_total_receiver_slots) *
                                    this->channel_buffer_size_bytes;
 
+            log_info(tt::LogFabric, "DIAG   option {}: slots=({},{},{},{}), total_slots={}, total_bytes={}, available={}, fits={}",
+                option_idx, vc0_sender_buffer_slots, vc0_receiver_buffer_slots, vc1_sender_buffer_slots, vc1_receiver_buffer_slots,
+                vc0_total_sender_slots + vc0_total_receiver_slots + vc1_total_sender_slots + vc1_total_receiver_slots,
+                total_num_bytes, this->available_channel_buffering_space, total_num_bytes <= this->available_channel_buffering_space);
+
             if (total_num_bytes <= this->available_channel_buffering_space) {
                 found_valid_option = true;
                 break;  // Found a configuration that fits
             }
+            option_idx++;
         }
 
         // Validate that we found a valid option, especially if VC1 is needed
@@ -476,6 +490,14 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         arch_index = 1;
     } else {
         TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
+    }
+
+    log_info(tt::LogFabric, "DIAG configure_buffer_slots_helper: topology={}, arch_index={}, fabric_tensix_config={}, channel_buffer_size={}, available_space={}",
+        static_cast<int>(topology), arch_index, static_cast<int>(options.fabric_tensix_config),
+        this->channel_buffer_size_bytes, this->available_channel_buffering_space);
+    for (size_t vc = 0; vc < 2; vc++) {
+        log_info(tt::LogFabric, "DIAG   VC{}: senders={}, receivers={}", vc,
+            this->num_used_sender_channels_per_vc[vc], this->num_used_receiver_channels_per_vc[vc]);
     }
 
     switch (options.fabric_tensix_config) {

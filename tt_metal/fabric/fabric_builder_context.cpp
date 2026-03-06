@@ -72,6 +72,9 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
 
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+    log_info(tt::LogFabric, "DIAG FabricBuilderContext: intermesh_vc_config: requires_vc1={}, router_type={}",
+        intermesh_vc_config_.requires_vc1,
+        static_cast<int>(intermesh_vc_config_.router_type));
 
     // Log trimming report after intermesh config is known (VC1 affects expected channel counts)
     if (rtoptions.has_fabric_trimming_profile()) {
@@ -81,6 +84,11 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     // Compute max channel counts for this fabric instance
     compute_max_channel_counts();
+    log_info(tt::LogFabric, "DIAG FabricBuilderContext: max_sender_channels_per_vc=[{},{}], max_receiver_channels_per_vc=[{},{}], topology={}, channel_buffer_size={}",
+        max_sender_channels_per_vc_[0], max_sender_channels_per_vc_[1],
+        max_receiver_channels_per_vc_[0], max_receiver_channels_per_vc_[1],
+        static_cast<int>(fabric_context_.get_fabric_topology()),
+        fabric_context_.get_fabric_channel_buffer_size_bytes());
 
     // Create configs using computed max
     router_config_ = create_edm_config();

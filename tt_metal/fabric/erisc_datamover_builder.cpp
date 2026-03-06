@@ -462,6 +462,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         size_t{0},
         [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
 
+    log_info(tt::LogFabric, "DIAG FabricEriscDatamoverConfig: topology={}, channel_buffer_size={}, available_space={}, memory_regions={}",
+        static_cast<int>(topology), channel_buffer_size_bytes, available_channel_buffering_space, this->available_buffer_memory_regions.size());
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; vc++) {
+        log_info(tt::LogFabric, "DIAG   VC{}: senders={}, receivers={}", vc,
+            this->num_used_sender_channels_per_vc[vc], this->num_used_receiver_channels_per_vc[vc]);
+    }
+    for (size_t i = 0; i < this->available_buffer_memory_regions.size(); i++) {
+        log_info(tt::LogFabric, "DIAG   memory_region[{}]: start={}, size={}", i,
+            this->available_buffer_memory_regions[i].start_address, this->available_buffer_memory_regions[i].get_size());
+    }
+
     // Create a default recipe with a single static pool for backward compatibility
     // All channels map to pool 0 (the single static pool)
     auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(

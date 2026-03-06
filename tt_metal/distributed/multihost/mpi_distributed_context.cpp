@@ -171,12 +171,23 @@ inline void init_env(int& argc, char**& argv) {
         const char* ompi_uri = std::getenv("OMPI_MCA_orte_hnp_uri");
         const char* pmix_ns = std::getenv("PMIX_NAMESPACE");
         const char* pmix_rank = std::getenv("PMIX_RANK");
+        const char* pmix_server_uri21 = std::getenv("PMIX_SERVER_URI21");
+        const char* pmix_server_uri2 = std::getenv("PMIX_SERVER_URI2");
+        const char* pmix_server_tmpdir = std::getenv("PMIX_SERVER_TMPDIR");
+        const char* pmix_system_tmpdir = std::getenv("PMIX_SYSTEM_TMPDIR");
+        const char* pmix_security = std::getenv("PMIX_SECURITY_MODE");
         log_info(tt::LogFabric, "DIAG MPI init_env PRE-INIT env: OMPI_COMM_WORLD_SIZE={}, OMPI_COMM_WORLD_RANK={}, OMPI_MCA_orte_hnp_uri={}, PMIX_NAMESPACE={}, PMIX_RANK={}",
             ompi_size ? ompi_size : "UNSET",
             ompi_rank ? ompi_rank : "UNSET",
             ompi_uri ? ompi_uri : "UNSET",
             pmix_ns ? pmix_ns : "UNSET",
             pmix_rank ? pmix_rank : "UNSET");
+        log_info(tt::LogFabric, "DIAG MPI init_env PRE-INIT PMIx: PMIX_SERVER_URI21={}, PMIX_SERVER_URI2={}, PMIX_SERVER_TMPDIR={}, PMIX_SYSTEM_TMPDIR={}, PMIX_SECURITY_MODE={}",
+            pmix_server_uri21 ? pmix_server_uri21 : "UNSET",
+            pmix_server_uri2 ? pmix_server_uri2 : "UNSET",
+            pmix_server_tmpdir ? pmix_server_tmpdir : "UNSET",
+            pmix_system_tmpdir ? pmix_system_tmpdir : "UNSET",
+            pmix_security ? pmix_security : "UNSET");
 
         int already_initialized = 0;
         MPI_Initialized(&already_initialized);
