@@ -19,18 +19,30 @@ env:
 on:
   workflow_call:
     inputs:
+      platform:
+        required: false
+        type: string
+        default: ""
+        description: "Platform string for legacy callers (e.g. Ubuntu 22.04)"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+        description: "Architecture for legacy callers; only amd64 is currently supported"
       build-manylinux:
         required: false
         type: boolean
         default: true
         description: "Build manylinux image (set false for 24.04 to avoid duplicate work)"
       tool-tags:
-        required: true
+        required: false
         type: string
+        default: ""
         description: "JSON object containing all tool image tags"
       platform-data:
-        required: true
+        required: false
         type: string
+        default: ""
         description: "JSON from preflight containing all platform tags and existence flags"
     outputs:
       ci-build-tag:
@@ -57,6 +69,7 @@ jobs:
     name: "Artifact metadata"
     runs-on: ubuntu-latest
     outputs:
+      platform_data: ${{ steps.metadata.outputs.platform_data }}
       ci_build_tag: ${{ steps.metadata.outputs.ci_build_tag }}
       ci_test_tag: ${{ steps.metadata.outputs.ci_test_tag }}
       dev_tag: ${{ steps.metadata.outputs.dev_tag }}
@@ -67,17 +80,60 @@ jobs:
       ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
       tool_tags: ${{ steps.metadata.outputs.tool_tags }}
     steps:
+      - name: Checkout repo for metadata computation
+        if: ${{ inputs.platform-data == '' || inputs.tool-tags == '' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+            dockerfile
+            tt_metal
+          sparse-checkout-cone-mode: false
+
       - name: Extract workflow metadata
         id: metadata
         env:
-          PLATFORM_DATA: ${{ inputs.platform-data }}
+          INPUT_PLATFORM_DATA: ${{ inputs.platform-data }}
+          INPUT_PLATFORM: ${{ inputs.platform }}
+          INPUT_ARCHITECTURE: ${{ inputs.architecture }}
           TOOL_TAGS_INPUT: ${{ inputs.tool-tags }}
+          GITHUB_REPOSITORY_VALUE: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          echo "$PLATFORM_DATA" | jq -e 'type == "object"' > /dev/null
-          TOOL_TAGS=$(echo "$TOOL_TAGS_INPUT" | jq -ce '.')
+          if [ "${INPUT_ARCHITECTURE}" != "amd64" ]; then
+            echo "::error::build-docker-artifact currently supports only amd64 when computing metadata internally"
+            exit 1
+          fi
 
+          if [ -n "$INPUT_PLATFORM_DATA" ]; then
+            PLATFORM_DATA=$(echo "$INPUT_PLATFORM_DATA" | jq -ce '.')
+          else
+            case "${INPUT_PLATFORM:-Ubuntu 22.04}" in
+              "Ubuntu 24.04")
+                VERSION="24.04"
+                ;;
+              "Ubuntu 22.04"|"")
+                VERSION="22.04"
+                ;;
+              *)
+                echo "::error::Unsupported platform '${INPUT_PLATFORM}' for build-docker-artifact"
+                exit 1
+                ;;
+            esac
+            PLATFORM_DATA=$(.github/scripts/compute-platform-data.sh "$VERSION" "$GITHUB_REPOSITORY_VALUE")
+            PLATFORM_DATA=$(echo "$PLATFORM_DATA" | jq -ce '.')
+          fi
+
+          if [ -n "$TOOL_TAGS_INPUT" ]; then
+            TOOL_TAGS=$(echo "$TOOL_TAGS_INPUT" | jq -ce '.')
+          else
+            TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$GITHUB_REPOSITORY_VALUE")
+            TOOL_TAGS=$(echo "$TOOL_TAGS" | jq -ce '.')
+          fi
+
+          echo "platform_data=$PLATFORM_DATA" >> "$GITHUB_OUTPUT"
           echo "ci_build_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
           echo "ci_test_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
           echo "dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
@@ -91,12 +147,13 @@ jobs:
   # Build venv images if needed (required by main images)
   venvs:
     name: "🐍 Python venvs"
+    needs: [metadata]
     if: |
-      fromJson(inputs.platform-data).ci_build_venv_exists != true ||
-      fromJson(inputs.platform-data).ci_test_venv_exists != true
+      fromJson(needs.metadata.outputs.platform_data).ci_build_venv_exists != true ||
+      fromJson(needs.metadata.outputs.platform_data).ci_test_venv_exists != true
     uses: ./.github/workflows/build-docker-python-venvs.yaml
     with:
-      platform-data: ${{ inputs.platform-data }}
+      platform-data: ${{ needs.metadata.outputs.platform_data }}
     secrets: inherit
 
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
@@ -105,10 +162,10 @@ jobs:
     needs: [metadata, venvs]
     if: |
       always() && !failure() && !cancelled() &&
-      fromJson(inputs.platform-data).distro == 'ubuntu' &&
-      (fromJson(inputs.platform-data).dev_exists != true ||
-       fromJson(inputs.platform-data).basic_dev_exists != true ||
-       fromJson(inputs.platform-data).basic_ttnn_exists != true)
+      fromJson(needs.metadata.outputs.platform_data).distro == 'ubuntu' &&
+      (fromJson(needs.metadata.outputs.platform_data).dev_exists != true ||
+       fromJson(needs.metadata.outputs.platform_data).basic_dev_exists != true ||
+       fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists != true)
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -142,7 +199,7 @@ jobs:
       - name: Prepare bake overrides
         id: bake
         env:
-          PLATFORM_DATA: ${{ inputs.platform-data }}
+          PLATFORM_DATA: ${{ needs.metadata.outputs.platform_data }}
           TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
         run: |
           set -euo pipefail
@@ -220,8 +277,8 @@ jobs:
         with:
           targets: ${{ steps.bake.outputs.targets }}
           set-lines: ${{ steps.bake.outputs.set }}
-          ubuntu-version: ${{ fromJson(inputs.platform-data).version }}
-          python-version: ${{ fromJson(inputs.platform-data).python_version }}
+          ubuntu-version: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
+          python-version: ${{ fromJson(needs.metadata.outputs.platform_data).python_version }}
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
@@ -229,7 +286,7 @@ jobs:
     needs: [metadata]
     if: |
       inputs.build-manylinux == true &&
-      fromJson(inputs.platform-data).manylinux_exists != true
+      fromJson(needs.metadata.outputs.platform_data).manylinux_exists != true
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -263,7 +320,7 @@ jobs:
       - name: Prepare bake overrides
         id: bake
         env:
-          PLATFORM_DATA: ${{ inputs.platform-data }}
+          PLATFORM_DATA: ${{ needs.metadata.outputs.platform_data }}
           TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
         run: |
           set -euo pipefail
@@ -307,45 +364,45 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
-        if: fromJson(inputs.platform-data).ci_build_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).ci_build_exists == true || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ fromJson(inputs.platform-data).ci_build_tag }}
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_build_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest CI Test tag"
-        if: fromJson(inputs.platform-data).ci_test_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).ci_test_exists == true || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ fromJson(inputs.platform-data).ci_test_tag }}
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_test_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"
-        if: fromJson(inputs.platform-data).dev_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).dev_exists == true || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ fromJson(inputs.platform-data).dev_tag }}
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic Dev tag"
-        if: fromJson(inputs.platform-data).basic_dev_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == true || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ fromJson(inputs.platform-data).basic_dev_tag }}
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic TTNN Runtime tag"
-        if: fromJson(inputs.platform-data).basic_ttnn_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == true || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ fromJson(inputs.platform-data).basic_ttnn_tag }}
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_ttnn_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Manylinux tag"
         if: |
           inputs.build-manylinux == true &&
-          (fromJson(inputs.platform-data).manylinux_exists == true || needs.manylinux.result == 'success')
+          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == true || needs.manylinux.result == 'success')
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ fromJson(inputs.platform-data).manylinux_tag }}
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).manylinux_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
