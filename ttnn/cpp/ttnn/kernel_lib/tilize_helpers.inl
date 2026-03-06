@@ -133,6 +133,10 @@ ALWI void tilize(
         ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb]));
     })
 
+    // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
+    // Block floats have shared exponents that break row-major-to-tile reinterpretation.
+    UNPACK(ASSERT(!is_block_float_format(unpack_src_format[input_cb])));
+
     // Reconfigure register datatypes if requested
     if constexpr (use_unpack_reconfig) {
         // Reconfigure srcA for unpack
