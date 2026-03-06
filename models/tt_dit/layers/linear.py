@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from ..utils.matmul import get_matmul_config
+from ..utils.matmul import get_fused_mmrs_config, get_matmul_config
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -319,7 +319,9 @@ class RowParallelLinear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
 
-        if os.environ.get("NON_FUSED", "0") == "1":  # Temporary for testing
+        if (
+            self.ccl_manager.topology == ttnn.Topology.Linear or os.environ.get("NON_FUSED", "0") == "1"
+        ):  # Temporary for testing
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
@@ -341,6 +343,9 @@ class RowParallelLinear(Module):
                 if needs_reshape:
                     output = ttnn.squeeze(output, 0)
         else:
+            needs_reshape = len(x.shape) <= 3
+            if needs_reshape:
+                x = ttnn.unsqueeze(x, 0)
             mm_core_grid = ttnn.CoreCoord(core_grid.x, core_grid.y - 2)
             rs_core_grid_offset = ttnn.CoreCoord(0, mm_core_grid.y)
             matmul_config = get_matmul_config(M, K, N, mm_core_grid, default_block_size)
@@ -349,20 +354,17 @@ class RowParallelLinear(Module):
                 weight_tensor=weight,
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
-                reduce_scatter_core_grid_offset=rs_core_grid_offset,
-                num_links=self.ccl_manager.num_links,
+                **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
                 bias=self.bias.data if self.bias is not None else None,
                 memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
                 rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.mesh_axis,
-                config=matmul_config,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
-                num_workers_per_link=5,
-                num_buffers_per_channel=None,
-                chunk_width_in_mm_blocks=1,
             )
+            if needs_reshape:
+                output = ttnn.squeeze(output, 0)
         return output
 
 

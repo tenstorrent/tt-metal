@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from typing import NamedTuple
 
 from loguru import logger
 
@@ -159,3 +160,46 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
     )
+
+
+class FusedMMRSConfig(NamedTuple):
+    compute_with_storage_grid_size: ttnn.CoreCoord
+    M_block_size: int
+    K_block_size: int
+    N_block_size: int
+    subblock_h: int
+    subblock_w: int
+    num_buffers_per_channel: int | None
+    chunk_width_in_mm_blocks: int
+
+    def get_params(self, core_grid, num_links):
+        rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
+        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
+        config_dict = self._asdict()
+        num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
+        chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+
+        # Order is important. Guaranteed for python 3.7+
+        return {
+            "reduce_scatter_core_grid_offset": ttnn.CoreCoord(0, self.compute_with_storage_grid_size.y),
+            "num_links": num_links,
+            "config": ttnn.MinimalMatmulConfig(**config_dict),
+            "num_buffers_per_channel": num_buffers_per_channel,
+            "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
+            "num_workers_per_link": num_workers_per_link,
+        }
+
+
+default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(8, 7), 2, 8, 8, 1, 1, None, 1)
+fused_mmrs_configs = {
+    ttnn.CoreCoord(
+        8, 9
+    ): {  # core_grid, M, K, N, sub_h, sub_w, num_w_p_link, num_buffers_per_channel, chunk_width_in_mm_blocks
+        (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+    }
+}
+
+
+def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
+    config = fused_mmrs_configs.get(device_core_grid, {}).get((M, K, N), default_fused_mmrs_config)
+    return config.get_params(device_core_grid, num_links)
