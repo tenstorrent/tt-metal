@@ -273,7 +273,7 @@ void kernel_main() {
             }
 
             if constexpr (do_gamma) {
-                if constexpr (do_beta == 0 && DST_ACCUM_MODE) {
+                if constexpr (do_beta == 0) {
                     pack_reconfig_data_format(cb_out);
                 }
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
