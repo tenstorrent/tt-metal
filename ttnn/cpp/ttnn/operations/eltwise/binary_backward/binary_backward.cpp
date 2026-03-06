@@ -614,8 +614,8 @@ std::vector<std::optional<Tensor>> sub_bw(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return ttnn::subalpha_bw(
         grad_tensor, input_a, other, 1.0f, are_required_outputs, output_mem_config, input_grad, other_grad);
 }

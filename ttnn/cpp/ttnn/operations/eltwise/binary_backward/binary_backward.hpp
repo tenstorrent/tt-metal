@@ -190,8 +190,8 @@ std::vector<std::optional<Tensor>> sub_bw(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<ComplexTensor> sub_bw(
     const ComplexTensor& grad_tensor,
