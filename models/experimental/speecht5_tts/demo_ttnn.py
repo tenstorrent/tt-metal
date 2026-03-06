@@ -27,23 +27,23 @@ Features:
 
 Usage:
     # Basic usage with short text:
-    python models/experimental/speecht5_tts/demo_ttnn_fp32.py \\
+    python models/experimental/speecht5_tts/demo_ttnn.py \\
         --text "Hello world!" \\
         --output speech.wav
 
     # Long text (automatic chunking):
-    python models/experimental/speecht5_tts/demo_ttnn_fp32.py \\
+    python models/experimental/speecht5_tts/demo_ttnn.py \\
         --text "Very long text here..." \\
         --output speech.wav \\
         --max_chunk_size 300
 
     # Multiple texts:
-    python models/experimental/speecht5_tts/demo_ttnn_fp32.py \\
+    python models/experimental/speecht5_tts/demo_ttnn.py \\
         --texts "First text." "Second text." \\
         --output_dir ./outputs
 
     # Custom max steps per chunk:
-    python models/experimental/speecht5_tts/demo_ttnn_fp32.py \\
+    python models/experimental/speecht5_tts/demo_ttnn.py \\
         --text "Your text" \\
         --output speech.wav \\
         --max_steps 500
