@@ -341,7 +341,6 @@ def test_attention_block(
     # Create mesh tensors for input and intermediate (CCL broadcast destination)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     device_tensors = []
-    intermediate_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if skip_ccl:
@@ -353,23 +352,11 @@ def test_attention_block(
             else:
                 # All other devices start with zeros
                 device_tensors.append(torch.zeros_like(torch_input))  # (1, 7168)
-            intermediate_tensors.append(torch.zeros_like(torch_input))
 
     mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
 
     input_tensor_mesh = ttnn.from_torch(
         mesh_tensor_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
-    )
-
-    intermediate_tensor_mesh = ttnn.from_torch(
-        intermediate_mesh_tensor_torch,
         device=submesh,
         layout=ttnn.TILE_LAYOUT,
         tile=tile,
@@ -804,18 +791,6 @@ def test_attention_block(
         mesh_mapper=mesh_mapper,
     )
 
-    # torch residual tensor is the same as the input tensor
-    mesh_residual_torch = torch.cat([torch_input] * num_devices, dim=0)
-    ttnn_residual = ttnn.from_torch(
-        mesh_residual_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
     # ========================================================================
     # Create SDPA tensors
     # ========================================================================
@@ -936,7 +911,6 @@ def test_attention_block(
     for i in range(num_iters):
         ttnn_output_result = AttentionBlock.op(
             input_tensor_mesh,
-            intermediate_tensor_mesh,
             gamma_overlapped,
             matmul_weights_overlapped,
             rmsnorm2_gamma_overlapped,
