@@ -103,6 +103,9 @@ PrefillMoeComputeMeshFactory::create_at(
     const uint32_t D = hs_shape[3];
     const uint32_t D_tiles = D / TILE_HW;
 
+    const auto& pkt_shape = tensor_args.pkt_buf.logical_shape();
+    const uint32_t M_tiles = pkt_shape[2] / TILE_HW;  // P/32 tile rows
+
     const auto& gu_shape = tensor_args.gate_up_weights[0].logical_shape();
     const uint32_t D_FF_padded = gu_shape[3];
 
@@ -174,7 +177,7 @@ PrefillMoeComputeMeshFactory::create_at(
     TensorAccessorArgs(tensor_args.out_bufs[0].buffer()).append_to(writer_ct_args);
 
     std::vector<uint32_t> compute_ct_args = {
-        k_tiles_gu, n_weight_per_core_gu, n_per_core_dn, num_experts, N_BLOCK_GU, N_BLOCK_DN, k_tiles_dn};
+        k_tiles_gu, n_weight_per_core_gu, n_per_core_dn, num_experts, N_BLOCK_GU, N_BLOCK_DN, k_tiles_dn, M_tiles};
 
     // Dispatch CT args: depends on fabric dispatch mode
     std::vector<uint32_t> dispatch_ct_args;
@@ -212,6 +215,7 @@ PrefillMoeComputeMeshFactory::create_at(
                 combine_phys.y,
                 num_experts,
                 k_tiles_dn,
+                M_tiles,
             };
             for (const auto& [px, py] : phys_coords) {
                 args.push_back(px);
@@ -242,6 +246,7 @@ PrefillMoeComputeMeshFactory::create_at(
                 leader_phys_x,
                 leader_phys_y,
                 num_experts,
+                M_tiles,
             };
             for (uint32_t e = 0; e < num_experts; ++e) {
                 args.push_back(static_cast<uint32_t>(tensor_args.gate_up_weights[e].buffer()->address()));
@@ -271,6 +276,7 @@ PrefillMoeComputeMeshFactory::create_at(
     std::vector<uint32_t> combine_args = {
         static_cast<uint32_t>(tensor_args.output.buffer()->address()),
         n_tiles_dn,
+        M_tiles,
         num_experts,
     };
     combine_args.insert(combine_args.end(), combine_metadata.begin(), combine_metadata.end());
@@ -497,6 +503,7 @@ PrefillMoeComputeMeshFactory::create_at(
         dispatch_args.push_back(dispatch_phys.y);  // [7] my_phys_y
         dispatch_args.push_back(D_bytes);          // [8]
         dispatch_args.push_back(D_tiles);          // [9]
+        dispatch_args.push_back(M_tiles);          // [10] P_tiles
         // Append per-device dispatch_metadata: [local_count, recv_count, send_count, indices...]
         dispatch_args.insert(dispatch_args.end(), dev_dispatch_meta.begin(), dev_dispatch_meta.end());
 
@@ -647,6 +654,9 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
     const uint32_t D_padded = dn_shape[3];
     const uint32_t n_tiles_dn = D_padded / TILE_HW;
 
+    const auto& pkt_shape = tensor_args.pkt_buf.logical_shape();
+    const uint32_t M_tiles = pkt_shape[2] / TILE_HW;
+
     uint32_t device_index = 0;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared = cached_workload.shared_variables.at(range);
@@ -675,9 +685,9 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
                 writer_args[0] = tensor_args.inter_buf.buffer()->address();
                 // Per-expert addresses start at index 14
                 for (uint32_t e = 0; e < num_experts; ++e) {
-                    writer_args[14 + e * 3 + 0] = tensor_args.gate_up_weights[e].buffer()->address();
-                    writer_args[14 + e * 3 + 1] = tensor_args.down_weights[e].buffer()->address();
-                    writer_args[14 + e * 3 + 2] = tensor_args.out_bufs[e].buffer()->address();
+                    writer_args[15 + e * 3 + 0] = tensor_args.gate_up_weights[e].buffer()->address();
+                    writer_args[15 + e * 3 + 1] = tensor_args.down_weights[e].buffer()->address();
+                    writer_args[15 + e * 3 + 2] = tensor_args.out_bufs[e].buffer()->address();
                 }
             }
         }
@@ -698,6 +708,7 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
         std::vector<uint32_t> combine_args = {
             static_cast<uint32_t>(tensor_args.output.buffer()->address()),
             n_tiles_dn,
+            M_tiles,
             num_experts,
         };
         combine_args.insert(combine_args.end(), combine_metadata.begin(), combine_metadata.end());

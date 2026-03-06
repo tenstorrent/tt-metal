@@ -6,11 +6,14 @@
 // Dispatch writes pkt_buf once. This kernel loops over num_experts,
 // re-reading the same pkt_buf each iteration (same activation for all experts).
 //
+// For P > 32, pkt_buf has multiple tile rows (M_tiles). Each phase reads
+// M_tiles tile rows, pushing M_tiles × k_tiles tiles to CB_ACT.
+//
 // Flow per expert:
 //   Leader broadcasts SEM_GO -> all cores wait SEM_GO (start-of-expert sync)
-//   Phase A: Read k_tiles_gu activation tiles from pkt_buf -> CB_ACT
+//   Phase A: Read M_tiles × k_tiles_gu activation tiles from pkt_buf -> CB_ACT
 //   Barrier A: Leader waits SEM_BARRIER(num_cores), broadcasts SEM_GO
-//   Phase B: Read k_tiles_dn intermediate tiles from inter -> CB_ACT
+//   Phase B: Read M_tiles × k_tiles_dn intermediate tiles from inter -> CB_ACT
 //   Barrier B: Leader waits SEM_BARRIER(num_cores), signals SEM_EXPERT_DONE
 //
 // Before expert 0: Leader also waits SEM_PKT_READY from dispatch.
@@ -34,7 +37,8 @@ void kernel_main() {
     const uint32_t combine_phys_y = get_arg_val<uint32_t>(6);
     const uint32_t num_experts = get_arg_val<uint32_t>(7);
     const uint32_t k_tiles_dn = get_arg_val<uint32_t>(8);
-    // [9..9+2*num_cores-1] = physical coords of all compute cores
+    const uint32_t M_tiles = get_arg_val<uint32_t>(9);
+    // [10..10+2*num_cores-1] = physical coords of all compute cores
 
     constexpr auto act_args = TensorAccessorArgs<0>();
     constexpr auto inter_args = TensorAccessorArgs<1>();
@@ -62,8 +66,8 @@ void kernel_main() {
         if (is_leader) {
             uint32_t sem_go_l1_addr = get_semaphore(SEM_GO);
             for (uint32_t c = 0; c < num_cores; ++c) {
-                uint32_t phys_x = get_arg_val<uint32_t>(9 + c * 2);
-                uint32_t phys_y = get_arg_val<uint32_t>(9 + c * 2 + 1);
+                uint32_t phys_x = get_arg_val<uint32_t>(10 + c * 2);
+                uint32_t phys_y = get_arg_val<uint32_t>(10 + c * 2 + 1);
                 uint64_t core_sem_noc = get_noc_addr(phys_x, phys_y, sem_go_l1_addr);
                 noc_semaphore_inc(core_sem_noc, 1);
             }
@@ -75,13 +79,16 @@ void kernel_main() {
             noc_semaphore_set(go_sem, 0);
         }
 
-        // ========== Phase A: Read activation tiles ==========
-        for (uint32_t k = 0; k < k_tiles_gu; ++k) {
-            cb_reserve_back(cb_act, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_act);
-            noc_async_read_page(k, act_accessor, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_act, 1);
+        // ========== Phase A: Read activation tiles (M_tiles tile rows) ==========
+        for (uint32_t m = 0; m < M_tiles; ++m) {
+            for (uint32_t k = 0; k < k_tiles_gu; ++k) {
+                cb_reserve_back(cb_act, 1);
+                uint32_t l1_write_addr = get_write_ptr(cb_act);
+                uint32_t page_idx = m * k_tiles_gu + k;
+                noc_async_read_page(page_idx, act_accessor, l1_write_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_act, 1);
+            }
         }
 
         // ========== Barrier A ==========
@@ -93,8 +100,8 @@ void kernel_main() {
 
             uint32_t sem_go_l1_addr = get_semaphore(SEM_GO);
             for (uint32_t c = 0; c < num_cores; ++c) {
-                uint32_t phys_x = get_arg_val<uint32_t>(9 + c * 2);
-                uint32_t phys_y = get_arg_val<uint32_t>(9 + c * 2 + 1);
+                uint32_t phys_x = get_arg_val<uint32_t>(10 + c * 2);
+                uint32_t phys_y = get_arg_val<uint32_t>(10 + c * 2 + 1);
                 uint64_t core_sem_noc = get_noc_addr(phys_x, phys_y, sem_go_l1_addr);
                 noc_semaphore_inc(core_sem_noc, 1);
             }
@@ -106,13 +113,16 @@ void kernel_main() {
             noc_semaphore_set(go_sem, 0);
         }
 
-        // ========== Phase B: Read intermediate tiles ==========
-        for (uint32_t k = 0; k < k_tiles_dn; ++k) {
-            cb_reserve_back(cb_act, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_act);
-            noc_async_read_page(k, inter_accessor, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_act, 1);
+        // ========== Phase B: Read intermediate tiles (M_tiles tile rows) ==========
+        for (uint32_t m = 0; m < M_tiles; ++m) {
+            for (uint32_t k = 0; k < k_tiles_dn; ++k) {
+                cb_reserve_back(cb_act, 1);
+                uint32_t l1_write_addr = get_write_ptr(cb_act);
+                uint32_t page_idx = m * k_tiles_dn + k;
+                noc_async_read_page(page_idx, inter_accessor, l1_write_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_act, 1);
+            }
         }
 
         // ========== Barrier B + SEM_EXPERT_DONE ==========
