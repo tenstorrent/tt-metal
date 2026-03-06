@@ -5,7 +5,7 @@
 #include "swiglu_fw_program_factory.hpp"
 
 #include <algorithm>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
