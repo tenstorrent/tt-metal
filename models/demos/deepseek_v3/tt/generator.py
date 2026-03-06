@@ -18,7 +18,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, optimal_topology
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, make_deepseek_sampling_args
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -1026,7 +1026,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     "cluster_axis": 0,
                     "dim": 2,
                     "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                    "topology": ttnn.Topology.Linear,
+                    "topology": optimal_topology,
                 }
             )
             gathered = ttnn.experimental.all_gather_async(last_logits, **gather_cfg)
