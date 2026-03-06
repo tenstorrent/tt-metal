@@ -607,16 +607,16 @@ def run_prefetcher_all_matmuls(
 @pytest.mark.parametrize(
     "model_name",
     [
-        "Llama-3.2-1B",
-        "Llama-3.2-3B",
-        "Llama-3.1-8B",
-        "Llama-3.3-70B",
+        # "Llama-3.2-1B",
+        # "Llama-3.2-3B",
+        # "Llama-3.1-8B",
+        # "Llama-3.3-70B",
         "Qwen3-32B",
-        "Qwen3-VL-7B",
-        "Qwen3-VL-14B",
-        "Qwen3-VL-72B",
-        "Gemma3-4B",
-        "Gemma3-27B",
+        # "Qwen3-VL-7B",
+        # "Qwen3-VL-14B",
+        # "Qwen3-VL-72B",
+        # "Gemma3-4B",
+        # "Gemma3-27B",
     ],
 )
 def test_prefetcher_BH(

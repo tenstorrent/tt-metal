@@ -11,7 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 
@@ -218,28 +218,32 @@ class Attention(LightweightModule):
         assert configuration.qkv_size % self.num_devices_per_group == 0
         assert configuration.dim % self.num_devices_per_group == 0
 
-        # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
+        use_pf = prefetcher is not None
+        ring = prefetcher.ring_size if use_pf else 1
+        pad = lambda x: args._pad_total_width(x, ring) if use_pf else x
+        ring_str = f".ring_{ring}" if use_pf else ""
+
+        # QKV: [dim, qkv_size] -> N-sharded on qkv_size
+        # NOTE: QKV output must NOT be padded - it needs exact head structure for nlp_create_qkv_heads
+        qkv_n_per_device = configuration.qkv_size // configuration.num_devices
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim, configuration.qkv_size // configuration.num_devices
+            configuration.dim, qkv_n_per_device, prefetcher=prefetcher
         )
 
         qkv_list = []
         for i in range(self.num_devices_per_group):
-            # Chunk weights
-            wq_selected = torch.chunk(state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
-
-            # Transpose the selected chunks
-            wq = torch.transpose(wq_selected, -2, -1)
-            wk = torch.transpose(wk_selected, -2, -1)
-            wv = torch.transpose(wv_selected, -2, -1)
-
-            qkv = torch.cat([wq, wk, wv], dim=-1)
-            qkv_list.append(qkv)
+            wq = torch.transpose(
+                torch.chunk(state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i], -2, -1
+            )
+            wk = torch.transpose(
+                torch.chunk(state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i], -2, -1
+            )
+            wv = torch.transpose(
+                torch.chunk(state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i], -2, -1
+            )
+            qkv_list.append(torch.cat([wq, wk, wv], dim=-1))
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.wqkv_dtype,
@@ -249,11 +253,10 @@ class Attention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d"),
+            cache_file_name=cache_name(f"wqkv_sharded_2d{ring_str}"),
         )
 
         def norm_reshard(x, norm, mode, norm_config):
-            """Hack until RMSNorm supports height-sharded output config"""
             if mode == Mode.DECODE:
                 mem_cfg = x.memory_config()
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
@@ -268,7 +271,7 @@ class Attention(LightweightModule):
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
                 state_dict=state_dict,
-                state_dict_prefix=None,  # we already prefix q_norm_str
+                state_dict_prefix=None,
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
@@ -286,7 +289,7 @@ class Attention(LightweightModule):
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
                 state_dict=state_dict,
-                state_dict_prefix=None,  # we already prefix k_norm_str
+                state_dict_prefix=None,
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
@@ -298,63 +301,57 @@ class Attention(LightweightModule):
         else:
             self.k_norm = lambda x, mode, norm_config: x
 
-        # For ring topology we can use all gather matmul for wo
+        # WO: [n_heads*head_dim, dim] -> K-sharded on n_heads*head_dim, pad N (output dim)
         self.use_fused_all_gather_matmul = self.args.use_fused_all_gather_matmul
-        pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        wo_k_per_device = (configuration.n_heads * configuration.head_dim) // configuration.num_devices
+        wo_n_padded = pad(configuration.dim)
+        pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2)
+        if use_pf:
+            pt_wo = pad_to_size(pt_wo, dim=-1, size=wo_n_padded)
+        pt_wo = pt_wo.unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
+            wo_k_per_device, configuration.dim, prefetcher=prefetcher
         )
-
         self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
 
-        if self.prefetcher is not None:
+        if use_pf:
             self.wo_sharded_ring = ttnn.as_tensor(
                 pt_wo,
                 dtype=self.wo_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=self.args.get_sharded_wo_ring_mem_config(),
+                memory_config=self.args.get_sharded_wo_ring_mem_config(prefetcher=prefetcher),
                 mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=self.shard_wo_dims,
-                    mesh_shape=configuration.cluster_shape,
+                    self.mesh_device, dims=self.shard_wo_dims, mesh_shape=configuration.cluster_shape
                 ),
-                cache_file_name=(cache_name("wo_sharded_ring")),
+                cache_file_name=cache_name(f"wo_sharded_ring{ring_str}"),
             )
 
-        def get_wo_memory_config():
-            if self.use_fused_all_gather_matmul or self.TG:
-                return ttnn.DRAM_MEMORY_CONFIG
-            else:
-                return wo_mem_config
-
+        wo_mem = ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config
+        wo_cache = "wo_width_sharded_2d" if (self.use_fused_all_gather_matmul or self.TG) else "wo"
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=get_wo_memory_config(),
+            memory_config=wo_mem,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=self.shard_wo_dims,
-                mesh_shape=configuration.cluster_shape,
+                self.mesh_device, dims=self.shard_wo_dims, mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
-            ),
+            cache_file_name=cache_name(f"{wo_cache}{ring_str}"),
         )
+
         if not use_paged_kv_cache:
-            # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
 
-        if configuration.query_pre_attn_scalar is not None:
-            self.scale = configuration.query_pre_attn_scalar**-0.5
-        else:
-            self.scale = self.head_dim**-0.5
+        self.scale = (
+            configuration.query_pre_attn_scalar**-0.5
+            if configuration.query_pre_attn_scalar
+            else self.head_dim**-0.5
+        )
 
-        # Insert the tensors into the prefetcher only in decode mode, we do not use prefetcher in prefill mode
-        if self.prefetcher is not None:
+        if use_pf:
 
             def register_weights():
                 self.prefetcher.insert_tensor(self.wqkv)
@@ -544,6 +541,13 @@ class Attention(LightweightModule):
             xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
+        # Reshard to compatible grid for nlp_create_qkv_heads_decode when using prefetcher
+        if self.prefetcher is not None:
+            xqkv_fused = ttnn.to_memory_config(
+                xqkv_fused,
+                self.args.get_attn_create_head_input_mem_config(Mode.DECODE, self.prefetcher),
+            )
+
         ###
         # Reshape and rotary embeddings
         ###
@@ -582,6 +586,7 @@ class Attention(LightweightModule):
             )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
         ###
         # KV update
         ###
@@ -639,7 +644,6 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
-
         ttnn.deallocate(q_heads_1BQD)
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
@@ -653,6 +657,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
+
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
