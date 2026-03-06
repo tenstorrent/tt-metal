@@ -7,6 +7,7 @@
 #include "llrt/rtoptions.hpp"
 
 #include <core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <algorithm>

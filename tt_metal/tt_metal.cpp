@@ -30,7 +30,6 @@
 
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
-#include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>

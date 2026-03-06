@@ -207,9 +207,66 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         groups_for_prep = 1;
     }
 
+    // When auto-slicing is enabled (num_slices=0), determine the actual slice config first
+    // so we can decide the execution path based on the auto-determined value
+    std::optional<Conv2dSliceConfig> actual_slice_config = dram_slice_config_;
+    if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices == 0) {
+        // Need to auto-determine - create temporary structures
+        auto [output_height, output_width] = calculate_ct2d_output_image_size(
+            {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
+
+        auto temp_slice_attr = get_conv_transpose2d_slice_attr(
+            batch_size,
+            input_height,
+            input_width,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding_n4,
+            {0, 0},
+            dilation,
+            groups,
+            input_layout,
+            input_dtype,
+            conv_output_dtype,
+            weight_dtype,
+            kernel_size[1],
+            has_bias,
+            conv_config,
+            compute_config,
+            device,
+            mirror_kernel);
+
+        actual_slice_config = op_slicing::determine_slice_config(
+            temp_slice_attr.get(),
+            ttnn::Shape{batch_size, input_height, input_width, in_channels},
+            ttnn::Shape{batch_size, output_height, output_width, out_channels},
+            dram_slice_config_,
+            conv_config.output_layout,
+            device);
+
+        // If auto-determination resulted in num_slices==1, convert to L1_FULL to avoid DRAM overhead
+        if (actual_slice_config.has_value() && actual_slice_config.value().num_slices == 1) {
+            actual_slice_config =
+                op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL};
+            log_debug(
+                tt::LogOp,
+                "Auto determined num_slices=1, converting to L1_FULL for ConvTranspose2d Weights {}",
+                temp_slice_attr->name());
+        } else {
+            log_debug(
+                tt::LogOp,
+                "Auto determined DRAM Slice Config in Prepare Conv_Transpose2d Weights as {} for {}",
+                actual_slice_config.value(),
+                temp_slice_attr->name());
+        }
+    }
+
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(
-        tt::tt_metal::StorageType::DEVICE, input_memory_config, dram_slice_config_);
+        tt::tt_metal::StorageType::DEVICE, input_memory_config, actual_slice_config);
+
     Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
     if (path == ConvT2dExecutionPath::L1) {
         // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
@@ -242,31 +299,8 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             compute_config_,
             op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
     }
-    Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
-            tt::tt_metal::TensorLayout(
-                weight_dtype,
-                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                MemoryConfig{
-                    TensorMemoryLayout::INTERLEAVED,
-                    BufferType::DRAM,
-                })),
-        device);
-    std::optional<Tensor> dummy_bias_tensor = std::nullopt;
-    if (has_bias) {
-        dummy_bias_tensor = tt::tt_metal::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape({1, 1, 1, out_channels}),
-                tt::tt_metal::TensorLayout(
-                    weight_dtype,
-                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                    MemoryConfig{
-                        TensorMemoryLayout::INTERLEAVED,
-                        BufferType::DRAM,
-                    })),
-            device);
-    }
+
+    // DRAM path continues - need to set up slice configuration
     auto [output_height, output_width] = calculate_ct2d_output_image_size(
         {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
     auto convt2d_slice_attr = get_conv_transpose2d_slice_attr(
@@ -284,24 +318,32 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         input_layout,
         input_dtype,
         conv_output_dtype,
-        std::ref(dummy_weight_tensor),
-        has_bias ? std::make_optional(std::ref(dummy_bias_tensor.value())) : std::nullopt,
+        weight_dtype,
+        kernel_size[1],
+        has_bias,
         conv_config,
         compute_config,
         device,
         mirror_kernel);
-    auto dram_slice_config = op_slicing::determine_slice_config(
-        convt2d_slice_attr.get(),
-        ttnn::Shape{batch_size, input_height, input_width, in_channels},
-        ttnn::Shape{batch_size, output_height, output_width, out_channels},
-        dram_slice_config_,
-        conv_config.output_layout,
-        device);
-    log_info(
-        tt::LogOp,
-        "Auto determined DRAM Slice Config in Prepare Conv_Transpose2d Weights as {} for {}",
-        dram_slice_config,
-        convt2d_slice_attr->name());
+
+    // Use the actual_slice_config if we determined it earlier, otherwise determine it now
+    Conv2dSliceConfig dram_slice_config;
+    if (actual_slice_config.has_value()) {
+        dram_slice_config = actual_slice_config.value();
+    } else {
+        dram_slice_config = op_slicing::determine_slice_config(
+            convt2d_slice_attr.get(),
+            ttnn::Shape{batch_size, input_height, input_width, in_channels},
+            ttnn::Shape{batch_size, output_height, output_width, out_channels},
+            dram_slice_config_,
+            conv_config.output_layout,
+            device);
+        log_info(
+            tt::LogOp,
+            "DRAM Slice Config in Prepare Conv_Transpose2d Weights: {} for {}",
+            dram_slice_config,
+            convt2d_slice_attr->name());
+    }
 
     uint32_t slice_rounding_value = 1;
     if (conv_config.output_layout == tt::tt_metal::Layout::TILE &&

@@ -10,7 +10,6 @@
 #include <string>
 #include <tt_stl/unreachable.hpp>
 
-#include "api/tt-metalium/data_types.hpp"
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"

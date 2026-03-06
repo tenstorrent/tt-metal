@@ -160,6 +160,42 @@ class Embedding1D(AbstractModule):
             "ccl": ccl,
         }
 
+    @staticmethod
+    def _fwd_embedding(x: ttnn.Tensor, cfg: dict, original_seq_len: int) -> ttnn.Tensor:
+        """Wrapper for embedding lookup with optional padding.
+        Matches: _forward lines 180-185
+
+        Args:
+            x: Input token IDs tensor [1, 1, seq_len]
+            cfg: Config for embedding operation (cfg["embedding"])
+            original_seq_len: Original sequence length before padding
+
+        Returns:
+            Embeddings tensor after lookup
+        """
+        if original_seq_len % ttnn.TILE_SIZE == 0:
+            return ttnn.embedding(x, **cfg["embedding"])
+        else:
+            x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - original_seq_len % ttnn.TILE_SIZE)], 0)
+            embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
+            ttnn.deallocate(x_padded)
+            return embeddings
+
+    @staticmethod
+    def _fwd_all_gather_embedding(x: ttnn.Tensor, cfg: dict, ccl) -> ttnn.Tensor:
+        """Wrapper for all-gather after embedding.
+        Matches: _forward line 195-197
+
+        Args:
+            x: Input tensor to gather
+            cfg: Config containing all_gather settings (cfg["all_gather"])
+            ccl: CCL runtime object
+
+        Returns:
+            Gathered tensor
+        """
+        return ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+
     @classmethod
     def forward_prefill(cls, x, cfg):
         return cls._forward(x, cfg)
