@@ -355,7 +355,12 @@ void Inspector::emit_debug_entry(
     }
     try {
         auto* data = get_inspector_data();
+        if (!data) {
+            // Inspector failed to initialize, no need to print failure message again.
+            return;
+        }
         const auto workload_id = mesh_workload->get_id();
+
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
         auto pos = data->runtime_entries_write_pos.load(std::memory_order_relaxed);
         auto& slot = data->runtime_entries[pos % inspector::Data::kRuntimeEntriesCapacity];
