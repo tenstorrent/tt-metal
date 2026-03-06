@@ -372,7 +372,7 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
     return num_counters;
 }
 
-FORCE_INLINE std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP>
+FORCE_INLINE const std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP>&
 get_counters_for_counter_group(PerfCounterGroup counter_group) {
     switch (counter_group) {
         case PerfCounterGroup::FPU: return fpu_counters;
@@ -382,10 +382,9 @@ get_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::INSTRN: return instrn_counters;
         default: {
             ASSERT(false);
-            break;
+            return fpu_counters;
         }
     }
-    return std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP>();
 }
 
 void start_perf_counter() {
