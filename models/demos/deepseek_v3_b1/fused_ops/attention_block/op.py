@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
+    CircularBufferIdManager,
     cb_descriptor_from_overlapped_tensor,
     cb_descriptor_from_overlapped_tensors,
 )
@@ -224,6 +225,7 @@ class AttentionBlock:
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        cb_id_context=None,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -811,84 +813,133 @@ class AttentionBlock:
         # Define circular buffer page size
         cb_page_size = tile_size
 
-        # CB indices (grouped by stage)
-        input_cb = 0
-        gamma_cb = 1
-        rmsnorm_output_cb = 2
-        # Matmul1 + gather-reduce + RMSNorm2 path
-        matmul_weights_cb_overlapped = 3
-        matmul_output_cb = 4
-        matmul_input_cb = 5
-        rmsnorm2_gamma_cb = 6  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
-        rmsnorm2_input_cb = 7  # Input CB for RMSNorm2
-        gather_reduce_half1_scratch_cb = 8  # Dedicated half1 scratch CB for gather_reduce
-        rmsnorm2_output_cb = 9  # Output CB for RMSNorm2
-        # Matmul2 + Matmul3 + QRoPE/CreateQHeads path
-        matmul2_input_cb = 10  # Input CB for second matmul (1x1536 with 1x32 tiles)
-        matmul2_output_cb = 12  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
-        matmul3_weights_cb = 13  # Weights CB for third matmul (height sharded on Qnope grid)
-        matmul3_output_cb = 14  # Output CB for third matmul (Qnope final output)
-        qrope_output_cb = 15  # Output CB for Qrope (RoPE output)
-        create_q_heads_out_cb = 16  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
-        qrope_cos_cb = 17  # Cos CB for RoPE
-        qrope_sin_cb = 18  # Sin CB for RoPE
-        qrope_trans_mat_cb = 19  # Trans_mat CB for RoPE
-        qrope_rotated_input_interm_cb = 20  # Rotated input intermediate CB for RoPE
-        qrope_cos_interm_cb = 21  # Cos intermediate CB for RoPE
-        qrope_sin_interm_cb = 22  # Sin intermediate CB for RoPE
-        # KV cache branch
-        dkv_matmul_output_cb = 24  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
-        kv_rmsnorm_input_cb = 25  # Input CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_gamma_cb = 26  # Gamma CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_output_cb = 27  # Output CB for KV Cache Branch RMSNorm
-        krope_output_cb = 28  # Output CB for KV Cache Branch RoPE
-        krope_cos_cb = 29  # Cos CB for RoPE
-        krope_sin_cb = 30  # Sin CB for RoPE
-        create_q_heads_receiver_in_cb = 31  # Intermediate CB for CreateQHeads (row-major data before tilization)
+        q_df = data_format
+        k_df = kv_cache_tensor.dtype
+        stats_df = ttnn.bfloat16
 
-        kv_cache_output_cb = 32  # Output CB for KV Cache Branch
-        kv_cache_intermed_cb = 33  # Intermed CB for KV Cache Branch
-        kv_cache_input_cb = 34  # Input CB for KV Cache Branch
+        # ==================================================================
+        # CB indices (auto-assigned via CircularBufferIdManager)
+        # ==================================================================
+        assert cb_id_context is not None, "cb_id_context must be provided"
+
+        TD_INTERP = ttnn.TileDescriptor(interpreted_tile)
+        TD_1x32 = ttnn.TileDescriptor(TILE_1x32)
+        TD_16x32 = ttnn.TileDescriptor(HALF_16x32_TILE)
+        TD_32x32 = ttnn.TileDescriptor(FULL_32x32_TILE)
+        TD_8x32 = ttnn.TileDescriptor(ttnn.Tile((8, 32)))
+        TD_SDPA = ttnn.TileDescriptor(sdpa_tile)
+        TD_KV = ttnn.TileDescriptor(kv_cache_tensor.get_tile())
+
+        # CB indices (grouped by stage)
+        input_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
+        gamma_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
+        rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
+        # Matmul1 + gather-reduce + RMSNorm2 path
+        matmul_weights_cb_overlapped = cb_id_context.get_cb_id(
+            matmul_weights_tensor.dtype, ttnn.TileDescriptor(matmul_weights_tensor.get_tile())
+        )
+        matmul_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        matmul_input_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        rmsnorm2_gamma_cb = cb_id_context.get_cb_id(
+            data_format, TD_16x32
+        )  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
+        rmsnorm2_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for RMSNorm2
+        gather_reduce_half1_scratch_cb = cb_id_context.get_cb_id(
+            data_format, TD_16x32
+        )  # Dedicated half1 scratch CB for gather_reduce
+        rmsnorm2_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for RMSNorm2
+        # Matmul2 + Matmul3 + QRoPE/CreateQHeads path
+        matmul2_input_cb = cb_id_context.get_cb_id(
+            data_format, TD_1x32
+        )  # Input CB for second matmul (1x1536 with 1x32 tiles)
+        matmul2_output_cb = cb_id_context.get_cb_id(
+            data_format, TD_1x32
+        )  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
+        matmul3_weights_cb = cb_id_context.get_cb_id(  # Weights CB for third matmul (height sharded on Qnope grid)
+            matmul3_weights_tensor.dtype, ttnn.TileDescriptor(matmul3_weights_tensor.get_tile())
+        )
+        matmul3_output_cb = cb_id_context.get_cb_id(
+            data_format, TD_1x32
+        )  # Output CB for third matmul (Qnope final output)
+        qrope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for Qrope (RoPE output)
+        create_q_heads_out_cb = cb_id_context.get_cb_id(
+            data_format, TD_8x32
+        )  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
+        qrope_cos_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos CB for RoPE
+        qrope_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Sin CB for RoPE
+        qrope_trans_mat_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Trans_mat CB for RoPE
+        qrope_rotated_input_interm_cb = cb_id_context.get_cb_id(
+            data_format, TD_1x32
+        )  # Rotated input intermediate CB for RoPE
+        qrope_cos_interm_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos intermediate CB for RoPE
+        qrope_sin_interm_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Sin intermediate CB for RoPE
+        # KV cache branch
+        dkv_matmul_output_cb = cb_id_context.get_cb_id(
+            data_format, TD_1x32
+        )  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
+        kv_rmsnorm_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for KV Cache Branch RMSNorm
+        kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Gamma CB for KV Cache Branch RMSNorm
+        kv_rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for KV Cache Branch RMSNorm
+        krope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for KV Cache Branch RoPE
+        krope_cos_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos CB for RoPE
+        krope_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Sin CB for RoPE
+        create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
+            data_format, TD_8x32
+        )  # Intermediate CB for CreateQHeads (row-major data before tilization)
+
+        kv_cache_output_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Output CB for KV Cache Branch
+        kv_cache_intermed_cb = cb_id_context.get_cb_id(stats_df, TD_32x32)  # Intermed CB for KV Cache Branch
+        kv_cache_input_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Input CB for KV Cache Branch
 
         # MLA parameters
         mla_q_in_cb = create_q_heads_out_cb  # In for MLA q heads
-        mla_k_in_cb = 35  # Input CB for MLA
-        mla_mask_cb = 42  # Mask CB for MLA
-        mla_interm_out_cb = 36  # Intermediate output CB for MLA
-        mla_interm_ms_cb = 37  # Intermediate MS CB for MLA
-        mla_out_in_cb = 38  # Output input CB for MLA
-        mla_ms_in_cb = 39  # Output MS CB for MLA
-        mla_out_o_cb = 40  # Output O CB for MLA
-        mla_out_ms_cb = 41  # Output MS CB for MLA
+        mla_k_in_cb = cb_id_context.get_cb_id(k_df, TD_KV)  # Input CB for MLA
+        mla_interm_out_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Intermediate output CB for MLA
+        mla_interm_ms_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Intermediate MS CB for MLA
+        mla_out_in_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output input CB for MLA
+        mla_ms_in_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output MS CB for MLA
+        mla_out_o_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output O CB for MLA
+        mla_out_ms_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output MS CB for MLA
+        mla_mask_cb = cb_id_context.get_cb_id(q_df, TD_8x32)  # Mask CB for MLA
         mla_out_final_cb = mla_out_o_cb  # Output final CB for MLA, unused for full fused attention block
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 43  # Packet buffer for CCL broadcast
+        bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # Packet buffer for CCL broadcast
 
-        # SDPA CB indices (14-24, after existing CBs 0-13)
+        # SDPA CB indices
         sdpa_cb_local_l = mla_out_o_cb
         sdpa_cb_local_ms = mla_out_ms_cb
-        sdpa_cb_neighbor_l = 46
-        sdpa_cb_neighbor_ms = 47
-        sdpa_cb_r1_result_l = 48
-        sdpa_cb_r1_result_ms = 49
-        sdpa_cb_l_out = 50
-        sdpa_cb_packet_slot = 51
+        sdpa_cb_neighbor_l = cb_id_context.get_cb_id(data_format, TD_SDPA)
+        sdpa_cb_neighbor_ms = cb_id_context.get_cb_id(data_format, TD_SDPA)
+        sdpa_cb_r1_result_l = cb_id_context.get_cb_id(data_format, TD_SDPA)
+        sdpa_cb_r1_result_ms = cb_id_context.get_cb_id(data_format, TD_SDPA)
+        sdpa_cb_l_out = cb_id_context.get_cb_id(data_format, TD_SDPA)
+        sdpa_cb_packet_slot = cb_id_context.get_cb_id(ttnn.uint32, TD_32x32)
 
-        matmul4_in0_cb = 52  # Matmul4 input (kv_b2 grid)
-        matmul4_in1_cb = 53  # Matmul4 weights (kv_b2 grid)
-        matmul4_out_cb = 54  # Matmul4 output (kv_b2 grid)
-        gather2_dst_cb = 55  # Gather2 output = Mcast3 source (gather core)
-        matmul5_in0_cb = 56  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
-        matmul5_in1_cb = 57  # Matmul5 weights (112 active cores)
-        matmul5_out_cb = 58  # Matmul5 output (112 active cores)
-        gather3_dst_cb = 59  # Gather3 output = CCL local data (gather core)
-        ccl_sender_in_cb = 60  # CCL sender reads gather3 output (sender core)
-        ccl_remote_data_cb = 61  # CCL received remote data (receiver core)
+        matmul4_in0_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Matmul4 input (kv_b2 grid)
+        matmul4_in1_cb = cb_id_context.get_cb_id(  # Matmul4 weights (kv_b2 grid)
+            post_sdpa_weights1_tensor.dtype, ttnn.TileDescriptor(post_sdpa_weights1_tensor.get_tile())
+        )
+        matmul4_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Matmul4 output (kv_b2 grid)
+        gather2_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Gather2 output = Mcast3 source (gather core)
+        matmul5_in0_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
+        matmul5_in1_cb = cb_id_context.get_cb_id(  # Matmul5 weights (112 active cores)
+            post_sdpa_weights2_tensor.dtype, ttnn.TileDescriptor(post_sdpa_weights2_tensor.get_tile())
+        )
+        matmul5_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Matmul5 output (112 active cores)
+        gather3_dst_cb = cb_id_context.get_cb_id(
+            data_format, TD_INTERP
+        )  # Gather3 output = CCL local data (gather core)
+        ccl_sender_in_cb = cb_id_context.get_cb_id(
+            data_format, TD_INTERP
+        )  # CCL sender reads gather3 output (sender core)
+        ccl_remote_data_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL received remote data (receiver core)
         ccl_residual_cb = input_cb
-        ccl_temp_cb = 62  # CCL temp for compute (receiver core)
-        ccl_output_cb = 11  # CCL output (receiver core)
-        ccl_packet_header_cb = 23  # CCL packet headers (sender + receiver cores)
+        ccl_temp_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL temp for compute (receiver core)
+        ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL output (receiver core)
+        ccl_packet_header_cb = cb_id_context.get_cb_id(
+            ttnn.uint32, TD_32x32
+        )  # CCL packet headers (sender + receiver cores)
 
         attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
 
@@ -2479,10 +2530,6 @@ class AttentionBlock:
                 # Flash MLA cb descriptors
                 mla_cb_descriptors = []
 
-                q_df = data_format
-                k_df = kv_cache_tensor.dtype
-                stats_df = ttnn.bfloat16
-
                 q_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
                 stats_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
                 stats_tile = q_tiny_tile
@@ -3752,6 +3799,8 @@ class AttentionBlock:
             sdpa_out_interm_buffer,
             attention_block_output_tensor,
         ]
+        cb_id_manager = CircularBufferIdManager()
+        cb_id_context = cb_id_manager.create_context()
         full_device_grid, attention_block_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             intermediate_tensor_mesh,
@@ -3800,6 +3849,7 @@ class AttentionBlock:
             fp32_dest_acc_en,
             skip_ccl,
             noc_mode,
+            cb_id_context,
         )
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
