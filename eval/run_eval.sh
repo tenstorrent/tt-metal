@@ -87,7 +87,7 @@ else
 fi
 
 # --- Setup results directory ---
-TIMESTAMP="$(date +%d_%m)"
+TIMESTAMP="$(date +%d_%m_%H%M)"
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/' '_')"
 RESULTS_DIR="${BASE_DIR}/results/${BRANCH_SLUG}_${TIMESTAMP}"
 mkdir -p "$RESULTS_DIR"
@@ -152,7 +152,7 @@ run_single() {
     local run_id="$2"
     local prompt_name
     prompt_name="$(basename "$prompt_file" .txt)"
-    local run_tag="${TIMESTAMP}_run${run_id}_${prompt_name}_${BRANCH_SLUG}_$$_${RANDOM}"
+    local run_tag="${TIMESTAMP}_run${run_id}_${prompt_name}_${BRANCH_SLUG}"
     local clone_dir="${BASE_DIR}/${run_tag}/tt-metal"
     local log_dir="${RESULTS_DIR}/${prompt_name}/run_${run_id}"
     mkdir -p "$log_dir"
