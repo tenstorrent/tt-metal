@@ -202,9 +202,6 @@ class AttentionBlock:
         # Post-SDPA parameters
         post_sdpa_weights1_tensor,
         post_sdpa_weights2_tensor,
-        post_sdpa_gather2_output_tensor,
-        post_sdpa_gather3_output_tensor,
-        post_sdpa_intermediate_tensor,
         sdpa_input_l_mesh,
         sdpa_input_ms_mesh,
         sdpa_output_l_mesh,
@@ -291,8 +288,6 @@ class AttentionBlock:
         # Post-SDPA parameters
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
         post_sdpa_weights2_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights2_tensor.fused_tensor)
-        post_sdpa_gather3_output_tensors_per_device = ttnn.get_device_tensors(post_sdpa_gather3_output_tensor)
-        post_sdpa_intermediate_tensors_per_device = ttnn.get_device_tensors(post_sdpa_intermediate_tensor)
 
         attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
 
@@ -1631,14 +1626,6 @@ class AttentionBlock:
         ccl_sender_noc_core = device.worker_core_from_logical_core(ccl_sender_core)
         ccl_receiver_noc_core = gather_dest_noc_core  # Same as gather core
 
-        # Buffer addresses
-        # TODO: is it possible to get these from CB write_ptrs?
-        post_sdpa_gather2_output_tensor_device = post_sdpa_gather2_output_tensor.device()
-        gather2_receiver_data_addr = post_sdpa_gather2_output_tensor.buffer_address()
-        # Gather3 writes to gather3_output_tensor, CCL reads from there and writes to output_tensor
-        post_sdpa_gather3_output_tensor_device_sample = post_sdpa_gather3_output_tensors_per_device[0]
-        gather3_receiver_data_addr = post_sdpa_gather3_output_tensor_device_sample.buffer_address()
-
         mcast3_is_part_of_receiver_grid = mcast3_grid.contains(gather_core)
 
         # ========================================================================
@@ -1663,7 +1650,6 @@ class AttentionBlock:
             ("gather2_sender_grid_end_x", 0),
             ("gather2_sender_grid_end_y", 0),
             ("gather2_row_major", 1),
-            ("gather2_receiver_data_addr", gather2_receiver_data_addr),
             # Mcast3 receiver
             ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
             ("mcast3_dst_cb", matmul5_in0_cb),
@@ -1686,7 +1672,6 @@ class AttentionBlock:
             ("gather3_sender_grid_end_x", 0),
             ("gather3_sender_grid_end_y", 0),
             ("gather3_row_major", 1),
-            ("gather3_receiver_data_addr", gather3_receiver_data_addr),
             # CCL sender (NCRISC reads from gather core)
             ("ccl_sender_cb0_id", ccl_sender_in_cb),
             ("ccl_sender_num_tiles", ccl_num_pages),
@@ -1932,8 +1917,6 @@ class AttentionBlock:
 
                 post_sdpa_weights1_fused_tensor_device = post_sdpa_weights1_fused_tensors_per_device[device_idx]
                 post_sdpa_weights2_fused_tensor_device = post_sdpa_weights2_fused_tensors_per_device[device_idx]
-                post_sdpa_gather3_output_tensor_device = post_sdpa_gather3_output_tensors_per_device[device_idx]
-                post_sdpa_intermediate_tensor_device = post_sdpa_intermediate_tensors_per_device[device_idx]
                 attention_block_output_tensor_device = attention_block_output_tensors_per_device[device_idx]
 
                 # Get worker core from per-device input tensor shard grid
@@ -2690,9 +2673,22 @@ class AttentionBlock:
                 running_address_offset += matmul4_out_cb_descriptor.total_size
 
                 # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
-                gather2_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather2_dst_cb, post_sdpa_gather2_output_tensor
+                gather2_dst_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=gather2_dst_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=matmul4_out_tile_descriptor,
                 )
+                gather2_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather2_dst_cb,
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
+                    total_size=mcast3_data_size_bytes,
+                )
+                gather2_dst_cb_descriptor.format_descriptors = [gather2_dst_cb_format]
+                sdpa_kv_cache_running_offset_mcast_core += gather2_dst_cb_descriptor.total_size
+
+                gather2_receiver_data_addr = ttnn.get_cb_address(gather2_dst_cb_descriptor)
 
                 # CB 4: Mcast3 destination = Matmul5 input (256 tiles of 1x32 per core)
                 matmul5_in0_cb_format = ttnn.CBFormatDescriptor(
@@ -2706,7 +2702,7 @@ class AttentionBlock:
                     matmul5_in0_cb,
                     sdpa_kv_cache_buffer_device,
                     address_offset=running_address_offset,
-                    total_size=mcast3_dst_num_pages * tile_1x32_size,
+                    total_size=mcast3_data_size_bytes,
                 )
                 matmul5_in0_cb_descriptor.format_descriptors = [matmul5_in0_cb_format]
                 running_address_offset += matmul5_in0_cb_descriptor.total_size
@@ -2734,11 +2730,22 @@ class AttentionBlock:
 
                 # CB 7: Gather3 output = CCL local data (backed by tensor on gather core)
                 # CCL sender reads from this tensor via NOC, not from local CB
-                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather3_dst_cb, post_sdpa_gather3_output_tensor_device
+                gather3_dst_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=gather3_dst_cb,
+                    data_format=data_format,
+                    page_size=tile_size,
+                    tile=tile_descriptor,
                 )
-                gather3_dst_cb_descriptor.format_descriptors[0].tile = tile_descriptor
-                gather3_dst_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather3_dst_cb,
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
+                    total_size=num_tiles * tile_size,
+                )
+                gather3_dst_cb_descriptor.format_descriptors = [gather3_dst_cb_format]
+                sdpa_kv_cache_running_offset_mcast_core += gather3_dst_cb_descriptor.total_size
+
+                gather3_receiver_data_addr = ttnn.get_cb_address(gather3_dst_cb_descriptor)
 
                 post_sdpa_cb_list = [
                     matmul4_in0_cb_descriptor,
@@ -2770,7 +2777,6 @@ class AttentionBlock:
                 post_sdpa_cb_list.append(ccl_sender_in_cb_descriptor)
 
                 # CB 9: CCL remote data (backed by intermediate tensor with 32x32 tiles)
-                # The intermediate tensor is where the CCL sender writes remote data
                 ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     ccl_remote_data_cb,
                     sdpa_kv_cache_buffer_device,
@@ -3239,6 +3245,8 @@ class AttentionBlock:
                 ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
                     k_addr,
                     position_ids_tensor_addr,
+                    gather2_receiver_data_addr,
+                    gather3_receiver_data_addr,
                 ]
 
                 brisc_named_compile_time_args = (
@@ -3781,9 +3789,6 @@ class AttentionBlock:
         # Post-SDPA parameters
         post_sdpa_weights1_tensor,
         post_sdpa_weights2_tensor,
-        post_sdpa_gather2_output_tensor,
-        post_sdpa_gather3_output_tensor,
-        post_sdpa_intermediate_tensor,
         sdpa_input_l_mesh,
         sdpa_input_ms_mesh,
         sdpa_output_l_mesh,
@@ -3847,9 +3852,6 @@ class AttentionBlock:
             # Post-SDPA parameters
             post_sdpa_weights1_tensor,
             post_sdpa_weights2_tensor,
-            post_sdpa_gather2_output_tensor,
-            post_sdpa_gather3_output_tensor,
-            post_sdpa_intermediate_tensor,
             sdpa_input_l_mesh,
             sdpa_input_ms_mesh,
             sdpa_output_l_mesh,

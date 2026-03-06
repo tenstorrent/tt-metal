@@ -303,7 +303,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather2_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather2_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather2_row_major"),
-        get_named_compile_time_arg_val("gather2_receiver_data_addr"),
+        get_common_arg_val<uint32_t>(15),  // gather2_receiver_data_addr
         get_named_compile_time_arg_val("gather2_sender_idx"),
     };
 
@@ -333,7 +333,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather3_row_major"),
-        get_named_compile_time_arg_val("gather3_receiver_data_addr"),
+        get_common_arg_val<uint32_t>(16),  // gather3_receiver_data_addr
         get_named_compile_time_arg_val("gather3_sender_idx"),
     };
 
