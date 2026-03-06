@@ -28,6 +28,63 @@ def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     return ttnn.multiply(x, inv_norm)
 
 
+def fused_decay_and_write_ttnn(
+    h,
+    k_t,
+    delta,
+    g_t,
+    beta_t,
+):
+    """
+    Logical fusion for the recurrent delta rule state update:
+
+        h = decay * h + beta_t * (k_t ⊗ delta)
+
+    Implemented using existing TTNN ops so call sites are stable.
+    Can be replaced by a true fused kernel later.
+    """
+    B = h.shape[0]
+    H = h.shape[1]
+    K = h.shape[2]
+    V = h.shape[3]
+
+    # decay: [B, H] -> [B, H, 1, 1]
+    decay = ttnn.exp(g_t)
+    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # beta: [B, H] -> [B, H, 1, 1]
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # k_t: [B, H, K] -> [B, H, K, 1]
+    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # delta: [B, H, V] -> [B, H, 1, V]
+    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # tilize matmul inputs
+    k_col = ttnn.to_layout(k_col, ttnn.TILE_LAYOUT)
+    d_row = ttnn.to_layout(d_row, ttnn.TILE_LAYOUT)
+
+    outer = ttnn.matmul(
+        k_col,
+        d_row,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # apply beta
+    outer = ttnn.multiply(
+        outer,
+        beta_expanded,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # fused-style update: decay * h + outer
+    h = ttnn.multiply(h, decay)
+    h = ttnn.add(h, outer)
+
+    return h
+
+
 def recurrent_delta_rule_step_ttnn(
     q_t,
     k_t,
@@ -38,57 +95,50 @@ def recurrent_delta_rule_step_ttnn(
     seq_len=None,
 ):
     """
-    Single recurrent step of the gated delta rule using TTNN ops.
+    Recurrent delta rule step using TTNN ops, with a logically fused
+    state update implemented via `fused_decay_and_write_ttnn`.
 
-    Uses ttnn.matmul for K-dimension reductions to leverage hardware
-    float32 accumulation, improving numerical precision.
-
-    Args:
-        q_t: [B, H, K] query for this timestep
-        k_t: [B, H, K] key for this timestep
-        v_t: [B, H, V] value for this timestep
-        beta_t: [B, H] write strength
-        g_t: [B, H] log-space decay
-        h: [B, H, K, V] recurrent state
-        seq_len: optional T; when <= 64, o_t reshape uses L1 to reduce DRAM; otherwise DRAM
-
-    Returns:
-        o_t: [B, H, V] output
-        h: [B, H, K, V] updated state
+    This keeps the call site ready for a future single-kernel
+    implementation without changing model code.
     """
     B = q_t.shape[0]
     H = q_t.shape[1]
     K = q_t.shape[2]
     V = v_t.shape[2]
 
-    # 1. Decay the state: h = h * exp(g_t)
-    decay = ttnn.exp(g_t)  # [B, H]
-    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, 1]
-    h = ttnn.multiply(h, decay)  # keep h in DRAM for matmul PCC stability
+    # Ensure TILE layout for matmul inputs (slicing loses tilization)
+    q_t = ttnn.to_layout(q_t, ttnn.TILE_LAYOUT)
+    k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT)
+    v_t = ttnn.to_layout(v_t, ttnn.TILE_LAYOUT)
+    h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
 
-    # 2. Read from state via matmul: v_read = k^T @ h
-    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, K]
-    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
-    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, V]
+    # 1. Read from state via matmul: v_read = k^T @ h
+    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_row = ttnn.to_layout(k_row, ttnn.TILE_LAYOUT)
 
-    # 3. Compute delta: delta = (v_t - v_read) * beta_t
+    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # 2. Compute delta (pre-beta): delta = v_t - v_read
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1]
-    delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # 4. Write to state via matmul outer product: h += k @ delta^T
-    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, 1]
-    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
-    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, V]
-    h = ttnn.add(h, outer)
+    # 3. Fused-style decay + write to state
+    h = fused_decay_and_write_ttnn(
+        h=h,
+        k_t=k_t,
+        delta=delta,
+        g_t=g_t,
+        beta_t=beta_t,
+    )
 
-    # 5. Query state via matmul: o_t = q^T @ h
-    q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
+    # 4. Query state via matmul: o_t = q^T @ h
+    q_row = ttnn.reshape(q_t, [B, H, 1, K])
+    q_row = ttnn.to_layout(q_row, ttnn.TILE_LAYOUT)
 
-    o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
+    o_t = ttnn.matmul(q_row, h)
     # Use L1 for o_t reshape when seq_len <= 64 to reduce DRAM; skip for longer sequences to avoid L1 pressure
     use_l1 = seq_len is not None and seq_len <= 64
-    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)  # [B, H, V]
+    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)
 
     return o_t, h
 
