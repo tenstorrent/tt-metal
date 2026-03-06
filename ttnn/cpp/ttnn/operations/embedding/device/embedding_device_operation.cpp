@@ -10,8 +10,6 @@ using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
 
-#define RISC_CORES_PER_TENSIX 2
-
 namespace ttnn::prim {
 
 EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_program_factory(
@@ -34,9 +32,7 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
         weights.layout() == Layout::ROW_MAJOR, "Weights tensor layout must be ROW_MAJOR but got {}", weights.layout());
     TT_FATAL(a.dtype() == DataType::UINT32 or a.dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");
-    TT_FATAL(
-        a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Embedding does not currently support sharded inputs");
+
     TT_FATAL(
         weights.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Embedding does not currently support sharded weights");
@@ -56,6 +52,13 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             "Number of columns in table {} must be factor of tile width {}",
             weights.padded_shape()[-1],
             TILE_WIDTH);
+
+        // TODO: remove this check when ttnn::to_layout supports ND-sharded tensors
+        // https://github.com/tenstorrent/tt-metal/issues/38273
+        TT_FATAL(
+            !operation_attributes.output_mem_config.nd_shard_spec().has_value(),
+            "NDSharded output tensor must have ROW_MAJOR_LAYOUT");
+
         if (is_sharded(operation_attributes.output_mem_config.memory_layout())) {
             const auto& shard_spec = operation_attributes.output_mem_config.shard_spec();
             TT_FATAL(shard_spec.has_value(), "Sharded memory config must have a shard spec");
@@ -81,15 +84,25 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
                 shard_spec->shape[1]);
         }
     } else {
-        if (is_sharded(operation_attributes.output_mem_config.memory_layout())) {
+        if (is_sharded(operation_attributes.output_mem_config.memory_layout()) &&
+            !operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
             TT_FATAL(
                 operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Embedding only supports height sharded Row Major outputs");
         }
     }
-    if (a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+
+    if (!tensor_args.input_tensor_arg.nd_shard_spec().has_value() &&
+        !operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+        if (a.layout() == Layout::ROW_MAJOR && a.padded_shape().rank() == 4) {
+            TT_FATAL(
+                a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1,
+                "Only dim 0 && 3 for the input can be non 1, but got {} and {} for dim 1 and 2",
+                a.padded_shape()[1],
+                a.padded_shape()[2]);
+        }
     }
+
     switch (operation_attributes.embeddings_type) {
         case EmbeddingsType::PADDED:
             TT_FATAL(
@@ -109,18 +122,22 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor_arg;
-    const auto& weight_tensor = tensor_args.weight_arg;
-    auto num_output_embeddings = input_tensor.logical_shape()[-1];
-    auto batch_num = input_tensor.logical_shape()[0];
-    auto num_embedding_dims = weight_tensor.logical_shape()[-1];
-
-    ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
-    auto output_layout =
-        (operation_attributes.tilized && input_tensor.layout() != Layout::TILE) ? Layout::TILE : Layout::ROW_MAJOR;
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
     }
+
+    const auto& input_tensor = tensor_args.input_tensor_arg;
+    const auto& weight_tensor = tensor_args.weight_arg;
+
+    auto num_embedding_dims = weight_tensor.logical_shape()[-1];
+
+    ttsl::SmallVector<uint32_t> output_shape_vec = {
+        input_tensor.logical_shape().begin(), input_tensor.logical_shape().end()};
+    output_shape_vec.push_back(num_embedding_dims);
+    ttnn::Shape output_shape(output_shape_vec);
+
+    auto output_layout =
+        (operation_attributes.tilized && input_tensor.layout() != Layout::TILE) ? Layout::TILE : Layout::ROW_MAJOR;
     return TensorSpec(
         output_shape,
         TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));

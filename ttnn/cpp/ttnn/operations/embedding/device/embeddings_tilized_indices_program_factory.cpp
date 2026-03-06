@@ -33,19 +33,16 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     Program program{};
 
     uint32_t input_element_size_bytes = a.element_size();
-    uint32_t weights_element_size_bytes = weights.element_size();
-    uint32_t output_element_size_bytes = output.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.logical_shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.padded_shape()[-1] * weights_element_size_bytes;
-    uint32_t output_page_size = output.padded_shape()[-1] * output_element_size_bytes;
+    uint32_t input_page_size = a.buffer()->page_size();
+    uint32_t weight_page_size = weights.buffer()->page_size();
+    uint32_t output_page_size = output.buffer()->page_size();
 
     // weights shape is [1, 1, num_embeddings, num_dim]
 
-    uint32_t batch_size = a.logical_shape()[0];  // num rows
     uint32_t num_cols = a.logical_shape()[-1];
-    uint32_t volume = num_cols * batch_size;
+    uint32_t volume = static_cast<uint32_t>(a.logical_volume());
     auto alignment = a.buffer()->alignment();
 
     // setup problem and grid size
