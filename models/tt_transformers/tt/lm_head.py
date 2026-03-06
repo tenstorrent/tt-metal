@@ -194,7 +194,7 @@ class LMHead(LightweightModule):
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
         )
 
-        sharded_output_memory_config = self.args.get_lm_head_sharded_output_mem_config(
+        interleaved_output_memory_config = self.args.get_lm_head_sharded_output_mem_config(
             self.prefetcher if use_prefetcher else None
         )
 
@@ -208,11 +208,12 @@ class LMHead(LightweightModule):
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
-            output = ttnn.sharded_to_interleaved(output, memory_config=sharded_output_memory_config)
+            output = ttnn.sharded_to_interleaved(output, memory_config=interleaved_output_memory_config)
             if output_biases is not None:
+                bias = ttnn.to_memory_config(output_biases[i], memory_config=output.memory_config())
                 output = ttnn.add(
                     output,
-                    output_biases[i],
+                    bias,
                     memory_config=output.memory_config(),
                     dtype=ttnn.bfloat16,
                 )
