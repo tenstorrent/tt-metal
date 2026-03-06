@@ -58,6 +58,9 @@ ALWI uint32_t get_cb_num_pages(uint32_t cb_id);
 /**
  * @brief Validate that a CB's page size equals the tile size for its data format (compile-time version)
  *
+ * On compute kernels (TRISC), fifo_page_size is stored in 16-byte units, so we shift left
+ * by CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT to convert back to bytes.
+ *
  * @tparam format Data format (compile-time constant)
  * @param cb_id Circular buffer ID
  */
@@ -67,8 +70,7 @@ ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id);
 /**
  * @brief Validate that a CB's page size equals the tile size for its data format (runtime version)
  *
- * On compute kernels (TRISC), fifo_page_size is stored in 16-byte units, so we shift left
- * by CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT to convert back to bytes.
+ * Same shift logic as the compile-time version.
  */
 ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format);
 
