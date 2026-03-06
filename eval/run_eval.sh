@@ -225,7 +225,7 @@ run_single() {
             echo "[${prompt_name}:${run_id}] Installing debugger..."
             # shellcheck disable=SC1091
             source python_env/bin/activate \
-                && pip install -r tools/triage/requirements.txt >> "${log_dir}/venv.log" 2>&1 \
+                && uv pip install -r tools/triage/requirements.txt >> "${log_dir}/venv.log" 2>&1 \
                 && ./scripts/install_debugger.sh >> "${log_dir}/venv.log" 2>&1 || true
             touch "$venv_sentinel"
             echo "[${prompt_name}:${run_id}] Venv complete"
