@@ -30,7 +30,7 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
         .num_faces = get_operand_num_faces(operandA_id),
         .face_r_dim = get_operand_face_r_dim(operandA_id),
         .face_c_dim = ckernel::trisc::FACE_C_DIM,
-        .narrow_tile = get_operand_narrow_tile(operandA_id)};
+        .narrow_tile = static_cast<bool>(get_operand_narrow_tile(operandA_id))};
 
     _llk_unpack_reduce_init_<reduce_dim>(operandA_id, operandB_id, tile_shape_A);
 }
