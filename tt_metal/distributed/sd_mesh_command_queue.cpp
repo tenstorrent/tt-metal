@@ -47,7 +47,12 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     std::function<std::lock_guard<std::mutex>()> lock_api_function,
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)),
-    active_distributed_context_(std::move(distributed_context)) {}
+    active_distributed_context_(std::move(distributed_context)) {
+    auto local_devices = mesh_device->get_devices();
+    if (local_devices.size() > 1) {
+        launch_thread_pool_ = create_device_bound_thread_pool(local_devices);
+    }
+}
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     TT_THROW("Trace not supported for slow dispatch");
@@ -221,16 +226,20 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto& range_program_map = mesh_workload.get_programs();
-    const auto num_threads = range_program_map.size();
-    launch_thread_pool_ = create_device_bound_thread_pool(num_threads);
-    if (num_threads > 1) {
-        uint32_t thread_idx = 0;
+    const auto num_programs = range_program_map.size();
+    // Parallelize program launch across devices using a thread pool (NUMA aware)
+    // Each program is enqueued to a thread bound to its target device's NUMA node
+    // Falls back to sequential launch for single-program workloads
+    if (num_programs > 1) {
         for (auto& [coord_range, program] : range_program_map) {
+            auto first_coord = *coord_range.begin();
+            const auto* const device = mesh_device_->impl().get_device(first_coord);
+            const uint32_t device_id = device->id();
             launch_thread_pool_->enqueue(
                 [this, &coord_range, &program, blocking]() {
                     launch_program_for_range(coord_range, program, blocking);
                 },
-                thread_idx++);
+                device_id);
         }
 
         launch_thread_pool_->wait();

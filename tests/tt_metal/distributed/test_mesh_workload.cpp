@@ -378,15 +378,15 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-// 2x4 test for parallelization experiments (8 devices)
+// 4x8 test for parallelization experiments
 // Measures metrics for multiple parallelize program launches
-TEST_F(MeshDeviceFixture2x4DispatchAgnostic, ParallelizationBenchmark) {
-    uint32_t num_programs = 128;
-    uint32_t num_iterations = 20;
+TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
+    uint32_t num_programs = 32;
     auto random_seed = 0;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
+    log_info(tt::LogTest, "Starting ParallelizationBenchmark");
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -396,28 +396,21 @@ TEST_F(MeshDeviceFixture2x4DispatchAgnostic, ParallelizationBenchmark) {
     double setup_enqueue_time_ms = 0.0;
     int workload_count = 0;
 
-    // Range covering 8 devices: {0,0} to {1,3}
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0});
-    MeshCoordinateRange devices_1(MeshCoordinate{0, 1});
-    MeshCoordinateRange devices_2(MeshCoordinate{0, 2});
-    MeshCoordinateRange devices_3(MeshCoordinate{0, 3});
-    MeshCoordinateRange devices_4(MeshCoordinate{1, 0});
-    MeshCoordinateRange devices_5(MeshCoordinate{1, 1});
-    MeshCoordinateRange devices_6(MeshCoordinate{1, 2});
-    MeshCoordinateRange devices_7(MeshCoordinate{1, 3});
+    // Range covering 32 devices: {0,0} to {3,7}
+    constexpr int num_devices = 32;  // 4 rows x 8 columns
+    std::vector<MeshCoordinateRange> devices;
+    devices.reserve(num_devices);
+    for (int d = 0; d < num_devices; d++) {
+        devices.emplace_back(MeshCoordinate{d / 8, d % 8});
+    }
 
     // Launch a unique program on a device
-    // In total total 8 programs for this workload (which should be launched in parallel)
-    for (int i = 0; i < num_programs; i += 8) {
+    // In total total 32 programs for this workload (which should be launched in parallel)
+    for (int i = 0; i < num_programs; i += num_devices) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-        workload->add_program(devices_0, std::move(*programs[i]));
-        workload->add_program(devices_1, std::move(*programs[i + 1]));
-        workload->add_program(devices_2, std::move(*programs[i + 2]));
-        workload->add_program(devices_3, std::move(*programs[i + 3]));
-        workload->add_program(devices_4, std::move(*programs[i + 4]));
-        workload->add_program(devices_5, std::move(*programs[i + 5]));
-        workload->add_program(devices_6, std::move(*programs[i + 6]));
-        workload->add_program(devices_7, std::move(*programs[i + 7]));
+        for (int d = 0; d < num_devices; d++) {
+            workload->add_program(devices[d], std::move(*programs[i + d]));
+        }
         auto t0 = std::chrono::steady_clock::now();
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         auto t1 = std::chrono::steady_clock::now();
@@ -434,32 +427,12 @@ TEST_F(MeshDeviceFixture2x4DispatchAgnostic, ParallelizationBenchmark) {
     // Benchmark steady-state re-execution
     auto start_total = std::chrono::steady_clock::now();
 
-    for (int i = 0; i < num_iterations; i++) {
-        if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
-        }
-        for (auto& workload : mesh_workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        }
-    }
-    auto end_enqueue = std::chrono::steady_clock::now();
-
     Finish(mesh_device_->mesh_command_queue());
     auto end_total = std::chrono::steady_clock::now();
 
-    auto total_duration_ms = std::chrono::duration<double, std::milli>(end_total - start_total).count();
-    auto enqueue_duration_ms = std::chrono::duration<double, std::milli>(end_enqueue - start_total).count();
-    auto finish_duration_ms = std::chrono::duration<double, std::milli>(end_total - end_enqueue).count();
-    int total_workload_dispatches = num_iterations * mesh_workloads.size();
+    auto finish_duration_ms = std::chrono::duration<double, std::milli>(end_total - start_total).count();
 
-    std::cout << "\n2x4 Benchmark Phase (Steady-state re-execution)";
-    std::cout << "Total workload dispatches: " << total_workload_dispatches << "\n";
-    std::cout << "Total time               : " << (total_duration_ms / 1000) << " seconds\n";
-    std::cout << "Enqueue time (wall)      : " << enqueue_duration_ms << " ms\n";
     std::cout << "Finish() time            : " << finish_duration_ms << " ms\n";
-    std::cout << "Avg per workload dispatch: " << (total_duration_ms / total_workload_dispatches) << " ms\n";
-    std::cout << "Throughput               : " << (total_workload_dispatches / (total_duration_ms / 1000))
-              << " workloads/sec\n";
 }
 
 TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {

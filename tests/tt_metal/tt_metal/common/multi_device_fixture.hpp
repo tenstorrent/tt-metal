@@ -237,6 +237,58 @@ protected:
     }
 };
 
+class MeshDeviceFixture4x8DispatchAgnostic : public MeshDeviceFixtureBase {
+protected:
+    MeshDeviceFixture4x8DispatchAgnostic() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}}) {}
+
+    void SetUp() override {
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (config_.arch.has_value() && *config_.arch != arch) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping MeshDevice test suite on a machine with architecture {} that does not match the requested "
+                "architecture {}",
+                arch,
+                *config_.arch);
+        }
+
+        const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
+        if (config_.mesh_shape.has_value() && config_.mesh_shape->mesh_size() > system_mesh_shape.mesh_size()) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping MeshDevice test suite on a machine with SystemMesh {} that is smaller than the requested "
+                "mesh "
+                "shape {}",
+                system_mesh_shape,
+                *config_.mesh_shape);
+        }
+
+        init_max_cbs();
+
+        // Use ethernet dispatch for more than 1 CQ on T3K/N300
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        bool is_n300_or_t3k_cluster =
+            cluster_type == tt::tt_metal::ClusterType::T3K or cluster_type == tt::tt_metal::ClusterType::N300;
+        auto core_type =
+            (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+
+        if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
+            tt_fabric::SetFabricConfig(
+                config_.fabric_config,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                std::nullopt,
+                config_.fabric_tensix_config,
+                config_.fabric_udm_mode);
+        }
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            core_type,
+            {},
+            config_.worker_l1_size);
+    }
+};
+
 // Fixtures that determine the mesh device type automatically.
 // The associated test will be run if the topology is supported.
 class GenericMeshDeviceFixture : public MeshDeviceFixtureBase {
