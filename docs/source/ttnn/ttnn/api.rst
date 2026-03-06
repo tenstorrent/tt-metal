@@ -223,7 +223,6 @@ Pointwise Unary
    ttnn.std_hw
    ttnn.swiglu
    ttnn.swish
-   ttnn.xielu
    ttnn.tan
    ttnn.tanh
    ttnn.tanhshrink
@@ -233,6 +232,7 @@ Pointwise Unary
    ttnn.trunc
    ttnn.unary_chain
    ttnn.var_hw
+   ttnn.xielu
 
 Pointwise Binary
 ================
