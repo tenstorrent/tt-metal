@@ -40,29 +40,22 @@ void kernel_main() {
     constexpr bool write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    // scores tensor compile time args
-    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(37);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(38);
-    constexpr uint32_t scores_page_size = get_compile_time_arg_val(39);
-    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(40);
+    constexpr uint32_t dispatch_devices = get_compile_time_arg_val(37);
+    constexpr uint32_t replicated_devices = get_compile_time_arg_val(38);
 
-    constexpr auto input_args = TensorAccessorArgs<41>();
+    // scores tensor compile time args
+    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
+    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
+    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(42);
+
+    constexpr auto input_args = TensorAccessorArgs<43>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
-#ifdef AXIS
-    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
-    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index =
-        axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
-#else
-    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
-    constexpr uint32_t dispatch_devices = num_devices;
-    constexpr uint32_t dispatch_index = linearized_mesh_coord;
-#endif
     uint32_t rt_ags = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_ags++);

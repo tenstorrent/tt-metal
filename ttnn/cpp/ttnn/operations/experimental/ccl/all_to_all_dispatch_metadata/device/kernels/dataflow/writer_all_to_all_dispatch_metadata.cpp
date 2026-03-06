@@ -51,6 +51,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t DispatchDevices,
     bool DoubleAntipodalAtomicInc = false,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
@@ -61,19 +62,13 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     using ttnn::operations::ccl::common::ReplicateGroup;
     const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
 
-    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
-    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
-    // dispatch_devices=MeshCols
-    constexpr uint32_t dispatch_devices =
-        Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
-
     // Split the ring: positive direction gets half, negative direction gets the other half
     // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
     // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
     // dispatch_devices) if DoubleAntipodalAtomicInc is true
-    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (dispatch_devices + 1) / 2 : dispatch_devices / 2;
+    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (DispatchDevices + 1) / 2 : DispatchDevices / 2;
     constexpr uint32_t negative_range =
-        DoubleAntipodalAtomicInc ? dispatch_devices - positive_range : (dispatch_devices - 1) - positive_range;
+        DoubleAntipodalAtomicInc ? DispatchDevices - positive_range : (DispatchDevices - 1) - positive_range;
 
     // Determine directions based on axis:
     // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
@@ -112,6 +107,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
     FabricConnectionsType& fabric_connections,
@@ -123,15 +119,10 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
     uint32_t alignment) {
     using ttnn::operations::ccl::common::ReplicateGroup;
 
-    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
-    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
-    // dispatch_devices=MeshCols
-    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
-
     // Split the ring: positive direction gets half, negative direction gets the other half
     // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
-    constexpr uint32_t positive_range = dispatch_devices / 2;
-    constexpr uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+    constexpr uint32_t positive_range = DispatchDevices / 2;
+    constexpr uint32_t negative_range = (DispatchDevices - 1) - positive_range;
 
     constexpr uint32_t positive_direction =
         Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
@@ -200,6 +191,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     FabricConnectionsType& fabric_connections,
@@ -210,15 +202,10 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     const std::array<uint16_t, 2>& chunk_sizes) {
     using ttnn::operations::ccl::common::ReplicateGroup;
 
-    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
-    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
-    // dispatch_devices=MeshCols
-    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
-
     // Split the ring: positive direction gets half, negative direction gets the other half
     // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
-    constexpr uint32_t positive_range = dispatch_devices / 2;
-    constexpr uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+    constexpr uint32_t positive_range = DispatchDevices / 2;
+    constexpr uint32_t negative_range = (DispatchDevices - 1) - positive_range;
 
     constexpr uint32_t positive_direction =
         Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
@@ -279,7 +266,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 //   FabricMaxPacketSize - Maximum fabric packet size in bytes
-//   NumDevices - Total number of devices
+//   DispatchDevices - Total number of dispatch devices in a single cluster
 //   SelectedExpertsK - Number of experts selected per token
 //   OutputAddrGenT - Type of the output address generator (TensorAccessor)
 // ============================================================================
@@ -290,7 +277,7 @@ template <
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     uint32_t FabricMaxPacketSize,
-    uint32_t NumDevices,
+    uint32_t DispatchDevices,
     uint32_t SelectedExpertsK,
     typename OutputAddrGenT,
     typename FabricConnectionsType>
@@ -310,6 +297,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast_1d;
+    using ttnn::operations::ccl::common::get_intra_cluster_id;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
@@ -321,8 +309,11 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already sent to this device for this token (avoid duplicate sends)
-        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
-            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
+        uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
+        if (send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] ==
+            0) {
+            send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] =
+                1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, we dispatch the input token to it
@@ -372,7 +363,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 //   FabricMaxPacketSize - Maximum fabric packet size in bytes
-//   NumDevices - Total number of devices
+//   DispatchDevices - Total number of dispatch devices in a single cluster
 //   SelectedExpertsK - Number of experts selected per token
 //   OutputAddrGenT - Type of the output address generator (TensorAccessor)
 // ============================================================================
@@ -383,7 +374,7 @@ template <
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     uint32_t FabricMaxPacketSize,
-    uint32_t NumDevices,
+    uint32_t DispatchDevices,
     uint32_t SelectedExpertsK,
     typename OutputAddrGenT,
     typename FabricConnectionsType>
@@ -403,12 +394,13 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d;
+    using ttnn::operations::ccl::common::get_intra_cluster_id;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
 
     // Collect all unique remote destinations for this token
-    uint32_t remote_token_destinations[NumDevices];
+    uint32_t remote_token_destinations[DispatchDevices];
     uint32_t num_remote_token_destinations = 0;
 
     for (uint32_t k = 0; k < SelectedExpertsK; k++) {
@@ -417,8 +409,11 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already processed this device for this token
-        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
-            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
+        uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
+        if (send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] ==
+            0) {
+            send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] =
+                1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, dispatch locally
@@ -438,7 +433,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             Topology,
             MeshRows,
             MeshCols,
-            NumDevices,
+            DispatchDevices,
             FabricMaxPacketSize>(
             output_addr_gen,
             fabric_connections,
@@ -478,7 +473,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 //   FabricMaxPacketSize - Maximum fabric packet size in bytes
-//   NumDevices - Total number of devices
+//   DispatchDevices - Total number of dispatch devices in a single cluster
 //   SelectedExpertsK - Number of experts selected per token
 //   OutputAddrGenT - Type of the output address generator (TensorAccessor)
 // ============================================================================
@@ -489,7 +484,7 @@ template <
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     uint32_t FabricMaxPacketSize,
-    uint32_t NumDevices,
+    uint32_t DispatchDevices,
     uint32_t SelectedExpertsK,
     typename OutputAddrGenT,
     typename FabricConnectionsType>
@@ -508,6 +503,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
+    using ttnn::operations::ccl::common::get_intra_cluster_id;
     using ttnn::operations::ccl::common::is_configured_target;
     using ttnn::operations::ccl::common::Polarity;
 
@@ -535,13 +531,13 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             // pos_distance: going EAST/SOUTH (ascending, with wrap)
             // neg_distance: going WEST/NORTH (descending, with wrap)
 
-            // TODO: (GR) cleanup
-            uint16_t normalized_target = target_device / 8;
-            uint16_t nromalized_src = LinearizedSrcMeshCoord / 8;
-            uint32_t dispatch_devices = 16;
+            uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
+            uint16_t intra_cluster_src_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
 
-            uint32_t pos_distance = (normalized_target - nromalized_src + dispatch_devices) % dispatch_devices;
-            uint32_t neg_distance = (nromalized_src - normalized_target + dispatch_devices) % dispatch_devices;
+            uint32_t pos_distance =
+                (intra_cluster_target_device - intra_cluster_src_device + DispatchDevices) % DispatchDevices;
+            uint32_t neg_distance =
+                (intra_cluster_src_device - intra_cluster_target_device + DispatchDevices) % DispatchDevices;
             // Determine shortest path direction
             if (pos_distance < neg_distance) {
                 // Shorter via positive direction (EAST/SOUTH)
@@ -630,7 +626,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 //   FabricMaxPacketSize - Maximum fabric packet size in bytes
-//   NumDevices - Total number of devices
+//   DispatchDevices - Total number of dispatch devices in a single cluster
 //   SelectedExpertsK - Number of experts selected per token
 //   OutputAddrGenT - Type of the output address generator (TensorAccessor)
 // ============================================================================
@@ -640,7 +636,7 @@ template <
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     uint32_t FabricMaxPacketSize,
-    uint32_t NumDevices,
+    uint32_t DispatchDevices,
     uint32_t SelectedExpertsK,
     typename OutputAddrGenT,
     typename FabricConnectionsType>
@@ -658,6 +654,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
     ttnn::operations::ccl::common::Polarity first_half_polarity,
     uint32_t alignment) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
+    using ttnn::operations::ccl::common::get_intra_cluster_id;
     using ttnn::operations::ccl::common::is_configured_target;
     using ttnn::operations::ccl::common::Polarity;
 
@@ -692,10 +689,13 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
             // Remote device on our axis - add to BOTH masks (same dest, different directions)
             // OR handles dedup: if bit already set, setting again is harmless
 
-            // Calculate distance in positive direction (e.g., EAST/SOUTH)
-            uint32_t pos_distance = (target_device - LinearizedSrcMeshCoord + NumDevices) % NumDevices;
-            // Calculate distance in negative direction (e.g., WEST/NORTH)
-            uint32_t neg_distance = (LinearizedSrcMeshCoord - target_device + NumDevices) % NumDevices;
+            uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
+            uint16_t intra_cluster_src_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
+
+            uint32_t pos_distance =
+                (intra_cluster_target_device - intra_cluster_src_device + DispatchDevices) % DispatchDevices;
+            uint32_t neg_distance =
+                (intra_cluster_src_device - intra_cluster_target_device + DispatchDevices) % DispatchDevices;
 
             // Add to both masks - each destination reachable from both directions
             pos_hop_mask |= (1 << (pos_distance - 1));
@@ -854,13 +854,16 @@ void kernel_main() {
     constexpr uint32_t write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    // scores tensor compile time args
-    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(37);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(38);
-    constexpr uint32_t scores_page_size = get_compile_time_arg_val(39);
-    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(40);
+    constexpr uint32_t dispatch_devices = get_compile_time_arg_val(37);
+    constexpr uint32_t replicated_devices = get_compile_time_arg_val(38);
 
-    constexpr auto input_args = TensorAccessorArgs<41>();
+    // scores tensor compile time args
+    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
+    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
+    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(42);
+
+    constexpr auto input_args = TensorAccessorArgs<43>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
@@ -988,10 +991,9 @@ void kernel_main() {
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
-        send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+        send_preparation_buffer_address, (token_end_idx - token_start_idx) * dispatch_devices * sizeof(uint8_t));
 
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
-    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
@@ -1054,8 +1056,12 @@ void kernel_main() {
     // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
 #ifndef SKIP_INIT_SEMAPHORE
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
-        fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
+    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
+        linearized_mesh_coord,
+        mesh_rows,
+        mesh_cols,
+        dispatch_devices,
+        axis>(fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
 
     // Wait for all devices to complete initialization synchronization
@@ -1136,7 +1142,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 fabric_max_packet_size,
-                num_devices,
+                dispatch_devices,
                 selected_experts_k>(
                 fabric_connections,
                 unicast_packet_header_neg,
@@ -1161,7 +1167,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 fabric_max_packet_size,
-                num_devices,
+                dispatch_devices,
                 selected_experts_k>(
                 fabric_connections,
                 unicast_packet_header_neg,
@@ -1187,7 +1193,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 fabric_max_packet_size,
-                num_devices,
+                dispatch_devices,
                 selected_experts_k>(
                 fabric_connections,
                 unicast_packet_header_pos,
@@ -1215,7 +1221,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 fabric_max_packet_size,
-                num_devices,
+                dispatch_devices,
                 selected_experts_k>(
                 fabric_connections,
                 unicast_packet_header_pos,
@@ -1287,7 +1293,8 @@ void kernel_main() {
             linearized_mesh_coord,
             mesh_rows,
             mesh_cols,
-            axis>(
+            axis,
+            dispatch_devices>(
             fabric_connections,
             metadata_packet_header_pos,
             metadata_packet_header_neg,
@@ -1297,12 +1304,17 @@ void kernel_main() {
         cb_pop_front(metadata_buffer_id, tokens_per_device);
         // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
         // device
-        detail::
-            fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
-                fabric_connections,
-                atomic_inc_packet_header_pos,
-                atomic_inc_packet_header_neg,
-                global_noc_semaphore_address);
+        detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
+            linearized_mesh_coord,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            dispatch_devices,
+            true>(
+            fabric_connections,
+            atomic_inc_packet_header_pos,
+            atomic_inc_packet_header_neg,
+            global_noc_semaphore_address);
     }
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
