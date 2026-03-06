@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "dev_mem_map.h"
 #include "experimental/noc.h"
 
 namespace experimental {
@@ -37,7 +38,11 @@ namespace experimental {
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
 public:
-    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {}
+    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {
+#ifdef ARCH_QUASAR
+        local_l1_addr_ += MEM_L1_UNCACHED_BASE;
+#endif
+    }
 
     /**
      * @brief Increment the semaphore by the specified value.
