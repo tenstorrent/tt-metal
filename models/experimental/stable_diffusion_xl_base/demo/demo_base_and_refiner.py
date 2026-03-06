@@ -9,13 +9,14 @@ from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
+    SDXL_L1_SMALL_SIZE_BH,
     SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     determinate_min_batch_size,
     prepare_device,
 )
 import os
-from models.common.utility_functions import profiler
+from models.common.utility_functions import profiler, is_wormhole_b0, is_blackhole
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline import (
@@ -28,6 +29,9 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline i
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompts,
     negative_prompts,
@@ -68,19 +72,19 @@ def run_demo_inference(
     # 1. Load base and refiner torch pipelines
     profiler.start("diffusion_pipeline_from_pretrained")
     base_pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     refiner_pipeline = None
     if use_refiner:
         refiner_pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-refiner-1.0",
+            sdxl_refiner_pipeline_location,
             torch_dtype=torch.float32,
             use_safetensors=True,
-            local_files_only=is_ci_env,
+            local_files_only=is_ci_v2_env or is_ci_env,
             text_encoder_2=base_pipeline.text_encoder_2,
             vae=base_pipeline.vae,
         )
@@ -195,7 +199,10 @@ def run_demo_inference(
     "image_resolution",
     [
         (1024, 1024),
-        (512, 512),
+        pytest.param(
+            (512, 512),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
     ids=["1024x1024", "512x512"],
 )
@@ -206,7 +213,7 @@ def run_demo_inference(
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "l1_small_size": SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH,
                 "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
@@ -214,7 +221,7 @@ def run_demo_inference(
         ),
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "l1_small_size": SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH,
                 "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
             },
             False,
@@ -297,6 +304,9 @@ def test_demo_base_and_refiner(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompt,
     negative_prompt,
@@ -324,6 +334,9 @@ def test_demo_base_and_refiner(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_base_pipeline_location,
+        sdxl_refiner_pipeline_location,
         image_resolution,
         prompt,
         negative_prompt,

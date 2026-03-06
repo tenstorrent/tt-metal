@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_m
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -20,9 +20,29 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         # 1024x1024 image resolution
         ((1024, 1024), (1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
         ((1024, 1024), (1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.997),
-        # 512x512 image resolution
-        ((512, 512), (1, 640, 32, 32), (1, 77, 2048), 1, 640, 10, 640, 0.998),
-        ((512, 512), (1, 1280, 16, 16), (1, 77, 2048), 2, 1280, 20, 1280, 0.995),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (1, 640, 32, 32),
+            (1, 77, 2048),
+            1,
+            640,
+            10,
+            640,
+            0.998,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 1280, 16, 16),
+            (1, 77, 2048),
+            2,
+            1280,
+            20,
+            1280,
+            0.995,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -37,14 +57,16 @@ def test_transformermodel(
     out_dim,
     pcc,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_unet_location,
     reset_seeds,
 ):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()

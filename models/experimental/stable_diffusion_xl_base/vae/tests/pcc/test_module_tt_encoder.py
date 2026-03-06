@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import lo
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 from loguru import logger
 
@@ -20,19 +20,35 @@ from loguru import logger
     "image_resolution, input_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 3, 1024, 1024), 0.97),
-        # 512x512 image resolution
-        ((512, 512), (1, 3, 512, 512), 0.98),
+        # Blackhole has lower PCC due to DRAM groupnorm numerical differences
+        ((1024, 1024), (1, 3, 1024, 1024), 0.97 if is_wormhole_b0() else 0.968),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (1, 3, 512, 512),
+            0.98,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_encoder(device, image_resolution, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
+def test_vae_encoder(
+    device,
+    image_resolution,
+    input_shape,
+    pcc,
+    debug_mode,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_vae_location,
+    reset_seeds,
+):
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_vae_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="vae",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "vae",
     )
     vae.eval()
     state_dict = vae.state_dict()

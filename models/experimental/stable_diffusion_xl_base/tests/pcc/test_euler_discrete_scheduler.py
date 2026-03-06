@@ -10,6 +10,7 @@ from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -17,13 +18,18 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     [
         # 1024x1024 image resolution
         (1, 1, 128 * 128, 4),
-        # 512x512 image resolution
-        (1, 1, 64 * 64, 4),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (1, 1, 64 * 64, 4),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_ci_env):
+def test_euler_discrete_scheduler(
+    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location
+):
     try:
         from tracy import signpost
     except ImportError:
@@ -32,10 +38,10 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
             pass
 
     pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     scheduler = pipe.scheduler
@@ -113,18 +119,23 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
     [
         # 1024x1024 image resolution
         (1, 4, 128, 128),
-        # 512x512 image resolution
-        (1, 4, 64, 64),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (1, 4, 64, 64),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("num_inference_steps", [20])
-def test_euler_discrete_scheduler_add_noise(device, input_shape, num_inference_steps, is_ci_env, reset_seeds):
+def test_euler_discrete_scheduler_add_noise(
+    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location, reset_seeds
+):
     pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     scheduler = pipe.scheduler

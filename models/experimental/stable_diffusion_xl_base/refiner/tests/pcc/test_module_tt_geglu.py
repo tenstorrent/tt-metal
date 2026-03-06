@@ -28,13 +28,23 @@ from functools import reduce
         ((512, 512), (1024, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.947),
     ],
 )
-def test_geglu(device, image_resolution, input_shape, module_path, pcc, is_ci_env, reset_seeds):
+def test_geglu(
+    device,
+    image_resolution,
+    input_shape,
+    module_path,
+    pcc,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_unet_location,
+    reset_seeds,
+):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()

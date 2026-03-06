@@ -11,6 +11,7 @@ from loguru import logger
 from transformers import CLIPTextModelWithProjection
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
+    SDXL_L1_SMALL_SIZE_BH,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     MAX_SEQUENCE_LENGTH,
@@ -20,7 +21,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     prepare_device,
 )
 import os
-from models.common.utility_functions import profiler
+from models.common.utility_functions import profiler, is_wormhole_b0, is_blackhole
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
@@ -33,6 +34,8 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompts,
     images,
@@ -80,10 +83,10 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        sdxl_refiner_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 
@@ -230,7 +233,11 @@ def run_demo_inference(
     "image_resolution, images_or_path",
     [
         ((1024, 1024), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_1024x1024.jpg"),
-        ((512, 512), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_512x512.jpg"),
+        pytest.param(
+            (512, 512),
+            "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_512x512.jpg",
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
     ids=["1024x1024", "512x512"],
 )
@@ -241,7 +248,7 @@ def run_demo_inference(
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "l1_small_size": SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
@@ -249,7 +256,7 @@ def run_demo_inference(
         ),
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "l1_small_size": SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
@@ -317,6 +324,8 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompt,
     images_or_path,
@@ -346,6 +355,8 @@ def test_demo(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_refiner_pipeline_location,
         image_resolution,
         prompt,
         images,

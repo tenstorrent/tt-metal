@@ -24,7 +24,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
-from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
@@ -34,7 +33,17 @@ UNET_LOOP_PCC = {
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_inference_steps, debug_mode):
+def run_unet_inference(
+    ttnn_device,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
+    image_resolution,
+    prompts,
+    num_inference_steps,
+    debug_mode,
+):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -54,19 +63,19 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     resolution_key = f"{height}x{width}"
     pcc_threshold = UNET_LOOP_PCC.get(resolution_key, {}).get(str(num_inference_steps), 0)
 
-    # 1. Load components
+    # 1. Load components - use CIv2 LFC when available
     base = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        sdxl_refiner_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
         text_encoder_2=base.text_encoder_2,
         vae=base.vae,
     )
@@ -353,7 +362,6 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
 @pytest.mark.parametrize(
     "image_resolution",
     [
@@ -374,9 +382,22 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
 def test_unet_loop(
     device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompt,
     loop_iter_num,
     debug_mode,
 ):
-    return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)
+    return run_unet_inference(
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        sdxl_base_pipeline_location,
+        sdxl_refiner_pipeline_location,
+        image_resolution,
+        prompt,
+        loop_iter_num,
+        debug_mode,
+    )

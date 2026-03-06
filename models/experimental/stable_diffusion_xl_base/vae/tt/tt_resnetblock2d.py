@@ -5,6 +5,7 @@
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
     prepare_linear_params,
@@ -160,6 +161,8 @@ class TtResnetBlock2D(LightweightModule):
             reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        # On Blackhole, disable Welford algorithm due to precision issues
+        use_welford_1 = reciprocals_tensor is not None and not is_blackhole()
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -169,8 +172,8 @@ class TtResnetBlock2D(LightweightModule):
             bias=self.beta_t_1,
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
-            use_welford=reciprocals_tensor is not None,
-            reciprocals=reciprocals_tensor,
+            use_welford=use_welford_1,
+            reciprocals=reciprocals_tensor if use_welford_1 else None,
             **self.groupnorm_config_1,
         )
 
@@ -229,6 +232,8 @@ class TtResnetBlock2D(LightweightModule):
             reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        # On Blackhole, disable Welford algorithm due to precision issues
+        use_welford_2 = reciprocals_tensor is not None and not is_blackhole()
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -238,8 +243,8 @@ class TtResnetBlock2D(LightweightModule):
             bias=self.beta_t_2,
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
-            use_welford=reciprocals_tensor is not None,
-            reciprocals=reciprocals_tensor,
+            use_welford=use_welford_2,
+            reciprocals=reciprocals_tensor if use_welford_2 else None,
             **self.groupnorm_config_2,
         )
 
