@@ -566,7 +566,6 @@ class SynthesizerTrnMsNSF:
         gin_channels: int,
         sr: int | str,
     ) -> None:
-        print(f"hello from nsf! sr: {sr}")
         if isinstance(sr, str):
             sr = sr2sr[sr]
         self.device = device
