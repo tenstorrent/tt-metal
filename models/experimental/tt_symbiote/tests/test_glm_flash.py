@@ -96,7 +96,7 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     moe_cfg = load_glm4_moe_config()
     params = moe_cfg["model_params"]
 
-    tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
+    tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash", use_fast=True)
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
 
     if model.config.hidden_size == params["hidden_size"]:

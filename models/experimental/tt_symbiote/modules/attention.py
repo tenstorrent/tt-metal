@@ -17,6 +17,7 @@ except ImportError:
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.run_config import trace_enabled, is_trace_capturing
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearIColShardedWRowSharded,
@@ -1006,6 +1007,7 @@ class LlamaAttention(TTNNModule):
         return self.o_proj(attn_out), None
 
 
+@trace_enabled
 class TTNNGlm4MoeLiteAttention(TTNNModule):
     """TTNN-accelerated Multi-Latent Attention for Glm4MoeLite.
 
@@ -1034,6 +1036,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         self.o_proj = None
         self.rope = None
         self.sdpa = None
+        self._use_trace_sems = False
 
     @classmethod
     def from_torch(cls, torch_attn: "Glm4MoeLiteAttention", distributed: bool = True):
@@ -1170,6 +1173,8 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         freqs = torch.outer(t, inv_freq)
         cos_table = freqs.cos().repeat_interleave(2, dim=-1).unsqueeze(0).unsqueeze(0)
         sin_table = freqs.sin().repeat_interleave(2, dim=-1).unsqueeze(0).unsqueeze(0)
+        self._rope_cos_table_torch = cos_table
+        self._rope_sin_table_torch = sin_table
         self._rope_cos_table = ttnn.from_torch(
             cos_table,
             device=self.device,
@@ -1186,6 +1191,50 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             mesh_mapper=mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        decode_cos = cos_table[:, :, :1, :].contiguous()
+        self._decode_cos_buf = ttnn.from_torch(
+            decode_cos,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._decode_sin_buf = ttnn.from_torch(
+            decode_cos,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        self._cur_pos_buf = ttnn.from_torch(
+            torch.zeros(1, dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if self.device.get_num_devices() > 1:
+            sub_device_crs = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(
+                            self.device.compute_with_storage_grid_size().x - 1,
+                            self.device.compute_with_storage_grid_size().y - 1,
+                        ),
+                    )
+                }
+            )
+            self._trace_ag_sems = [
+                [ttnn.create_global_semaphore(self.device, sub_device_crs, 0) for _ in range(2)] for _ in range(2)
+            ]
+            self._trace_barrier_sems = [ttnn.create_global_semaphore(self.device, sub_device_crs, 0) for _ in range(2)]
+            self._ag_cycle_idx = 0
 
     @property
     def _is_distributed(self):
@@ -1199,11 +1248,19 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         if not self._is_distributed:
             return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
         t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+        if self._use_trace_sems:
+            idx = self._ag_cycle_idx
+            self._ag_cycle_idx = (idx + 1) % 2
+            ag_sem = self._trace_ag_sems[idx]
+            barrier_sem = self._trace_barrier_sems[idx]
+        else:
+            ag_sem = self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1)
+            barrier_sem = self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1)
         return ttnn.experimental.all_gather_async(
             t,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            multi_device_global_semaphore=ag_sem,
+            barrier_semaphore=barrier_sem,
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
@@ -1336,6 +1393,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         cache_position: Optional[torch.LongTensor],
     ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+        self._use_trace_sems = False
 
         query_states, key_states, value_states, cos, sin = self._project_qkv(
             hidden_states, batch_size, seq_length, position_embeddings
@@ -1431,26 +1489,8 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _forward_decode_paged(
-        self,
-        hidden_states: ttnn.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[ttnn.Tensor],
-        past_key_values: "TTNNPagedAttentionKVCache",
-        cache_position: Optional[torch.LongTensor],
-    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
-        """Decode path using paged attention with on-device KV cache.
-
-        TTNN paged kernels require tensors in [1, batch, heads, head_dim]
-        layout (``S B H D``) whereas ``_project_qkv`` returns the standard
-        [batch, heads, seq, head_dim] (``B H S D``).  This method handles
-        the permute, L1 sharding required by ``paged_update_cache``, and
-        the MLA-aware SDPA decode call.
-        """
-        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+    def _update_decode_position(self, cache_position, past_key_values, batch_size):
         layer_idx = self._fallback_torch_layer.layer_idx
-
-        # --- resolve cache position to a 1-D torch int32 tensor [batch] ---
         if cache_position is None:
             cur_pos = past_key_values.get_seq_length(layer_idx)
             cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
@@ -1462,7 +1502,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
                 cp = ttnn.to_torch(cp, mesh_composer=self._cos_sin_mesh_composer)
             cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
 
-        cur_pos_tt = ttnn.from_torch(
+        cur_pos_dev = ttnn.from_torch(
             cache_position_tensor,
             device=self.device,
             dtype=ttnn.int32,
@@ -1470,22 +1510,47 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             mesh_mapper=self._mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.copy(cur_pos_dev, self._cur_pos_buf)
 
-        pos_for_embed = ttnn.from_torch(
-            cache_position_tensor.unsqueeze(0),
+        pos = cache_position_tensor[0].item()
+        cos_t = self._rope_cos_table_torch[:, :, pos : pos + 1, :].contiguous()
+        sin_t = self._rope_sin_table_torch[:, :, pos : pos + 1, :].contiguous()
+        cos_dev = ttnn.from_torch(
+            cos_t,
             device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             mesh_mapper=self._mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        cos = ttnn.embedding(pos_for_embed, self._rope_cos_table, layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(pos_for_embed, self._rope_sin_table, layout=ttnn.TILE_LAYOUT)
-        cos = ttnn.unsqueeze_to_4D(cos)
-        sin = ttnn.unsqueeze_to_4D(sin)
+        sin_dev = ttnn.from_torch(
+            sin_t,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(cos_dev, self._decode_cos_buf)
+        ttnn.copy(sin_dev, self._decode_sin_buf)
 
+    def _forward_decode_paged(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor],
+        past_key_values: "TTNNPagedAttentionKVCache",
+        cache_position: Optional[torch.LongTensor],
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+        layer_idx = self._fallback_torch_layer.layer_idx
+        cur_pos_tt = self._cur_pos_buf
+        self._use_trace_sems = True
+        self._ag_cycle_idx = 0
+
+        decode_pos_embeddings = (self._decode_cos_buf, self._decode_sin_buf)
         query_states, key_states, value_states, _, _ = self._project_qkv(
-            hidden_states, batch_size, seq_length, (cos, sin), rope_precomputed=True
+            hidden_states, batch_size, seq_length, decode_pos_embeddings, rope_precomputed=True
         )
 
         # --- permute B H S D  →  S B H D  (the layout paged kernels expect) ---
@@ -1510,13 +1575,16 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         key_states = ttnn.to_memory_config(key_states, self._decode_shard_cfg)
         value_states = ttnn.to_memory_config(value_states, self._decode_shard_cfg)
 
-        # --- update the on-device paged KV cache ---
         past_key_values.paged_update_on_device(
             key_states,
             value_states,
             layer_idx=layer_idx,
             current_pos=cur_pos_tt,
         )
+        if is_trace_capturing():
+            past_key_values._seq_lengths[layer_idx] -= key_states.shape[0]
+            if layer_idx == 0:
+                past_key_values._seen_tokens -= key_states.shape[0]
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
 
@@ -1540,6 +1608,70 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         return attn_output, None
 
+    def should_trace(self, hidden_states, *args, **kwargs):
+        h = hidden_states
+        if isinstance(h, TorchTTNNTensor):
+            h = h.to_ttnn
+        seq_len = h.shape[1] if hasattr(h, "shape") and len(h.shape) > 1 else 1
+        return seq_len == 1
+
+    def pre_trace_execute(
+        self,
+        hidden_states,
+        position_embeddings=None,
+        attention_mask=None,
+        past_key_values=None,
+        cache_position=None,
+        position_ids=None,
+        **kwargs,
+    ):
+        if isinstance(past_key_values, TTNNPagedAttentionKVCache):
+            h = hidden_states
+            if isinstance(h, TorchTTNNTensor):
+                h = h.to_ttnn
+            if isinstance(h, ttnn.Tensor):
+                bs = h.shape[0]
+            else:
+                bs = 1
+            self._update_decode_position(cache_position, past_key_values, bs)
+            layer_idx = self._fallback_torch_layer.layer_idx
+            past_key_values._seq_lengths[layer_idx] += bs
+            if layer_idx == 0:
+                past_key_values._seen_tokens += bs
+
+    def _update_rope_from_hf(self, position_embeddings):
+        cos_orig, sin_orig = position_embeddings
+        if isinstance(cos_orig, TorchTTNNTensor):
+            cos_orig = cos_orig.to_torch
+        if isinstance(sin_orig, TorchTTNNTensor):
+            sin_orig = sin_orig.to_torch
+        if isinstance(cos_orig, ttnn.Tensor):
+            cos_orig = ttnn.to_torch(cos_orig)
+        if isinstance(sin_orig, ttnn.Tensor):
+            sin_orig = ttnn.to_torch(sin_orig)
+        half_dim = cos_orig.shape[-1] // 2
+        perm_idx = torch.arange(half_dim).repeat_interleave(2)
+        cos_meta = cos_orig[..., perm_idx].reshape(1, 1, 1, -1).to(torch.bfloat16).contiguous()
+        sin_meta = sin_orig[..., perm_idx].reshape(1, 1, 1, -1).to(torch.bfloat16).contiguous()
+        cos_dev = ttnn.from_torch(
+            cos_meta,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin_dev = ttnn.from_torch(
+            sin_meta,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(cos_dev, self._decode_cos_buf)
+        ttnn.copy(sin_dev, self._decode_sin_buf)
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -1554,6 +1686,8 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
 
         if use_paged and seq_length == 1:
+            if not is_trace_capturing():
+                self._update_decode_position(cache_position, past_key_values, hidden_states.shape[0])
             return self._forward_decode_paged(
                 hidden_states,
                 position_embeddings,
