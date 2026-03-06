@@ -15,6 +15,7 @@ os.environ.setdefault("MESH_DEVICE", "TG")
 THRESHOLD = 0.5
 THRESHOLD_PERCENTAGE = 0.03
 
+"""
 old_moe_gate_prefill_dict = {
     "SliceDeviceOperation": 13,
     "MatmulDeviceOperation": 12,
@@ -49,7 +50,113 @@ old_moe_gate_prefill_dict = {
     "FullDeviceOperation": 1,
     "AllToAllCombineDeviceOperation": 1,
 }
-new_moe_gate_prefill_dict = {}
+"""
+
+moe_gate_prefill_dict = {
+    "MatmulDeviceOperation": 12,
+    "SliceDeviceOperation": 7,
+    "BinaryNgDeviceOperation": 7,
+    "RepeatDeviceOperation": 6,
+    "AllGatherAsyncDeviceOperation": 6,
+    "UntilizeDeviceOperation": 6,
+    "InterleavedToShardedDeviceOperation": 5,
+    "TilizeDeviceOperation": 5,
+    "ReshapeViewDeviceOperation": 4,
+    "TransposeDeviceOperation": 3,
+    "FastReduceNCDeviceOperation": 2,
+    "LayerNormPreAllGatherDeviceOperation": 2,
+    "LayerNormPostAllGatherDeviceOperation": 2,
+    "LayerNormDeviceOperation": 2,
+    "ReduceScatterMinimalAsyncDeviceOperation": 2,
+    "ConcatDeviceOperation": 2,
+    "RotaryEmbeddingLlamaDeviceOperation": 2,
+    "ReshardDeviceOperation": 2,
+    "ShardedToInterleavedDeviceOperation": 2,
+    "PagedFillCacheDeviceOperation": 1,
+    "TypecastDeviceOperation": 1,
+    "UntilizeWithUnpaddingDeviceOperation": 1,
+    "SDPAOperation": 1,
+    "GenericOpDeviceOperation": 1,
+    "TilizeWithValPaddingDeviceOperation": 1,
+    "PermuteDeviceOperation": 1,
+    "AllToAllDispatchDeviceOperation": 1,
+    "FullDeviceOperation": 1,
+    "AllToAllCombineDeviceOperation": 1,
+}
+
+"""
+old_moe_gate_decode_dict = {
+    'BinaryNgDeviceOperation': 14,
+    'SliceDeviceOperation': 13,
+    'MatmulDeviceOperation': 12,
+    'TransposeDeviceOperation': 8,
+    'RepeatDeviceOperation': 7,
+    'FillPadDeviceOperation': 6,
+    'ShardedToInterleavedDeviceOperation': 6,
+    'TilizeDeviceOperation': 5,
+    'InterleavedToShardedDeviceOperation': 5,
+    'ReshapeViewDeviceOperation': 4,
+    'AllGatherAsyncDeviceOperation': 4,
+    'LayerNormDeviceOperation': 4,
+    'UntilizeDeviceOperation': 4,
+    'TilizeWithValPaddingDeviceOperation': 4,
+    'UnaryDeviceOperation': 4,
+    'UntilizeWithUnpaddingDeviceOperation': 4,
+    'TopKDeviceOperation': 3,
+    'ConcatDeviceOperation': 3,
+    'FastReduceNCDeviceOperation': 2,
+    'ReshardDeviceOperation': 2,
+    'RotaryEmbeddingLlamaDeviceOperation': 2,
+    'PadDeviceOperation': 2,
+    'ReduceDeviceOperation': 2,
+    'AllBroadcastDeviceOperation': 1,
+    'SdpaDecodeDeviceOperation': 1,
+    'MeshPartitionDeviceOperation': 1,
+    'GenericOpDeviceOperation': 1,
+    'AllToAllAsyncGenericDeviceOperation': 1,
+    'PagedUpdateCacheDeviceOperation': 1,
+    'ScatterDeviceOperation': 1,
+    'GatherDeviceOperation': 1,
+    'PermuteDeviceOperation': 1,
+    'AllToAllDispatchDeviceOperation': 1,
+    'FullDeviceOperation': 1,
+    'AllToAllCombineDeviceOperation': 1,
+    'ReduceScatterMinimalAsyncDeviceOperation': 1
+}
+"""
+
+moe_gate_decode_dict = {
+    "MatmulDeviceOperation": 12,
+    "InterleavedToShardedDeviceOperation": 10,
+    "BinaryNgDeviceOperation": 9,
+    "TransposeDeviceOperation": 8,
+    "ShardedToInterleavedDeviceOperation": 8,
+    "UntilizeDeviceOperation": 8,
+    "SliceDeviceOperation": 7,
+    "TilizeDeviceOperation": 6,
+    "RepeatDeviceOperation": 6,
+    "LayerNormDeviceOperation": 4,
+    "ReshardDeviceOperation": 4,
+    "AllGatherAsyncDeviceOperation": 4,
+    "ConcatDeviceOperation": 3,
+    "UnaryDeviceOperation": 3,
+    "FastReduceNCDeviceOperation": 2,
+    "TilizeWithValPaddingDeviceOperation": 2,
+    "GenericOpDeviceOperation": 2,
+    "RotaryEmbeddingLlamaDeviceOperation": 2,
+    "ReshapeViewDeviceOperation": 2,
+    "MeshPartitionDeviceOperation": 1,
+    "PagedUpdateCacheDeviceOperation": 1,
+    "AllBroadcastDeviceOperation": 1,
+    "SdpaDecodeDeviceOperation": 1,
+    "AllToAllAsyncGenericDeviceOperation": 1,
+    "PermuteDeviceOperation": 1,
+    "UntilizeWithUnpaddingDeviceOperation": 1,
+    "AllToAllDispatchDeviceOperation": 1,
+    "FullDeviceOperation": 1,
+    "AllToAllCombineDeviceOperation": 1,
+    "ReduceScatterMinimalAsyncDeviceOperation": 1,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -68,20 +175,26 @@ def galaxy_type():
 
 
 @pytest.mark.parametrize(
-    "step_name, warmup_iters, perf_target_us",
+    "step_name, mode, warmup_iters, num_iters, perf_target_us",
     [
-        ("moe_gate", 10, 31.5),
+        ("moe_gate_decode", "decode", 3, 5, 7924.49),
+        ("moe_gate_prefill", "prefill", 3, 5, 11815.22),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_moe_gate_perf(
     step_name,
+    mode,
     warmup_iters,
+    num_iters,
     perf_target_us,
     galaxy_type,
 ):
     subdir = "deepseek_moe_gate_perf"
-    command = "pytest models/demos/deepseek_v3/tests/test_decoder_block.py::test_forward_pass[mode_prefill_seq_128_batch_1-MoEDecoderBlock2D-model.layers.3-3-run_test_forward_pass_decoder2d-device_params0]"
+    if mode == "decode":
+        command = f"pytest models/demos/deepseek_v3/tests/test_decoder_block_trace_mode.py::test_forward_pass[{warmup_iters}-{num_iters}-mode_decode_seq_1_batch_32_pos_random-MoEDecoderBlock2D-model.layers.3-3-run_test_forward_pass_decoder2d-device_params0] --recalculate-weights"
+    else:
+        command = f"pytest models/demos/deepseek_v3/tests/test_decoder_block_trace_mode.py::test_forward_pass[{warmup_iters}-{num_iters}-mode_prefill_seq_128_batch_1-MoEDecoderBlock2D-model.layers.3-3-run_test_forward_pass_decoder2d-device_params0] --recalculate-weights"
     cols = ["DEVICE KERNEL"]
 
     profiler = BenchmarkProfiler()
@@ -100,7 +213,10 @@ def test_moe_gate_perf(
     measured_max = 0
     measured_avg = 0
     measured_std = 0
-    current_value_dict = old_moe_gate_prefill_dict.copy()
+    if mode == "decode":
+        current_value_dict = moe_gate_decode_dict.copy()
+    else:
+        current_value_dict = moe_gate_prefill_dict.copy()
     for op in results.keys():
         assert op in current_value_dict, f"Operation {op} not found in current_value_dict"
         measured_min += current_value_dict[op] * results[op][cols[0]]["MIN"]

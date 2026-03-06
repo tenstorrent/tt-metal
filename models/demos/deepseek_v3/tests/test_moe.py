@@ -11,9 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.moe import (  # flag by default to use new Gate; set it in test_moe.py; by default use new gate
-    MoE,
-)
+from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -72,10 +70,6 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     # Get state dict from actual model - pass directly to convert_weights
-    if hasattr(reference_model.gate, "e_score_correction_bias"):
-        reference_model.gate.e_score_correction_bias.data = torch.randn_like(
-            reference_model.gate.e_score_correction_bias.data
-        )
     state_dict = add_inv_scale_to_state_dict(
         reference_model.state_dict(),
         block_shape=hf_config.quantization_config["weight_block_size"],
@@ -96,9 +90,9 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=True,
-        test_name="test_new_moe",
-        real_weights=True,
+        force_recalculate=False,
+        test_name="test_moe",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function
@@ -127,7 +121,7 @@ def test_forward_pass(
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
 
     # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
+    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True, use_old_gate=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

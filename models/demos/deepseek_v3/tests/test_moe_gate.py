@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -95,6 +95,18 @@ def test_forward_pass(
     # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
     tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+
+    # Verify output memory config matches expected
+    expected_output_memory_config = run_config["output_memory_config"]
+    actual_topk_weights_memory_config = tt_topk_weights.memory_config()
+    assert (
+        actual_topk_weights_memory_config == expected_output_memory_config
+    ), f"TopK experts weights memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_weights_memory_config}"
+
+    actual_topk_indices_memory_config = tt_topk_indices.memory_config()
+    assert (
+        actual_topk_indices_memory_config == expected_output_memory_config
+    ), f"TopK experts indices memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_indices_memory_config}"
 
     # Convert output back to torch
     tt_topk_weights_torch = ttnn.to_torch(

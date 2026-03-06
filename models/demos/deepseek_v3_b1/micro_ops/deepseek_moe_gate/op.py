@@ -111,6 +111,8 @@ class DeepseekMoeGateSingleCore:
         # with 16x16 tiles is logically equivalent to that with 32x32 tiles.
         # Remove this check once we have an operator to modify the tile size.
         assert input_shape[-1] * input_shape[-2] == 256, "Input tensor must have 256 elements"
+        # Also for input indices
+        assert input_indices_shape[-1] * input_indices_shape[-2] == 256, "Input indices tensor must have 256 elements"
         # assert input_shard_spec == bias_tensor.memory_config().shard_spec
         # assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
         assert output_shard_spec == output_indices_tensor.memory_config().shard_spec

@@ -81,6 +81,15 @@ class LinearConfig(OpConfigBase):
 
 
 @dataclass
+class MoEGateRoutingConfig(OpConfigBase):
+    """Common parameters for a DeepseekMoeGateSingleCore op (the routing part)"""
+
+    ttnn_output_tensor: ConfigWeight
+    ttnn_input_indices: ConfigWeight
+    ttnn_output_indices: ConfigWeight
+
+
+@dataclass
 class EmbeddingConfig(OpConfigBase):
     """Common parameters for a ttnn.embedding op"""
 

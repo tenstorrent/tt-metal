@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -31,6 +32,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def generate_reference_io(
@@ -89,6 +91,8 @@ def run_test_forward_pass_decoder2d(
     module_path,
     reference_layer_idx,
     mode,
+    warmup_iters,
+    num_iters,
     seq_len,
     batch_size_per_row,
     hf_config_short,
@@ -136,7 +140,7 @@ def run_test_forward_pass_decoder2d(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
-        test_name="test_decoder_block",
+        test_name="test_decoder_block_trace_mode",
         real_weights=module_path is not None,
         layer_id=module_path,
     )
@@ -181,13 +185,85 @@ def run_test_forward_pass_decoder2d(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
+    ttnn.synchronize_device(mesh_device)
+
+    profiler = BenchmarkProfiler()
 
     if mode == "prefill":
         tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        ttnn.synchronize_device(mesh_device)
+        # Capture warmup trace
+        logger.info(f"Capturing warmup trace with {warmup_iters} iterations")
+        trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(warmup_iters):
+            tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        # Capture main trace
+        logger.info(f"Capturing main trace with {num_iters} iterations")
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(num_iters):
+            tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        # Execute warmup trace
+        logger.info("Executing warmup trace")
+        profiler.start("warmup")
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        profiler.end("warmup")
+
+        # Execute main trace with signposts
+        logger.info("Executing main trace")
+        signpost("start")
+        profiler.start("main")
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        profiler.end("main")
+        signpost("stop")
+
     else:
         tt_output = DecoderBlockClass.forward_decode(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
         )
+        ttnn.synchronize_device(mesh_device)
+        # Capture warmup trace
+        logger.info(f"Capturing warmup trace with {warmup_iters} iterations")
+        trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(warmup_iters):
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+            )
+        ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        # Capture main trace
+        logger.info(f"Capturing main trace with {num_iters} iterations")
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(num_iters):
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+            )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        # Execute warmup trace
+        logger.info("Executing warmup trace")
+        profiler.start("warmup")
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        profiler.end("warmup")
+
+        # Execute main trace with signposts
+        logger.info("Executing main trace")
+        signpost("start")
+        profiler.start("main")
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        profiler.end("main")
+        signpost("stop")
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
@@ -212,9 +288,7 @@ optimal_topology = (
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": optimal_topology,
-        }
+        {"trace_region_size": 7000000, "fabric_config": optimal_topology},
     ],
     indirect=True,
 )
@@ -256,11 +330,19 @@ optimal_topology = (
     TEST_CASES,
     ids=TEST_IDS,
 )
+@pytest.mark.parametrize(
+    "warmup_iters, num_iters",
+    [
+        (3, 5),
+    ],
+)
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock2DBase],
     module_path,
     reference_layer_idx,
     mode,
+    warmup_iters,
+    num_iters,
     seq_len,
     batch_size_per_row,
     decode_position_ids,
@@ -282,6 +364,8 @@ def test_forward_pass(
         module_path,
         reference_layer_idx,
         mode,
+        warmup_iters,
+        num_iters,
         seq_len,
         batch_size_per_row,
         hf_config_short,

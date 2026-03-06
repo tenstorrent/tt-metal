@@ -130,6 +130,7 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
     This helper is only exercised by these tests.:
         - models/demos/deepseek_v3/tests/test_mla.py
         - models/demos/deepseek_v3/tests/test_decoder_block.py
+        - models/demos/deepseek_v3/tests/test_decoder_block_trace_mode.py
         - models/demos/deepseek_v3/tests/test_model.py
 
     Args:
