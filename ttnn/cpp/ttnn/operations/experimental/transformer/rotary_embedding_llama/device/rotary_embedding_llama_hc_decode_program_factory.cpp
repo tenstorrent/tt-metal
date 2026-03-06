@@ -205,8 +205,11 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
             .set_page_size(output_cb_index, output_single_tile_size));
 
     // ---- Reader kernel ----
-    // When a tensor is sharded (globally-allocated CB), no TensorAccessorArgs are
-    // needed for it — the reader does not issue NOC reads for that tensor.
+    // TensorAccessorArgs are appended for all four tensors regardless of sharding.
+    // Sharded tensors still need a valid accessor config word in the compile-time args
+    // so that all accessor slots land at fixed, predictable offsets.  The kernel uses
+    // the trans_mat_sharded / cos_sin_sharded compile-time booleans to decide whether
+    // to actually issue NOC reads or just signal the CB protocol.
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)input_cb_index,
         (uint32_t)cos_cb_index,
@@ -220,13 +223,9 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         (uint32_t)cos_sin_sharded,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    if (!cos_sin_sharded) {
-        tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    }
-    if (!trans_mat_sharded) {
-        tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,

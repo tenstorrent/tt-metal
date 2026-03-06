@@ -181,9 +181,6 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
                 trans_mat.logical_shape()[0] == 1 && trans_mat.logical_shape()[1] == 1,
                 "Transformation matrix must have 1st & 2nd dim equal to 1");
             TT_FATAL(
-                trans_mat.logical_shape()[-2] == TILE_HEIGHT,
-                "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
-            TT_FATAL(
                 trans_mat.logical_shape()[-1] == TILE_WIDTH,
                 "Transformation matrix must have 4th dim equal to TILE_WIDTH");
             if (trans_mat_sharded) {
@@ -193,6 +190,10 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(
                     trans_mat.shard_spec()->shape[1] == TILE_WIDTH,
                     "HEIGHT_SHARDED trans_mat shard width must equal TILE_WIDTH for HC decode RoPE");
+            } else {
+                TT_FATAL(
+                    trans_mat.logical_shape()[-2] == TILE_HEIGHT,
+                    "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
             }
         }
     } else {  // Prefill mode validation

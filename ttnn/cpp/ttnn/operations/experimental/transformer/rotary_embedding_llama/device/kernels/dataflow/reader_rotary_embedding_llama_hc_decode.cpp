@@ -16,6 +16,15 @@
 // The CB is globally-allocated at that address, so the reader only needs to
 // signal compute via cb_reserve_back / cb_push_back — no NOC reads required.
 //
+// Compile-time arg layout (indices 10..):
+//   [10..]  TensorAccessorArgs for input     (always present)
+//   [+N0..] TensorAccessorArgs for cos       (always present; no NOC read when cos_sin_sharded)
+//   [+N1..] TensorAccessorArgs for sin       (always present; no NOC read when cos_sin_sharded)
+//   [+N2..] TensorAccessorArgs for trans_mat (always present; no NOC read when trans_mat_sharded)
+// All four TensorAccessorArgs blocks are always appended by the host so that the
+// compile-time arg indices are predictable regardless of sharding, avoiding
+// dynamic offset chaining inside an otherwise non-template kernel_main().
+//
 // When reload_cos_sin=false and !freq_per_head and !cos_sin_sharded:
 //   cos/sin tiles for all assigned batch tiles are loaded once before the head
 //   loop and held in the CB for the duration; compute reads them with a
@@ -50,28 +59,14 @@ void kernel_main() {
     constexpr bool trans_mat_sharded = get_compile_time_arg_val(8) == 1;  // trans_mat pre-loaded in L1 shard
     constexpr bool cos_sin_sharded = get_compile_time_arg_val(9) == 1;    // cos/sin pre-loaded in L1 shard
 
-    // Compile-time arg layout starting at index 10:
-    //
-    //  [10 ...]                      = TensorAccessorArgs for input   (always present)
-    //  [input_args.next() ...]       = TensorAccessorArgs for cos     (only when !cos_sin_sharded)
-    //  [cos_args.next()   ...]       = TensorAccessorArgs for sin     (only when !cos_sin_sharded)
-    //  [sin_args.next()   ...]       = TensorAccessorArgs for trans_mat (only when !trans_mat_sharded)
-    //
-    // Because the factory only appends accessor args for non-sharded tensors, and
-    // TensorAccessorArgs slots are tightly packed, we must chain the offsets only
-    // for those that are actually present.  The if-constexpr blocks below ensure
-    // that TensorAccessorArgs for a sharded tensor is never instantiated, which
-    // avoids reading stale/garbage compile-time arg slots.
+    // TensorAccessorArgs for all four tensors are always appended at fixed offsets.
+    constexpr auto input_args = TensorAccessorArgs<10>();
+    constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1;
 
-    // Compile-time arg layout starting at index 10:
-    //   [10..]              = TensorAccessorArgs for input (always present)
-    //   [+N_input..]        = TensorAccessorArgs for cos   (only when !cos_sin_sharded)
-    //   [+N_cos..]          = TensorAccessorArgs for sin   (only when !cos_sin_sharded)
-    //   [+N_sin..]          = TensorAccessorArgs for trans_mat (only when !trans_mat_sharded)
-    constexpr auto input_args = TensorAccessorArgs<10>();
-    constexpr uint32_t after_input = input_args.next_compile_time_args_offset();
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
     const auto s_input = TensorAccessor(input_args, src_addr, input_tile_bytes);
 
@@ -84,31 +79,13 @@ void kernel_main() {
         cb_reserve_back(trans_mat_cb_id, onetile);
         cb_push_back(trans_mat_cb_id, onetile);
     } else {
-        // When cos_sin_sharded: trans_mat args begin right after input args.
-        // When !cos_sin_sharded: trans_mat args begin after input + cos + sin args.
-        if constexpr (cos_sin_sharded) {
-            constexpr auto trans_mat_args = TensorAccessorArgs<after_input>();
-            const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
-            const auto s_trans_mat = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
-            cb_reserve_back(trans_mat_cb_id, onetile);
-            uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
-            noc_async_read_tile(0, s_trans_mat, trans_mat_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(trans_mat_cb_id, onetile);
-        } else {
-            constexpr auto cos_args_for_tm = TensorAccessorArgs<after_input>();
-            constexpr uint32_t after_cos = cos_args_for_tm.next_compile_time_args_offset();
-            constexpr auto sin_args_for_tm = TensorAccessorArgs<after_cos>();
-            constexpr uint32_t after_sin = sin_args_for_tm.next_compile_time_args_offset();
-            constexpr auto trans_mat_args = TensorAccessorArgs<after_sin>();
-            const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
-            const auto s_trans_mat = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
-            cb_reserve_back(trans_mat_cb_id, onetile);
-            uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
-            noc_async_read_tile(0, s_trans_mat, trans_mat_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(trans_mat_cb_id, onetile);
-        }
+        const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
+        const auto s_trans_mat = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
+        cb_reserve_back(trans_mat_cb_id, onetile);
+        uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
+        noc_async_read_tile(0, s_trans_mat, trans_mat_l1_write_addr);
+        noc_async_read_barrier();
+        cb_push_back(trans_mat_cb_id, onetile);
     }
 
     // Input tile linear index: input[0, h, bt, w] = h * batch_t * Wt + bt * Wt + w
@@ -146,10 +123,6 @@ void kernel_main() {
         // ------------------------------------------------------------------
         // DRAM cos/sin paths
         // ------------------------------------------------------------------
-        constexpr auto cos_args = TensorAccessorArgs<after_input>();
-        constexpr uint32_t after_cos = cos_args.next_compile_time_args_offset();
-        constexpr auto sin_args = TensorAccessorArgs<after_cos>();
-
         const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
         const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
         const auto s_cos = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
