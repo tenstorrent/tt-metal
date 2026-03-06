@@ -50,16 +50,17 @@ def _assert_overlapped_metadata_eq(original: OverlappedTensor, loaded: Overlappe
     ), f"view[{key}] total_size: {original.total_size} != {loaded.total_size}"
 
 
-def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device):
-    """Roundtrip: two BFP8 sub-tensors on same cores, single lane."""
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device, dtype):
+    """Roundtrip: two sub-tensors on same cores, single lane."""
     torch.manual_seed(0)
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     t1 = torch.randn(512, 512, dtype=torch.bfloat16)
     t2 = torch.randn(256, 512, dtype=torch.bfloat16)
 
-    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=ttnn.bfloat8_b)
-    spec2 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=ttnn.bfloat8_b)
+    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
+    spec2 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
 
     views = overlap_tensors([[("t1", t1, spec1), ("t2", t2, spec2)]], device=device)
     assert len(views) == 2
@@ -80,21 +81,22 @@ def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device):
     assert torch.equal(orig_torch, loaded_torch)
 
 
-def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device):
-    """Roundtrip: two lanes with different core ranges and dtypes."""
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device, dtype):
+    """Roundtrip: two lanes with different core ranges, primary dtype parameterized."""
     torch.manual_seed(42)
 
     crs_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     crs_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
 
-    t_bfp8 = torch.randn(512, 512, dtype=torch.bfloat16)
+    t_primary = torch.randn(512, 512, dtype=torch.bfloat16)
     t_bf16 = torch.randn(128, 128, dtype=torch.bfloat16)
 
-    spec_bfp8 = OverlappedShardSpec(core_range_set=crs_a, raw_tensor_shape=(512, 512), dtype=ttnn.bfloat8_b)
+    spec_primary = OverlappedShardSpec(core_range_set=crs_a, raw_tensor_shape=(512, 512), dtype=dtype)
     spec_bf16 = OverlappedShardSpec(core_range_set=crs_b, raw_tensor_shape=(128, 128), dtype=ttnn.bfloat16)
 
     views = overlap_tensors(
-        [[("bfp8", t_bfp8, spec_bfp8)], [("bf16", t_bf16, spec_bf16)]],
+        [[("primary", t_primary, spec_primary)], [("bf16", t_bf16, spec_bf16)]],
         device=device,
     )
     assert len(views) == 2
@@ -109,18 +111,19 @@ def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device):
     for name in views:
         _assert_overlapped_metadata_eq(views[name], loaded[name], name)
 
-    orig_torch = ttnn.to_torch(views["bfp8"].fused_tensor)
-    loaded_torch = ttnn.to_torch(loaded["bfp8"].fused_tensor)
+    orig_torch = ttnn.to_torch(views["primary"].fused_tensor)
+    loaded_torch = ttnn.to_torch(loaded["primary"].fused_tensor)
     assert torch.equal(orig_torch, loaded_torch)
 
 
-def test_overlapped_tensor_roundtrip_to_device(tmp_path, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+def test_overlapped_tensor_roundtrip_to_device(tmp_path, device, dtype):
     """Roundtrip with load-to-device: loads directly onto device."""
     torch.manual_seed(7)
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     t1 = torch.randn(256, 512, dtype=torch.bfloat16)
-    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=ttnn.bfloat8_b)
+    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
 
     views = overlap_tensors([[("t1", t1, spec1)]], device=device)
 
@@ -138,7 +141,8 @@ def test_overlapped_tensor_roundtrip_to_device(tmp_path, device):
     assert torch.equal(orig_torch, loaded_torch)
 
 
-def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device, dtype):
     """Roundtrip with HEIGHT_SHARDED sub-tensors."""
     torch.manual_seed(13)
 
@@ -147,7 +151,7 @@ def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device):
     spec1 = OverlappedShardSpec(
         core_range_set=crs,
         raw_tensor_shape=(512, 256),
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
 
@@ -165,8 +169,9 @@ def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device):
     assert torch.equal(orig_torch, loaded_torch)
 
 
-def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device):
-    """Roundtrip with mixed tile sizes (32x32 BFP8 + 1x32 BF16 gamma)."""
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device, dtype):
+    """Roundtrip with mixed tile sizes (32x32 parameterized dtype + 1x32 BF16 gamma)."""
     torch.manual_seed(99)
 
     crs_main = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
@@ -175,7 +180,7 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device):
     t_main = torch.randn(256, 512, dtype=torch.bfloat16)
     t_gamma = torch.randn(1, 32, dtype=torch.bfloat16)
 
-    spec_main = OverlappedShardSpec(core_range_set=crs_main, raw_tensor_shape=(256, 512), dtype=ttnn.bfloat8_b)
+    spec_main = OverlappedShardSpec(core_range_set=crs_main, raw_tensor_shape=(256, 512), dtype=dtype)
     spec_gamma = OverlappedShardSpec(
         core_range_set=crs_gamma,
         raw_tensor_shape=(1, 32),
@@ -210,7 +215,8 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device, dtype):
     """Roundtrip serialization with TP on a 4x2 mesh.
 
     Creates two sub-tensors on the same core range:
@@ -234,11 +240,11 @@ def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device):
     t1 = torch.randn(512, 512, dtype=torch.bfloat16)
     t2 = torch.randn(256, 1024, dtype=torch.bfloat16)
 
-    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=ttnn.bfloat8_b)
+    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
     spec2 = OverlappedShardSpec(
         core_range_set=crs,
         raw_tensor_shape=(256, 1024),
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         tp_dim=(None, 1),
     )
 
