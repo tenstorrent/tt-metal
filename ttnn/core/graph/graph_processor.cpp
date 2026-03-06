@@ -11,6 +11,7 @@
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
 #include <boost/algorithm/string/replace.hpp>
+#include <cstdlib>
 #include <cxxabi.h>
 #include <fstream>
 #include <sstream>
@@ -49,7 +50,27 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     nlohmann::json j;
     j[ttnn::graph::kCounter] = data.counter;
     j[ttnn::graph::kNodeType] = data.node_type;
-    j[ttnn::graph::kParams] = data.params;
+
+    static const std::unordered_set<std::string> integer_params = {
+        ttnn::graph::kSize,
+        ttnn::graph::kAddress,
+        ttnn::graph::kTensorId,
+        ttnn::graph::kDeviceId,
+        ttnn::graph::kBufferTypeValue,
+        ttnn::graph::kPageSize,
+        ttnn::graph::kNumCores,
+        ttnn::graph::kMaxSizePerBank,
+    };
+    nlohmann::json params_json;
+    for (const auto& [key, value] : data.params) {
+        if (integer_params.count(key)) {
+            params_json[key] = std::stoll(value);
+        } else {
+            params_json[key] = value;
+        }
+    }
+    j[ttnn::graph::kParams] = std::move(params_json);
+
     j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kConnections] = data.connections;
     j[ttnn::graph::kInputTensors] = data.input_tensors;
@@ -140,8 +161,8 @@ std::string get_mesh_coordinate_mapping_content() {
 namespace ttnn::graph {
 
 // Static member initialization
-bool GraphProcessor::capture_stack_traces_ = true;
-bool GraphProcessor::capture_buffer_pages_ = false;
+std::atomic<bool> GraphProcessor::capture_stack_traces_{true};
+std::atomic<bool> GraphProcessor::capture_buffer_pages_{false};
 
 void GraphProcessor::enable_stack_traces() { capture_stack_traces_ = true; }
 
@@ -170,14 +191,12 @@ std::vector<std::string> GraphProcessor::capture_stack_trace() {
     if (symbols == nullptr) {
         return result;
     }
+    auto symbols_guard = std::unique_ptr<char*, decltype(&std::free)>(symbols, &std::free);
 
-    // Skip first few frames (this function, track_function_start, etc.)
     constexpr int skip_frames = 3;
     for (int i = skip_frames; i < num_frames; ++i) {
         std::string frame(symbols[i]);
 
-        // Try to demangle C++ symbols
-        // Format is typically: "path(mangled_name+offset) [address]"
         size_t begin = frame.find('(');
         size_t end = frame.find('+');
         if (begin != std::string::npos && end != std::string::npos && end > begin) {
@@ -185,13 +204,12 @@ std::vector<std::string> GraphProcessor::capture_stack_trace() {
             int status = 0;
             char* demangled = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &status);
             if (status == 0 && demangled != nullptr) {
+                auto demangled_guard = std::unique_ptr<char, decltype(&std::free)>(demangled, &std::free);
                 frame = frame.substr(0, begin + 1) + demangled + frame.substr(end);
-                free(demangled);
             }
         }
         result.push_back(frame);
     }
-    free(symbols);
 #endif
     return result;
 }
@@ -292,7 +310,8 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
         {kSize, std::to_string(buffer->size())},
         {kAddress, std::to_string(buffer->address())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kExactBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
+        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
+        {kBufferTypeValue, std::to_string(static_cast<int>(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
@@ -316,9 +335,9 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     if (capture_buffer_pages_ && !captured_mesh_devices.empty()) {
         auto all_pages = ttnn::reports::get_buffer_pages(captured_mesh_devices);
         std::vector<ttnn::reports::BufferPageInfo> pages_for_addr;
-        for (auto& page : all_pages) {
+        for (const auto& page : all_pages) {
             if (page.address == addr) {
-                pages_for_addr.push_back(std::move(page));
+                pages_for_addr.push_back(page);
             }
         }
         if (!pages_for_addr.empty()) {
@@ -340,7 +359,8 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         {kSize, std::to_string(buffer->size())},
         {kAddress, std::to_string(buffer->address())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kExactBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
+        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
+        {kBufferTypeValue, std::to_string(static_cast<int>(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
@@ -501,7 +521,7 @@ void GraphProcessor::track_function_start(
         current_op_id.push(counter);
     }
 
-    for (auto& tracked_arg : input_parameters) {
+    for (const auto& tracked_arg : input_parameters) {
         const auto* const it =
             std::ranges::find(begin_function_any_map, tracked_arg.value.type(), [](const auto& pair) -> const auto& {
                 return pair.first;
@@ -633,7 +653,8 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     if (buffer != nullptr) {
         params[kDeviceId] = std::to_string(buffer->device()->id());
         params[kAddress] = std::to_string(buffer->address());
-        params[kBufferType] = std::to_string(static_cast<int>(buffer->buffer_type()));
+        params[kBufferType] = fmt::format("{}", buffer->buffer_type());
+        params[kBufferTypeValue] = std::to_string(static_cast<int>(buffer->buffer_type()));
     }
 
     if (!device_tensors_json.empty()) {
@@ -670,7 +691,8 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kExactBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
+        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
+        {kBufferTypeValue, std::to_string(static_cast<int>(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kDeviceId, std::to_string(buffer->device()->id())}};
 
@@ -704,7 +726,7 @@ void GraphProcessor::begin_function_process(const std::optional<T>& tensor_opt) 
 
 template <typename T>
 void GraphProcessor::begin_function_process(const std::vector<T>& tensor_vec) {
-    for (auto& it : tensor_vec) {
+    for (const auto& it : tensor_vec) {
         begin_function_process(it);
     }
 }
@@ -723,7 +745,7 @@ void GraphProcessor::end_function_process(const std::optional<T>& tensor_opt) {
 
 template <typename T>
 void GraphProcessor::end_function_process(const std::vector<T>& tensor_vec) {
-    for (auto& it : tensor_vec) {
+    for (const auto& it : tensor_vec) {
         end_function_process(it);
     }
 }
@@ -936,129 +958,37 @@ nlohmann::json GraphProcessor::end_graph_capture() {
 }
 
 nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::path& report_path) {
-    auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
     TT_ASSERT(!processors.empty(), "No active graph capture to end");
 
     auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
     TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
 
-    // End capture first to finalize the graph
+    // Finalize the graph, then build the report via the shared get_report() path
     auto graph_json = processor->end_capture();
-
-    // Now get the full report (graph is already finalized)
-    // We need to call get_report before popping, but after end_capture
-    // Since end_capture already finalized, we can construct report manually
-    nlohmann::json report;
-    report[kReportVersion] = kCurrentReportVersion;
-    report[kReportGraph] = graph_json;
-
-    // Device info
-    nlohmann::json devices = nlohmann::json::array();
-    for (const auto& [device_id, device_info] : processor->captured_device_info) {
-        devices.push_back(device_info);
-    }
-    report[kReportDevices] = devices;
-
-    // Metadata
-    nlohmann::json metadata;
-    metadata[kReportTimestampNs] = processor->capture_start_timestamp_ns;
-    if (!processor->graph.empty() && processor->graph.back().node_type == kNodeCaptureEnd) {
-        metadata[kReportTotalDurationNs] = processor->graph.back().duration_ns;
-    }
-    report[kReportMetadata] = metadata;
-
-    // Cluster descriptor (YAML content) - always try, returns empty if unavailable
-    std::string cluster_desc = get_cluster_descriptor_content();
-    if (!cluster_desc.empty()) {
-        report["cluster_descriptor"] = cluster_desc;
-    }
-
-    // Mesh coordinate mapping (from generated/fabric/*.yaml) - matches old behavior
-    std::string mesh_mapping = get_mesh_coordinate_mapping_content();
-    if (!mesh_mapping.empty()) {
-        report["mesh_coordinate_mapping"] = mesh_mapping;
-    }
-
-    // Buffer pages (when detailed buffer report is enabled)
-    if (capture_buffer_pages_ && !processor->captured_mesh_devices.empty()) {
-        auto buffer_pages = ttnn::reports::get_buffer_pages(processor->captured_mesh_devices);
-        nlohmann::json buffer_pages_json = nlohmann::json::array();
-        for (const auto& page : buffer_pages) {
-            buffer_pages_json.push_back(
-                {{"device_id", page.device_id},
-                 {"address", page.address},
-                 {"core_y", page.core_y},
-                 {"core_x", page.core_x},
-                 {"bank_id", page.bank_id},
-                 {"page_index", page.page_index},
-                 {"page_address", page.page_address},
-                 {"page_size", page.page_size},
-                 {"buffer_type", static_cast<int>(page.buffer_type)}});
-        }
-        report["buffer_pages"] = buffer_pages_json;
-    }
-
-    // Per-operation buffer snapshots from get_buffers()
-    if (!processor->per_op_buffers_.empty()) {
-        nlohmann::json per_op_json = nlohmann::json::object();
-        for (const auto& [op_counter, buffers] : processor->per_op_buffers_) {
-            nlohmann::json bufs_json = nlohmann::json::array();
-            for (const auto& buf : buffers) {
-                bufs_json.push_back(
-                    {{"device_id", buf.device_id},
-                     {"address", buf.address},
-                     {"max_size_per_bank", buf.max_size_per_bank},
-                     {"buffer_type", static_cast<int>(buf.buffer_type)},
-                     {"buffer_layout", static_cast<int>(buf.buffer_layout)}});
-            }
-            per_op_json[std::to_string(op_counter)] = std::move(bufs_json);
-        }
-        report["per_operation_buffers"] = std::move(per_op_json);
-    }
-
-    // Buffer pages keyed by address, versioned by allocation counter
-    if (!processor->buffer_pages_by_address_.empty()) {
-        nlohmann::json bp_json = nlohmann::json::object();
-        for (const auto& [addr, snapshots] : processor->buffer_pages_by_address_) {
-            nlohmann::json snaps_json = nlohmann::json::array();
-            for (const auto& [alloc_counter, pages] : snapshots) {
-                nlohmann::json pages_json = nlohmann::json::array();
-                for (const auto& page : pages) {
-                    pages_json.push_back(
-                        {{"device_id", page.device_id},
-                         {"address", page.address},
-                         {"core_y", page.core_y},
-                         {"core_x", page.core_x},
-                         {"bank_id", page.bank_id},
-                         {"page_index", page.page_index},
-                         {"page_address", page.page_address},
-                         {"page_size", page.page_size},
-                         {"buffer_type", static_cast<int>(page.buffer_type)}});
-                }
-                snaps_json.push_back({{"alloc_counter", alloc_counter}, {"pages", std::move(pages_json)}});
-            }
-            bp_json[std::to_string(addr)] = std::move(snaps_json);
-        }
-        report["buffer_pages_by_address"] = std::move(bp_json);
-    }
+    nlohmann::json report = processor->get_report();
 
     // Write to file
     if (report_path.has_parent_path()) {
         std::filesystem::create_directories(report_path.parent_path());
     }
     std::ofstream file(report_path);
-    if (file.is_open()) {
-        file << report.dump(2);
-        file.close();
-        log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
+    if (!file.is_open()) {
+        TT_THROW("Failed to open graph report file for writing: {}", report_path.string());
     }
+    file << report.dump(2);
+    if (!file) {
+        TT_THROW("Failed to write graph report to file: {}", report_path.string());
+    }
+    file.close();
+    log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
 
     tt::tt_metal::GraphTracker::instance().pop_processor();
     return graph_json;
 }
 
 nlohmann::json GraphProcessor::get_current_report() {
-    auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
     TT_ASSERT(!processors.empty(), "No active graph capture");
 
     auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
@@ -1069,7 +999,7 @@ nlohmann::json GraphProcessor::get_current_report() {
 
 void GraphProcessor::track_error(
     const std::string& error_type, const std::string& error_message, const std::string& operation_name) {
-    auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
     if (processors.empty()) {
         return;  // No active capture, nothing to do
     }
@@ -1128,10 +1058,14 @@ ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode, std::filesy
 
 ScopedGraphCapture::~ScopedGraphCapture() {
     if (is_active) {
-        if (!auto_report_path.empty()) {
-            GraphProcessor::end_graph_capture_to_file(auto_report_path);
-        } else {
-            GraphProcessor::end_graph_capture();
+        try {
+            if (!auto_report_path.empty()) {
+                GraphProcessor::end_graph_capture_to_file(auto_report_path);
+            } else {
+                GraphProcessor::end_graph_capture();
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogAlways, "Exception during graph capture teardown: {}", e.what());
         }
     }
 }

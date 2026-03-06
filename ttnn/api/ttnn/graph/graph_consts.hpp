@@ -34,6 +34,7 @@ constexpr auto kDeviceId = "device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
 constexpr auto kExactBufferType = "exact_buffer_type";
+constexpr auto kBufferTypeValue = "buffer_type_value";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
