@@ -8,8 +8,11 @@ set -e
 # Valid --compiler flag values (same as build_metal.sh)
 COMPILER_FLAGS=(clang gcc clang-20 clang-19 clang-18 clang-17 clang-20-libcpp gcc-14 gcc-13 gcc-12)
 
-# Pinned LLVM tarball version for non-Debian platforms (update on new patch releases)
+# Pinned LLVM tarball versions for non-Debian platforms (update on new patch releases)
 LLVM_TARBALL_VERSION_20="20.1.8"
+LLVM_TARBALL_VERSION_19="19.1.7"
+LLVM_TARBALL_VERSION_18="18.1.8"
+LLVM_TARBALL_VERSION_17="17.0.6"
 
 usage()
 {
@@ -378,8 +381,27 @@ install_llvm_from_tarball() {
         return 1
     fi
 
-    local tarball_name="LLVM-${full_version}-Linux-X64.tar.xz"
-    local tarball_url="https://github.com/llvm/llvm-project/releases/download/llvmorg-${full_version}/${tarball_name}"
+    # LLVM 19+ uses "LLVM-X.Y.Z-Linux-X64.tar.xz" naming.
+    # LLVM 17-18 uses "clang+llvm-X.Y.Z-x86_64-linux-gnu-ubuntu-*.tar.xz".
+    local tarball_name tarball_url
+    local base_url="https://github.com/llvm/llvm-project/releases/download/llvmorg-${full_version}"
+    if [ "$llvm_major" -ge 19 ]; then
+        tarball_name="LLVM-${full_version}-Linux-X64.tar.xz"
+    else
+        # Older releases have OS suffix; try common variants
+        for suffix in "x86_64-linux-gnu-ubuntu-22.04" "x86_64-linux-gnu-ubuntu-18.04" "x86_64-linux-gnu"; do
+            tarball_name="clang+llvm-${full_version}-${suffix}.tar.xz"
+            if curl -sfI "${base_url}/${tarball_name}" >/dev/null 2>&1; then
+                break
+            fi
+            tarball_name=""
+        done
+        if [ -z "$tarball_name" ]; then
+            echo "[ERROR] No LLVM ${full_version} tarball found for x86_64 Linux"
+            return 1
+        fi
+    fi
+    tarball_url="${base_url}/${tarball_name}"
 
     echo "[INFO] Downloading LLVM ${full_version} from GitHub releases..."
     echo "[INFO] URL: ${tarball_url}"
