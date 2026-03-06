@@ -25,7 +25,7 @@ static std::vector<CoreCoord> find_collector_core_coords(
     for (int32_t y = full_grid_size.y - 1; y >= 0; --y) {
         for (int32_t x = full_grid_size.x - 1; x >= 0; --x) {
             const auto core_coord = CoreCoord(x, y);
-            if (dram_cores_set.find(core_coord) == dram_cores_set.end()) {
+            if (!dram_cores_set.contains(core_coord)) {
                 collector_core_coords.push_back(core_coord);
                 if (collector_core_coords.size() == num_collectors) {
                     return collector_core_coords;

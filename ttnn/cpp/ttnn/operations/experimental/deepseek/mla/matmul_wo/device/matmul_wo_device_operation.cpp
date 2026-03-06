@@ -34,7 +34,7 @@ MatmulWODeviceOperation::tensor_return_value_t MatmulWODeviceOperation::create_o
 
 std::tuple<MatmulWODeviceOperation::operation_attributes_t, MatmulWODeviceOperation::tensor_args_t>
 MatmulWODeviceOperation::invoke(
-    const Tensor& input_tensor, const Tensor& w_tensor, const Tensor& output_tensor, const uint32_t layer_id) {
+    const Tensor& input_tensor, const Tensor& w_tensor, const Tensor& output_tensor, uint32_t layer_id) {
     return {
         operation_attributes_t{.layer_id = layer_id},
         tensor_args_t{.input_tensor = input_tensor, .w_tensor = w_tensor, .output_tensor = output_tensor}};

@@ -15,7 +15,7 @@ struct ExecuteMatmulWO {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& w_tensor,
         const ttnn::Tensor& output_tensor,
-        const uint32_t layer_id);
+        uint32_t layer_id);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::mla

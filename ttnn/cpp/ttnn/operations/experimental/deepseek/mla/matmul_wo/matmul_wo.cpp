@@ -11,7 +11,7 @@ ttnn::Tensor ExecuteMatmulWO::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& w_tensor,
     const ttnn::Tensor& output_tensor,
-    const uint32_t layer_id) {
+    uint32_t layer_id) {
     return ttnn::prim::matmul_wo(input_tensor, w_tensor, output_tensor, layer_id);
 }
 
