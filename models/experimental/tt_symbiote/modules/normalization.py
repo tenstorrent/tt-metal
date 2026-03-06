@@ -8,7 +8,6 @@ from torch import nn
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 class TTNNLayerNorm(TTNNModule):
@@ -96,7 +95,6 @@ class TTNNRMSNorm(TTNNModule):
         return x
 
 
-@trace_enabled
 class TTNNDistributedRMSNorm(TTNNModule):
     """
     Distributed RMSNorm implementation that performs the reduction across devices in the forward pass.
