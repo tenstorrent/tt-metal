@@ -140,7 +140,7 @@ std::string get_mesh_coordinate_mapping_content() {
 namespace ttnn::graph {
 
 // Static member initialization
-bool GraphProcessor::capture_stack_traces_ = true;
+bool GraphProcessor::capture_stack_traces_ = false;
 bool GraphProcessor::capture_buffer_pages_ = false;
 
 void GraphProcessor::enable_stack_traces() { capture_stack_traces_ = true; }
@@ -925,7 +925,7 @@ void GraphProcessor::clean_hook() {
 
 GraphProcessor::~GraphProcessor() { clean_hook(); }
 
-void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
+void GraphProcessor::begin_graph_capture(RunMode mode) {
     tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
 }
 
@@ -942,116 +942,9 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
     TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
 
-    // End capture first to finalize the graph
+    // Finalize the graph, then write the full report via write_report()
     auto graph_json = processor->end_capture();
-
-    // Now get the full report (graph is already finalized)
-    // We need to call get_report before popping, but after end_capture
-    // Since end_capture already finalized, we can construct report manually
-    nlohmann::json report;
-    report[kReportVersion] = kCurrentReportVersion;
-    report[kReportGraph] = graph_json;
-
-    // Device info
-    nlohmann::json devices = nlohmann::json::array();
-    for (const auto& [device_id, device_info] : processor->captured_device_info) {
-        devices.push_back(device_info);
-    }
-    report[kReportDevices] = devices;
-
-    // Metadata
-    nlohmann::json metadata;
-    metadata[kReportTimestampNs] = processor->capture_start_timestamp_ns;
-    if (!processor->graph.empty() && processor->graph.back().node_type == kNodeCaptureEnd) {
-        metadata[kReportTotalDurationNs] = processor->graph.back().duration_ns;
-    }
-    report[kReportMetadata] = metadata;
-
-    // Cluster descriptor (YAML content) - always try, returns empty if unavailable
-    std::string cluster_desc = get_cluster_descriptor_content();
-    if (!cluster_desc.empty()) {
-        report["cluster_descriptor"] = cluster_desc;
-    }
-
-    // Mesh coordinate mapping (from generated/fabric/*.yaml) - matches old behavior
-    std::string mesh_mapping = get_mesh_coordinate_mapping_content();
-    if (!mesh_mapping.empty()) {
-        report["mesh_coordinate_mapping"] = mesh_mapping;
-    }
-
-    // Buffer pages (when detailed buffer report is enabled)
-    if (capture_buffer_pages_ && !processor->captured_mesh_devices.empty()) {
-        auto buffer_pages = ttnn::reports::get_buffer_pages(processor->captured_mesh_devices);
-        nlohmann::json buffer_pages_json = nlohmann::json::array();
-        for (const auto& page : buffer_pages) {
-            buffer_pages_json.push_back(
-                {{"device_id", page.device_id},
-                 {"address", page.address},
-                 {"core_y", page.core_y},
-                 {"core_x", page.core_x},
-                 {"bank_id", page.bank_id},
-                 {"page_index", page.page_index},
-                 {"page_address", page.page_address},
-                 {"page_size", page.page_size},
-                 {"buffer_type", static_cast<int>(page.buffer_type)}});
-        }
-        report["buffer_pages"] = buffer_pages_json;
-    }
-
-    // Per-operation buffer snapshots from get_buffers()
-    if (!processor->per_op_buffers_.empty()) {
-        nlohmann::json per_op_json = nlohmann::json::object();
-        for (const auto& [op_counter, buffers] : processor->per_op_buffers_) {
-            nlohmann::json bufs_json = nlohmann::json::array();
-            for (const auto& buf : buffers) {
-                bufs_json.push_back(
-                    {{"device_id", buf.device_id},
-                     {"address", buf.address},
-                     {"max_size_per_bank", buf.max_size_per_bank},
-                     {"buffer_type", static_cast<int>(buf.buffer_type)},
-                     {"buffer_layout", static_cast<int>(buf.buffer_layout)}});
-            }
-            per_op_json[std::to_string(op_counter)] = std::move(bufs_json);
-        }
-        report["per_operation_buffers"] = std::move(per_op_json);
-    }
-
-    // Buffer pages keyed by address, versioned by allocation counter
-    if (!processor->buffer_pages_by_address_.empty()) {
-        nlohmann::json bp_json = nlohmann::json::object();
-        for (const auto& [addr, snapshots] : processor->buffer_pages_by_address_) {
-            nlohmann::json snaps_json = nlohmann::json::array();
-            for (const auto& [alloc_counter, pages] : snapshots) {
-                nlohmann::json pages_json = nlohmann::json::array();
-                for (const auto& page : pages) {
-                    pages_json.push_back(
-                        {{"device_id", page.device_id},
-                         {"address", page.address},
-                         {"core_y", page.core_y},
-                         {"core_x", page.core_x},
-                         {"bank_id", page.bank_id},
-                         {"page_index", page.page_index},
-                         {"page_address", page.page_address},
-                         {"page_size", page.page_size},
-                         {"buffer_type", static_cast<int>(page.buffer_type)}});
-                }
-                snaps_json.push_back({{"alloc_counter", alloc_counter}, {"pages", std::move(pages_json)}});
-            }
-            bp_json[std::to_string(addr)] = std::move(snaps_json);
-        }
-        report["buffer_pages_by_address"] = std::move(bp_json);
-    }
-
-    // Write to file
-    if (report_path.has_parent_path()) {
-        std::filesystem::create_directories(report_path.parent_path());
-    }
-    std::ofstream file(report_path);
-    if (file.is_open()) {
-        file << report.dump(2);
-        file.close();
-        log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
-    }
+    processor->write_report(report_path);
 
     tt::tt_metal::GraphTracker::instance().pop_processor();
     return graph_json;

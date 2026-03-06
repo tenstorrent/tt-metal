@@ -20,9 +20,11 @@ directly to SQLite during execution. The importer is aware of this and uses
 CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
 """
 
+import bisect
 import json
 import math
 import sqlite3
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Union
 
@@ -432,8 +434,6 @@ def import_graph(
 
     Returns dict with stats about what was imported.
     """
-    from collections import defaultdict, deque
-
     # Collect data for batch inserts
     nodes_batch = []
     stack_traces_batch = []
@@ -1371,8 +1371,6 @@ def import_report(
                     else:
                         timeline = [(0, [_parse_page(p) for p in snapshots])]
                     pages_timeline[addr_int] = timeline
-
-                import bisect
 
                 def _get_pages_for_addr(addr, op_counter):
                     """Pick the latest snapshot whose alloc_counter <= op_counter."""
