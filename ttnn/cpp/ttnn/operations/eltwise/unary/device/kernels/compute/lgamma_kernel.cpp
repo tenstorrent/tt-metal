@@ -62,8 +62,8 @@ void kernel_main() {
             where_tile<DataFormat::Float16_b>(1, 2, 0, 1);
 
             // log z
-            log_tile_init();
-            log_tile(1);
+            log_tile_init<false>();
+            log_tile<false>(1);
 
             // tile 0 = res_stirling
             lgamma_stirling_tile_init();

@@ -185,7 +185,7 @@ Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output
     if (x.dtype() == DataType::BFLOAT16) {
         return _lgamma_fast(x, output_mem_config);
     }
-    return _lgamma(x, output_mem_config);
+    return _lgamma_fast(x, output_mem_config);
 }
 
 // multivariate log-gamma function
