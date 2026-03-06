@@ -166,6 +166,7 @@ void physical_system_descriptor_to_proto(
         proto_asic_desc->set_asic_location(*asic_desc.asic_location);
         proto_asic_desc->set_board_type(board_type_to_proto(asic_desc.board_type));
         proto_asic_desc->set_unique_id(*asic_desc.unique_id);
+        proto_asic_desc->set_umd_unique_id(asic_desc.umd_unique_id);
         proto_asic_desc->set_host_name(asic_desc.host_name);
     }
 
@@ -265,6 +266,10 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         asic_desc.asic_location = ASICLocation{proto_asic_desc.asic_location()};
         asic_desc.board_type = proto_to_board_type(proto_asic_desc.board_type());
         asic_desc.unique_id = AsicID{proto_asic_desc.unique_id()};
+        // For backward compatibility: if umd_unique_id is not set (defaults to 0 in proto3),
+        // we need to find the ChipId from the cluster descriptor. However, since we don't have
+        // access to cluster_desc_ here, we'll use 0 as a sentinel and handle it elsewhere if needed.
+        asic_desc.umd_unique_id = proto_asic_desc.umd_unique_id();
         asic_desc.host_name = proto_asic_desc.host_name();
 
         asic_descriptors[asic_id] = asic_desc;

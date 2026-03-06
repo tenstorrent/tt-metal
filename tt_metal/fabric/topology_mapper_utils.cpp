@@ -17,6 +17,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -391,40 +392,14 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
  * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
  */
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     PhysicalAdjacencyMap flat_adj;
-
-    // Build a set of all ASIC IDs for quick lookup
-    std::unordered_set<tt::tt_metal::AsicID> all_asics;
-    if (!asic_id_to_mesh_rank.empty()) {
-        // Filter to only ASICs in the mesh assignment
-        for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-            for (const auto& [asic_id, _] : asic_map) {
-                all_asics.insert(asic_id);
-            }
-        }
-    } else {
-        // Include all ASICs from PSD
-        for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
-            all_asics.insert(asic_id);
-        }
-    }
 
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
-            // Skip ASICs not in any mesh assignment
-            if (!all_asics.contains(src_asic_id)) {
-                continue;
-            }
-
             for (const auto& asic_connection : asic_connections) {
                 auto dst_asic_id = asic_connection.first;
-                // Skip ASICs not in any mesh assignment
-                if (!all_asics.contains(dst_asic_id)) {
-                    continue;
-                }
 
                 // Skip self-connections
                 if (src_asic_id == dst_asic_id) {
@@ -445,18 +420,92 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
+    using namespace ::tt::tt_fabric;
+
+    // Build flat adjacency map from PhysicalSystemDescriptor
+    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+
+    // Get valid groupings map from MGD and PGD
+    auto valid_groupings_map =
+        physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor, physical_system_descriptor);
+
+    // Get groupings for mesh level mappings
+    TT_ASSERT(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
+    TT_ASSERT(
+        valid_groupings_map.at("MESH").size() > 0,
+        "Internal error: Physical grouping descriptor was not able to find mesh groupings");
+    // Collect all mesh groupings from all instances into a single vector
+    std::vector<GroupingInfo> all_mesh_grouping_infos;
+    for (const auto& [instance_name, groupings] : valid_groupings_map.at("MESH")) {
+        for (const auto& grouping : groupings) {
+            all_mesh_grouping_infos.push_back(grouping);
+        }
+    }
+
+    // Find all possible mappings of mesh groupings to the PSD
+    std::vector<std::string> errors;
+    auto all_mesh_groupings =
+        physical_grouping_descriptor.find_all_in_psd(all_mesh_grouping_infos, physical_system_descriptor, errors);
+
+    log_info(
+        tt::LogFabric, "Found {} mesh grouping mappings in PSD (errors: {})", all_mesh_groupings.size(), errors.size());
+
+    PhysicalMultiMeshGraph result;
+    if (all_mesh_groupings.empty()) {
+        log_warning(tt::LogFabric, "No mesh groupings found in PSD - returning empty graph");
+        return result;
+    }
+
+    // Convert flat adjacency map to graph and build hierarchical structure
+    // Pass mesh groupings directly - function will build asic_id_to_mesh_rank internally
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+    result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
+
+    return result;
+}
+
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Build flat adjacency map from PhysicalSystemDescriptor
-    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor, asic_id_to_mesh_rank);
+    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+
+    // Convert asic_id_to_mesh_rank to mesh_groupings format
+    // Find the maximum mesh ID to determine vector size
+    MeshId max_mesh_id{0};
+    for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
+        if (mesh_id.get() > max_mesh_id.get()) {
+            max_mesh_id = mesh_id;
+        }
+    }
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings(max_mesh_id.get() + 1);
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, _] : asic_map) {
+            mesh_groupings[mesh_id.get()].insert(asic_id);
+        }
+    }
 
     // Convert to AdjacencyGraph and use the common algorithm
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    return build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+    return build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 }
 
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const std::vector<std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings) {
+    // Build asic_id_to_mesh_rank map from mesh groupings
+    // Each element in mesh_groupings represents one mesh, with index becoming the MeshId
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < mesh_groupings.size(); ++i) {
+        MeshId mesh_id{static_cast<uint32_t>(i)};
+        for (const auto& asic_id : mesh_groupings[i]) {
+            // Default to rank 0 - proper rank assignment would come from hostname_to_asics or other config
+            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
+        }
+    }
+
     // Build a map from AsicID to MeshId for quick lookup
     std::unordered_map<tt::tt_metal::AsicID, MeshId> asic_id_to_mesh_id;
     for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {

@@ -19,6 +19,10 @@ namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
+namespace tt::tt_fabric {
+class PhysicalGroupingDescriptor;
+}  // namespace tt::tt_fabric
+
 namespace tt::tt_metal::experimental::tt_fabric {
 
 // Import types from tt::tt_fabric for use in this API
@@ -162,21 +166,6 @@ TopologyMappingResult map_mesh_to_physical(
  * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
  */
 std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph);
-
-/**
- * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
- *
- * Builds a complete flat adjacency map including all connections (both intra-mesh and intermesh),
- * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
- *
- * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
- * @param asic_id_to_mesh_rank Optional mapping of mesh IDs to ASIC IDs to mesh host ranks.
- *                              If empty, all ASICs from PSD are included.
- * @return PhysicalAdjacencyMap Map from AsicID to vector of neighbor AsicIDs
- */
-PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {});
 
 /**
  * @brief Build physical adjacency maps from system descriptor connectivity
@@ -376,10 +365,40 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
+ * @brief Build a physical multi-mesh adjacency graph from physical system descriptor and physical grouping descriptor
+ *
+ * Creates a PhysicalMultiMeshGraph with:
+ * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
+ * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<AsicID>)
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @param physical_grouping_descriptor Reference to the physical grouping descriptor containing mesh grouping
+ * information
+ * @param mesh_graph_descriptor Reference to the mesh graph descriptor containing logical mesh topology
+ * @return PhysicalMultiMeshGraph containing mesh-level graph and internal mesh nodes
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
+
+/**
+ * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
+ *
+ * Builds a complete flat adjacency map including all connections
+ * (both intra-mesh and intermesh), with multiple entries per channel.
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @return PhysicalAdjacencyMap Map from AsicID to vector of neighbor AsicIDs (with multiple entries per channel)
+ */
+PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+
+/**
  * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
  *
  * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
- * based on mesh assignments. This is useful when you have a pre-built adjacency graph and need to
+ * based on mesh groupings. This is useful when you have a pre-built adjacency graph and need to
  * organize it by mesh.
  *
  * The function:
@@ -388,13 +407,13 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
  * - Builds exit node graphs for each mesh
  *
  * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
- * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks.
- *                              Used to determine which mesh each ASIC belongs to.
+ * @param mesh_groupings Vector of mesh groupings, where each grouping is a set of ASIC IDs belonging to one mesh.
+ *                       Each element in the vector represents one mesh, and the index becomes the MeshId.
  * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
  */
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+    const std::vector<std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings);
 
 /**
  * @brief Map logical multi-mesh topology to physical multi-mesh topology

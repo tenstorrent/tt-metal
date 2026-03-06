@@ -55,6 +55,11 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& n
 }
 
 template <typename NodeId>
+const typename AdjacencyGraph<NodeId>::AdjacencyMap& AdjacencyGraph<NodeId>::get_adjacency_map() const {
+    return adj_map_;
+}
+
+template <typename NodeId>
 void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) const {
     std::stringstream ss;
     ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
@@ -517,19 +522,8 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
     for (const auto& target_node : target_nodes) {
-        auto it = valid_mappings_.find(target_node);
-        if (it == valid_mappings_.end()) {
-            forbidden_pairs_.insert({target_node, global_node});
-        } else {
-            saved_state[target_node] = it->second;
-            it->second.erase(global_node);
-        }
-    }
-
-    if (!saved_state.empty()) {
-        return validate(&saved_state);
+        forbidden_pairs_.insert({target_node, global_node});
     }
     return true;
 }

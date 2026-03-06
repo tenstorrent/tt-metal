@@ -143,4 +143,9 @@ using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
 using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
 
+// Stream operators for StrongType types
+std::ostream& operator<<(std::ostream& os, const AsicID& asic_id);
+std::ostream& operator<<(std::ostream& os, const TrayID& tray_id);
+std::ostream& operator<<(std::ostream& os, const ASICLocation& asic_location);
+
 }  // namespace tt::tt_metal

@@ -245,3 +245,41 @@ target_link_libraries(
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
+
+# Generate rank bindings tool
+add_executable(generate_rank_bindings src/generate_rank_bindings.cpp)
+
+set_target_properties(
+    generate_rank_bindings
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(
+    generate_rank_bindings
+    scaleout_generated_protos
+    fabric_generated_protos
+    fabric
+)
+
+target_include_directories(
+    generate_rank_bindings
+    PRIVATE
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $<TARGET_PROPERTY:fabric,BINARY_DIR>
+)
+
+target_link_libraries(
+    generate_rank_bindings
+    PRIVATE
+        scaleout_tools
+        tt_metal
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+)
