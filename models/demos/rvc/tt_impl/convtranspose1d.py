@@ -8,6 +8,70 @@ import torch
 
 import ttnn
 
+dims_to_num_slices = {
+    # ConvTranspose1d: batch_size=1, input_length=35600, output_length=213600, in_channels=256, out_channels: 128, kernel_size=16, stride=6, padding=5, dilation=1
+    (213600, 256, 16): 4,
+    # ConvTranspose1d: batch_size=1, input_length=213600, output_length=427200, in_channels=128, out_channels: 64, kernel_size=4, stride=2, padding=1, dilation=1
+    (427200, 128, 4): 3,
+    # ConvTranspose1d: batch_size=1, input_length=427200, output_length=854400, in_channels=64, out_channels: 32, kernel_size=4, stride=2, padding=1, dilation=1
+    (854400, 64, 4): 3,
+    # ConvTranspose1d: batch_size=1, input_length=854400, output_length=1708800, in_channels=32, out_channels: 16, kernel_size=4, stride=2, padding=1, dilation=1
+    (1708800, 32, 4): 3,
+    # ConvTranspose1d: batch_size=1, input_length=3560, output_length=35600, in_channels=512, out_channels: 256, kernel_size=16, stride=10, padding=3, dilation=1
+    (35600, 512, 16): 4,
+}
+
+dims_to_act_block_h_override = {
+    # ConvTranspose1d: batch_size=1, input_length=3560, output_length=35600, in_channels=512, out_channels: 256, kernel_size=16, stride=10, padding=3, dilation=1
+    (35600, 512, 16): 32,
+    # ConvTranspose1d: batch_size=1, input_length=35600, output_length=213600, in_channels=256, out_channels: 128, kernel_size=16, stride=6, padding=5, dilation=1
+    (213600, 256, 16): 32,
+    # ConvTranspose1d: batch_size=1, input_length=213600, output_length=427200, in_channels=128, out_channels: 64, kernel_size=4, stride=2, padding=1, dilation=1
+    (427200, 128, 4): 32,
+    # ConvTranspose1d: batch_size=1, input_length=427200, output_length=854400, in_channels=64, out_channels: 32, kernel_size=4, stride=2, padding=1, dilation=1
+    (854400, 64, 4): 32,
+    # ConvTranspose1d: batch_size=1, input_length=854400, output_length=1708800, in_channels=32, out_channels: 16, kernel_size=4, stride=2, padding=1, dilation=1
+    (1708800, 32, 4): 32,
+}
+
+
+def determine_slice_strategy(
+    batch_size: int, ouput_length: int, in_channels: int, kernel_size: int
+) -> Optional[SliceStrategy]:
+    if (ouput_length, in_channels, kernel_size) in dims_to_num_slices:
+        num_slices = dims_to_num_slices[(ouput_length, in_channels, kernel_size)]
+        return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
+    else:
+        return ttnn.Op2DSliceConfig(num_slices=1, slice_type=ttnn.Op2DDRAMSliceWidth)
+    l1_free_th = 1_300_000 * 60  # in bytes
+    memory_cost = batch_size * ouput_length * in_channels * kernel_size * 2  # assuming bfloat16, so 2 bytes per element
+    if memory_cost > l1_free_th:
+        num_slices = (memory_cost + l1_free_th - 1) // l1_free_th + 2
+        return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
+    return None
+
+
+def determine_conv2d_config(
+    batch_size: int, ouput_length: int, in_channels: int, kernel_size: int
+) -> ttnn.Conv2dConfig:
+    if (ouput_length, in_channels, kernel_size) in dims_to_act_block_h_override:
+        act_block_h_override = dims_to_act_block_h_override[(ouput_length, in_channels, kernel_size)]
+        return ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            config_tensors_in_dram=True,
+            act_block_h_override=act_block_h_override,
+        )
+    else:
+        return ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+            config_tensors_in_dram=True,
+        )
+
 
 def _normalize_input(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     batch_size = input_tensor.shape[0]
@@ -86,16 +150,16 @@ class ConvTranspose1d:
         if self.weight_tensor is None:
             raise ValueError("weight_tensor is not set. Provide it in __init__ or call load_parameters().")
 
-        conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16,
-            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            deallocate_activation=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
-            config_tensors_in_dram=True,
-            # output_layout=ttnn.TILE_LAYOUT,
-            act_block_h_override=96,
-        )
+        # conv_config = ttnn.Conv2dConfig(
+        #     weights_dtype=ttnn.bfloat16,
+        #     # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     deallocate_activation=True,
+        #     enable_act_double_buffer=False,
+        #     enable_weights_double_buffer=False,
+        #     config_tensors_in_dram=True,
+        #     # output_layout=ttnn.TILE_LAYOUT,
+        #     # act_block_h_override=96,
+        # )
         compute_config = ttnn.init_device_compute_kernel_config(
             input_tensor.device().arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -105,8 +169,15 @@ class ConvTranspose1d:
         normalized_input = _normalize_input(input_tensor)
         batch_size = normalized_input.shape[0]
         input_length = normalized_input.shape[2]
-        dram_slice_config = ttnn.Op2DSliceConfig(num_slices=16, slice_type=ttnn.Op2DDRAMSliceWidth)
-        # normalized_input0 = ttnn.to_layout(normalized_input, ttnn.TILE_LAYOUT)
+        output_length = (
+            (input_length - 1) * self.stride
+            - 2 * self.padding
+            + self.dilation * (self.kernel_size - 1)
+            + self.output_padding
+            + 1
+        )
+        slice_config = determine_slice_strategy(batch_size, output_length, self.in_channels, self.kernel_size)
+        conv_config = determine_conv2d_config(batch_size, output_length, self.in_channels, self.kernel_size)
         output, [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
             input_tensor=normalized_input,
             weight_tensor=self.weight_tensor,
@@ -130,6 +201,6 @@ class ConvTranspose1d:
             return_weights_and_bias=True,
             mirror_kernel=True,
             dtype=self.dtype,
-            dram_slice_config=dram_slice_config,
+            dram_slice_config=slice_config,
         )
         return output

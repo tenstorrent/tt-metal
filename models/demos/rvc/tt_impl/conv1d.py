@@ -86,6 +86,80 @@ def to_slice_config(slice_type: str):
     # )
 
 
+dims_to_num_slices = {
+    (56992, 512, 3): 7,
+    # Conv1d: batch_size=1, input_length=569938, output_length=113986, in_channels=1, out_channels: 512, kernel_size=10, stride=5, padding=0, dilation=1
+    (113986, 1, 10): 3,
+    # Conv1d: batch_size=1, input_length=56992, output_length=28495, in_channels=512, out_channels: 512, kernel_size=3, stride=2, padding=0, dilation=1
+    (28495, 512, 3): 4,
+    # Conv1d: batch_size=1, input_length=28495, output_length=14247, in_channels=512, out_channels: 512, kernel_size=3, stride=2, padding=0, dilation=1
+    (14247, 512, 3): 2,
+    # Conv1d: batch_size=1, input_length=1780, output_length=1781, in_channels=768, out_channels: 768, kernel_size=128, stride=1, padding=64, dilation=1
+    (1781, 768, 128): 56,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=35600, in_channels=1, out_channels: 256, kernel_size=96, stride=48, padding=24, dilation=1
+    (35600, 1, 96): 3,
+    # Conv1d: batch_size=1, input_length=35600, output_length=35600, in_channels=256, out_channels: 256, kernel_size=3, stride=1, padding=1, dilation=1
+    (35600, 256, 3): 2,
+    # Conv1d: batch_size=1, input_length=35600, output_length=35600, in_channels=256, out_channels: 256, kernel_size=7, stride=1, padding=3, dilation=1
+    (35600, 256, 7): 4,
+    # Conv1d: batch_size=1, input_length=35600, output_length=35600, in_channels=256, out_channels: 256, kernel_size=11, stride=1, padding=5, dilation=1
+    (35600, 256, 11): 6,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=213600, in_channels=1, out_channels: 128, kernel_size=16, stride=8, padding=4, dilation=1
+    (213600, 1, 16): 3,
+    # Conv1d: batch_size=1, input_length=213600, output_length=213600, in_channels=128, out_channels: 128, kernel_size=3, stride=1, padding=1, dilation=1
+    (213600, 128, 3): 6,
+    # Conv1d: batch_size=1, input_length=213600, output_length=213600, in_channels=128, out_channels: 128, kernel_size=7, stride=1, padding=3, dilation=1
+    (213600, 128, 7): 14,
+    # Conv1d: batch_size=1, input_length=213600, output_length=213600, in_channels=128, out_channels: 128, kernel_size=11, stride=1, padding=5, dilation=1
+    (213600, 128, 11): 27,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=427200, in_channels=1, out_channels: 64, kernel_size=8, stride=4, padding=2, dilation=1
+    (427200, 1, 8): 3,
+    # Conv1d: batch_size=1, input_length=427200, output_length=427200, in_channels=64, out_channels: 64, kernel_size=3, stride=1, padding=1, dilation=1
+    (427200, 64, 3): 6,
+    # Conv1d: batch_size=1, input_length=427200, output_length=427200, in_channels=64, out_channels: 64, kernel_size=7, stride=1, padding=3, dilation=1
+    (427200, 64, 7): 11,
+    # Conv1d: batch_size=1, input_length=427200, output_length=427200, in_channels=64, out_channels: 64, kernel_size=11, stride=1, padding=5, dilation=1
+    (427200, 64, 11): 18,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=854400, in_channels=1, out_channels: 32, kernel_size=4, stride=2, padding=1, dilation=1
+    (854400, 1, 4): 3,
+    # Conv1d: batch_size=1, input_length=854400, output_length=854400, in_channels=32, out_channels: 32, kernel_size=3, stride=1, padding=1, dilation=1
+    (854400, 32, 3): 6,
+    # Conv1d: batch_size=1, input_length=854400, output_length=854400, in_channels=32, out_channels: 32, kernel_size=7, stride=1, padding=3, dilation=1
+    (854400, 32, 7): 11,
+    # Conv1d: batch_size=1, input_length=854400, output_length=854400, in_channels=32, out_channels: 32, kernel_size=11, stride=1, padding=5, dilation=1
+    (854400, 32, 11): 17,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=1708800, in_channels=16, out_channels: 16, kernel_size=3, stride=1, padding=1, dilation=1
+    (1708800, 16, 3): 8,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=1708800, in_channels=16, out_channels: 16, kernel_size=7, stride=1, padding=3, dilation=1
+    (1708800, 16, 7): 13,
+    # Conv1d: batch_size=1, input_length=1708800, output_length=1708800, in_channels=16, out_channels: 16, kernel_size=11, stride=1, padding=5, dilation=1
+    (1708800, 16, 11): 18,
+}
+
+
+# dims_to_num_slices_2 = {
+#     (512, 512, 3),
+#     (1, 512, 10),
+#     ()
+# }
+
+
+def determine_slice_strategy(
+    batch_size: int, ouput_length: int, in_channels: int, kernel_size: int
+) -> Optional[SliceStrategy]:
+    if (ouput_length, in_channels, kernel_size) in dims_to_num_slices:
+        num_slices = dims_to_num_slices[(ouput_length, in_channels, kernel_size)]
+        return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
+    else:
+        return ttnn.Op2DSliceConfig(num_slices=1, slice_type=ttnn.Op2DDRAMSliceWidth)
+    l1_free_th = 1_300_000 * 60  # in bytes
+    memory_cost = batch_size * ouput_length * in_channels * kernel_size * 2  # assuming bfloat16, so 2 bytes per element
+    if memory_cost > l1_free_th:
+        num_slices = (memory_cost + l1_free_th - 1) // l1_free_th + 2
+        return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
+    return None
+
+
 class Conv1d:
     """Stateful Conv1d wrapper around `ttnn.conv1d`."""
 
@@ -167,9 +241,11 @@ class Conv1d:
         input_2d = input1d_to_2d(input_tensor)
         batch_size = input_2d.shape[0]
         input_length = input_2d.shape[2]
-
+        output_length = (
+            input_length + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1
+        ) // self.stride + 1
+        slice_config = determine_slice_strategy(batch_size, output_length, self.in_channels, self.kernel_size)
         conv_result, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
-            # input_tensor = ttnn.to_memory_config(input_2d, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             input_tensor=input_2d,
             weight_tensor=self.weight_tensor,
             return_output_dim=False,
@@ -188,17 +264,8 @@ class Conv1d:
             bias_tensor=self.bias_tensor,
             dtype=self.dtype,
             conv_config=self.conv_config,
-            # slice_config=ttnn.Conv2dL1FullSliceConfig,
-            # "slice_config=self.slice_config,
             compute_config=self.compute_config,
-            # "memory_config=self.memory_config,
-            # slice_config=ttnn.Conv2dDRAMSliceWidth,
-            # slice_config=ttnn.Conv2dSliceConfig(
-            #     slice_type=ttnn.Conv2dSliceWidth,
-            #     num_slices=4,
-            # )
-            # slice_config=ttnn.Conv2dDRAMSliceHeight,
-            # slice_config=slice_config,
+            slice_config=slice_config,
         )
         return conv_result
 
