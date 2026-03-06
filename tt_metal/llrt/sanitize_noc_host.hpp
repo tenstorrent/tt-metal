@@ -69,6 +69,7 @@ static void watcher_sanitize_host_noc(
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const std::unordered_set<CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -91,6 +92,11 @@ static void watcher_sanitize_host_noc(
                 print_stack_trace();
                 TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
             }
+        }
+    } else if (coord_found_p(virtual_dram_hw_cores, core)) {
+        if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} dram hw core address {}", what, noc_address(core, addr, lbytes));
         }
     } else if (coord_found_p(virtual_eth_cores, core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
@@ -115,6 +121,7 @@ inline void watcher_sanitize_host_noc_read(
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const std::unordered_set<CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -125,6 +132,7 @@ inline void watcher_sanitize_host_noc_read(
         virtual_eth_cores,
         virtual_pcie_cores,
         virtual_dram_cores,
+        virtual_dram_hw_cores,
         core,
         addr,
         lbytes);
@@ -136,6 +144,7 @@ inline void watcher_sanitize_host_noc_write(
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const std::unordered_set<CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -146,6 +155,7 @@ inline void watcher_sanitize_host_noc_write(
         virtual_eth_cores,
         virtual_pcie_cores,
         virtual_dram_cores,
+        virtual_dram_hw_cores,
         core,
         addr,
         lbytes);
