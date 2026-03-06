@@ -19,3 +19,17 @@ def float_to_bfloat16_packed(value):
 def float_to_uint32(value):
     """Convert float to uint32"""
     return int.from_bytes(struct.pack("f", value), byteorder="little")
+
+
+def generate_mm_weights(shape, dtype):
+    import torch
+
+    torch_mm_weights = (torch.randn(shape, dtype=torch.float32) / (shape[-2] ** 0.5)).to(dtype)
+    return torch_mm_weights
+    # TODO: Review the below, which should provide a similar result
+    # torch_mm_weights = torch.empty(shape, dtype=dtype)
+    # # This assumes that weights are already pre-transposed, so inner dimension is the first dimension
+    # # fan_in assumes the inner dimension is the second dimension, which is why we pass a transposed view
+    # # Alternatively, we could pass the original shape and use fan_out
+    # torch.nn.init.kaiming_normal_(torch_mm_weights.T, mode="fan_in", nonlinearity="linear")
+    # return torch_mm_weights
