@@ -273,7 +273,11 @@ def prepare_output_tensor_from_combine_writer(
     output_shard_tensor = torch.stack(combine_output_shards)
 
     buffer_size_total_tokens = 512
-    # assert output_shard_tensor.shape[0] == output_shard_height_dim * output_shard_width_dim * experts_per_device
+    # Validate that hardcoded buffer_size_total_tokens matches the actual tensor dimensions
+    # The view operation requires: output_shard_tensor.numel() == experts_per_device * buffer_size_total_tokens * hidden
+    assert buffer_size_total_tokens == output_shard_tensor.numel() // (
+        experts_per_device * hidden
+    ), f"buffer_size_total_tokens ({buffer_size_total_tokens}) doesn't match computed value from tensor shape"
 
     output_shape = (
         output_shard_height_dim,
