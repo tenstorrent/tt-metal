@@ -42,7 +42,7 @@ def hf_model():
         pytest.skip(f"Skipping Bark tests: failed to load HuggingFace reference model 'suno/bark-small': {exc}")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def tt_bark_model(device):
     """Load TtBarkModel with skip guard for offline environments."""
     try:
@@ -243,7 +243,7 @@ class TestBarkFine:
         # TTNN forward
         codebook_idx = 2
         tt_input_ids = ttnn.from_torch(
-            input_ids.unsqueeze(0), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
+            input_ids.unsqueeze(0).to(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
         )
         tt_logits = tt_model(codebook_idx=codebook_idx, input_ids=tt_input_ids)
         tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
