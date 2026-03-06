@@ -19,7 +19,7 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_src_address);
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dst_dram;
-    experimental::quasar::Semaphore semaphore(get_compile_time_arg_val(0));
+    experimental::Semaphore semaphore(get_compile_time_arg_val(0));
 
     semaphore.wait(signal_value);
 
