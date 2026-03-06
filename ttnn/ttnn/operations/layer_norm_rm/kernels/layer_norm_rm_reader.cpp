@@ -15,8 +15,14 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+
+    // Input TensorAccessor at compile-time arg index 4
     constexpr uint32_t input_acc_idx = 4;
     constexpr auto input_args = TensorAccessorArgs<input_acc_idx>();
+
+    // Gamma TensorAccessor follows input (if present)
+    // Beta TensorAccessor follows gamma (if present)
+    // Note: these are constexpr chains — the compiler resolves offsets at compile time
 
     uint32_t arg_idx = 0;
     const uint32_t src_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -51,30 +57,39 @@ void kernel_main() {
     eps_conv.u = eps_packed;
     dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_conv.f);
 
-    // Read gamma tiles if present (Wt tiles, program lifetime)
+    // Read gamma RM stick if present — single stick read via TensorAccessor
     if constexpr (has_gamma) {
-        constexpr uint32_t tile_size = get_tile_size(cb_gamma);
+        constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+        const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, stick_size);
+
         cb_reserve_back(cb_gamma, Wt);
         uint32_t gamma_l1_write_addr = get_write_ptr(cb_gamma);
-        for (uint32_t t = 0; t < Wt; t++) {
-            uint64_t gamma_noc_addr = get_noc_addr(t, gamma_addr);
-            noc_async_read(gamma_noc_addr, gamma_l1_write_addr, tile_size);
-            gamma_l1_write_addr += tile_size;
-        }
+        uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+        noc_async_read(gamma_noc_addr, gamma_l1_write_addr, stick_size);
         noc_async_read_barrier();
         cb_push_back(cb_gamma, Wt);
-    }
 
-    // Read beta tiles if present (Wt tiles, program lifetime)
-    if constexpr (has_beta) {
-        constexpr uint32_t tile_size = get_tile_size(cb_beta);
+        // Read beta if present (accessor follows gamma)
+        if constexpr (has_beta) {
+            constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+            const auto beta_accessor = TensorAccessor(beta_args, beta_addr, stick_size);
+
+            cb_reserve_back(cb_beta, Wt);
+            uint32_t beta_l1_write_addr = get_write_ptr(cb_beta);
+            uint64_t beta_noc_addr = beta_accessor.get_noc_addr(0);
+            noc_async_read(beta_noc_addr, beta_l1_write_addr, stick_size);
+            noc_async_read_barrier();
+            cb_push_back(cb_beta, Wt);
+        }
+    } else if constexpr (has_beta) {
+        // Beta without gamma — accessor at input's next offset
+        constexpr auto beta_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+        const auto beta_accessor = TensorAccessor(beta_args, beta_addr, stick_size);
+
         cb_reserve_back(cb_beta, Wt);
         uint32_t beta_l1_write_addr = get_write_ptr(cb_beta);
-        for (uint32_t t = 0; t < Wt; t++) {
-            uint64_t beta_noc_addr = get_noc_addr(t, beta_addr);
-            noc_async_read(beta_noc_addr, beta_l1_write_addr, tile_size);
-            beta_l1_write_addr += tile_size;
-        }
+        uint64_t beta_noc_addr = beta_accessor.get_noc_addr(0);
+        noc_async_read(beta_noc_addr, beta_l1_write_addr, stick_size);
         noc_async_read_barrier();
         cb_push_back(cb_beta, Wt);
     }

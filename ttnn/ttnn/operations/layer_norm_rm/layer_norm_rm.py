@@ -26,9 +26,9 @@ from .layer_norm_rm_program_descriptor import create_program_descriptor
 
 def layer_norm_rm(
     input_tensor: ttnn.Tensor,
-    *,
     gamma: ttnn.Tensor = None,
     beta: ttnn.Tensor = None,
+    *,
     epsilon: float = 1e-5,
     memory_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:

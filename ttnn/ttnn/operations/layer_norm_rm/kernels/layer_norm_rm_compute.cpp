@@ -9,6 +9,10 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 
 constexpr uint32_t cb_in = 0;
+constexpr uint32_t cb_gamma_rm = 1;
+constexpr uint32_t cb_beta_rm = 2;
+constexpr uint32_t cb_gamma = 3;
+constexpr uint32_t cb_beta = 4;
 constexpr uint32_t cb_reduce_scaler = 8;
 constexpr uint32_t cb_eps = 9;
 constexpr uint32_t cb_out = 16;
@@ -34,9 +38,23 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_reduce_scaler, cb_out);
 
+    // Tilize gamma/beta from RM to tile format (once, before main loop)
+    if constexpr (has_gamma) {
+        compute_kernel_lib::tilize<cb_gamma_rm, cb_gamma>(Wt, 1);
+    }
+    if constexpr (has_beta) {
+        compute_kernel_lib::tilize<cb_beta_rm, cb_beta>(Wt, 1);
+    }
+
     // Wait for constant CBs
     cb_wait_front(cb_reduce_scaler, 1);
     cb_wait_front(cb_eps, 1);
+    if constexpr (has_gamma) {
+        cb_wait_front(cb_gamma, Wt);
+    }
+    if constexpr (has_beta) {
+        cb_wait_front(cb_beta, Wt);
+    }
 
     for (uint32_t tr = 0; tr < N; tr++) {
         // Phase 1: Tilize input (cb_in -> cb_tilized)
@@ -85,7 +103,40 @@ void kernel_main() {
             compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
             cb_centered, cb_inv_std, cb_normed, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
-        // Untilize to output
-        compute_kernel_lib::untilize<Wt, cb_normed, cb_out>(1);
+        if constexpr (has_gamma) {
+            // Phase 8a: gamma * normed -> cb_affine_out
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_normed, cb_gamma, cb_affine_out, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+            if constexpr (has_beta) {
+                // Phase 8b: (gamma * normed) + beta -> cb_normed (reuse freed CB)
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::ROW,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                    cb_affine_out, cb_beta, cb_normed, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+                // Untilize from cb_normed
+                compute_kernel_lib::untilize<Wt, cb_normed, cb_out>(1);
+            } else {
+                // Untilize from cb_affine_out
+                compute_kernel_lib::untilize<Wt, cb_affine_out, cb_out>(1);
+            }
+        } else if constexpr (has_beta) {
+            // Only beta, no gamma: normed + beta -> cb_affine_out
+            compute_kernel_lib::add<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_normed, cb_beta, cb_affine_out, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+            compute_kernel_lib::untilize<Wt, cb_affine_out, cb_out>(1);
+        } else {
+            // No affine: untilize normed directly
+            compute_kernel_lib::untilize<Wt, cb_normed, cb_out>(1);
+        }
     }
 }

@@ -39,8 +39,10 @@ _OP_KERNEL_PATH = "ttnn/ttnn/operations/layer_norm_rm/kernels"
 
 # CB indices
 CB_IN = 0  # RM input sticks (tile-sized pages)
-CB_GAMMA = 1  # Gamma row tiles (constant, program-lifetime)
-CB_BETA = 2  # Beta row tiles (constant, program-lifetime)
+CB_GAMMA = 1  # Gamma RM stick (for tilize input)
+CB_BETA = 2  # Beta RM stick (for tilize input)
+CB_GAMMA_TILED = 3  # Gamma tiles after tilize (program-lifetime)
+CB_BETA_TILED = 4  # Beta tiles after tilize (program-lifetime)
 CB_REDUCE_SCALER = 8  # 1/W reduce scaler (constant, program-lifetime)
 CB_EPS = 9  # Epsilon scalar tile (constant, program-lifetime)
 CB_OUT = 16  # RM output sticks (tile-sized pages)
@@ -194,6 +196,32 @@ def create_program_descriptor(
         ],
     )
 
+    # cb_gamma_tiled: Wt tiles (tilized gamma, program-lifetime)
+    cb_gamma_tiled_descriptor = ttnn.CBDescriptor(
+        total_size=Wt * tile_size,
+        core_ranges=all_cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_GAMMA_TILED,
+                data_format=input_tensor.dtype,
+                page_size=tile_size,
+            )
+        ],
+    )
+
+    # cb_beta_tiled: Wt tiles (tilized beta, program-lifetime)
+    cb_beta_tiled_descriptor = ttnn.CBDescriptor(
+        total_size=Wt * tile_size,
+        core_ranges=all_cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_BETA_TILED,
+                data_format=input_tensor.dtype,
+                page_size=tile_size,
+            )
+        ],
+    )
+
     # cb_reduce_scaler: 1 tile (program-lifetime constant)
     cb_reduce_scaler_descriptor = ttnn.CBDescriptor(
         total_size=tile_size,
@@ -341,6 +369,8 @@ def create_program_descriptor(
         cb_in_descriptor,
         cb_gamma_descriptor,
         cb_beta_descriptor,
+        cb_gamma_tiled_descriptor,
+        cb_beta_tiled_descriptor,
         cb_reduce_scaler_descriptor,
         cb_eps_descriptor,
         cb_out_descriptor,
@@ -363,6 +393,8 @@ def create_program_descriptor(
     #   [2] has_gamma        - 1 if gamma tensor provided, else 0
     #   [3] has_beta         - 1 if beta tensor provided, else 0
     #   [4+] input TensorAccessor compile-time args
+    #   [4+N] gamma TensorAccessor compile-time args (if gamma)
+    #   [4+N+M] beta TensorAccessor compile-time args (if beta)
     reader_ct_args = [
         stick_size,
         Wt,
@@ -370,6 +402,10 @@ def create_program_descriptor(
         1 if beta is not None else 0,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    if gamma is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    if beta is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
 
     # Pack float values as uint32 (IEEE 754 bits) for passing to kernel
     eps_packed = struct.unpack("I", struct.pack("f", epsilon))[0]
