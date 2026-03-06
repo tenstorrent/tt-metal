@@ -81,8 +81,14 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     uint32_t output_cb_index = CBIndex::c_16;
 
-    // CB sizes: one stripe of head_dim_t tiles per (head, batch_tile) iteration.
-    const uint32_t num_io_tiles = head_dim_t;
+    // CB sizes: I/O CBs are double-buffered to overlap NOC reads/writes with compute.
+    // The reader can begin issuing NOC reads for iteration i+1 while compute
+    // processes iteration i.  The output CB is doubled so the writer can drain
+    // iteration i while compute fills iteration i+1.
+    // Intermediate CBs are single-buffered: they are produced and consumed entirely
+    // within one compute iteration and don't benefit from double-buffering.
+    const uint32_t num_io_tiles = 2 * head_dim_t;
+    const uint32_t num_interm_tiles = head_dim_t;
 
     tt_metal::CreateCircularBuffer(
         program,
@@ -112,19 +118,21 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         program,
         all_cores,
         tt_metal::CircularBufferConfig(
-            num_io_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
+            num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size));
 
     tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        tt_metal::CircularBufferConfig(num_io_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
+        tt_metal::CircularBufferConfig(
+            num_interm_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
             .set_page_size(cos_interm_cb_index, cos_single_tile_size));
 
     tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        tt_metal::CircularBufferConfig(num_io_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
+        tt_metal::CircularBufferConfig(
+            num_interm_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
             .set_page_size(sin_interm_cb_index, sin_single_tile_size));
 
     tt_metal::CreateCircularBuffer(
