@@ -34,27 +34,27 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
-    const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec();  // can be nullopt if no nd sharding
-    const bool nd_sharded = first_nd_shard_spec.has_value();
 
     constexpr bool rm_orientation = false;
     Buffer* const dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& output_nd_shard_spec = output.nd_shard_spec();  // can be nullopt if no nd sharding
+    const bool nd_sharded = output_nd_shard_spec.has_value();
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
     const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), dst_buffer->alignment());
-    if (nd_sharded) {
-        num_output_pages = dst_buffer->num_pages();
-        single_page_size = dst_buffer->aligned_page_size();
-        std::cout << "ND Sharding: num_output_pages " << num_output_pages << "  aligned page size " << single_page_size
-                  << "\n";
-    } else if (rm_layout) {
+    if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
-        num_output_pages = output.physical_volume() / TILE_HW;
-        single_page_size = tt::tile_size(cb_data_format);
+        if (nd_sharded) {
+            num_output_pages = dst_buffer->num_pages();
+            single_page_size = dst_buffer->aligned_page_size();
+        } else {
+            num_output_pages = output.physical_volume() / TILE_HW;
+            single_page_size = tt::tile_size(cb_data_format);
+        }
     }
 
     CoreRangeSet all_cores;

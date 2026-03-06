@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -110,6 +111,15 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 "First tensor shard rank: {}, Current tensor shard rank: {}",
                 first_shard_shape.rank(),
                 curr_shard_shape.rank());
+            const uint32_t shard_width = curr_shard_shape[-1];
+            const uint32_t page_size_bytes = in_ref.buffer()->page_size();
+            const uint32_t alignment_requirement = hal::get_l1_alignment();
+            TT_FATAL(
+                page_size_bytes == in_ref.buffer()->aligned_page_size(),
+                "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
+                shard_width,
+                page_size_bytes,
+                alignment_requirement);
 
             const tt::tt_metal::Shape& first_logical_shape = in_ref.logical_shape();
             const tt::tt_metal::Shape& first_padded_shape = in_ref.padded_shape();
