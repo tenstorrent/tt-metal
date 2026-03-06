@@ -45,12 +45,6 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
 
-#ifdef ARCH_QUASAR
-#define VALID_L1_SIZE (MEM_L1_SIZE)
-#else
-#define VALID_L1_SIZE MEM_L1_SIZE
-#endif
-
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
@@ -169,9 +163,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
-    if (addr + len > MEM_L1_BASE + VALID_L1_SIZE) {
-        DPRINT << "debug_valid_worker_addr: 0x" << HEX() << VALID_L1_SIZE << ENDL();
-        DPRINT << "addr, len: " << HEX() << addr << ", " << len << ENDL();
+    if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
 
@@ -193,7 +185,6 @@ inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > core_info->noc_pcie_addr_end) {
-        DPRINT << "debug_valid_pcie_addr" << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
     return DebugSanitizeOK;
@@ -208,7 +199,6 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > core_info->noc_dram_addr_end) {
-        DPRINT << "debug_valid_dram_addr" << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
     return DebugSanitizeOK;
@@ -222,7 +212,6 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE) {
-        DPRINT << "debug_valid_eth_addr" << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
     constexpr uint64_t mem_mailbox_end = MEM_IERISC_MAILBOX_END < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END
@@ -269,7 +258,8 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
-//  - this isn't racy between riscvs so long as each gets their own noc_index
+//  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
+//  - for Quasar, we have a single noc_index across all DMs so the writes need to be atomic
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -284,8 +274,15 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     }
 
     debug_sanitize_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize);
+    uint16_t expected = DebugSanitizeOK;
 
-    if (v[noc_id].return_code == DebugSanitizeOK) {
+#if defined(QUASAR)
+    uint16_t temp = 0xDEAD;
+    if (__atomic_compare_exchange_n(&v[noc_id].return_code, &expected, temp, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+#else
+    if (v[noc_id].return_code == DebugSanitizeOK)
+#endif
+    {
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
@@ -293,7 +290,13 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
         v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
+#if defined(QUASAR)
+        // __ATOMIC_RELEASE ensures all writes above are visible before this
+        // for host to read
+        __atomic_store_n(&v[noc_id].return_code, return_code, __ATOMIC_RELEASE)
+#else
         v[noc_id].return_code = return_code;
+#endif
     }
 
 #if defined(COMPILE_FOR_ERISC)
@@ -352,7 +355,6 @@ uint32_t debug_sanitize_noc_addr(
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir,
     bool check_linked) {
-    DPRINT << "Inside debug_sanitize_noc_addr Here" << ENDL();
     // Different encoding of noc addr depending on multicast vs unitcast
     uint8_t x, y;
     if (multicast) {
@@ -576,7 +578,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #if defined(COMPILE_FOR_ERISC)
     constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
 #else
-    constexpr uint64_t l1_overflow_addr = VALID_L1_SIZE;
+    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
     if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
@@ -620,7 +622,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
 #endif
 }
 
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && !defined(NOC_AT_LEN_BE)
 #define NOC_AT_LEN_BE NOC_AT_LEN
 #endif
 

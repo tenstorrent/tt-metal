@@ -102,13 +102,14 @@ void RunTestOnCore(
     bool is_idle_eth_core = false) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
-    // It's not simple to check the watcher server status from the finish loop for slow dispatch, so just run these
-    // tests in FD.
+    // IDLE_ETH cores only support SD (FD not yet implemented)
+    // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
-        GTEST_SKIP();
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
     }
 
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
+    uint32_t dm_id = use_ncrisc ? 1 : 0;
 
     // Set up program
     distributed::MeshWorkload workload;
@@ -183,12 +184,13 @@ void RunTestOnCore(
     } else {
         if (is_quasar) {
             // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
-            // others exit early. This lets us verify assert works on each DM individually
+            // others exit early. This lets us verify NOC sanitizations works on select DM individually
             dram_copy_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
                 program_,
                 kernel,
                 core,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 8, .compile_args = {dm_id}});
         } else {
             tt_metal::DataMovementConfig config{
                 .processor =
@@ -239,8 +241,13 @@ void RunTestOnCore(
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
+            // TODO: Enable this test once we have multi-cluster support enable for Quasar
+            if (is_quasar) {
+                GTEST_SKIP() << "Only single cluster runtime is enabled on quasar";
+            }
             // Use invalid multicast range with actual DRAM cores: start > end
             // Wrap-around is only allowed for Tensix cores, not DRAM
+            // Use actual Tensix worker cores with an invalid multicast range (start > end for NOC0).
             use_multicast_semaphore_inc = true;
 
             // Get actual DRAM NOC coordinates
@@ -304,11 +311,10 @@ void RunTestOnCore(
     std::string expected;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
+    // TODO: replace ierisc and erisc with hal.get_processor_class_name() after
+    // unifying all tests + watcher_device_reader::get_riscv_name() with same method
     std::string risc_name = (is_eth_core) ? is_idle_eth_core ? "ierisc" : "erisc"
-                                          : hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 0, false);
-    if (use_ncrisc) {
-        risc_name = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 1, false);
-    }
+                                          : hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, dm_id, false);
     switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
@@ -407,7 +413,7 @@ void RunTestOnCore(
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
                 "support DRAM destination addresses).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                (is_eth_core) ? is_idle_eth_core ? "idleth" : "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -536,7 +542,7 @@ void RunTestIEth(
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
-    RunTestOnCore(fixture, mesh_device, core, true, feature, false, true);
+    RunTestOnCore(fixture, mesh_device, core, true, feature, false /*use_ncrisc*/, true /*is_idle_eth_core*/);
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
