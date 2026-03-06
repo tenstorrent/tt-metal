@@ -10,6 +10,7 @@ from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
 
 from models.demos.rvc.torch_impl.synthesizer import attentions, modules
+from models.demos.rvc.torch_impl.utils import linear_channel_first
 
 
 class TextEncoder(nn.Module):
@@ -38,7 +39,7 @@ class TextEncoder(nn.Module):
             n_layers,
             kernel_size,
         )
-        self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
+        self.proj_linear = nn.Linear(hidden_channels, out_channels * 2)
 
     def forward(self, phone: torch.Tensor, pitch: torch.Tensor | None):
         if pitch is None:
@@ -49,7 +50,7 @@ class TextEncoder(nn.Module):
         x = self.lrelu(x)
         x = torch.transpose(x, 1, -1)  # [b, h, t]
         x = self.encoder(x)
-        stats = self.proj(x)
+        stats = linear_channel_first(x, self.proj_linear)
 
         m, logs = torch.split(stats, self.out_channels, dim=1)
         return m, logs
@@ -130,12 +131,12 @@ class Generator(nn.Module):
 
         self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
         if gin_channels != 0:
-            self.cond = nn.Conv1d(gin_channels, upsample_initial_channel, 1)
+            self.cond_linear = nn.Linear(gin_channels, upsample_initial_channel)
 
     def forward(self, x: torch.Tensor, g: torch.Tensor | None = None):
         x = self.conv_pre(x)
         if g is not None:
-            x = x + self.cond(g)
+            x = x + linear_channel_first(g, self.cond_linear)
 
         for i in range(self.num_upsamples):
             x = F.leaky_relu(x, modules.LRELU_SLOPE)
@@ -278,7 +279,7 @@ class GeneratorNSF(nn.Module):
                     )
                 )
             else:
-                self.noise_convs.append(Conv1d(1, c_cur, kernel_size=1))
+                self.noise_convs.append(nn.Linear(1, c_cur))
 
         self.resblocks = nn.ModuleList()
         for i in range(len(self.ups)):
@@ -289,7 +290,7 @@ class GeneratorNSF(nn.Module):
         self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
 
         if gin_channels != 0:
-            self.cond = nn.Conv1d(gin_channels, upsample_initial_channel, 1)
+            self.cond_linear = nn.Linear(gin_channels, upsample_initial_channel)
 
         self.upp = math.prod(upsample_rates)
 
@@ -304,11 +305,14 @@ class GeneratorNSF(nn.Module):
         har_source = har_source.transpose(1, 2)
         x = self.conv_pre(x)
         if g is not None:
-            x = x + self.cond(g)
+            x = x + linear_channel_first(g, self.cond_linear)
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x = F.leaky_relu(x, self.lrelu_slope)
             x = ups(x)
-            x_source = noise_convs(har_source)
+            if isinstance(noise_convs, nn.Linear):
+                x_source = linear_channel_first(har_source, noise_convs)
+            else:
+                x_source = noise_convs(har_source)
             x = x + x_source
             xs = self.resblocks[i * self.num_kernels](x)
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):

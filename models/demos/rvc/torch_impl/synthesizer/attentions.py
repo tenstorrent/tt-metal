@@ -9,6 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from models.demos.rvc.torch_impl.synthesizer.modules import LayerNorm
+from models.demos.rvc.torch_impl.utils import linear_channel_first
 
 
 class Encoder(nn.Module):
@@ -77,10 +78,10 @@ class MultiHeadAttention(nn.Module):
         self.window_size = window_size
 
         self.k_channels = channels // n_heads
-        self.conv_q = nn.Conv1d(channels, channels, 1)
-        self.conv_k = nn.Conv1d(channels, channels, 1)
-        self.conv_v = nn.Conv1d(channels, channels, 1)
-        self.conv_o = nn.Conv1d(channels, out_channels, 1)
+        self.linear_q = nn.Linear(channels, channels)
+        self.linear_k = nn.Linear(channels, channels)
+        self.linear_v = nn.Linear(channels, channels)
+        self.linear_o = nn.Linear(channels, out_channels)
 
         if window_size is not None:
             n_heads_rel = 1
@@ -89,13 +90,13 @@ class MultiHeadAttention(nn.Module):
             self.emb_rel_v = nn.Parameter(torch.randn(n_heads_rel, window_size * 2 + 1, self.k_channels) * rel_stddev)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor):
-        q = self.conv_q(x)
-        k = self.conv_k(c)
-        v = self.conv_v(c)
+        q = linear_channel_first(x, self.linear_q)
+        k = linear_channel_first(c, self.linear_k)
+        v = linear_channel_first(c, self.linear_v)
 
         x = self.attention(q, k, v)
 
-        x = self.conv_o(x)
+        x = linear_channel_first(x, self.linear_o)
         return x
 
     def attention(
@@ -108,10 +109,10 @@ class MultiHeadAttention(nn.Module):
         b, d, t_s = key.size()
         t_t = query.size(2)
         query = query.view(b, self.n_heads, self.k_channels, t_t).transpose(2, 3)
-        key = key.view(b, self.n_heads, self.k_channels, t_s).transpose(2, 3)
+        key = key.view(b, self.n_heads, self.k_channels, t_s)
         value = value.view(b, self.n_heads, self.k_channels, t_s).transpose(2, 3)
 
-        scores = torch.matmul(query / math.sqrt(self.k_channels), key.transpose(-2, -1))
+        scores = torch.matmul(query / math.sqrt(self.k_channels), key)
         if self.window_size is not None:
             assert t_s == t_t, "Relative attention is only available for self-attention."
             key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, t_s)
