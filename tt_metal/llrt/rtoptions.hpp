@@ -10,15 +10,16 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <set>
-#include <unordered_set>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
-#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -32,6 +33,10 @@
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
+
+namespace tt::tt_metal::distributed {
+class SystemMesh;
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
@@ -72,6 +77,9 @@ struct TargetSelection {
     bool enabled{};
     std::vector<int> chip_ids;
     std::vector<tt_fabric::FabricNodeId> node_ids;  // Resolved to chip IDs in resolve_fabric_node_ids_to_chip_ids
+    // System mesh coordinates (row, col) in the global mesh grid.
+    // Resolved to chip IDs in resolve_mesh_coords_to_chip_ids.
+    std::vector<std::pair<uint32_t, uint32_t>> mesh_coords;
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
@@ -450,6 +458,11 @@ public:
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
         feature_targets[feature].chip_ids = std::move(chip_ids);
     }
+    // Directly set mesh coordinates for a feature; resolved to chip IDs by resolve_mesh_coords_to_chip_ids().
+    void set_feature_mesh_coords(
+        RunTimeDebugFeatures feature, std::vector<std::pair<uint32_t, uint32_t>> coords) {
+        feature_targets[feature].mesh_coords = std::move(coords);
+    }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
         feature_targets[feature].all_chips = all_chips;
@@ -742,6 +755,12 @@ public:
     // rtoptions parsing we don't have access to the control plane yet.
     void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
 
+    // Resolve mesh coordinates (row, col) in the global system mesh to physical chip IDs.
+    // This must be called after the system mesh is initialized (which in turn requires the
+    // control plane). Coordinates that belong to remote hosts in a multi-host system are
+    // skipped with a warning.
+    void resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distributed::SystemMesh& system_mesh);
+
 private:
     // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
@@ -760,6 +779,9 @@ private:
     void InitializeFromEnvVars();         // Initialize all environment variables from table
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
+    // Parse (row,col) mesh coordinate tuples from an environment variable.
+    // Returns true if the variable was set.
+    bool ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const std::string& env_var);
 
     // Watcher feature name strings (used in env vars + defines in the device code), as well as a
     // set to track disabled features.
