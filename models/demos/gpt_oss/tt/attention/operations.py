@@ -6,19 +6,39 @@ import ttnn
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights):
+def apply_qkv_projection(
+    hidden_states,
+    weights: AttentionWeights,
+    use_minimal=False,
+    matmul_program_config=None,
+    compute_kernel_config=None,
+):
     """
     Apply QKV projection and add bias.
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
         weights: Attention weights container
+        use_minimal: Use minimal_matmul for better performance
+        matmul_program_config: Optional MinimalMatmulConfig or matmul program config
+        compute_kernel_config: Optional compute kernel config for minimal_matmul
 
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
-    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    if use_minimal:
+        xqkv_fused = ttnn.experimental.minimal_matmul(
+            input_tensor=hidden_states,
+            weight_tensor=weights.wqkv,
+            bias_tensor=weights.wqkv_bias,
+            config=matmul_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+    else:
+        xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
+        ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
     return xqkv_fused
 
 
@@ -97,7 +117,14 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype):
+def apply_output_projection(
+    tensor,
+    weights: AttentionWeights,
+    activation_dtype,
+    matmul_program_config=None,
+    use_minimal=False,
+    compute_kernel_config=None,
+):
     """
     Apply output projection and bias.
 
@@ -105,14 +132,29 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
         tensor: Attention output tensor
         weights: Attention weights container
         activation_dtype: Target dtype for output
+        matmul_program_config: Optional matmul program config for performance tuning
+        use_minimal: Use minimal_matmul for better long-sequence performance
+        compute_kernel_config: Optional compute kernel config for minimal_matmul
 
     Returns:
         Output tensor after projection
     """
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
-    out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
-    tensor.deallocate(True)
-    ttnn.add(out, weights.o_proj_bias, output_tensor=out)
+    if use_minimal:
+        out = ttnn.experimental.minimal_matmul(
+            input_tensor=tensor,
+            weight_tensor=weights.o_proj,
+            bias_tensor=weights.o_proj_bias,
+            config=matmul_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=activation_dtype,
+        )
+        tensor.deallocate(True)
+    else:
+        out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype, program_config=matmul_program_config)
+        tensor.deallocate(True)
+        ttnn.add(out, weights.o_proj_bias, output_tensor=out)
     return out
 
 

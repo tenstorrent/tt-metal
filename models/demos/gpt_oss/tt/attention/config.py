@@ -106,15 +106,15 @@ class ProgramConfig:
             exp_approx_mode=False,
         )
 
+    def get_prefill_sdpa_chunks(self, seq_len: int) -> tuple[int, int]:
+        """Get (q_chunk, k_chunk) for a given seq_len. Override in subclass for per-seq_len configs."""
+        if seq_len >= self.prefill_threshold:
+            return self.prefill_q_chunk_size_large, self.prefill_k_chunk_size_large
+        return self.prefill_q_chunk_size_small, self.prefill_k_chunk_size_small
+
     def get_prefill_sdpa_config(self, mesh_device, seq_len: int) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for prefill mode based on sequence length"""
-        if seq_len >= self.prefill_threshold:
-            q_chunk = self.prefill_q_chunk_size_large
-            k_chunk = self.prefill_k_chunk_size_large
-        else:
-            q_chunk = self.prefill_q_chunk_size_small
-            k_chunk = self.prefill_k_chunk_size_small
-
+        q_chunk, k_chunk = self.get_prefill_sdpa_chunks(seq_len)
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             exp_approx_mode=False,
@@ -155,6 +155,45 @@ class ProgramConfig:
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
+        )
+
+    def _build_matmul_config_2d(
+        self,
+        cores: tuple[int, int],
+        m: int,
+        n: int,
+        k: int,
+        in0_block_w: int,
+        out_subblock_h: int,
+        out_subblock_w: int,
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
+        """Build 2D multicast matmul program config. Returns None if dimensions don't tile evenly."""
+        if m % 32 != 0 or n % 32 != 0 or k % 32 != 0:
+            return None
+        core_x, core_y = cores
+        m_tiles = m // 32
+        n_tiles = n // 32
+        k_tiles = k // 32
+        per_core_M = m_tiles // core_y
+        per_core_N = n_tiles // core_x
+        if per_core_M < 1 or per_core_N < 1:
+            return None
+        if per_core_M * core_y != m_tiles or per_core_N * core_x != n_tiles:
+            return None
+        if k_tiles % in0_block_w != 0:
+            return None
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_M,
+            out_block_w=per_core_N,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
         )
 
     def get_decode_qkv_config(self, m: int, n: int, k: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
@@ -203,11 +242,11 @@ class ProgramConfig:
 
     def get_prefill_out_config(
         self, m: int, n: int, k: int
-    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
-        """Get program config for prefill output projection"""
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+        """Get program config for prefill output projection. Uses 2D multicast for better bandwidth utilization."""
         if self.prefill_out_cores is None:
             return None
-        return self._build_matmul_config(
+        return self._build_matmul_config_2d(
             self.prefill_out_cores,
             m,
             n,
@@ -216,3 +255,16 @@ class ProgramConfig:
             self.prefill_out_out_subblock_h,
             self.prefill_out_out_subblock_w,
         )
+
+    # Minimal matmul support for prefill output projection
+    minimal_matmul_threshold: int = 128
+
+    def use_minimal_matmul(self, seq_len: int) -> bool:
+        return seq_len >= self.minimal_matmul_threshold
+
+    def get_prefill_out_minimal_config(self, seq_len: int):
+        return None  # Use auto config by default
+
+    def get_prefill_qkv_minimal_config(self, seq_len: int):
+        """Get MinimalMatmulConfig for QKV projection. Override in subclass for custom configs."""
+        return None  # Use auto config by default
