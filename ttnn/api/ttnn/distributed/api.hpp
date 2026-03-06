@@ -37,13 +37,6 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 // Given a multi-device tensor, returns a list of individual per-device tensors.
 std::vector<Tensor> get_device_tensors(const Tensor& tensor);
 
-// Given a multi-device tensor, returns a single-device tensor at the given coordinate.
-//
-// Throws if the tensor is not a device tensor.
-// Throws if the tensor is not allocated at the given coordinate.
-Tensor get_single_device_tensor_at_coord(
-    const Tensor& tensor, const MeshCoordinate& coord, tt::tt_metal::TensorTopology tensor_topology);
-
 // Given a list of host shards, returns a multi-device tensor.
 // Tensor specs (including shapes) must match for all shards, and the number of shards must match the mesh size.
 // `shard_dim` is the dimension that was sharded over, which is used to create the tensor topology (assumes sharded
