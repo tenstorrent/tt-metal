@@ -4658,3 +4658,65 @@ def test_binary_mul_scalar_bcast_height_sharded_sd_regression(device, a_shape, s
     out_tt = ttnn.multiply(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
     out_tt = ttnn.to_torch(out_tt)
     assert_with_pcc(out_pt, out_tt)
+
+
+@pytest.mark.parametrize(
+    "batch_size, height, width, channels, shard_strategy, shard_layout, grid_size",
+    [
+        # Layer 1: 56x56, 256 channels, HEIGHT_SHARDED on 8x7 (uneven)
+        (16, 56, 56, 256, ttnn.ShardStrategy.HEIGHT, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (8, 7)),
+    ],
+)
+def test_resnet50_residual_add_bfloat8b_sharded(
+    device, batch_size, height, width, channels, shard_strategy, shard_layout, grid_size
+):
+    torch.manual_seed(0)
+
+    shape = [batch_size, channels, height, width]
+    grid_h, grid_w = grid_size
+    padded_h = divup(height, 32) * 32
+    padded_w = divup(width, 32) * 32
+    if shard_strategy == ttnn.ShardStrategy.HEIGHT:
+        num_cores = grid_h * grid_w
+        total_height = batch_size * channels * padded_h
+        shard_height = divup(total_height // 32, num_cores) * 32
+        shard_width = padded_w
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (grid_h - 1, grid_w - 1))})
+    sharded_config = ttnn.create_sharded_memory_config(
+        [shard_height, shard_width],
+        core_grid=core_grid,
+        strategy=shard_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_config,
+    )
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_config,
+    )
+
+    out_pt = torch.relu(torch.add(a_pt, b_pt))
+
+    out_tt = ttnn.add(
+        a_tt,
+        b_tt,
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+        memory_config=sharded_config,
+        use_legacy=None,
+    )
+    out_tt = ttnn.to_torch(out_tt)
+    assert_with_pcc(out_pt, out_tt, pcc=0.998)

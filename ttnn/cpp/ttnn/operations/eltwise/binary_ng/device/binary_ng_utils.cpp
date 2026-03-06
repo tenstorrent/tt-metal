@@ -688,10 +688,6 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     if (!b.has_value()) {
         return false;
     }
-    if (b.has_value() && b->logical_shape().volume() == 1 &&
-        a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && !is_uneven(a)) {
-        return true;
-    }
 
     // enable a few more conditions for faster performance
     // in order to achieve performance parity with legacy binary
@@ -723,7 +719,15 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     // Both tensors have identical shape and memory config (no broadcast on any dimension)
     if ((a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
         if (is_uneven(a) || is_uneven(*b)) {
-            return false;
+            // Uneven shards are safe when all tensors (a, b, c) are L1 sharded with identical
+            // shard specs -- each core sees the same tile counts for all tensors, matching legacy
+            // binary behavior. a.memory_config() == b->memory_config() already guarantees a == b.
+            bool all_l1 = a.memory_config().buffer_type() == BufferType::L1 &&
+                          b->memory_config().buffer_type() == BufferType::L1 && c.buffer_type() == BufferType::L1;
+            bool c_shard_matches = c.is_sharded() && c.shard_spec().has_value() &&
+                                   a.memory_config().shard_spec().has_value() &&
+                                   *c.shard_spec() == *a.memory_config().shard_spec();
+            return all_l1 && c_shard_matches;
         }
         if (a.memory_config().buffer_type() == BufferType::DRAM ||
             b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
@@ -737,14 +741,12 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
             if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
                 const auto& a_grid = a.memory_config().shard_spec()->grid;
                 if (a_grid != c_grid) {
-                    // Different grids require resharding - treat as interleaved
                     return false;
                 }
             }
             if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
                 const auto& b_grid = b->memory_config().shard_spec()->grid;
                 if (b_grid != c_grid) {
-                    // Different grids require resharding - treat as interleaved
                     return false;
                 }
             }
