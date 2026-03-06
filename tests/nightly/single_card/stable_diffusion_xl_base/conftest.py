@@ -1,1 +1,1 @@
-../../../../models/experimental/stable_diffusion_xl_base/conftest.py
+../../../../models/demos/stable_diffusion_xl_base/conftest.py
