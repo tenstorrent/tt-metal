@@ -4,36 +4,50 @@
 // layer_norm_rm - Reader Kernel
 // Runs on RISCV_0 (BRISC), reads RM sticks from DRAM to L1 CBs via NOC0
 //
-// Stage 1 stub: minimal implementation that signals completion.
-// Full implementation will:
-//   1. Read Wt RM sticks per tile-row from input into cb_in (Wt tile-sized pages)
-//   2. On first tile-row: generate reduce scaler (1/W) into cb_reduce_scaler
-//   3. On first tile-row: generate epsilon scalar tile into cb_eps
-//   4. On first tile-row: read gamma Wt tiles into cb_gamma (once, never popped)
-//   5. On first tile-row: read beta Wt tiles into cb_beta (once, never popped)
+// Per tile-row: reads 32 RM sticks into cb_in (Wt tile-sized pages).
+// On first tile-row (when needed): generates reduce scaler, epsilon, gamma, beta.
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-// TensorAccessor is available via dataflow_api.h (includes api/tensor/tensor_accessor.h)
+
+constexpr uint32_t cb_in = 0;
+constexpr uint32_t cb_gamma = 1;
+constexpr uint32_t cb_beta = 2;
+constexpr uint32_t cb_reduce_scaler = 8;
+constexpr uint32_t cb_eps = 9;
 
 void kernel_main() {
-    // Compile-time args:
-    //   [0] stick_size       - Width of one RM stick in bytes
-    //   [1] Wt               - Tiles per row
-    //   [2] has_gamma        - 1 if gamma tensor provided
-    //   [3] has_beta         - 1 if beta tensor provided
-    //   [4+] input TensorAccessor compile-time args
+    // Compile-time args
+    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+    constexpr auto input_accessor_args = TensorAccessorArgs<4>();
 
-    // Runtime args:
-    //   [0] src_addr         - Input buffer base address
-    //   [1] N                - Tile-rows for this core
-    //   [2] start_stick_id   - First stick ID for this core
-    //   [3] scaler_packed    - 1/W as packed bfloat16 u32
-    //   [4] eps_packed       - epsilon as packed bfloat16 u32
-    //   [5] gamma_addr       - Gamma buffer base address (0 if no gamma)
-    //   [6] beta_addr        - Beta buffer base address (0 if no beta)
+    // Runtime args
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t N = get_arg_val<uint32_t>(1);
+    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
+    // Args 3-6 used in later stages (scaler, eps, gamma_addr, beta_addr)
 
-    // Stub: no-op
-    // Real implementation will populate cb_in with Wt pages per tile-row,
-    // and constant CBs (reduce_scaler, eps, gamma, beta) on first iteration.
+    const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_size);
+
+    uint32_t stick_id = start_stick_id;
+
+    for (uint32_t row = 0; row < N; row++) {
+        // Reserve Wt tile-sized pages in cb_in
+        cb_reserve_back(cb_in, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_in);
+
+        // Read 32 RM sticks (one tile-row)
+        for (uint32_t s = 0; s < 32; s++) {
+            uint64_t noc_addr = input_accessor.get_noc_addr(stick_id);
+            noc_async_read(noc_addr, l1_write_addr, stick_size);
+            l1_write_addr += stick_size;
+            stick_id++;
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(cb_in, Wt);
+    }
 }
