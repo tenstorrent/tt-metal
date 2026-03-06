@@ -27,7 +27,7 @@ def _run_matmul_custom_compressed(
     num_cores=1,
     threshold=0.993,
     pcc_threshold=0.98,
-    use_constexpr_unroll=True,
+    impl="constexpr_compact",
     tile_scaler=None,
 ):
     """Helper: run custom compressed A @ decompress(B_compressed).
@@ -121,7 +121,7 @@ def _run_matmul_custom_compressed(
     )
 
     # Run custom compressed matmul
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, use_constexpr_unroll=use_constexpr_unroll)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl)
 
     output_torch = ttnn.to_torch(ttnn_result)
     assert output_torch.shape == (M, N), f"Expected shape ({M}, {N}), got {output_torch.shape}"
@@ -129,6 +129,9 @@ def _run_matmul_custom_compressed(
     passing, pcc_message = comp_pcc(torch_expected, output_torch, pcc_threshold)
     logger.info(pcc_message)
     assert passing, pcc_message
+
+
+# --- Constexpr compact path ---
 
 
 def test_matmul_custom_compressed_small(device):
@@ -176,17 +179,35 @@ def test_matmul_custom_compressed_multicore_mixed_32cores(device):
     _run_matmul_custom_compressed(device, 1, 7168, 64 * 32, formats=["bfp8", "bfp4"], num_cores=32)
 
 
+# --- Full constexpr unroll path ---
+
+
+def test_matmul_custom_compressed_constexpr_unroll_mixed(device):
+    """[1, 256] x [256, 32], mixed bfp8+bfp4 using fully unrolled constexpr path."""
+    _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8", "bfp4"], impl="constexpr_unroll")
+
+
 # --- Runtime path (no constexpr unroll) ---
 
 
 def test_matmul_custom_compressed_runtime_large(device):
     """[1, 7168] x [7168, 32], bfp8. Runtime path, DeepSeek shape."""
-    _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8", "bfp4"], use_constexpr_unroll=False)
+    _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8", "bfp4"], impl="runtime")
 
 
 def test_matmul_custom_compressed_runtime_large_uniform(device):
     """[1, 7168] x [7168, 32], bfp8. Runtime path, DeepSeek shape."""
-    _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8"], use_constexpr_unroll=False)
+    _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8"], impl="runtime")
+
+
+def test_matmul_custom_compressed_runtime_uniform_wide(device):
+    """[1, 512] x [512, 256], bfp8. Runtime path, DeepSeek shape."""
+    _run_matmul_custom_compressed(device, 1, 512, 256, formats=["bfp8"], impl="runtime")
+
+
+def test_matmul_custom_compressed_runtime_wide(device):
+    """[1, 512] x [512, 256], bfp8. Runtime path, DeepSeek shape."""
+    _run_matmul_custom_compressed(device, 1, 512, 256, formats=["bfp8", "bfp4"], impl="runtime")
 
 
 def scale_tiles_clustered(b_torch, formats):
@@ -282,7 +303,7 @@ def test_matmul_custom_compressed_clustered(device):
 
     from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
 
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, use_constexpr_unroll=True)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl="constexpr_compact")
 
     output_torch = ttnn.to_torch(ttnn_result)
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
@@ -290,7 +311,7 @@ def test_matmul_custom_compressed_clustered(device):
     assert passing, pcc_message
 
 
-def _run_matmul_interleaved_by_n(device, interleave_n, use_constexpr_unroll=True):
+def _run_matmul_interleaved_by_n(device, interleave_n, impl="constexpr_compact"):
     """[1, 7168] x [7168, 32], alternating every N tiles: bfp8*N, bfp4*N, ..."""
     import numpy as np
 
@@ -358,7 +379,7 @@ def _run_matmul_interleaved_by_n(device, interleave_n, use_constexpr_unroll=True
 
     from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
 
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, use_constexpr_unroll=use_constexpr_unroll)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl)
 
     output_torch = ttnn.to_torch(ttnn_result)
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
@@ -471,7 +492,7 @@ def test_matmul_custom_compressed_hybrid(device):
 
     from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
 
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, use_constexpr_unroll=True)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl="constexpr_compact")
 
     output_torch = ttnn.to_torch(ttnn_result)
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)

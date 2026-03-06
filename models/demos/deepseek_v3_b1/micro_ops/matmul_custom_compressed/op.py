@@ -29,6 +29,14 @@ _TILES_PER_UINT32 = 32 // _ASSIGN_BITS  # 16
 # Pre-resolved values (must match tensix_types.h and llk_unpack_compressed.h)
 _DATA_FORMATS = [6, 7, 15, 0]  # bfp8=Bfp8_b(6), bfp4=Bfp4_b(7), bfp2=Bfp2_b(15), bfp0=0
 _TILE_SIZES_SHIFTED = [68, 36, 20, 0]  # tile_bytes >> 4 (cb_addr_shift)
+_IMPL_RUNTIME = 0
+_IMPL_CONSTEXPR_COMPACT = 1
+_IMPL_CONSTEXPR_UNROLL = 2
+_IMPL_TO_DEFINE = {
+    "runtime": _IMPL_RUNTIME,
+    "constexpr_compact": _IMPL_CONSTEXPR_COMPACT,
+    "constexpr_unroll": _IMPL_CONSTEXPR_UNROLL,
+}
 
 
 def pack_pairs_as_ctas(assignment_flat: np.ndarray) -> list[int]:
@@ -82,15 +90,16 @@ class MatmulCustomCompressed:
         a_tensor: ttnn.Tensor,
         ct: CompressedTensor,
         output_tensor: ttnn.Tensor,
-        use_constexpr_unroll: bool = True,
+        impl: str = "constexpr_compact",
     ) -> ttnn.Tensor:
         """
         A [M, K] @ decompress(B_compressed [K, 32]) = output [M, 32].
 
         Args:
-            use_constexpr_unroll: If True, bake per-tile formats into code as constexpr
-                (zero runtime lookup, but O(K) code size). If False, read formats from
-                assignment tensor in L1 at runtime (compact code, ~3us overhead).
+            impl: One of "runtime", "constexpr_compact", or "constexpr_unroll".
+                - "runtime": read packed pair metadata from L1 tensor at runtime.
+                - "constexpr_compact": constexpr formats with compact run-detection.
+                - "constexpr_unroll": fully template-unrolled constexpr formats.
         """
         core_grid = a_tensor.memory_config().shard_spec.grid
         data_tensor = ct.get_data_tensor()
@@ -143,8 +152,14 @@ class MatmulCustomCompressed:
         per_core_pos_cta = None
         fmt_tensor = None
 
-        if use_constexpr_unroll:
-            defines.append(("USE_CONSTEXPR_UNROLL", "1"))
+        if impl not in _IMPL_TO_DEFINE:
+            valid = ", ".join(sorted(_IMPL_TO_DEFINE.keys()))
+            raise ValueError(f"Unsupported impl '{impl}'. Expected one of: {valid}")
+
+        impl_define = _IMPL_TO_DEFINE[impl]
+        defines.append(("COMPRESSED_MM_IMPL", str(impl_define)))
+
+        if impl in ("constexpr_compact", "constexpr_unroll"):
             named_compile_time_args.append(("fmt_cta_base", 0))
 
             all_cores = ttnn.corerange_to_cores(core_grid)
