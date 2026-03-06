@@ -5,9 +5,12 @@
 """
 Device tests for overlapped (fused) weight extraction.
 
+All tests are parameterized by dtype (bfloat4_b, bfloat8_b, bfloat16)
+to verify correctness across data type configurations.
+
 Tests all three constituents of get_tt_q_ab_proj_and_kv_a_proj_weights
 (using an NCRISC kernel to extract each sub-tensor, then verifying
-against an independently preprocessed + bfp8 round-tripped reference):
+against an independently preprocessed + dtype round-tripped reference):
   - q_a_proj (packed)
   - q_b_proj (shuffled)
   - kv_a_proj (shard-reordered)
@@ -15,7 +18,7 @@ against an independently preprocessed + bfp8 round-tripped reference):
 Tests all constituents of get_tt_o_proj_and_gate_mm_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
-  - o_proj  (BFP8)
+  - o_proj  (parameterized dtype)
   - gate_mm (BFP16)
   - attn_norm (BFP16, 1x32 tile)
   - q_norm (BFP16, 1x32 tile)
@@ -25,15 +28,15 @@ against a dtype round-tripped reference):
 Tests both constituents of get_tt_kv_b12_proj_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
-  - kv_b1_proj (HEIGHT_SHARDED, BFP8)
-  - kv_b2_proj (WIDTH_SHARDED, BFP8) — extracted in original shape
+  - kv_b1_proj (HEIGHT_SHARDED)
+  - kv_b2_proj (WIDTH_SHARDED) — extracted in original shape
     since shuffle_kv_b2 preserves per-tile data and linear tile order
 
 Tests both constituents of get_tt_moe_shared_expert_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
-  - gate_proj (block-sharded HEIGHT_SHARDED, BFP4)
-  - up_proj   (block-sharded HEIGHT_SHARDED, BFP4)
+  - gate_proj (block-sharded HEIGHT_SHARDED)
+  - up_proj   (block-sharded HEIGHT_SHARDED)
 """
 
 import pytest
@@ -131,13 +134,14 @@ def _get_roundtrip_reference(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify all three constituents of the q_ab_proj + kv_a_proj overlap.
 
     Creates the fused tensor once via BlitzDecodeWeights, then extracts
@@ -174,7 +178,7 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused q_ab_proj + kv_a_proj weights ...")
-    qab_kva = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a_raw, q_b_raw, kv_raw)
+    qab_kva = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a_raw, q_b_raw, kv_raw, dtype=dtype)
     q_a, q_b, kv = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
@@ -260,13 +264,14 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): q_a_proj, q_b_proj, kv_a_proj overlap passed")
 
 
+@pytest.mark.parametrize("o_proj_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
     """Verify all constituents of the o_proj + gate_mm + rmsnorm gamma overlap.
 
     Creates the fused tensor once via BlitzDecodeWeights, then extracts
@@ -316,6 +321,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         q_norm_raw,
         kv_norm_raw,
         ffn_norm_raw,
+        o_proj_dtype=o_proj_dtype,
     )
     o_proj = o_norms["o_proj"]
     gate_mm = o_norms["gate_mm"]
@@ -432,13 +438,14 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         logger.info(f"Device {device_idx} (TP={tp_group}): o_proj, gate_mm, gammas overlap passed")
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify both constituents of the kv_b1 + kv_b2 overlap.
 
     Creates the fused tensor once via BlitzDecodeWeights, then extracts
@@ -474,7 +481,7 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused kv_b1 + kv_b2 weights ...")
-    kv_b12 = bdw.get_tt_kv_b12_proj_weights(kv_b1_raw, kv_b2_raw)
+    kv_b12 = bdw.get_tt_kv_b12_proj_weights(kv_b1_raw, kv_b2_raw, dtype=dtype)
     kv_b1, kv_b2 = kv_b12["kv_b1_proj"], kv_b12["kv_b2_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
@@ -567,13 +574,14 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): kv_b1_proj, kv_b2_proj overlap passed")
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify both constituents of the gate + up projection overlap.
 
     Creates the fused tensor once via BlitzDecodeWeights, then extracts
@@ -613,7 +621,7 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused gate + up proj weights ...")
-    gate, up, _ = bdw.get_tt_moe_shared_expert_weights(gate_raw, up_raw, down_raw)
+    gate, up, _ = bdw.get_tt_moe_shared_expert_weights(gate_raw, up_raw, down_raw, dtype=dtype)
 
     # -- Extract gate (block-sharded BFP4) while fused buffer is alive -------
     logger.info("Extracting gate_proj from fused buffer ...")
