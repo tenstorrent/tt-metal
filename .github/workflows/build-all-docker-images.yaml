@@ -91,6 +91,7 @@ jobs:
             .github
             dockerfile
             scripts
+            tt_metal
           sparse-checkout-cone-mode: false
 
       - name: Check Harbor availability
