@@ -692,7 +692,9 @@ void add_rank_binding_constraints(
             }
 
             if (!config.hostname_to_asics.empty()) {
-                std::set<tt::tt_metal::AsicID> unset_asic_pool;
+                // Hosts with no claimed rank: keep per-host ASIC sets so we can assign each host to one rank.
+                // This ensures all ASICs on the same host map to fabric nodes of the same rank (no split across ranks).
+                std::vector<std::pair<std::string, std::set<tt::tt_metal::AsicID>>> unset_hosts;
                 for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
                     std::vector<std::pair<tt::tt_metal::AsicID, MeshHostRankId>> host_pairs;
                     for (const auto& asic_id : asic_set) {
@@ -724,16 +726,32 @@ void add_rank_binding_constraints(
                             rank_to_asics[host_rank.value()].insert(asic_id);
                         }
                     } else {
+                        std::set<tt::tt_metal::AsicID> host_asics;
                         for (const auto& [asic_id, _] : host_pairs) {
-                            unset_asic_pool.insert(asic_id);
+                            host_asics.insert(asic_id);
                         }
+                        unset_hosts.emplace_back(hostname, std::move(host_asics));
                     }
                 }
+                // Assign each unset host to exactly one unclaimed rank so mesh host ranks are not split across hosts.
+                std::vector<MeshHostRankId> unclaimed_ranks;
                 for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
                     if (!fn_set.empty() && !claimed_ranks.contains(r)) {
-                        for (const auto& asic_id : unset_asic_pool) {
-                            rank_to_asics[r].insert(asic_id);
-                        }
+                        unclaimed_ranks.push_back(r);
+                    }
+                }
+                if (!unset_hosts.empty() && unclaimed_ranks.empty()) {
+                    TT_THROW(
+                        "Rank bindings: {} host(s) have no rank binding but all mesh ranks are already claimed. "
+                        "Either assign ranks to these hosts or ensure enough ranks exist.",
+                        unset_hosts.size());
+                }
+                for (size_t i = 0; i < unset_hosts.size(); ++i) {
+                    const auto& [hostname, host_asics] = unset_hosts[i];
+                    (void)hostname;
+                    MeshHostRankId rank = unclaimed_ranks[i % unclaimed_ranks.size()];
+                    for (const auto& asic_id : host_asics) {
+                        rank_to_asics[rank].insert(asic_id);
                     }
                 }
             }
