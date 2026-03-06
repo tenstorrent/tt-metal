@@ -15,6 +15,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     LinearConfig,
     LinearFallbackConfig,
     MeshDeviceStub,
+    MoEGateRoutingConfig,
     MulConfig,
     ReshapeConfig,
     ScatterConfig,
@@ -29,9 +30,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
-class MoEGate(AbstractModule):
+class BlazeMoeGate(AbstractModule):
     """MoE gate module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
@@ -47,6 +49,7 @@ class MoEGate(AbstractModule):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None
+
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
@@ -58,6 +61,35 @@ class MoEGate(AbstractModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
                 )
+            },
+            "gate_routing": {
+                "ttnn_output_tensor": shard_and_save(
+                    output_path / f"gate_proj.ttnn_output_tensor",
+                    torch.zeros((1, 32, 32)),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                ),
+                "ttnn_input_indices": shard_and_save(
+                    output_path / f"gate_proj.ttnn_input_indices",
+                    torch.transpose(torch.arange(16 * 16).unsqueeze(0).reshape(1, 16, 16), -2, -1),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.uint16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                ),
+                "ttnn_output_indices": shard_and_save(
+                    output_path / f"gate_proj.ttnn_output_indices",
+                    torch.zeros((1, 32, 32)),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.uint16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                ),
             },
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
@@ -137,6 +169,11 @@ class MoEGate(AbstractModule):
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
+                "gate_routing": MoEGateRoutingConfig(
+                    ttnn_output_tensor=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    ttnn_input_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    ttnn_output_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                ),
                 "add_score_correction_bias": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
@@ -205,6 +242,11 @@ class MoEGate(AbstractModule):
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                ),
+                "gate_routing": MoEGateRoutingConfig(
+                    ttnn_output_tensor=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    ttnn_input_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    ttnn_output_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -296,24 +338,63 @@ class MoEGate(AbstractModule):
         assert num_experts == 256, "num_experts should be 256"
         batch_size_per_device = logits.shape[2]
 
-        # create the bias
-        scores_correction_bias = ttnn.typecast(cfg["add_score_correction_bias"]["input_tensor_b"], ttnn.bfloat16)
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
-        scores_correction_bias = ttnn.to_memory_config(
-            scores_correction_bias, memory_config=cfg["add_score_correction_bias"]["memory_config"]
-        )
-        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
-        eps = 1e-20
+        reshaped_input_shape = (batch_size_per_device, 16, 16)
 
-        topk_experts_scores_normalized, topk_experts_indices = ttnn.experimental.deepseek_grouped_gate(
+        # create the shard spec and memory config for the input, logits and output
+        grid = cfg["mesh_device"].compute_with_storage_grid_size()
+        input_output_shard_shape = (32, 32)
+        core_grid = ttnn.num_cores_to_corerangeset(
+            batch_size_per_device,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        )
+
+        # currently we cannot convert the tile size of logits and input indices to 16*16,
+        # but the memory layout is the same since the length is 256
+        input_output_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            input_output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
+        )
+
+        logits = ttnn.reshape(logits, reshaped_input_shape)
+
+        # change the memory config of the logits
+        logits = ttnn.to_memory_config(logits, memory_config=input_output_mem_config)
+
+        # create the bias
+        scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
+        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
+        scores_correction_bias = ttnn.reshape(scores_correction_bias, (batch_size_per_device, 16, 16))
+        scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_output_mem_config)
+
+        # create the output tensor, input indices and output indices
+        ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
+        ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device, 1, 1))
+        ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
+        ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
+        ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_device, 1, 1))
+        ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
+        ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
+        ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device, 1, 1))
+        ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
+
+        eps = 1e-20
+        scaling_factor = 2.5
+        enable_sigmoid = True
+
+        topk_experts_scores_normalized, topk_experts_indices = DeepseekMoeGateSingleCore.op(
             logits,
             scores_correction_bias,
-            n_groups=8,
-            summed_experts_per_group=2,
-            topk_groups=4,
-            n_activated_experts=8,
-            route_scale=torch.rand(1).item() + 0.1,
-            epsilon=eps,
+            ttnn_output_tensor,
+            ttnn_input_indices,
+            ttnn_output_indices,
+            eps,
+            scaling_factor,
+            enable_sigmoid,
         )
 
         return topk_experts_scores_normalized, topk_experts_indices
