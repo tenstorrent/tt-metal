@@ -392,7 +392,7 @@ void kernel_main() {
     constexpr uint32_t seed = get_compile_time_arg_val(14);
     constexpr uint32_t cb_local_vals = get_compile_time_arg_val(15);
     constexpr uint32_t temp_cb_index = get_compile_time_arg_val(16);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(17);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
     generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;
@@ -411,9 +411,9 @@ void kernel_main() {
         index_transposed_cb_index,
         values_cb_index,
         output_ind_cb_index,
-        TILE_WIDTH,
+        tile_width,
         true>();
-    constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
+    constexpr uint32_t Kt = nearest32_K / tile_width;
 
     // scale temperature
 

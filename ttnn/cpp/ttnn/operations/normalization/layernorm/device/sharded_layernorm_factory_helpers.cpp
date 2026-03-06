@@ -748,7 +748,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
     // Welford-specific compute args
     if (ctx.use_welford) {
         const uint32_t tile_width = ctx.tile_width;
-        uint32_t last_tile_W = ctx.K - ((ctx.K - tile_width) / tile_width) * tile_width;
+        uint32_t last_tile_W = ctx.K - (((ctx.K - tile_width) / tile_width) * tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
 
         args.compute_all_to_all.push_back(tile_width);
