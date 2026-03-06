@@ -171,12 +171,16 @@ void kernel_main() {
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
         auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+        auto pkt_scatter_hdr_3 = PacketHeaderPool::allocate_header();
+        auto pkt_scatter_hdr_4 = PacketHeaderPool::allocate_header();
         auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
         auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
         auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr_3, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr_4, unicast_route_info);
 
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
@@ -219,6 +223,21 @@ void kernel_main() {
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
+        fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            pkt_scatter_hdr_3,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            NocUnicastScatterCommandHeader(
+                {0, 0, 0}, {static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)}),
+            page_size * 3);
+        fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            pkt_scatter_hdr_4,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            NocUnicastScatterCommandHeader(
+                {0, 0, 0, 0},
+                {static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)}),
+            page_size * 4);
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
@@ -339,6 +358,47 @@ void kernel_main() {
                                     if (i < (ring_size - 1)) {
                                         // Send tile(s) to the intermediate buffer on the neighboring device.
                                         switch (num_in_bounds_tiles) {
+                                            case 4: {
+                                                const auto noc_address0 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[0], 0);
+                                                const auto noc_address1 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[1], 0);
+                                                const auto noc_address2 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[2], 0);
+                                                const auto noc_address3 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[3], 0);
+                                                fabric_unicast_noc_scatter_write_with_state<
+                                                    UnicastScatterWriteUpdateMask::DstAddrs>(
+                                                    &mux_connection_handle,
+                                                    pkt_scatter_hdr_4,
+                                                    l1_read_addr,
+                                                    NocUnicastScatterCommandHeader(
+                                                        {noc_address0, noc_address1, noc_address2, noc_address3}));
+                                                break;
+                                            }
+                                            case 3: {
+                                                const auto noc_address0 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[0], 0);
+                                                const auto noc_address1 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[1], 0);
+                                                const auto noc_address2 =
+                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                        intermediate_addrgen, global_tile_idxs[2], 0);
+                                                fabric_unicast_noc_scatter_write_with_state<
+                                                    UnicastScatterWriteUpdateMask::DstAddrs>(
+                                                    &mux_connection_handle,
+                                                    pkt_scatter_hdr_3,
+                                                    l1_read_addr,
+                                                    NocUnicastScatterCommandHeader(
+                                                        {noc_address0, noc_address1, noc_address2}));
+                                                break;
+                                            }
                                             case 2: {
                                                 const auto noc_address0 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
