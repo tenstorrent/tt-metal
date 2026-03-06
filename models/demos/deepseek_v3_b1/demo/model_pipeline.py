@@ -86,14 +86,16 @@ class ModelPipeline:
 
     def run_inference(
         self,
-        total_iterations: int,
-        prompt_token_ids: list[int] | None = None,
-        max_new_tokens: int = 0,
+        prompt_token_ids: list[int],
+        max_new_tokens: int,
         on_token: Callable[[int], None] | None = None,
         eos_token_id: int | None = None,
         return_generated_tokens: bool = False,
     ) -> list[int] | None:
         """Run full inference across all ranks.
+
+        All ranks must pass the same prompt_token_ids and max_new_tokens so
+        they agree on the total iteration count.
 
         - Input rank: writes tokens (prefill then decode) and receives output
           token ids from the output rank via recv_token.
@@ -101,11 +103,11 @@ class ModelPipeline:
           input rank via send_token.
         - Other ranks: no-op (pipeline kernels handle forwarding).
         """
+        total_iterations = len(prompt_token_ids) + max_new_tokens
         if self.pipeline.is_input_rank:
             return self._run_input_rank(
                 total_iterations,
-                prompt_token_ids or [],
-                max_new_tokens=max_new_tokens,
+                prompt_token_ids,
                 on_token=on_token,
                 eos_token_id=eos_token_id,
                 return_generated_tokens=return_generated_tokens,
@@ -118,7 +120,6 @@ class ModelPipeline:
         self,
         total_iterations: int,
         prompt_token_ids: list[int],
-        max_new_tokens: int,
         on_token: Callable[[int], None] | None,
         eos_token_id: int | None,
         return_generated_tokens: bool,
@@ -137,6 +138,7 @@ class ModelPipeline:
 
             self.pipeline.write_token(self._make_token_tensor(token_id))
             out_token = self.pipeline.recv_output_token()
+            logger.debug(f"Received token {out_token} from rank {self.pipeline.my_mesh_id}")
 
             # Prefill outputs before the last prompt token are discarded.
             if i >= num_prefill - 1:
