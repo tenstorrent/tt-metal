@@ -61,6 +61,11 @@ jobs:
             --build-all \
             --configure-only
 
+      - name: 📦 Install GNU time
+        run: |
+          apt-get update -qq && apt-get install -y -qq time >/dev/null 2>&1
+          /usr/bin/time --version
+
       - name: ⏱️ Timed Compile (32 cores)
         id: compile
         timeout-minutes: 90
