@@ -406,6 +406,8 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
+from ttnn.operations.auto_config import matmul_auto
+
 from ttnn.operations.normalization import (
     SoftmaxProgramConfig,
     SoftmaxDefaultProgramConfig,
