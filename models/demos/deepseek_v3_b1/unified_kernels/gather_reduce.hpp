@@ -44,19 +44,6 @@ namespace deepseek_b1_ops {
 //   Receiver: waits on noc0/noc1 sender counts, then resets both semaphores to 0
 // ============================================================================
 
-#if defined(COMPILE_FOR_TRISC)
-// Helper functions to manipulate CB read pointer (from bmm_large_block_zm_fused_bias_activation_gathered.cpp)
-FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    return local_cb.fifo_rd_ptr;
-}
-
-FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    local_cb.fifo_rd_ptr = val;
-}
-#endif
-
 struct GatherReduce {
     // ========================================================================
     // Runtime args structs - different layout per RISC
@@ -107,7 +94,7 @@ struct GatherReduce {
         cb_wait_front(in1_cb, num_tiles);
 
         uint32_t in0_cb_base_rd_ptr = 0;
-        UNPACK(({ in0_cb_base_rd_ptr = get_local_cb_rd_ptr(in0_cb); }));
+        UNPACK(({ in0_cb_base_rd_ptr = unified_kernels::get_local_cb_rd_ptr(in0_cb); }));
 
         // Process tiles - element-wise add
         tile_regs_acquire();
@@ -123,7 +110,7 @@ struct GatherReduce {
 
         // restore in0_cb read pointer to the beginning of the block so that the reduced tiles can be popped by the
         // caller
-        UNPACK(({ update_local_cb_rd_ptr(in0_cb, in0_cb_base_rd_ptr); }));
+        UNPACK(({ unified_kernels::update_local_cb_rd_ptr(in0_cb, in0_cb_base_rd_ptr); }));
 
         // pop cb1 after reduction since it's no longer needed
         cb_pop_front(in1_cb, num_tiles);

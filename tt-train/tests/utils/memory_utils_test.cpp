@@ -6,12 +6,14 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 class MemoryUtilsTest : public ::testing::Test {

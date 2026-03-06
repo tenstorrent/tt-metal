@@ -25,12 +25,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
@@ -424,7 +423,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr + sizeof(std::uint32_t),
+                l1_overflow_addr,
                 sizeof(std::uint32_t));
         } break;
         case SanitizeEthSrcL1Overflow: {
