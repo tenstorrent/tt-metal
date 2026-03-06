@@ -4,14 +4,13 @@
 #pragma once
 
 #include "tt-metalium/circular_buffer_constants.h"
-#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/cb_api.h"
 #include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 // This is the go-to helper for all untilize usage in compute kernels.
-// Prefer this over raw untilize_init/untilize_block/untilize_uninit and pack_untilize calls.
+// Prefer this over raw pack_untilize_init/pack_untilize_block/pack_untilize_uninit calls.
 namespace compute_kernel_lib {
 
 namespace untilize_config {
@@ -26,7 +25,7 @@ enum class ReconfigureRegisterDatatypeMode : uint8_t {
     UnpackAndPackReconfigure  // Default — reconfigure both unpack and pack
 };
 
-// Controls whether untilize_init/untilize_uninit are called.
+// Controls whether pack_untilize_init/pack_untilize_uninit are called.
 // When calling untilize() multiple times back-to-back, you can skip redundant
 // init/uninit between calls: use InitOnly on the first call, Neither on
 // middle calls, and UninitOnly on the last call.
@@ -40,7 +39,7 @@ enum class InitUninitMode : uint8_t {
 // Input synchronization strategy.
 enum class WaitMode : uint8_t {
     WaitBlock,    // Default — wait for input per block
-    WaitUpfront,  // Wait for all tiles upfront before processing (forces standard untilize path)
+    WaitUpfront,  // Wait for all tiles upfront before processing
     NoWait        // Caller manages synchronization externally
 };
 
@@ -64,10 +63,8 @@ ALWI void untilize_uninit();
  * Untilize: convert tiled data back to row-major format (reverse of tilize).
  *
  * Reads from input CB (tiled), writes to output CB (row-major).
- * Automatically selects the best implementation at compile time based on
- * block_width_tiles vs DEST capacity, data format, and wait mode.
- *
- * NOTE: Unlike tilize, block_width_tiles is a compile-time template parameter.
+ * Automatically selects single-pass or block-based pack_untilize at compile time
+ * based on block_width_tiles vs DEST capacity.
  *
  * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
  * start of your kernel before using this function, unless another init or
@@ -109,7 +106,7 @@ ALWI void untilize_uninit();
  *   // 1. Basic untilize (most common)
  *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_blocks);
  *
- *   // 2. Wait-upfront (e.g., GroupNorm pattern — forces standard untilize path)
+ *   // 2. Wait-upfront (e.g., GroupNorm pattern)
  *   using namespace compute_kernel_lib::untilize_config;
  *   compute_kernel_lib::untilize<10, cb_in, cb_out,
  *            InitUninitMode::InitAndUninit,

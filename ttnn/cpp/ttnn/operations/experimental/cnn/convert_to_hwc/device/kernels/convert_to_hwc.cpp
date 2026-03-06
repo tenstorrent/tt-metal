@@ -31,8 +31,6 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     cb_pop_front(cb_in, BatchSize);
 }
 
-// Removed: Now using compute_kernel_lib::tilize with asymmetric input_count
-
 void kernel_main() {
     constexpr uint32_t cb_in_batch = get_compile_time_arg_val(0);
     constexpr uint32_t cb_tiled_in = get_compile_time_arg_val(1);

@@ -37,9 +37,6 @@ template <
 void tilize_in(
 #endif
     uint32_t in_num_subblocks) {
-    // Replaced manual tilize loop with unified helper function
-    // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
-
     constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
         init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
                                      : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
