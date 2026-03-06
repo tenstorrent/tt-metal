@@ -119,6 +119,14 @@ struct Gather {
 
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
+                DPRINT << "G: "
+                       << TileSlice(
+                              args.src_cb,
+                              0,
+                              SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8},
+                              true,
+                              true)
+                       << ENDL();
 
                 // Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
@@ -154,6 +162,8 @@ struct Gather {
                 }
 
                 // Push to destination CB after data arrived
+                // DPRINT << "Gather: " << TileSlice(args.dst_cb, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1
+                // = 32, .ws = 8}, true, true) << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             }
 #elif defined(COMPILE_FOR_TRISC)

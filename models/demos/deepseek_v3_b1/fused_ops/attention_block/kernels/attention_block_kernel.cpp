@@ -73,6 +73,8 @@ struct Core {
     static constexpr uint32_t kv_cache_device_chunk_size = get_named_compile_time_arg_val("kv_cache_device_chunk_size");
     static constexpr uint32_t kv_cache_sp_device_idx = get_named_compile_time_arg_val("kv_cache_sp_device_idx");
     static constexpr uint32_t kv_cache_num_sp_devices = get_named_compile_time_arg_val("kv_cache_num_sp_devices");
+    // Tensor Parallel configs
+    static constexpr uint32_t kv_cache_tp_device_idx = get_named_compile_time_arg_val("kv_cache_tp_device_idx");
 
     // Post SDPA
     // SDPA output cores 8 cores - run SDPA reduction and scatter
@@ -1239,11 +1241,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
     uint32_t cur_pos = pos_ptr[0];
 
-    // const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
-    //     cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
-    const bool skip_attention = false;
-    const bool skip_kv_cache_update = false;
-    const uint32_t local_cur_pos = cur_pos;
+    // DPRINT << "DEVICE SP: " << Core::kv_cache_sp_device_idx << " TP: " << Core::kv_cache_tp_device_idx << ENDL();
+    const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
+        cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
+
+    using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::
+        Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>;
 
     if (!skip_attention) {
         // ====================================================================
@@ -1409,11 +1412,17 @@ void kernel_main() {
         // ====================================================================
         {
             DeviceZoneScopedN("FLASH_MLA");
-            deepseek_b1_ops::FlashMLADecode::
-                Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>
-                    flash_mla;
+            FlashMLAOp flash_mla;
             flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
             flash_mla(flash_mla_args);
+        }
+    } else {
+        // This device has no sequence data (e.g. SP2/SP3 with seq_len = 2047 and per_device_chunk_size = 1024).
+        // Push dummy tiles into the hand-off CBs so SDPA reduce does not hang.
+        // TODO: Fuse the final SP reduce into Flash MLA and handle this internally,
+        // eliminating the need for this explicit dummy push.
+        if constexpr (Core::is_sdpa_worker_core) {
+            FlashMLAOp::push_dummy_sdpa_inputs();
         }
     }
     {
