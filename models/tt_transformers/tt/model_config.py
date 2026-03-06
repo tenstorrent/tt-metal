@@ -81,6 +81,13 @@ class OpGroup(Enum):
     ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
+def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Pad total vocab so each device shard is tile-aligned."""
+    if num_devices < 1:
+        raise ValueError(f"num_devices must be >= 1, got {num_devices}")
+    return nearest_multiple(vocab_size, 32 * num_devices)
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -2535,7 +2542,12 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        if self.is_galaxy:
+            self.padded_vocab_size = 128 * 1024
+        elif self.num_devices > 1:
+            self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
+        else:
+            self.padded_vocab_size = None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
