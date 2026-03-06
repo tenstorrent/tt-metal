@@ -4,6 +4,9 @@
 
 import struct
 
+import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+
 
 def deinterleave_kv_cache(kv, device_chunk_size: int, num_devices: int):
     """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.

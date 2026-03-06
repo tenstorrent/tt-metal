@@ -360,7 +360,6 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
     if constexpr (!Core::skip_ccl && Core::is_input_core) {
-        DPRINT << " BCAST ARGS " << per_core_rta_arg_idx << ENDL();
         uint32_t offset_fabric_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
@@ -379,7 +378,6 @@ void kernel_main() {
             per_core_rta_arg_idx,
         };
         per_core_rta_arg_idx += offset_fabric_args;
-        DPRINT << " BCAST ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
@@ -426,7 +424,6 @@ void kernel_main() {
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
         per_core_rta_arg_idx += fabric_args_offset;
-        DPRINT << " SDPA REDUCE FORWARDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     // CCL Sender NCRISC CTArgs (reads from gather core)
@@ -459,21 +456,16 @@ void kernel_main() {
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     if constexpr (Core::is_ccl_sender_core) {
-        DPRINT << " CCL SENDER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_sender_args = {
             .tensor_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-        DPRINT << " CCL SENDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     if constexpr (Core::is_ccl_receiver_core) {
-        DPRINT << " CCL RECEIVER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_receiver_args = {
             .sender_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-        DPRINT << " CCL RECEIVER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
-    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -621,8 +613,6 @@ void kernel_main() {
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
-        DPRINT << " THIS IS MLA CORE " << ENDL();
-        DPRINT << " PER CORE RTA ARG IDX " << per_core_rta_arg_idx << ENDL();
         constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
         uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -636,8 +626,6 @@ void kernel_main() {
         uint32_t mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
         per_core_rta_arg_idx += num_tree_reduction_steps * 4;
-
-        DPRINT << " AFTTER MLA ARGS " << per_core_rta_arg_idx << ENDL();
 
         flash_mla_args = {
             .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
@@ -796,7 +784,6 @@ void kernel_main() {
             .scatter_arrival_sem_addr = get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
         };
         per_core_rta_arg_idx += SdpaReduceWorkerCTArgs::scatter_num_rows * 2;  // x, y value per dest
-        DPRINT << " SDPA REDUCE WORKER ARGS " << per_core_rta_arg_idx << ENDL();
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
@@ -806,7 +793,6 @@ void kernel_main() {
 
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
     if constexpr (Core::is_sdpa_forwarder_core) {
-        DPRINT << " SDPA REDUCE FORWARDER ARGS " << per_core_rta_arg_idx << ENDL();
         sdpa_reduce_forwarder_args = {
             .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -816,7 +802,6 @@ void kernel_main() {
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
         per_core_rta_arg_idx += fabric_args_offset;
-        DPRINT << " SDPA REDUCE FORWARDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     // CCL Sender BRISC CTArgs (sends via fabric)
@@ -838,7 +823,6 @@ void kernel_main() {
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     if constexpr (Core::is_ccl_sender_core) {
-        DPRINT << " CCL SENDER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_sender_args = {
             .receiver_base_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .receive_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -846,9 +830,7 @@ void kernel_main() {
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         ccl_sender_args.fabric_args_start_index = per_core_rta_arg_idx;
         per_core_rta_arg_idx += fabric_args_offset;
-        DPRINT << " CCL SENDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
-    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -1143,7 +1125,6 @@ void kernel_main() {
     // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
-    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
     deepseek_compute_kernel_init();
 #endif
 
@@ -1249,8 +1230,6 @@ void kernel_main() {
     }
 #endif
 
-    DPRINT << " DONE CCL BROADCAST" << ENDL();
-
     // SP position handling.
     // Read the global position from L1 and decide whether this device has
     // work / owns the current KV-cache slot. The normalized (device-local)
@@ -1265,8 +1244,6 @@ void kernel_main() {
     const uint32_t local_cur_pos = cur_pos;
 
     if (!skip_attention) {
-        DPRINT << " DOING ATTENTION" << ENDL();  // Watch out: Adding this somehow fixes a hang with dprint
-
         // ====================================================================
         // Input core: RMSNorm + Mcast send
         // ====================================================================
@@ -1425,8 +1402,6 @@ void kernel_main() {
             kv_cache_update.signal_cache_ready(kv_cache_update_args);
         }
 
-        DPRINT << " DONE KV CACHE UPDATE" << ENDL();
-
         // ====================================================================
         // Flash MLA: Compute
         // ====================================================================
@@ -1439,7 +1414,6 @@ void kernel_main() {
             flash_mla(flash_mla_args);
         }
     }
-    DPRINT << " DONE FLASH MLA" << ENDL();
     {
         // ========================================================================
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
@@ -1450,7 +1424,6 @@ void kernel_main() {
                     deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                     sdpa_reduce_worker(sdpa_reduce_worker_args);
                 }
-                DPRINT << " DONE SDPA REDUCE WORKER" << ENDL();
                 if constexpr (Core::is_sdpa_forwarder_core) {
                     deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                     sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
@@ -1461,17 +1434,14 @@ void kernel_main() {
                         get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
                     volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
-                    DPRINT << " wait for scatter arrival semaphore" << ENDL();
                     noc_semaphore_wait(scatter_arrival_sem_addr, 1);
                     noc_semaphore_set(scatter_arrival_sem_addr, 0);
-                    DPRINT << " scatter arrival semaphore waited" << ENDL();
                     constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
                     constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
                     unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
                 }
 #endif
             }
-            DPRINT << " DONE POST_SDPA" << ENDL();
             // ========================================================================
             // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
             // ========================================================================
@@ -1528,7 +1498,6 @@ void kernel_main() {
                 deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
                 gather3(gather3_args);
             }
-            DPRINT << " DONE GATHER3" << ENDL();
 
 #if defined(COMPILE_FOR_BRISC)
             // Signal CCL sender that gather3 is complete (gather receiver only)

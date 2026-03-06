@@ -100,7 +100,6 @@ uint32_t per_core_rta_arg_idx = 0;
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
     if constexpr (!Core::skip_ccl) {
-        DPRINT << " BCAST ARGS " << per_core_rta_arg_idx << ENDL();
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
             get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
@@ -854,7 +853,6 @@ uint32_t per_core_rta_arg_idx = 0;
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
-    DPRINT << " DONE MCAST" << ENDL();
     // ========================================================================
     // SP position handling.
     // Read the global position from L1 and decide whether this device has
