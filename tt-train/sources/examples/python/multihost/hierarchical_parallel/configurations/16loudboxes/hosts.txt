@@ -1,16 +1,16 @@
-metal-wh-18.closetbox.tenstorrent.com slots=1
-metal-wh-08.closetbox.tenstorrent.com slots=1
-metal-wh-01.closetbox.tenstorrent.com slots=1
-metal-wh-02.closetbox.tenstorrent.com slots=1
-metal-wh-03.closetbox.tenstorrent.com slots=1
-metal-wh-04.closetbox.tenstorrent.com slots=1
-metal-wh-05.closetbox.tenstorrent.com slots=1
-metal-wh-06.closetbox.tenstorrent.com slots=1
-metal-wh-13.closetbox.tenstorrent.com slots=1
-metal-wh-14.closetbox.tenstorrent.com slots=1
-metal-wh-15.closetbox.tenstorrent.com slots=1
-metal-wh-16.closetbox.tenstorrent.com slots=1
-metal-wh-09.closetbox.tenstorrent.com slots=1
-metal-wh-10.closetbox.tenstorrent.com slots=1
-metal-wh-11.closetbox.tenstorrent.com slots=1
-metal-wh-12.closetbox.tenstorrent.com slots=1
+rank 0=metal-wh-18.closetbox.tenstorrent.com slot=0
+rank 1=metal-wh-08.closetbox.tenstorrent.com slot=0
+rank 2=metal-wh-01.closetbox.tenstorrent.com slot=0
+rank 3=metal-wh-02.closetbox.tenstorrent.com slot=0
+rank 4=metal-wh-03.closetbox.tenstorrent.com slot=0
+rank 5=metal-wh-04.closetbox.tenstorrent.com slot=0
+rank 6=metal-wh-05.closetbox.tenstorrent.com slot=0
+rank 7=metal-wh-06.closetbox.tenstorrent.com slot=0
+rank 8=metal-wh-13.closetbox.tenstorrent.com slot=0
+rank 9=metal-wh-14.closetbox.tenstorrent.com slot=0
+rank 10=metal-wh-15.closetbox.tenstorrent.com slot=0
+rank 11=metal-wh-16.closetbox.tenstorrent.com slot=0
+rank 12=metal-wh-09.closetbox.tenstorrent.com slot=0
+rank 13=metal-wh-10.closetbox.tenstorrent.com slot=0
+rank 14=metal-wh-11.closetbox.tenstorrent.com slot=0
+rank 15=metal-wh-12.closetbox.tenstorrent.com slot=0

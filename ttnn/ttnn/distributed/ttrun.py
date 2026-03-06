@@ -616,6 +616,7 @@ def main(
         - TT_MESH_HOST_RANK: Host rank within the mesh
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
+        - PYTHONHOME: Python installation directory
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)

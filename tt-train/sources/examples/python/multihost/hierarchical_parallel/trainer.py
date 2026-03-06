@@ -15,6 +15,7 @@ from time import time
 import numpy as np
 import ttnn
 import ttml
+from ttml.core.utils import MemoryUsageTracker
 from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import no_grad, PerformanceMeter
 
@@ -62,12 +63,14 @@ def get_batch_ttml(
 
 def worker(
     cfg,
+    seq_len,
     model,
     train_ids: np.ndarray,
     val_ids: np.ndarray,
     use_ddp: bool = False,
     use_tp: bool = False,
     num_workers: int = None,
+    track_memory: bool = False,
 ):
     """Execute worker training loop.
 
@@ -77,21 +80,36 @@ def worker(
 
     Args:
         cfg: Training configuration object
+        seq_len: Sequence length
         model: Model to train
         train_ids: Training data token IDs
         val_ids: Validation data token IDs (unused, for API compatibility)
         use_ddp: Whether to use distributed data parallel
         use_tp: Whether to use tensor parallel
         num_workers: Number of worker ranks (if None, assumes 3-tier with world_size - 2)
+        track_memory: Whether to enable memory usage tracking
 
     Returns:
         Tuple of (train_losses, val_losses) lists
     """
+    # Setup memory tracking
+    memory_guard = None
+    is_first_iteration = True
+
+    if track_memory:
+        print(f"[Worker] Memory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
+
+    def memory_snapshot(name: str):
+        nonlocal is_first_iteration
+        if track_memory and is_first_iteration:
+            MemoryUsageTracker.snapshot(name)
+
     # Setup loss function and causal mask
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
-    causal_mask = build_causal_mask(cfg.seq_len)
+    causal_mask = build_causal_mask(seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
         causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
@@ -131,20 +149,28 @@ def worker(
     optimizer.receive_weights()
     print(f"[Worker {rank}] Received initial weights")
 
-    performance_meter = PerformanceMeter(cfg)
+    memory_snapshot("INITIAL_STATE")
+
+    performance_meter = PerformanceMeter(cfg, seq_len)
+
+    # Step time tracking
+    step_times = []
 
     # Training loop: outer loop = optimizer steps
     for step in range(1, cfg.steps + 1):
+        step_start_time = time()
         performance_meter.step()
         optimizer.zero_grad()
         accum_loss = 0.0
 
         # Gradient accumulation loop
         for _ in range(cfg.gradient_accumulation_steps):
-            tt_x, tt_y = get_batch_ttml(train_ids, cfg.seq_len, cfg.batch_size, use_ddp)
+            tt_x, tt_y = get_batch_ttml(train_ids, seq_len, cfg.batch_size, use_ddp)
 
             # Forward and backward pass
             logits = model(tt_x, tt_mask)
+            memory_snapshot("FORWARD_PASS")
+
             loss = loss_fn(logits, tt_y, reduce)
 
             # Scale loss by accumulation steps for proper gradient averaging
@@ -152,6 +178,7 @@ def worker(
                 loss = loss * (1.0 / cfg.gradient_accumulation_steps)
 
             loss.backward(False)
+            memory_snapshot("BACKWARD_PASS")
 
             # Convert loss to numpy for logging
             loss_numpy = loss.to_numpy(composer=composer)
@@ -161,29 +188,65 @@ def worker(
             # Reset computation graph after each micro-batch
             autograd_ctx.reset_graph()
 
+        memory_snapshot("GRADIENT_ACCUMULATION_COMPLETE")
+
         # RemoteOptimizer.step() sends gradients to aggregator and receives updated weights
         optimizer.step()
 
+        step_end_time = time()
+        step_time = step_end_time - step_start_time
+        step_times.append(step_time)
+
         # Log training progress
         train_losses.append(accum_loss)
+
+        # Print memory usage after first iteration
+        if track_memory and is_first_iteration:
+            is_first_iteration = False
+            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+            MemoryUsageTracker.print_memory_usage()
+            MemoryUsageTracker.clear()
+            if memory_guard:
+                memory_guard.release()
+
         if step > 10:
             samples_per_second, tokens_per_second = performance_meter.get_metrics()
             # scale by number of workers
             samples_per_second = samples_per_second * num_workers
             tokens_per_second = tokens_per_second * num_workers
+            avg_step_time = (
+                np.mean(step_times[1:]) if len(step_times) > 1 else step_times[0]
+            )
             print(
                 f"[Worker {rank}] Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}, "
-                f"Samples/s = {samples_per_second:.2f}, Tokens/s = {tokens_per_second:.2f}"
+                f"Samples/s = {samples_per_second:.2f}, Tokens/s = {tokens_per_second:.2f}, "
+                f"Avg Step Time = {avg_step_time:.3f}s"
+            )
+        elif step == 1:
+            print(
+                f"[Worker {rank}] Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}, Step Time = {step_time:.3f}s (warmup)"
             )
         else:
-            print(f"[Worker {rank}] Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}")
+            print(
+                f"[Worker {rank}] Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}, Step Time = {step_time:.3f}s"
+            )
 
-    print(f"[Worker {rank}] Training finished")
+    if len(step_times) > 1:
+        avg_step_time = np.mean(step_times[1:])
+        print(
+            f"[Worker {rank}] Training finished. Average step time (excluding warmup): {avg_step_time:.3f}s"
+        )
+    elif step_times:
+        print(
+            f"[Worker {rank}] Training finished. Only warmup step completed: {step_times[0]:.3f}s"
+        )
+    else:
+        print(f"[Worker {rank}] Training finished")
     return train_losses, val_losses
 
 
 @no_grad()
-def aggregator(model, cfg, use_ddp: bool = False):
+def aggregator(model, cfg, use_ddp: bool = False, track_memory: bool = False):
     """Aggregator that averages gradients from workers and broadcasts weights.
 
     The aggregator sits between workers and the optimizer:
@@ -198,7 +261,21 @@ def aggregator(model, cfg, use_ddp: bool = False):
         model: Model instance (for getting parameters)
         cfg: Training configuration
         use_ddp: Whether to apply DDP reduction on gradients
+        track_memory: Whether to enable memory usage tracking
     """
+    # Setup memory tracking
+    memory_guard = None
+    is_first_iteration = True
+
+    if track_memory:
+        print(f"[Aggregator] Memory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
+
+    def memory_snapshot(name: str):
+        nonlocal is_first_iteration
+        if track_memory and is_first_iteration:
+            MemoryUsageTracker.snapshot(name)
+
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     distributed_ctx = autograd_ctx.get_distributed_context()
@@ -239,10 +316,16 @@ def aggregator(model, cfg, use_ddp: bool = False):
         for worker_id in range(num_workers):
             socket_manager.send(tensor_ptr, workers_and_aggregator_ctx, worker_id)
 
+    memory_snapshot("INITIAL_STATE")
+
     print(f"[Aggregator {rank}] Starting training loop for {cfg.steps} steps")
+
+    # Step time tracking
+    step_times = []
 
     # Training loop
     for step in range(cfg.steps):
+        step_start_time = time()
         # Receive and average gradients from all workers
         for name, tensor_ptr in sorted_parameters.items():
             # Receive gradient from first worker
@@ -254,14 +337,22 @@ def aggregator(model, cfg, use_ddp: bool = False):
                 socket_manager.recv(to_add, workers_and_aggregator_ctx, worker_id)
                 tensor_ptr = tensor_ptr + to_add
 
-            # Average the gradients (in-place on tensor_ptr's grad)
+        memory_snapshot("GRADIENT_RECEIVE")
+
+        # Average the gradients (in-place on tensor_ptr's grad)
+        for name, tensor_ptr in sorted_parameters.items():
             tensor_ptr = tensor_ptr * (1.0 / num_workers)
 
-            # Apply DDP reduction across devices if enabled
-            if use_ddp:
-                tensor_ptr = ttml.ops.distributed.all_reduce(tensor_ptr)
+        memory_snapshot("GRADIENT_AVERAGE")
 
-            # Send averaged gradient to optimizer (local rank 1 in sub-context)
+        # Apply DDP reduction across devices if enabled
+        if use_ddp:
+            for name, tensor_ptr in sorted_parameters.items():
+                tensor_ptr = ttml.ops.distributed.all_reduce(tensor_ptr)
+            memory_snapshot("DDP_REDUCE")
+
+        # Send averaged gradient to optimizer (local rank 1 in sub-context)
+        for name, tensor_ptr in sorted_parameters.items():
             socket_manager.send(
                 tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank
             )
@@ -272,14 +363,50 @@ def aggregator(model, cfg, use_ddp: bool = False):
                 tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank
             )
 
-            # Broadcast to all workers
+        memory_snapshot("WEIGHT_RECEIVE")
+
+        # Broadcast to all workers
+        for name, tensor_ptr in sorted_parameters.items():
             for worker_id in range(num_workers):
                 socket_manager.send(tensor_ptr, workers_and_aggregator_ctx, worker_id)
 
-    print(f"[Aggregator {rank}] Completed {cfg.steps} steps")
+        step_end_time = time()
+        step_time = step_end_time - step_start_time
+        step_times.append(step_time)
+
+        # Print memory usage after first iteration
+        if track_memory and is_first_iteration:
+            is_first_iteration = False
+            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+            MemoryUsageTracker.print_memory_usage()
+            MemoryUsageTracker.clear()
+            if memory_guard:
+                memory_guard.release()
+
+        if (step + 1) % 10 == 0:
+            avg_step_time = np.mean(step_times[1:]) if len(step_times) > 1 else 0.0
+            print(
+                f"[Aggregator {rank}] Step {step + 1}/{cfg.steps}, Avg Step Time = {avg_step_time:.3f}s"
+            )
+        elif step == 0:
+            print(
+                f"[Aggregator {rank}] Step {step + 1}/{cfg.steps}, Step Time = {step_time:.3f}s (warmup)"
+            )
+
+    if len(step_times) > 1:
+        avg_step_time = np.mean(step_times[1:])
+        print(
+            f"[Aggregator {rank}] Completed {cfg.steps} steps. Average step time (excluding warmup): {avg_step_time:.3f}s"
+        )
+    elif step_times:
+        print(
+            f"[Aggregator {rank}] Completed {cfg.steps} steps. Only warmup step completed: {step_times[0]:.3f}s"
+        )
+    else:
+        print(f"[Aggregator {rank}] Completed {cfg.steps} steps")
 
 
-def optimizer(model, cfg, optimizer_instance):
+def optimizer(model, cfg, optimizer_instance, track_memory: bool = False):
     """Optimizer that applies optimizer updates.
 
     The optimizer is responsible for:
@@ -292,7 +419,21 @@ def optimizer(model, cfg, optimizer_instance):
         model: Model instance (for getting parameters)
         cfg: Training configuration
         optimizer_instance: Optimizer instance to use for updates
+        track_memory: Whether to enable memory usage tracking
     """
+    # Setup memory tracking
+    memory_guard = None
+    is_first_iteration = True
+
+    if track_memory:
+        print(f"[Optimizer] Memory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
+
+    def memory_snapshot(name: str):
+        nonlocal is_first_iteration
+        if track_memory and is_first_iteration:
+            MemoryUsageTracker.snapshot(name)
+
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     distributed_ctx = autograd_ctx.get_distributed_context()
@@ -323,10 +464,16 @@ def optimizer(model, cfg, optimizer_instance):
             tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank
         )
 
+    memory_snapshot("INITIAL_STATE")
+
     print(f"[Optimizer {rank}] Starting training loop for {cfg.steps} steps")
+
+    # Step time tracking
+    step_times = []
 
     # Training loop
     for step in range(cfg.steps):
+        step_start_time = time()
         # Receive gradients from aggregator (local rank 0 in sub-context)
         for name, tensor_ptr in sorted_parameters.items():
             socket_manager.recv(
@@ -336,8 +483,12 @@ def optimizer(model, cfg, optimizer_instance):
                 use_grad=True,
             )
 
+        memory_snapshot("GRADIENT_RECEIVE")
+
         # Apply optimizer step
         optimizer_instance.step()
+
+        memory_snapshot("OPTIMIZER_STEP")
 
         # Send updated weights back to aggregator (local rank 0 in sub-context)
         for name, tensor_ptr in sorted_parameters.items():
@@ -345,10 +496,45 @@ def optimizer(model, cfg, optimizer_instance):
                 tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank
             )
 
-    print(f"[Optimizer {rank}] Completed {cfg.steps} steps")
+        step_end_time = time()
+        step_time = step_end_time - step_start_time
+        step_times.append(step_time)
+
+        # Print memory usage after first iteration
+        if track_memory and is_first_iteration:
+            is_first_iteration = False
+            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+            MemoryUsageTracker.print_memory_usage()
+            MemoryUsageTracker.clear()
+            if memory_guard:
+                memory_guard.release()
+
+        if (step + 1) % 10 == 0:
+            avg_step_time = np.mean(step_times[1:]) if len(step_times) > 1 else 0.0
+            print(
+                f"[Optimizer {rank}] Step {step + 1}/{cfg.steps}, Avg Step Time = {avg_step_time:.3f}s"
+            )
+        elif step == 0:
+            print(
+                f"[Optimizer {rank}] Step {step + 1}/{cfg.steps}, Step Time = {step_time:.3f}s (warmup)"
+            )
+
+    if len(step_times) > 1:
+        avg_step_time = np.mean(step_times[1:])
+        print(
+            f"[Optimizer {rank}] Completed {cfg.steps} steps. Average step time (excluding warmup): {avg_step_time:.3f}s"
+        )
+    elif step_times:
+        print(
+            f"[Optimizer {rank}] Completed {cfg.steps} steps. Only warmup step completed: {step_times[0]:.3f}s"
+        )
+    else:
+        print(f"[Optimizer {rank}] Completed {cfg.steps} steps")
 
 
-def aggregator_optimizer(model, cfg, optimizer_instance, use_ddp: bool = False):
+def aggregator_optimizer(
+    model, cfg, optimizer_instance, use_ddp: bool = False, track_memory: bool = False
+):
     """Combined aggregator and optimizer for 2-tier hierarchical parallel training.
 
     This function combines the roles of aggregator and optimizer:
@@ -364,7 +550,21 @@ def aggregator_optimizer(model, cfg, optimizer_instance, use_ddp: bool = False):
         cfg: Training configuration
         optimizer_instance: Optimizer instance to use for updates
         use_ddp: Whether to apply DDP reduction on gradients
+        track_memory: Whether to enable memory usage tracking
     """
+    # Setup memory tracking
+    memory_guard = None
+    is_first_iteration = True
+
+    if track_memory:
+        print(f"[AggregatorOptimizer] Memory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
+
+    def memory_snapshot(name: str):
+        nonlocal is_first_iteration
+        if track_memory and is_first_iteration:
+            MemoryUsageTracker.snapshot(name)
+
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     distributed_ctx = autograd_ctx.get_distributed_context()
@@ -393,10 +593,16 @@ def aggregator_optimizer(model, cfg, optimizer_instance, use_ddp: bool = False):
         for name, tensor_ptr in sorted_parameters.items():
             socket_manager.send(tensor_ptr, all_ctx, worker_id)
 
+    memory_snapshot("INITIAL_STATE")
+
     print(f"[AggregatorOptimizer {rank}] Starting training loop for {cfg.steps} steps")
+
+    # Step time tracking
+    step_times = []
 
     # Training loop
     for step in range(cfg.steps):
+        step_start_time = time()
         # Receive and average gradients from all workers
         for name, tensor_ptr in sorted_parameters.items():
             # Receive gradient from first worker
@@ -420,15 +626,52 @@ def aggregator_optimizer(model, cfg, optimizer_instance, use_ddp: bool = False):
             # Set the gradient on the parameter for optimizer step
             tensor_ptr.set_grad_from_tensor(grad_tensor)
 
+        memory_snapshot("GRADIENT_RECEIVE_AND_AVERAGE")
+
+        if use_ddp:
+            memory_snapshot("DDP_REDUCE")
+
         # Apply optimizer step
         optimizer_instance.step()
+
+        memory_snapshot("OPTIMIZER_STEP")
 
         # Broadcast updated weights to all workers
         for name, tensor_ptr in sorted_parameters.items():
             for worker_id in range(num_workers):
                 socket_manager.send(tensor_ptr, all_ctx, worker_id)
 
-        if (step + 1) % 10 == 0:
-            print(f"[AggregatorOptimizer {rank}] Completed step {step + 1}/{cfg.steps}")
+        step_end_time = time()
+        step_time = step_end_time - step_start_time
+        step_times.append(step_time)
 
-    print(f"[AggregatorOptimizer {rank}] Completed {cfg.steps} steps")
+        # Print memory usage after first iteration
+        if track_memory and is_first_iteration:
+            is_first_iteration = False
+            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+            MemoryUsageTracker.print_memory_usage()
+            MemoryUsageTracker.clear()
+            if memory_guard:
+                memory_guard.release()
+
+        if (step + 1) % 10 == 0:
+            avg_step_time = np.mean(step_times[1:]) if len(step_times) > 1 else 0.0
+            print(
+                f"[AggregatorOptimizer {rank}] Step {step + 1}/{cfg.steps}, Avg Step Time = {avg_step_time:.3f}s"
+            )
+        elif step == 0:
+            print(
+                f"[AggregatorOptimizer {rank}] Step {step + 1}/{cfg.steps}, Step Time = {step_time:.3f}s (warmup)"
+            )
+
+    if len(step_times) > 1:
+        avg_step_time = np.mean(step_times[1:])
+        print(
+            f"[AggregatorOptimizer {rank}] Completed {cfg.steps} steps. Average step time (excluding warmup): {avg_step_time:.3f}s"
+        )
+    elif step_times:
+        print(
+            f"[AggregatorOptimizer {rank}] Completed {cfg.steps} steps. Only warmup step completed: {step_times[0]:.3f}s"
+        )
+    else:
+        print(f"[AggregatorOptimizer {rank}] Completed {cfg.steps} steps")

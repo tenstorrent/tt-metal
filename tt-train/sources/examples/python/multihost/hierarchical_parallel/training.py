@@ -9,11 +9,8 @@ This script orchestrates the training of transformer models using a 3-tier archi
 - Aggregator: Averages gradients from workers
 - Optimizer: Applies optimizer updates
 """
-import os
+
 import sys
-
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-
 import click
 import ttml
 from ttml.common.config import (
@@ -22,11 +19,18 @@ from ttml.common.config import (
     TrainingConfig,
     load_config,
 )
+
+from socket import gethostname
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import create_optimizer, initialize_device, set_seed
 
 from ttml.common.data import prepare_data
 from trainer import worker, aggregator, optimizer, aggregator_optimizer
+
+import ttnn
+import torch
+import time
+from loguru import logger
 
 
 @click.command()
@@ -45,7 +49,19 @@ from trainer import worker, aggregator, optimizer, aggregator_optimizer
     default=None,
     help="Type of worker (auto-detected if not specified)",
 )
-def main(config: str, worker_type: str):
+@click.option(
+    "--track_memory",
+    is_flag=True,
+    default=False,
+    help="Enable memory usage tracking for the first iteration",
+)
+@click.option(
+    "--test_sockets",
+    is_flag=True,
+    default=False,
+    help="Run socket connectivity tests instead of training",
+)
+def main(config: str, worker_type: str, track_memory: bool, test_sockets: bool):
     """Main training function for hierarchical parallel training.
 
     Supports two architectures:
@@ -74,7 +90,9 @@ def main(config: str, worker_type: str):
     rank = distributed_ctx.rank()
     world_size = distributed_ctx.size()
 
-    multihost_config = MultiHostConfig(yaml_config)
+    multihost_config = MultiHostConfig(
+        load_config(yaml_config["training_config"]["multihost_config"])
+    )
     num_workers = multihost_config.num_workers
 
     # Determine architecture based on world_size and num_workers
@@ -95,7 +113,9 @@ def main(config: str, worker_type: str):
             worker_type = "optimizer"
 
     mode = "2-tier" if is_two_tier else "3-tier"
-    print(f"Rank {rank}/{world_size}: Running as {worker_type} ({mode} mode)")
+    print(
+        f"Rank {rank}/{world_size-1} on {gethostname()}: Running as {worker_type} ({mode} mode)"
+    )
 
     # Initialize socket manager
     socket_type = (
@@ -127,31 +147,41 @@ def main(config: str, worker_type: str):
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
 
+    print(
+        f"Device config DDP: {device_config.enable_ddp}, TP: {device_config.enable_tp} on rank {rank}"
+    )
+
     # Execute appropriate worker function
     if worker_type == "worker":
         # Training worker - computes forward/backward and uses RemoteOptimizer
         train_losses, val_losses = worker(
             training_cfg,
+            model_factory.transformer_config.max_sequence_length,
             model,
             train_ids,
             val_ids,
             device_config.enable_ddp,
             device_config.enable_tp,
             num_workers,
+            track_memory,
         )
         print(f"[Worker {rank}] Completed with {len(train_losses)} loss values")
     elif worker_type == "aggregator":
         # Aggregator - averages gradients from workers and broadcasts weights (3-tier only)
-        aggregator(model, training_cfg, device_config.enable_ddp)
+        aggregator(model, training_cfg, device_config.enable_ddp, track_memory)
     elif worker_type == "optimizer":
         # Optimizer - applies optimizer updates (3-tier only)
         optimizer_instance = create_optimizer(model, yaml_config)
-        optimizer(model, training_cfg, optimizer_instance)
+        optimizer(model, training_cfg, optimizer_instance, track_memory)
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
         aggregator_optimizer(
-            model, training_cfg, optimizer_instance, device_config.enable_ddp
+            model,
+            training_cfg,
+            optimizer_instance,
+            device_config.enable_ddp,
+            track_memory,
         )
 
     # Cleanup

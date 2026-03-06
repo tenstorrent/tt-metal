@@ -151,3 +151,8 @@ Testing
 models/experimental/petr/resources/*.pth
 
 .claude
+
+*.out
+*.err
+
+.cache_*/
