@@ -7,7 +7,7 @@
 import os
 import pickle
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import ttnn
@@ -77,6 +77,7 @@ class SFTTrainer:
         train_dataloader: TTMLDataloader,
         eval_dataloader: Optional[TTMLDataloader],
         config: SFTConfig,
+        lr_schedule: Optional[Callable[[int], float]] = None,
     ) -> None:
         if config.seed is not None:
             ttml.autograd.AutoContext.get_instance().set_seed(config.seed)
@@ -85,10 +86,12 @@ class SFTTrainer:
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.config = config
-        self.step = 0
+        self.step = 0  # 0-based; incremented after each optimizer step
 
         self._optimizer = self._build_optimizer()
-        self._lr_schedule = self._build_lr_schedule()
+        self._lr_schedule = (
+            lr_schedule if lr_schedule is not None else self._build_lr_schedule()
+        )
         self._causal_mask = self._build_causal_mask()
         self._loss_fn = ttml.ops.loss.cross_entropy_loss
 
@@ -97,20 +100,35 @@ class SFTTrainer:
     # ------------------------------------------------------------------
 
     def train(self) -> None:
-        """Run the full training loop."""
+        """Run the full training loop.
+
+        The dataloader is cycled automatically: when one epoch ends the
+        iterator is reset so that ``max_steps`` is always reached regardless
+        of dataset size.
+        """
         self.model.train()
         data_iter = iter(self.train_dataloader)
         cfg = self.config
 
-        bar = tqdm(range(1, cfg.max_steps + 1), desc="SFTTrainer")
-        for step in bar:
-            self._optimizer.zero_grad()
-            lr = self._lr_schedule(step)
+        def _next_batch() -> Batch:
+            nonlocal data_iter
+            try:
+                return next(data_iter)
+            except StopIteration:
+                data_iter = iter(self.train_dataloader)
+                return next(data_iter)
+
+        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
+        for _ in bar:
+            # self.step is 0-based so external lr_schedule callables (e.g.
+            # SpeedrunScheduler.lr_at) receive the expected step index.
+            lr = self._lr_schedule(self.step)
             self._optimizer.set_lr(lr)
+            self._optimizer.zero_grad()
 
             micro_losses = []
             for _ in range(cfg.gradient_accumulation_steps):
-                batch = next(data_iter)
+                batch = _next_batch()
                 loss = self._compute_loss(batch)
                 micro_losses.append(float(loss.to_numpy().mean()))
 
