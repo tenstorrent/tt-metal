@@ -180,6 +180,8 @@ void BuildEnvManager::add_build_env(
             dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
             dev_build_env.firmware_precompiled = true;
             log_info(tt::LogBuildKernels, "Using pre-compiled firmware from: {}", *precompiled_dir);
+        } else {
+            dev_build_env.firmware_precompiled = false;
         }
     }
     dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, dev_config, true);
