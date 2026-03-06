@@ -513,8 +513,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     if (has_dram_fw) {
         auto dram_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
         auto dram_data = watcher_init_val[dram_index].view();
-        uint64_t watcher_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::WATCHER) +
-                                hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+        uint64_t watcher_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::WATCHER);
         const auto& soc_d = cluster.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
