@@ -55,18 +55,18 @@ class JobInfo:
 # Default partition to device mesh shape mapping
 PARTITION_DEVICE_MAPPING = {
     "bh_lb_single": {
-        "mesh_shape": [1, 8],
-        "description": "LoudBox Single Node (1x8)",
+        "mesh_shape": [8, 1],
+        "description": "LoudBox Single Node (8x1)",
         "max_nodes": 1,
     },
     "bh_lb_multi": {
-        "mesh_shape": [1, 8],
+        "mesh_shape": [8, 1],
         "description": "LoudBox Multi Node",
         "max_nodes": 4,
     },
     "bh_galaxy": {
-        "mesh_shape": [1, 32],
-        "description": "Galaxy (1x32)",
+        "mesh_shape": [32, 1],
+        "description": "Galaxy (32x1)",
         "max_nodes": 1,
     },
     "n150": {
@@ -81,23 +81,80 @@ PARTITION_DEVICE_MAPPING = {
     },
 }
 
+# Available Galaxy nodes for non-lb partitions
+GALAXY_NODES = [
+    "bh-glx-c01u02",
+    "bh-glx-c01u08",
+    "bh-glx-c02u02",
+    "bh-glx-c02u08",
+]
+
+# Mesh graph descriptor template for LoudBox (lb) partitions
+LB_MESH_GRAPH_TEMPLATE = """# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {{
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology {{ dims: [ 8, 1 ] }}
+  host_topology   {{ dims: [ 1, 1 ] }}
+  channels {{
+    count: 2
+    policy: RELAXED
+  }}
+}}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance {{ mesh {{ mesh_descriptor: "M0" mesh_id: 0 }} }}
+"""
+
+# Mesh graph descriptor template for Galaxy (non-lb) partitions
+GALAXY_MESH_GRAPH_TEMPLATE = """# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {{
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology {{ dims: [ 32, 1 ] }}
+  host_topology   {{ dims: [ 1, 1 ] }}
+  channels {{ count: 2 policy: RELAXED }}
+}}
+
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {{
+  logical_fabric_node_id {{
+    mesh_id: 0
+    chip_id: 0
+  }}
+  physical_asic_position {{
+    tray_id: 1
+    asic_location: 1
+  }}
+}}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance {{ mesh {{ mesh_descriptor: "M0" mesh_id: 0 }} }}
+"""
+
 SLURM_SCRIPT_TEMPLATE = """#!/bin/bash
 #SBATCH --partition={partition}
 #SBATCH --nodes={nodes}
 #SBATCH --job-name={job_name}
 #SBATCH --output={output_dir}/slurm_%j.out
 #SBATCH --error={output_dir}/slurm_%j.err
+{nodelist_directive}
 
 # Set environmental variables
-export TT_METAL_HOME="{tt_metal_home}"
+export TT_METAL_HOME="/data/${{USER}}/tt-metal"
 export TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME
 export PYTHONPATH="${{TT_METAL_HOME}}"
 source ${{TT_METAL_HOME}}/python_env/bin/activate
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
+export TT_MESH_GRAPH_DESC_PATH="{mesh_graph_desc_path}"
+export TT_TRAIN_OVERRIDES_PATH="{training_overrides_path}"
 
 # Reset devices
-tt-smi -r
+{reset_command}
 
 # Change to output directory for output files
 cd {output_dir}
@@ -156,8 +213,10 @@ class JobManager:
 
         Returns:
             List of partition info dictionaries with name, description, etc.
+            Duplicates are removed (keeps first occurrence).
         """
         partitions = []
+        seen_names = set()
 
         try:
             result = subprocess.run(
@@ -174,6 +233,12 @@ class JobManager:
                     parts = line.split("|")
                     if len(parts) >= 4:
                         name = parts[0].rstrip("*")
+
+                        # Skip duplicates
+                        if name in seen_names:
+                            continue
+                        seen_names.add(name)
+
                         avail = parts[1]
                         nodes = parts[2]
                         state = parts[3]
@@ -218,6 +283,7 @@ class JobManager:
         nodes: int,
         job_name: str,
         output_dir: Path,
+        selected_node: Optional[str] = None,
     ) -> str:
         """Generate a SLURM batch script.
 
@@ -227,26 +293,67 @@ class JobManager:
             nodes: Number of nodes to request
             job_name: Name for the job
             output_dir: Directory for job outputs
+            selected_node: For non-lb partitions, the specific Galaxy node to use
 
         Returns:
             Generated SLURM script content
         """
-        tt_metal_home = os.environ.get(
-            "TT_METAL_HOME", f"/data/{os.environ.get('USER', 'user')}/tt-metal"
-        )
         script_dir = Path(__file__).parent
         script_path = script_dir / "gsm8k_finetune.py"
+
+        is_lb_partition = "lb" in partition.lower()
+
+        # Choose reset command based on partition type
+        if is_lb_partition:
+            reset_command = "tt-smi -r"
+        else:
+            reset_command = "tt-smi -glx_reset"
+
+        # For non-lb partitions, add nodelist directive if a node is selected
+        nodelist_directive = ""
+        if not is_lb_partition and selected_node:
+            nodelist_directive = f"#SBATCH --nodelist={selected_node}"
+
+        # Paths to job-specific config files
+        mesh_graph_desc_path = output_dir / "mesh_graph_descriptor.textproto"
+        training_overrides_path = output_dir / "training_overrides.yaml"
 
         script_content = SLURM_SCRIPT_TEMPLATE.format(
             partition=partition,
             nodes=nodes,
             job_name=job_name,
             output_dir=str(output_dir),
-            tt_metal_home=tt_metal_home,
+            reset_command=reset_command,
             script_path=str(script_path),
+            nodelist_directive=nodelist_directive,
+            mesh_graph_desc_path=str(mesh_graph_desc_path),
+            training_overrides_path=str(training_overrides_path),
         )
 
         return script_content
+
+    def generate_mesh_graph_descriptor(self, partition: str, output_dir: Path) -> Path:
+        """Generate a mesh graph descriptor file for the job.
+
+        Args:
+            partition: SLURM partition name
+            output_dir: Directory to write the descriptor file
+
+        Returns:
+            Path to the created mesh graph descriptor file
+        """
+        is_lb_partition = "lb" in partition.lower()
+
+        if is_lb_partition:
+            content = LB_MESH_GRAPH_TEMPLATE
+        else:
+            content = GALAXY_MESH_GRAPH_TEMPLATE
+
+        descriptor_path = output_dir / "mesh_graph_descriptor.textproto"
+        with open(descriptor_path, "w") as f:
+            f.write(content)
+
+        return descriptor_path
 
     def create_training_overrides(self, config: Dict, output_dir: Path) -> Path:
         """Create training_overrides.yaml for the job.
@@ -311,6 +418,26 @@ class JobManager:
 
         return config_path
 
+    def _get_next_galaxy_node(self) -> str:
+        """Get the next Galaxy node using round-robin selection.
+
+        Returns:
+            The next available Galaxy node name.
+        """
+        # Count how many jobs are on each node
+        node_counts = {node: 0 for node in GALAXY_NODES}
+
+        for job in self._jobs_cache.values():
+            if job.status in [JobStatus.PENDING.value, JobStatus.RUNNING.value]:
+                # Check if this job has a node assignment stored
+                job_config = job.config or {}
+                assigned_node = job_config.get("_assigned_node")
+                if assigned_node and assigned_node in node_counts:
+                    node_counts[assigned_node] += 1
+
+        # Return the node with the fewest active jobs
+        return min(node_counts, key=node_counts.get)
+
     def submit_job(
         self,
         config: Dict,
@@ -336,25 +463,36 @@ class JobManager:
         job_dir = self.jobs_base_dir / f"job_{job_name}"
         job_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            config_path = self.create_training_overrides(config, job_dir)
+        # Determine mesh shape and node selection based on partition
+        is_lb_partition = "lb" in partition.lower()
+        if is_lb_partition:
+            mesh_shape = [8, 1]
+            selected_node = None
+        else:
+            mesh_shape = [32, 1]
+            # Automatically select a Galaxy node using round-robin
+            selected_node = self._get_next_galaxy_node()
 
-            symlink_path = (
-                Path(os.environ.get("TT_METAL_HOME", "."))
-                / "tt-train"
-                / "configs"
-                / "training_overrides.yaml"
-            )
-            symlink_path.parent.mkdir(parents=True, exist_ok=True)
-            if symlink_path.exists() or symlink_path.is_symlink():
-                symlink_path.unlink()
-            symlink_path.symlink_to(config_path)
+        # Update config with correct mesh shape
+        config = config.copy()
+        config["mesh_shape"] = mesh_shape
+        config["enable_ddp"] = True
+        # Store the assigned node for tracking (internal use)
+        if selected_node:
+            config["_assigned_node"] = selected_node
+
+        try:
+            # Create job-specific training overrides
+            self.create_training_overrides(config, job_dir)
+
+            # Generate mesh graph descriptor
+            self.generate_mesh_graph_descriptor(partition, job_dir)
 
         except Exception as e:
             return False, f"Failed to create config: {e}", None
 
         script_content = self.generate_slurm_script(
-            config, partition, nodes, job_name, job_dir
+            config, partition, nodes, job_name, job_dir, selected_node
         )
         script_path = job_dir / "submit.sh"
         with open(script_path, "w") as f:

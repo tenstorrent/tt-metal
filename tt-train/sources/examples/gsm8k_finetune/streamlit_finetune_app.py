@@ -721,14 +721,20 @@ def main():
             )
             max_nodes = partition_info.get("max_nodes", 4)
 
-            num_nodes = st.number_input(
-                "Number of Nodes",
-                min_value=1,
-                max_value=max_nodes,
-                value=1,
-                step=1,
-                help=f"Number of nodes to request (max: {max_nodes})",
-            )
+            # Check if this is a non-lb partition (Galaxy)
+            is_lb_partition = "lb" in selected_partition.lower()
+
+            if is_lb_partition:
+                num_nodes = st.number_input(
+                    "Number of Nodes",
+                    min_value=1,
+                    max_value=max_nodes,
+                    value=1,
+                    step=1,
+                    help=f"Number of nodes to request (max: {max_nodes})",
+                )
+            else:
+                num_nodes = 1  # Galaxy jobs run on single node
 
             job_name = st.text_input(
                 "Job Name",
@@ -736,7 +742,11 @@ def main():
                 help="Name for the SLURM job",
             )
 
-            mesh_shape = partition_info.get("mesh_shape", [1, 1])
+            # Mesh shape is determined by partition type
+            if is_lb_partition:
+                mesh_shape = [8, 1]
+            else:
+                mesh_shape = [32, 1]
         else:
             st.subheader("Device Settings")
             devices_options = ["N150", "N300", "LoudBox", "Galaxy", "3-tier"]

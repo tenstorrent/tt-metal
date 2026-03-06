@@ -375,12 +375,15 @@ def train():
     )
     model_config = load_config(yaml_config["training_config"]["model_config"])
 
-    override_config_path = (
-        f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
+    # Check for job-specific overrides via environment variable first,
+    # then fall back to default location
+    override_config_path = os.environ.get(
+        "TT_TRAIN_OVERRIDES_PATH",
+        f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml",
     )
 
     if os.path.isfile(override_config_path):
-        print("Applying training overrides...")
+        print(f"Applying training overrides from: {override_config_path}")
 
         override_config = load_config(override_config_path)
 
