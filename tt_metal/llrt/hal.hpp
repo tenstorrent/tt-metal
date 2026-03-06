@@ -782,6 +782,9 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
         case HalProgrammableCoreType::IDLE_ETH:
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::DRAM:
+            // DRAM kernels are always loaded directly to L1; no config buffer indirection.
+            return false;
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }
@@ -793,6 +796,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
         case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
         case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
         case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        case CoreType::DRAM: return HalProgrammableCoreType::DRAM;
         default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
@@ -817,3 +821,10 @@ struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
 #define HAL_MEM_ETH_SIZE                                         \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
+
+#define HAL_MEM_DRAM_L1_BASE                                     \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
+        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_DRAM_L1_SIZE                                     \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
+        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)

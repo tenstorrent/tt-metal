@@ -10,6 +10,7 @@
 #include "internal/firmware_common.h"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
+#include "api/debug/waypoint.h"
 
 uint8_t noc_index;
 
@@ -32,6 +33,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_DRISC_MAILBOX_BASE);
 
 int main() {
+    WAYPOINT("I");
     configure_csr();
     do_crt1((uint32_t*)MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
@@ -50,12 +52,15 @@ int main() {
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;
 
+    WAYPOINT("GW");
     while (1) {
         while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
             invalidate_l1_cache();
         }
+        WAYPOINT("GD");
 
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        WAYPOINT("GW");
     }
 
     return 0;
