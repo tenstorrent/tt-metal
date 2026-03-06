@@ -1245,6 +1245,11 @@ void kernel_main() {
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
 
         cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        DPRINT
+            << " rmsnorm input: "
+            << TileSlice(
+                   rmsnorm_input_cb, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8}, true, true)
+            << ENDL();
         cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
     }
 #endif

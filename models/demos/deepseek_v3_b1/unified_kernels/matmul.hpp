@@ -128,6 +128,12 @@ struct Matmul {
             } else {
                 cb_wait_front(args.in1, args.k_num_tiles * out_w);
             }
+            UNPACK(
+                (DPRINT
+                 << " mm weights: "
+                 << TileSlice(
+                        args.in1, 0, SliceRange{.h0 = 0, .h1 = 31, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8}, true, true)
+                 << ENDL()));
 
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
@@ -194,6 +200,11 @@ struct Matmul {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
 
+            PACK((
+                DPRINT
+                << " matmul output: "
+                << TileSlice(args.out, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 4}, true, true)
+                << ENDL()));
             cb_push_back(args.out, out_w);
 #endif
         }

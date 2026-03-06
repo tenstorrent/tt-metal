@@ -152,6 +152,15 @@ struct RMSNorm {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile_block(0, CTArgs::output_cb, num_tiles);
+                PACK(
+                    (DPRINT << " rmsnorm output: "
+                            << TileSlice(
+                                   CTArgs::output_cb,
+                                   0,
+                                   SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8},
+                                   true,
+                                   true)
+                            << ENDL()));
                 cb_push_back(CTArgs::output_cb, num_tiles);
                 tile_regs_release();
             }

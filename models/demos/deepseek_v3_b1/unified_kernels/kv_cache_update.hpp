@@ -105,6 +105,7 @@ struct KVCacheUpdate {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
+                DPRINT << " kv-cache update" << ENDL();
                 static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
@@ -165,6 +166,14 @@ struct KVCacheUpdate {
 
                 // 3. Wait for TRISC to finish tilize into kv_cache_output_cb and write out to DRAM
                 cb_wait_front(kv_cache_output_cb, kv_cache_num_tiles);
+                DPRINT << " kv-cache output: "
+                       << TileSlice(
+                              kv_cache_output_cb,
+                              0,
+                              SliceRange{.h0 = 31, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 4},
+                              true,
+                              true)
+                       << ENDL();
 
                 cb_addr = get_read_ptr(kv_cache_output_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
@@ -172,6 +181,7 @@ struct KVCacheUpdate {
                     cb_addr += kv_tensor_accessor.page_size;
                 }
                 noc_async_write_barrier();
+
                 cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
             }
 #elif defined(COMPILE_FOR_TRISC)

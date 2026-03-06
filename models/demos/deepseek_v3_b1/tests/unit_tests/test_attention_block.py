@@ -68,6 +68,7 @@ def create_fabric_router_config(max_payload_size):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
+            "worker_l1_size": 1344544,
             "trace_region_size": 573440,
         }
     ],
@@ -578,7 +579,7 @@ def test_attention_block(
     dcs = program_config.device_chunk_size
     num_sp = mesh_rows
 
-    torch_kv_cache = torch.full(cache_shape, float("-inf"), dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
     torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
 
@@ -1054,6 +1055,7 @@ def test_attention_block(
             continue
 
         # ---- KV Cache: old positions must be unchanged ----
+        # Print: kv_cache_output_torch[:, 0, 127, :4] if running -k 127
         assert torch.equal(
             kv_cache_bfp8_before_op[device_idx, ..., :local_seq_len, :],
             kv_cache_output_torch[device_idx, ..., :local_seq_len, :],

@@ -386,6 +386,14 @@ struct Mcast {
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
 
                 // Push to destination CB after data arrived
+                DPRINT << "mcast receiver output: "
+                       << TileSlice(
+                              args.dst_cb,
+                              0,
+                              SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8},
+                              true,
+                              true)
+                       << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
