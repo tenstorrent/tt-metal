@@ -149,6 +149,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable on-device sampling (default: host-side sampling).",
     )
+    p.add_argument(
+        "--recalculate-weights",
+        action="store_true",
+        default=False,
+        help="Force regeneration of cached TTNN weight files and config.",
+    )
     return p
 
 
@@ -267,6 +273,7 @@ def run_demo(
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
     sample_on_device: bool = False,
+    force_recalculate: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -366,6 +373,7 @@ def run_demo(
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
             )
@@ -472,6 +480,7 @@ def main() -> None:
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
+        force_recalculate=bool(args.recalculate_weights),
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
