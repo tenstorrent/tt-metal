@@ -61,6 +61,8 @@ Transformer::Transformer(const TransformerConfig &config) {
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
 
+    fmt::print("Rebuild does update");
+
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(
@@ -119,6 +121,11 @@ Transformer::Transformer(const TransformerConfig &config) {
     register_module(fc, "fc");
 
     common::transformer::initialize_weights_gpt2(*this);
+}
+
+ttml::autograd::TensorPtr Transformer::operator()(
+    const ttml::autograd::TensorPtr &x, const ttml::autograd::TensorPtr &mask) {
+    return (*this)(x, std::optional<ttml::autograd::TensorPtr>(mask));
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
