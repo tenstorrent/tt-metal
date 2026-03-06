@@ -102,7 +102,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     // Exp-based region (-13.1875, -5): asymptotic formula
     // GELU(x) ≈ -exp(-x^2/2) / sqrt(2*pi) * (1 - 1/x^2 + 3/x^4)
     v_elseif(x > -13.1875f) {
-        constexpr float NEG_INV_SQRT_2PI = -0.3989422804014327f;
+        constexpr float K = -0.3989422804014327f;  // -1/sqrt(2*pi)
+        constexpr float K3 = 3.0f * K;             // -3/sqrt(2*pi)
 
         sfpi::vFloat x2 = x * x;
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x^2/2
@@ -111,12 +112,11 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         // (no fused method needed: result magnitude > exp(t) magnitude)
         sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);
 
-        // Mills ratio asymptotic correction
-        sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x^2
-        sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x^4
-        sfpi::vFloat correction = 1.0f - inv_x2 + 3.0f * inv_x4;
+        // Mills ratio correction with K folded in: 2 MADs + 1 MUL
+        sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);        // 1/x^2
+        sfpi::vFloat scaled = (K3 * inv_x2 - K) * inv_x2 + K;  // K*(3/x^4 - 1/x^2 + 1)
 
-        result = exp_val * NEG_INV_SQRT_2PI * correction;
+        result = exp_val * scaled;
     }
     // For x <= -13.1875: saturate to 0 (BF16 natural saturation)
     v_endif;
