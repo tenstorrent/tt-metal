@@ -111,11 +111,11 @@ def test_refiner_unet(
 # Format: {test_id: {"wormhole": perf_ns, "blackhole": perf_ns}}
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
-        "wormhole": 191_651_771 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 190_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": 119_138_750 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 91_463_635 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 90_553_421 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
