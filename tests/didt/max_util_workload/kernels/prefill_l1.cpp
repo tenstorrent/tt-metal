@@ -23,6 +23,7 @@
 //   10: tile_size_bytes         - 2048 for bfloat16
 //   11: transfer_size           - transfer size (8KB)
 //   12: num_tiles               - number of tiles to read (8)
+//   13: l1_super_sync_addr      - L1 destination for super sync semaphore
 // Buffers 2, 7, 8, 9, 10: addr in cfg only, no init in prefill kernel.
 
 void kernel_main() {
@@ -39,6 +40,9 @@ void kernel_main() {
     constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t transfer_size = get_compile_time_arg_val(11);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(13);
+    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
 
     // Create address generators for DRAM buffers
     const InterleavedAddrGen<true> dram0_addr_gen = {
@@ -90,4 +94,6 @@ void kernel_main() {
     noc_async_read_barrier();
     noc_async_read(noc_addr, l1_buffer6_addr, transfer_size);
     noc_async_read_barrier();
+
+    *(l1_super_sync_addr_ptr) = 0;
 }
