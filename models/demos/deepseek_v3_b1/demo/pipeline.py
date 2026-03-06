@@ -35,8 +35,9 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
 def create_single_galaxy_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
-    lm_head_fp32_dest_acc_en: bool = True,
-    lm_head_persistent_mode: bool = True,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
 
@@ -44,10 +45,12 @@ def create_single_galaxy_pipeline_configuration(
         return EmbeddingStage(weight_provider.load_embedding(device))
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        mtp_weights = weight_provider.load_mtp_weights(device) if enable_mtp else None
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=mtp_weights,
         )
 
     return PipelineConfiguration(
@@ -63,8 +66,9 @@ def create_single_galaxy_pipeline_configuration(
 def create_single_pod_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
-    lm_head_fp32_dest_acc_en: bool = True,
-    lm_head_persistent_mode: bool = True,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
@@ -78,10 +82,12 @@ def create_single_pod_pipeline_configuration(
         return EmbeddingStage(weight_provider.load_embedding(device))
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
+        mtp_weights = weight_provider.load_mtp_weights(device) if enable_mtp else None
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=mtp_weights,
         )
 
     # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
@@ -109,8 +115,9 @@ def create_single_pod_pipeline_configuration(
 def create_sp4_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
-    lm_head_fp32_dest_acc_en: bool = True,
-    lm_head_persistent_mode: bool = True,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
@@ -124,10 +131,12 @@ def create_sp4_pipeline_configuration(
         return EmbeddingStage(weight_provider.load_embedding(device))
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
+        mtp_weights = weight_provider.load_mtp_weights(device) if enable_mtp else None
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=mtp_weights,
         )
 
     # Stage i -> layer_id i-1 for decoder stages (stage 1 = layer 0, ..., stage 61 = layer 60)
@@ -156,8 +165,9 @@ def create_pipeline_configuration_from_num_procs(
     num_procs: int,
     weight_provider: WeightProvider,
     *,
-    lm_head_fp32_dest_acc_en: bool = True,
-    lm_head_persistent_mode: bool = True,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
@@ -165,22 +175,25 @@ def create_pipeline_configuration_from_num_procs(
     if num_procs == 4:
         return create_single_galaxy_pipeline_configuration(
             weight_provider,
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            enable_mtp=enable_mtp,
         )
     if num_procs == 16:
         return create_single_pod_pipeline_configuration(
             weight_provider,
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            enable_mtp=enable_mtp,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
     if num_procs == 64:
         return create_sp4_pipeline_configuration(
             weight_provider,
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            enable_mtp=enable_mtp,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )

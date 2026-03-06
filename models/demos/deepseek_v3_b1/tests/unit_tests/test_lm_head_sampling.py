@@ -31,7 +31,11 @@ from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    DeepSeekV3MTPWeights,
+    prepare_embedding_weights,
+    prepare_lm_head_weights,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -64,6 +68,97 @@ class _SyntheticWeightProvider:
             {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)},
             device,
             move_to_device=True,
+        )
+
+    def load_mtp_weights(self, device):
+        M = 1
+        K = _EMBED_HIDDEN
+        embedding_dim = _EMBED_HIDDEN
+        mtp_output_dim = _EMBED_HIDDEN
+        tile_width = 32
+        num_dram_banks = 8
+        mtp_n_per_core = mtp_output_dim // num_dram_banks
+        mtp_padded_dim = num_dram_banks * mtp_n_per_core
+        num_matmul_cores = 101
+        n_per_core = 160
+        n_total = num_matmul_cores * n_per_core
+        num_devices = device.shape[0] * device.shape[1]
+
+        a_tile = ttnn.Tile([1, 32])
+        b_tile = ttnn.Tile([32, 32])
+
+        mcast_core = ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, 9)
+        mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+        input_a_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        torch.manual_seed(42)
+        torch_embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
+        torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16)
+        torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16)
+        torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
+        torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
+        torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
+
+        ttnn_embedding = ttnn.from_torch(
+            torch_embedding,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        ttnn_h_gamma = ttnn.from_torch(
+            torch_h_gamma,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=input_a_mem_config,
+            tile=a_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        ttnn_e_gamma = ttnn.from_torch(
+            torch_e_gamma,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=input_a_mem_config,
+            tile=a_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
+        eh_shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                )
+            }
+        )
+        eh_proj_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(eh_shard_grid, (K + embedding_dim, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
+        ttnn_eh_proj = ttnn.from_torch(
+            torch_eh_proj_shuffled,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=eh_proj_mem_config,
+            tile=b_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
+        return DeepSeekV3MTPWeights(
+            embedding=ttnn_embedding,
+            h_gamma=ttnn_h_gamma,
+            e_gamma=ttnn_e_gamma,
+            eh_projection=ttnn_eh_proj,
         )
 
 
@@ -2737,6 +2832,72 @@ def test_persistent_mode(mesh_device, use_fp32):
     logger.info(f"Barrier for P{pipeline.my_mesh_id}")
     pipeline.barrier()
     logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
+
+
+@pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 1600000,
+        }
+    ],
+    indirect=True,
+)
+def test_persistent_mode_mtp(mesh_device, use_fp32):
+    """
+    4-stage 4x2 single-galaxy pipeline with MTP fusion enabled:
+    P1(H2D) -> P2(LMHead+Sampling+MTP) -> P3(forward) -> P4(forward) -> P1(D2H).
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    iterations = 100
+    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
+    config = create_single_galaxy_pipeline_configuration(
+        _SyntheticWeightProvider(),
+        fp32_dest_acc_en=use_fp32,
+        enable_mtp=True,
+    )
+    pipeline = config.build_pipeline(mesh_device)
+    pipeline.setup_and_run()
+
+    if pipeline.my_mesh_id == 0:
+        for iteration in range(iterations):
+            logger.info(f"[MTP] Writing token for iteration {iteration}")
+            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token[0, 0] = iteration
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pipeline.write_token(token_tensor)
+            pipeline.read_output(output_tensor)
+            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+            expected_idx = torch_expected_indices[iteration]
+            logger.info(f"[MTP] Iteration {iteration} output token: {got}, expected: {expected_idx}")
+            assert torch.equal(
+                got, expected_idx
+            ), f"PipelineBlock 4-stage MTP token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
+
+    logger.info(f"[MTP] Barrier for P{pipeline.my_mesh_id}")
+    pipeline.barrier()
+    logger.info(f"[MTP] Barrier completed for P{pipeline.my_mesh_id}")
 
 
 # @pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
