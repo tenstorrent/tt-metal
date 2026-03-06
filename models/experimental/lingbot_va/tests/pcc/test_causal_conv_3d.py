@@ -7,31 +7,19 @@ from models.common.metrics import compute_pcc
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
+# Test configuration constants
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
 BATCH_SIZE = 1
 PCC_THRESHOLD = 0.99
-# T, H, W are input dimensions - choose based on test requirements
 # T must be >= temporal kernel_size for causal conv to work
-H = 256  # Height - choose based on test
-W = 320  # Width - choose based on test
+H = 256  # Height
+W = 320  # Width
 # T will be set dynamically based on kernel_size
-
-# ---------------------------------------------------------------------------
-# Main test
-# ---------------------------------------------------------------------------
 
 
 def test_wan_causal_conv3d():
     """Test WanCausalConv3dTTNN with Lingbot-VA model parameters."""
-    # ── 1. Load HuggingFace model (CPU to avoid CUDA→TTNN weight issues) ──
+
     print("Loading AutoencoderKLWan...")
     autoencoder_klwan = AutoencoderKLWan.from_pretrained(
         CHECKPOINT_PATH,
@@ -122,6 +110,7 @@ def test_wan_causal_conv3d():
         tt_input_tensor = ttnn.pad(tt_input_tensor, [(0, 0), (0, 0), (0, 0), (0, 0), (0, pad_amount)], 0.0)
 
     tt_wan_causal_conv3d_out = ttnn.permute(wan_causal_conv3d_ttnn(tt_input_tensor, logical_h=H), (0, 4, 1, 2, 3))
+    print("Torch WanCausalConv3d output shape:", wan_causal_conv3d_out.shape)
     print("TTNN WanCausalConv3d output shape:", tt_wan_causal_conv3d_out.shape)
 
     tt_wan_causal_conv3d_out_torch = ttnn.to_torch(tt_wan_causal_conv3d_out)
