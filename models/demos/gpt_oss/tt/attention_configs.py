@@ -36,8 +36,8 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
     prefill_out_out_subblock_h: int = 1
     prefill_out_out_subblock_w: int = 4
 
-    # Use minimal_matmul for all prefill seq_lens (39-78% faster than standard matmul)
-    minimal_matmul_threshold: int = 128  # Effectively always use minimal_matmul in prefill
+    # Use minimal_matmul for prefill when seq_len >= minimal_matmul_threshold
+    minimal_matmul_threshold: int = 128  # Minimal matmul enabled for prefill seq_len >= 128
 
     def get_prefill_sdpa_chunks(self, seq_len: int) -> tuple[int, int]:
         """Per-seq_len SDPA chunk sizes. Swept on 4x8 galaxy mesh."""

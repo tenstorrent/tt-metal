@@ -168,6 +168,8 @@ class ProgramConfig:
         out_subblock_w: int,
     ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
         """Build 2D multicast matmul program config. Returns None if dimensions don't tile evenly."""
+        if m % 32 != 0 or n % 32 != 0 or k % 32 != 0:
+            return None
         core_x, core_y = cores
         m_tiles = m // 32
         n_tiles = n // 32

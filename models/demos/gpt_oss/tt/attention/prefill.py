@@ -61,9 +61,10 @@ def prefill_forward(
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
     # QKV projection - use minimal_matmul with per-seq_len swept configs
-    use_minimal = program_config.use_minimal_matmul(seq_len)
+    # Use total_seq_len (actual matmul M dimension) for config selection
+    use_minimal = program_config.use_minimal_matmul(total_seq_len)
     if use_minimal:
-        qkv_config = program_config.get_prefill_qkv_minimal_config(seq_len)
+        qkv_config = program_config.get_prefill_qkv_minimal_config(total_seq_len)
         compute_cfg = program_config.get_compute_kernel_config()
     else:
         qkv_config = None
@@ -170,11 +171,11 @@ def prefill_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    # Output projection - use minimal_matmul with per-seq_len swept configs
+    # Output projection - select config based on actual matmul M dimension
+    out_m = tt_sdpa_out.shape[-2]
     if use_minimal:
-        out_config = program_config.get_prefill_out_minimal_config(seq_len)
+        out_config = program_config.get_prefill_out_minimal_config(out_m)
     else:
-        out_m = tt_sdpa_out.shape[-2]
         out_k = tt_sdpa_out.shape[-1]
         out_n = weights.o_proj.shape[-1]
         out_config = program_config.get_prefill_out_config(out_m, out_n, out_k)
