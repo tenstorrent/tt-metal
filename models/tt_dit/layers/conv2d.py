@@ -160,6 +160,9 @@ class Conv2d(Module):
             on_host=True,
         )
 
+        self._prepared_weight = None
+        self._prepared_bias = None
+
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -258,10 +261,10 @@ class Conv2d(Module):
         )
 
         try:
-            x, [out_height, out_width] = ttnn.conv2d(
+            x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
                 input_tensor=x,
-                weight_tensor=self.weight.data,
-                bias_tensor=self.bias.data if self.bias is not None else None,
+                weight_tensor=self._prepared_weight or self.weight.data,
+                bias_tensor=(self._prepared_bias or self.bias.data) if self.bias is not None else None,
                 in_channels=self.in_channels // self.in_mesh_axis_size,
                 out_channels=self.weight.data.shape[0],
                 device=self.mesh_device,
@@ -275,6 +278,7 @@ class Conv2d(Module):
                 compute_config=self.compute_config,
                 slice_config=slice_config,
                 return_output_dim=True,
+                return_weights_and_bias=True,
             )
         except RuntimeError as e:
             m = re.search(r"Out of Memory: (.*)", str(e))

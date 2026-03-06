@@ -354,6 +354,11 @@ class CCLManager:
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
 
+    def clear_persistent_buffers(self):
+        """Free all cached ping-pong buffers from device memory."""
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
+
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
     ) -> ttnn.Tensor:
