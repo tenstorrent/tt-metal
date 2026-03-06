@@ -213,8 +213,6 @@ class Pipeline:
         index_rate,
         protect,
     ):
-        # audio = audio[:40000]
-        print(f"audio_shape: {audio.shape}")
         feats = torch.from_numpy(audio).float()
         if feats.dim() == 2:
             feats = feats.mean(-1)
