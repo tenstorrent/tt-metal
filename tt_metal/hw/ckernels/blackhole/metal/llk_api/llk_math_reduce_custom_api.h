@@ -66,4 +66,16 @@ inline void llk_math_reduce_block_max_row(const uint dst_index) {
  * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
  * for a certain use case and the LLK team does not guarantee any degree of generality.
  */
-inline void llk_math_reduce_block_max_row_reinit() { reduce_max_row_configure_addrmod_reinit(); }
+inline void llk_math_reduce_block_max_row_reinit_minimal() {
+    reduce_max_row_configure_addrmod_reinit_minimal();
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <uint32_t block_ct_dim>
+inline void llk_math_reduce_block_max_row_reinit_with_mop() {
+    reduce_max_row_configure_addrmod();
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>();
+}

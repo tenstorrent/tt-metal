@@ -42,9 +42,9 @@ namespace ckernel {
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_init() {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
@@ -76,22 +76,34 @@ ALWI void reduce_block_max_row_init() {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim>(icb, icb_scaler, row_start_index)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
 
 #ifdef ARCH_BLACKHOLE
 /**
- * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
- * Reprograms reduce MOP and restores only the reduce addrmods.
+ * Blackhole-only reinit at K-chunk boundary: restores addrmods + SETC16 + counters +
+ * MOP registers (clobbered by SALAD eltwise-binary between K chunks) + PACK reduce mask.
+ * Skips replay buffer re-recording (positions 0-14 preserved since matmul/eltwise use offset 16+).
  */
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_reinit()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
+    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+/**
+ * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
+ * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
+ */
+template <uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_reinit_minimal() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
 #endif
 
@@ -117,7 +129,7 @@ ALWI void reduce_block_max_row_reinit_short() {
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A. Required when clear_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
  */
 // clang-format on
-template <bool clear_fp32_accumulation = false>
+template <bool clear_fp32_accumulation = false, bool respect_trigger = false>
 ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit<clear_fp32_accumulation>()));
@@ -128,7 +140,7 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
     MATH((llk_math_reduce_uninit<clear_fp32_accumulation>(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
-    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
 }
 
 }  // namespace ckernel
