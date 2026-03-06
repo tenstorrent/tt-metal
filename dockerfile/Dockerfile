@@ -277,14 +277,17 @@ ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
 ENV PYTHONPATH=/tt-metal
 
-# Accept git reference argument
+# Accept git repository and reference arguments so images can be built
+# directly from a fork/feature branch without hot-swapping source at runtime.
+ARG GIT_REPO_URL=https://github.com/tenstorrent/tt-metal.git
 ARG GIT_REF=main
 
 # Clone tt-metal
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
-    https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
+    ${GIT_REPO_URL} ${TT_METAL_HOME} \
     && cd ${TT_METAL_HOME} \
     && git checkout ${GIT_REF} \
+    && git submodule sync --recursive \
     && git submodule update --init --recursive"
 
 WORKDIR /tt-metal
