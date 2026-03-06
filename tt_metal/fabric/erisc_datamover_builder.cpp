@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -350,14 +350,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
     // ----------- Receiver Channels
     for (uint32_t i = 0; i < num_downstream_edms; i++) {
-        // temporarily padded to have exact parity with addresses pre-refactor
-        // because receiver_channels_local_buffer_index_address was removed (as dead code) and is no longer
-        // needed. We still waste the L1 to minimize the incremental changes in builder refactor
-        buffer_address += field_size;
-
         // persistent mode field
-        this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
@@ -1269,10 +1262,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // Credit amortization named compile-time args
-    // Only enabled when there is a single sender channel (common 1D case)
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (num_sender_channels == 1) {
+    if (actual_sender_channels_vc0 == 1) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
@@ -1494,8 +1486,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
 
         for (uint32_t i = 0; i < num_downstream_edms; i++) {
-            receiver_channels_downstream_flow_control_semaphore_id[i] =
-                config.receiver_channels_downstream_flow_control_semaphore_address[i];
+            receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
             receiver_channels_downstream_teardown_semaphore_id[i] =
                 config.receiver_channels_downstream_teardown_semaphore_address[i];
         }
