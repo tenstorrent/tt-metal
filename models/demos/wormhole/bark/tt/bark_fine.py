@@ -124,6 +124,8 @@ class TtBarkFineModel:
                 tokens_i = ttnn.reshape(tokens_i, [1, tokens_i.shape[1], tokens_i.shape[2]])
 
             emb_i = ttnn.embedding(tokens_i, self.input_embeds_layers[i], memory_config=memory_config)
+            # ttnn.embedding returns ROW_MAJOR; convert to TILE for downstream ops
+            emb_i = ttnn.to_layout(emb_i, ttnn.TILE_LAYOUT)
 
             if tt_hidden is None:
                 tt_hidden = emb_i
@@ -140,12 +142,14 @@ class TtBarkFineModel:
         seq_len = tt_hidden.shape[-2]
         position_ids = torch.arange(0, seq_len, dtype=torch.int32)
         tt_position_ids = ttnn.from_torch(
-            position_ids.unsqueeze(0).unsqueeze(0), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+            position_ids.unsqueeze(0).unsqueeze(0), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         position_embeds = ttnn.embedding(tt_position_ids, self.position_embeds_weight, memory_config=memory_config)
         ttnn.deallocate(tt_position_ids)
+        # Convert position embeddings to TILE layout for the add
+        position_embeds = ttnn.to_layout(position_embeds, ttnn.TILE_LAYOUT)
 
-        # Combine
+        # Combine (both now TILE layout)
         prev_hidden = tt_hidden
         tt_hidden = ttnn.add(tt_hidden, position_embeds, memory_config=memory_config)
         ttnn.deallocate(prev_hidden)

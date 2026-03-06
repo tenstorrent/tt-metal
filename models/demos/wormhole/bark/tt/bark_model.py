@@ -244,6 +244,7 @@ class TtBarkModel:
             # Shape: [1, batch, seq, 1]
             cb_i = ttnn.from_torch(
                 coarse_tokens_reshaped[:, :, i].unsqueeze(0).unsqueeze(-1).to(torch.int32),
+                dtype=ttnn.uint32,
                 device=self.device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
