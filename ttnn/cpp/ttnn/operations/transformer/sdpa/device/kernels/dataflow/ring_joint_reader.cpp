@@ -90,14 +90,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
 
-    uint64_t sender_semaphore_noc_addr = 0;
     uint64_t receiver_semaphore_noc_addr = 0;
     uint64_t mcast_base_noc_addr = 0;
     uint64_t mcast_sem_noc_addr = 0;
     uint32_t sender_wait_count = 1;
 
+    const uint64_t sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
+
     if constexpr (mcast_enabled) {
-        sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
         if (is_injector) {
             // prev_physical = mcast_start (first receiver), next_physical = mcast_end (last receiver)
             mcast_base_noc_addr = get_noc_multicast_addr(
@@ -110,7 +110,6 @@ void kernel_main() {
             sender_wait_count = mcast_sender_wait;
         }
     } else {
-        sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
         receiver_semaphore_noc_addr = get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
     }
 
@@ -193,6 +192,12 @@ void kernel_main() {
                 q_end_seq_tile = local_padded_Nt;
             }
 
+            // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
+            const uint32_t q_iter_local = global_q_chunk - global_q_start;
+            const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                        (q_iter_local < next_core_q_chunks);
+            const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
@@ -232,16 +237,6 @@ void kernel_main() {
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }
                 }
-
-                // Determine if this Q iteration is within this core's chain segment for (batch, head)
-                const uint32_t q_iter_local = global_q_chunk - global_q_start;
-
-                // Chain forwarding conditions are loop-invariant — compute once
-                const bool should_forward = is_chain_participant && !is_sink &&
-                                            (nb == chain_batch && nq == chain_head) &&
-                                            (q_iter_local < next_core_q_chunks);
-                const bool should_receive =
-                    is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
 
                 // K: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
