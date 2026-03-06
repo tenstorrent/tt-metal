@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sgd_fused_program_factory.hpp"
+#include "sgd_program_factory.hpp"
 
 #include <common/TracyQueue.hpp>
 #include <cstdint>
@@ -11,21 +11,20 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
-#include "sgd_fused_device_operation_types.hpp"
+#include "sgd_device_operation_types.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
 namespace {
 
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/dataflow/"
-    "reader_sgd_fused_interleaved_start_id.cpp";
+    "tt-train/sources/ttml/metal/optimizers/sgd/device/kernels/dataflow/"
+    "reader_sgd_interleaved_start_id.cpp";
 
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/dataflow/"
-    "writer_sgd_fused_interleaved_start_id.cpp";
+    "tt-train/sources/ttml/metal/optimizers/sgd/device/kernels/dataflow/"
+    "writer_sgd_interleaved_start_id.cpp";
 
-constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/compute/sgd_fused_kernel.cpp";
+constexpr auto kComputeKernelPath = "tt-train/sources/ttml/metal/optimizers/sgd/device/kernels/compute/sgd_kernel.cpp";
 
 // reader runtime args
 constexpr uint32_t kParamAddrIdx = 0;
@@ -68,13 +67,13 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
 }  // namespace
 
-namespace ttml::metal::optimizers::sgd_fused::device {
+namespace ttml::metal::optimizers::sgd::device {
 
 /**
  *   Helper struct to hold references to all kernels we create,
  *        used during runtime argument setup.
  */
-struct SGDFusedKernels {
+struct SGDKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
     tt::tt_metal::KernelHandle compute_group_1;
@@ -87,7 +86,7 @@ struct SGDFusedKernels {
  */
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
-    const SGDFusedKernels& kernels,
+    const SGDKernels& kernels,
     const tt::tt_metal::Buffer* param_buffer,
     const tt::tt_metal::Buffer* grad_buffer,
     const tt::tt_metal::Buffer* momentum_buffer,
@@ -169,7 +168,7 @@ void assign_per_core_runtime_args(
     }
 }
 
-SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
+SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -314,7 +313,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     defines["USE_MOMENTUM"] = momentum_buffer != nullptr ? "1" : "0";
     defines["USE_NESTEROV"] = nesterov ? "1" : "0";
 
-    SGDFusedKernels kernels{};
+    SGDKernels kernels{};
     std::vector<uint32_t> reader_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
@@ -372,27 +371,27 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     return cached_program_t{
         std::move(program),
-        {/* sgd_fused_reader_kernel_id  = */ kernels.reader,
-         /* sgd_fused_writer_kernel_id  = */ kernels.writer,
-         /* sgd_fused_kernel_group_1_id = */ kernels.compute_group_1,
-         /* sgd_fused_kernel_group_2_id = */ kernels.compute_group_2,
+        {/* sgd_reader_kernel_id  = */ kernels.reader,
+         /* sgd_writer_kernel_id  = */ kernels.writer,
+         /* sgd_kernel_group_1_id = */ kernels.compute_group_1,
+         /* sgd_kernel_group_2_id = */ kernels.compute_group_2,
          /* core_group_1              = */ core_group_1,
          /* core_group_2              = */ core_group_2,
          /* num_cores                 = */ num_cores,
          /* num_cores_y               = */ num_cores_y}};
 }
 
-void SGDFusedProgramFactory::override_runtime_arguments(
+void SGDProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
-    auto& sgd_fused_reader_kernel_id = shared_variables.reader_kernel_id;
-    auto& sgd_fused_writer_kernel_id = shared_variables.writer_kernel_id;
-    auto& sgd_fused_compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
-    auto& sgd_fused_compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
+    auto& sgd_reader_kernel_id = shared_variables.reader_kernel_id;
+    auto& sgd_writer_kernel_id = shared_variables.writer_kernel_id;
+    auto& sgd_compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
+    auto& sgd_compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
     auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
@@ -412,12 +411,12 @@ void SGDFusedProgramFactory::override_runtime_arguments(
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, sgd_fused_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, sgd_fused_writer_kernel_id);
-    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, sgd_fused_compute_kernel_group_1_id);
-    [[maybe_unused]] auto& compute_group_2_runtime_args =
-        core_group_2.ranges().empty() ? compute_group_1_runtime_args
-                                      : GetRuntimeArgs(program, sgd_fused_compute_kernel_group_2_id);
+    auto& reader_runtime_args = GetRuntimeArgs(program, sgd_reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, sgd_writer_kernel_id);
+    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, sgd_compute_kernel_group_1_id);
+    [[maybe_unused]] auto& compute_group_2_runtime_args = core_group_2.ranges().empty()
+                                                              ? compute_group_1_runtime_args
+                                                              : GetRuntimeArgs(program, sgd_compute_kernel_group_2_id);
 
     bfloat16 bfloat_lr = bfloat16::truncate(lr);
     uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
@@ -469,4 +468,4 @@ void SGDFusedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttml::metal::optimizers::sgd_fused::device
+}  // namespace ttml::metal::optimizers::sgd::device
