@@ -65,9 +65,9 @@ inline void _llk_pack_dest_dvalid_section_done_()
 
 /**
  * @brief Configure packer edge mask programming for packer 0 with reduce operations
- * @tparam REDUCE_DIM: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
+ * @tparam REDUCE_DIMENSION: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  **/
-template <ReduceDim REDUCE_DIM>
+template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_pack_reduce_mask_config_()
 {
     // Wait for packer to finish to avoid breaking its current configuration
@@ -79,7 +79,7 @@ inline void _llk_pack_reduce_mask_config_()
 
     // TODO: (RT) Clean this up using pack edge struct to match addresses
     //  Make it unified
-    if constexpr (REDUCE_DIM == ReduceDim::REDUCE_ROW)
+    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
         // This register specifies which datums will not have the mask applied
         // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
@@ -92,7 +92,7 @@ inline void _llk_pack_reduce_mask_config_()
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x55555555);
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x55555555);
     }
-    else if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL)
+    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
         // The below mask mean all datums in a row preserve their value
         cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);

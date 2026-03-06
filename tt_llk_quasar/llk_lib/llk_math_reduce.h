@@ -288,26 +288,27 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
 
 /**
  * @brief Sets up addrmods for reduce operations
- * @tparam REDUCE_DIM: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
+ * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
  * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
  */
-template <ReduceDim REDUCE_DIM, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_addrmod_()
 {
     constexpr bool high_fidelity               = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
 
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ((REDUCE_DIM == ReduceDim::REDUCE_COL) ? 16 : 0)}, .fidelity = {.incr = 0, .clr = 1}}
+    addr_mod_t {
+        .srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ((REDUCE_DIMENSION == ReduceDim::REDUCE_COL) ? 16 : 0)}, .fidelity = {.incr = 0, .clr = 1}}
         .set(ADDR_MOD_0);
 
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity_increment}}.set(ADDR_MOD_2);
 
-    if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL)
+    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0, .clr = 1}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_1);
     }
-    else if constexpr (REDUCE_DIM == ReduceDim::REDUCE_ROW)
+    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
         addr_mod_t {
             .srca = {.incr = 0},
@@ -321,25 +322,25 @@ inline void _llk_math_reduce_addrmod_()
 /**
  * @brief Sets up mop config for reduce operations
  * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
- * @tparam REDUCE_DIM: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
+ * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
  * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
-template <PoolType POOL_TYPE, ReduceDim REDUCE_DIM, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_init_(const TileShape& tile_shape)
 {
-    _llk_math_reduce_addrmod_<REDUCE_DIM, MATH_FIDELITY_TYPE>();
+    _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>();
 
-    if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL)
+    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
         _llk_math_reduce_col_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
     }
-    else if constexpr (REDUCE_DIM == ReduceDim::REDUCE_ROW)
+    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
         _llk_math_reduce_row_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
     }
-    else if constexpr (REDUCE_DIM == ReduceDim::REDUCE_SCALAR)
+    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {
         _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
     }
