@@ -82,6 +82,9 @@ void kernel_main() {
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
+
+    // Compile-time flag for whether joint tensors are provided (following standard SDPA pattern)
+    constexpr bool use_joint_tensors = L > 0;
     constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(15);
     constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(16);
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
@@ -255,8 +258,100 @@ void kernel_main() {
             }
 
             if (ring_iter > 0) {
-                read_prev_output_and_lse(
-                    is_joint_q ? joint_out_generator : out_generator,
+                // Use compile-time conditionals to avoid TensorAccessor type mismatch
+                if constexpr (use_joint_tensors) {
+                    if (is_joint_q) {
+                        read_prev_output_and_lse(
+                            joint_out_generator,
+                            lse_writer,
+                            lse_tile_logical,
+                            nb,
+                            nq,
+                            Sq_chunk_t,
+                            out_slice,
+                            end_seq_tile,
+                            lse_seq_start_tile,
+                            lse_seq_end_tile,
+                            cb_prev_out,
+                            cb_lse_in,
+                            tile_bytes,
+                            lse_tile_bytes);
+                    } else {
+                        read_prev_output_and_lse(
+                            out_generator,
+                            lse_writer,
+                            lse_tile_logical,
+                            nb,
+                            nq,
+                            Sq_chunk_t,
+                            out_slice,
+                            end_seq_tile,
+                            lse_seq_start_tile,
+                            lse_seq_end_tile,
+                            cb_prev_out,
+                            cb_lse_in,
+                            tile_bytes,
+                            lse_tile_bytes);
+                    }
+                } else {
+                    // When joint tensors not provided, always use regular generator
+                    read_prev_output_and_lse(
+                        out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        cb_prev_out,
+                        cb_lse_in,
+                        tile_bytes,
+                        lse_tile_bytes);
+                }
+            }
+
+            // Use compile-time conditionals to avoid TensorAccessor type mismatch
+            if constexpr (use_joint_tensors) {
+                if (is_joint_q) {
+                    write_output_and_lse(
+                        joint_out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        cb_out,
+                        cb_lse_out,
+                        tile_bytes,
+                        lse_tile_bytes);
+                } else {
+                    write_output_and_lse(
+                        out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        cb_out,
+                        cb_lse_out,
+                        tile_bytes,
+                        lse_tile_bytes);
+                }
+            } else {
+                // When joint tensors not provided, always use regular generator
+                write_output_and_lse(
+                    out_generator,
                     lse_writer,
                     lse_tile_logical,
                     nb,
@@ -266,27 +361,11 @@ void kernel_main() {
                     end_seq_tile,
                     lse_seq_start_tile,
                     lse_seq_end_tile,
-                    cb_prev_out,
-                    cb_lse_in,
+                    cb_out,
+                    cb_lse_out,
                     tile_bytes,
                     lse_tile_bytes);
             }
-
-            write_output_and_lse(
-                is_joint_q ? joint_out_generator : out_generator,
-                lse_writer,
-                lse_tile_logical,
-                nb,
-                nq,
-                Sq_chunk_t,
-                out_slice,
-                end_seq_tile,
-                lse_seq_start_tile,
-                lse_seq_end_tile,
-                cb_out,
-                cb_lse_out,
-                tile_bytes,
-                lse_tile_bytes);
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }

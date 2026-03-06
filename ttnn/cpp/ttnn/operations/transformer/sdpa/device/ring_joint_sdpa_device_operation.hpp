@@ -31,12 +31,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
-    const std::string& joint_strategy,
     std::size_t logical_n,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
@@ -51,6 +47,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     bool is_balanced = false,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    const std::optional<ttnn::Tensor>& joint_tensor_q = std::nullopt,
+    const std::optional<ttnn::Tensor>& joint_tensor_k = std::nullopt,
+    const std::optional<ttnn::Tensor>& joint_tensor_v = std::nullopt,
+    const std::optional<std::string>& joint_strategy = std::nullopt);
 
 }  // namespace ttnn::prim

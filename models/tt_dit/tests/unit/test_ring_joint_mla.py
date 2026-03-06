@@ -80,7 +80,7 @@ def reverse_reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
     for new_pos, orig_pos in enumerate(chunk_order):
         inverse_order[orig_pos] = new_pos
 
-    print(f"inverse order: {inverse_order}")
+    logger.debug(f"inverse order: {inverse_order}")
     return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
 
 
@@ -143,8 +143,6 @@ def run_ring_joint_sdpa(
     # Check sharding on these
     ag_output_shape_k = (b, nhk, padded_seq_len, head_dim_k)
     ag_output_shape_v = (b, nhv, padded_seq_len, head_dim_v)
-    print("ag_output_shape_k = ", ag_output_shape_k)
-    print("ag_output_shape_v = ", ag_output_shape_v)
 
     persistent_k_output_shard_dims = [None, None]
     persistent_k_output_shard_dims[up_axis] == 1 if nhk != 1 else None
@@ -172,9 +170,6 @@ def run_ring_joint_sdpa(
         ]
         for _ in range(n_iters)
     ]
-
-    print("Persistent output buffer[0] shape = ", persistent_output_buffers[0][0].shape)
-    print("Persistent output buffer[1] shape = ", persistent_output_buffers[0][1].shape)
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -209,14 +204,21 @@ def run_ring_joint_sdpa(
         padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
         padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
 
-    joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
-    joint_K = fa_rand(b, nhk, joint_seq_len, head_dim_k)
-    joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
+    # Only create joint tensors if joint_seq_len > 0
+    if joint_seq_len > 0:
+        joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
+        joint_K = fa_rand(b, nhk, joint_seq_len, head_dim_k)
+        joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
+        logger.debug(f"jointQ: {joint_Q.shape}")
+        logger.debug(f"jointK: {joint_K.shape}")
+        logger.debug(f"jointV: {joint_V.shape}")
+    else:
+        joint_Q = None
+        joint_K = None
+        joint_V = None
+        logger.debug("No joint tensors created (joint_seq_len = 0) - using optional API")
 
     # Print shapes of all inputs along with input names
-    logger.debug(f"jointQ: {joint_Q.shape}")
-    logger.debug(f"jointK: {joint_K.shape}")
-    logger.debug(f"jointV: {joint_V.shape}")
     logger.debug(f"padded_Q: {padded_Q.shape}")
     logger.debug(f"padded_K: {padded_K.shape}")
     logger.debug(f"padded_V: {padded_V.shape}")
@@ -259,76 +261,102 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
-    tt_joint_Q = ttnn.from_torch(
-        joint_Q,
-        dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
-    )
-    # split on head if there is nh > 1, else replicate
-    joint_k_mesh_mapper = (
-        ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims)
-        if nhk > 1
-        else ttnn.ReplicateTensorToMesh(submesh)
-    )
-    tt_joint_K = ttnn.from_torch(
-        joint_K,
-        dtype=kv_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        mesh_mapper=joint_k_mesh_mapper,
-    )
-    print("tt_joint_K shape = ", tt_joint_K.shape)
-    tt_joint_V = ttnn.from_torch(
-        joint_V,
-        dtype=kv_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
-    )
-    print("tt_joint_V shape = ", tt_joint_V.shape)
-
-    logger.debug(f"tt_Q: {tt_Q.shape}")
-    logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
+    # Only convert joint tensors to ttnn if they exist
+    if joint_seq_len > 0:
+        tt_joint_Q = ttnn.from_torch(
+            joint_Q,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+        )
+        # split on head if there is nh > 1, else replicate
+        joint_k_mesh_mapper = (
+            ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims)
+            if nhk > 1
+            else ttnn.ReplicateTensorToMesh(submesh)
+        )
+        tt_joint_K = ttnn.from_torch(
+            joint_K,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            mesh_mapper=joint_k_mesh_mapper,
+        )
+        tt_joint_V = ttnn.from_torch(
+            joint_V,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+        )
+    else:
+        tt_joint_Q = None
+        tt_joint_K = None
+        tt_joint_V = None
 
     tt_out_list = []
 
     def run_iters(tt_out_list):
         for i in range(n_iters):
-            print("Running ring-joint sdpa with the following shapes:")
-            print("tt_Q: ", tt_Q.shape)
-            print("tt_K: ", tt_K.shape)
-            print("tt_V: ", tt_V.shape)
-            print("tt_joint_Q: ", tt_joint_Q.shape)
-            print("tt_joint_K: ", tt_joint_K.shape)
-            print("tt_joint_V: ", tt_joint_V.shape)
-            print("base seq_len is: ", base_seq_len)
-            print("cluster axis is: ", rp_axis)
-            tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                tt_Q,
-                tt_K,
-                tt_V,
-                tt_joint_Q,
-                tt_joint_K,
-                tt_joint_V,
-                persistent_output_buffer_k=persistent_output_buffers[i][0],
-                persistent_output_buffer_v=persistent_output_buffers[i][1],
-                joint_strategy="rear",
-                logical_n=base_seq_len,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                cluster_axis=rp_axis,
-                mesh_device=submesh,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=ccl_core_grid_offset,
-                is_causal=is_causal,
-                is_balanced=is_balanced,
-            )
+            logger.debug("Running ring-joint sdpa with the following shapes:")
+            logger.debug(f"tt_Q: {tt_Q.shape}")
+            logger.debug(f"tt_K: {tt_K.shape}")
+            logger.debug(f"tt_V: {tt_V.shape}")
+            if joint_seq_len > 0:
+                logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
+                logger.debug(f"tt_joint_K: {tt_joint_K.shape}")
+                logger.debug(f"tt_joint_V: {tt_joint_V.shape}")
+            else:
+                logger.debug("Using optional API - no joint tensors provided")
+
+            # Call with or without joint tensors based on whether they exist
+            if joint_seq_len > 0:
+                tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    tt_joint_Q,
+                    tt_joint_K,
+                    tt_joint_V,
+                    persistent_output_buffer_k=persistent_output_buffers[i][0],
+                    persistent_output_buffer_v=persistent_output_buffers[i][1],
+                    joint_strategy="rear",
+                    logical_n=base_seq_len,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    dim=2,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    num_links=num_links,
+                    cluster_axis=rp_axis,
+                    mesh_device=submesh,
+                    topology=all_gather_topology,
+                    subdevice_id=worker_sub_device_id,
+                    ccl_core_grid_offset=ccl_core_grid_offset,
+                    is_causal=is_causal,
+                    is_balanced=is_balanced,
+                )
+            else:
+                tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    persistent_output_buffer_k=persistent_output_buffers[i][0],
+                    persistent_output_buffer_v=persistent_output_buffers[i][1],
+                    logical_n=base_seq_len,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    dim=2,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    num_links=num_links,
+                    cluster_axis=rp_axis,
+                    mesh_device=submesh,
+                    topology=all_gather_topology,
+                    subdevice_id=worker_sub_device_id,
+                    ccl_core_grid_offset=ccl_core_grid_offset,
+                    is_causal=is_causal,
+                    is_balanced=is_balanced,
+                )
             tt_out_list.append(tt_out)
 
     if trace_enabled:
@@ -350,23 +378,21 @@ def run_ring_joint_sdpa(
 
     if not skip_check:
         # Only use main tensors for host reference (no joint tensors since joint_seq_len=0)
-        print("Running on host...")
+        logger.debug("Running on host...")
         gt_out = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
-        print("Done running on host...")
-        print("Host output shape: ", gt_out.shape)
+        logger.debug("Done running on host...")
+        logger.debug("Host output shape: ", gt_out.shape)
 
         for i in range(n_iters):
-            print("Synchronize call...")
+            logger.debug("Synchronize call...")
             ttnn.synchronize_device(submesh)
-            print("Done synchronizing...")
+            logger.debug("Done synchronizing...")
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
                 ),
             )
-            print("Started doing to_torch stuff...")
-            print("Done to torch stuff...")
 
             # Reverse reordering for TT output if balanced reordering was applied
             if is_balanced and chunk_order is not None:
@@ -383,7 +409,6 @@ def run_ring_joint_sdpa(
 
             passing = True
             out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
-            logger.debug("spatial")
             logger.debug(f"{out_pcc}")
             mse = ((gt_out - tt_out) ** 2).mean()
             logger.debug(f"mse: {mse}")
