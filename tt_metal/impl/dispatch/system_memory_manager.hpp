@@ -105,8 +105,8 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<umd::Writer> prefetch_q_writers;
-    std::vector<umd::Writer> completion_q_writers;
+    std::vector<tt_cxy_pair> prefetch_q_writers;
+    std::vector<tt_cxy_pair> completion_q_writers;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 
