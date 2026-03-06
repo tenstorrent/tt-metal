@@ -488,6 +488,7 @@ TEST_F(GeluFwUlpTest, CumulativeULPDistribution) {
     std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     std::vector<::bfloat16> bf16_inputs;
+    bf16_inputs.reserve(input_values.size());
     for (float x : input_values) {
         bf16_inputs.push_back(::bfloat16(x));
     }
@@ -711,6 +712,7 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
     std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     std::vector<::bfloat16> bf16_inputs;
+    bf16_inputs.reserve(tail_values.size());
     for (float x : tail_values) {
         bf16_inputs.push_back(::bfloat16(x));
     }
@@ -810,6 +812,7 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
     std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     std::vector<::bfloat16> bf16_inputs;
+    bf16_inputs.reserve(input_values.size());
     for (float x : input_values) {
         bf16_inputs.push_back(::bfloat16(x));
     }
