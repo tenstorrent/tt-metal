@@ -499,6 +499,23 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         write_watcher_init_val(inactive_eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
 
+    // Initialize DRAM cores debug values (Blackhole only)
+    bool has_dram_fw =
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal.get_programmable_core_type_count();
+    if (has_dram_fw) {
+        auto dram_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
+        auto dram_data = watcher_init_val[dram_index].view();
+        uint64_t watcher_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::WATCHER) +
+                                hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+        const auto& soc_d = cluster.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            CoreCoord virtual_core{dram_core.x, dram_core.y};
+            std::fill_n(dram_data.debug_insert_delays().data(), dram_data.debug_insert_delays().size(), std::byte{0});
+            cluster.write_core(
+                dram_data.data(), dram_data.size(), {static_cast<size_t>(device_id), virtual_core}, watcher_addr);
+        }
+    }
+
     log_debug(LogLLRuntime, "Watcher initialized device {}", device_id);
 }
 

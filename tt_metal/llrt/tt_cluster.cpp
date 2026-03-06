@@ -567,6 +567,7 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
             for (const tt::umd::CoreCoord& core :
                  get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
                 this->virtual_dram_hw_cores_[chip_id].insert({core.x, core.y});
+                this->virtual_dram_cores_[chip_id].insert({core.x, core.y});
             }
 
             for (uint32_t noc = 0; noc < this->num_nocs_; noc++) {

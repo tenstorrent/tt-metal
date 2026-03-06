@@ -21,6 +21,11 @@ namespace tt {
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
+#define DRAM_L1_NOC_OFFSET 0x2000000000ULL
+#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                            \
+    ((((a) >= DRAM_L1_NOC_OFFSET) && ((a) + (l) <= DRAM_L1_NOC_OFFSET + HAL_MEM_DRAM_L1_SIZE)) || \
+     (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
+
 static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
     for (const tt::umd::CoreCoord& core_coord : coords) {
         CoreCoord item = {core_coord.x, core_coord.y};
@@ -73,12 +78,19 @@ static void watcher_sanitize_host_noc(
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        uint64_t dram_addr_base = 0;
-        uint64_t dram_addr_size = soc_d.dram_core_size;
-        uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
-        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
-            print_stack_trace();
-            TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+        if (addr >= DRAM_L1_NOC_OFFSET) {
+            if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
+                print_stack_trace();
+                TT_THROW("Host watcher: bad {} dram L1 address {}", what, noc_address(core, addr, lbytes));
+            }
+        } else {
+            uint64_t dram_addr_base = 0;
+            uint64_t dram_addr_size = soc_d.dram_core_size;
+            uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
+            if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
+                print_stack_trace();
+                TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+            }
         }
     } else if (coord_found_p(virtual_eth_cores, core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
