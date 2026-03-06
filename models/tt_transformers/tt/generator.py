@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 import os
+import time
 from collections import defaultdict
 
 import torch
@@ -79,6 +82,8 @@ class Generator(WarmupForwardMixin):
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
         self.mode = None
+        self._bitmask_debug_dump_counter = 0
+        self._bitmask_debug_run_id = os.getenv("TT_DEBUG_BITMASK_RUN_ID", str(int(time.time())))
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses)
     model_capabilities = {
@@ -90,6 +95,96 @@ class Generator(WarmupForwardMixin):
             sampling_module = getattr(model_instance, "sampling", None)
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
+
+    def _debug_probe_bitmask_stage(self, model_idx: int, stage: str):
+        """
+        Debug helper:
+        Probe current device bitmask at a named stage. Ground truth is zeros.
+        """
+        model_i = self.model[model_idx]
+        early_tt = getattr(model_i, "bitmask", None)
+        if early_tt is None:
+            logger.warning(f"[BITMASK-DBG] stage={stage} model={model_idx} bitmask is None")
+            return
+
+        early_host = ttnn.to_torch(early_tt).reshape(-1).cpu()
+        dump_paths, early_is_all_zero, nonzero_count = self._dump_early_bitmask_debug_tensor(
+            model_idx=model_idx, early_host=early_host, stage=stage
+        )
+        if early_is_all_zero:
+            logger.warning(
+                "[BITMASK-DBG] stage={} model={} is_all_zero=True nonzero_count=0 (no dump written)".format(
+                    stage, model_idx
+                )
+            )
+        else:
+            logger.warning(
+                "[BITMASK-DBG] stage={} model={} is_all_zero=False nonzero_count={} dump={} meta={}".format(
+                    stage,
+                    model_idx,
+                    nonzero_count,
+                    dump_paths["early_pt"],
+                    dump_paths["meta_json"],
+                )
+            )
+
+    def _dump_early_bitmask_debug_tensor(self, model_idx: int, early_host: torch.Tensor, stage: str):
+        """
+        Persist early mask debug artifact with unique filenames to avoid
+        collisions across multiple server rounds/runs.
+        """
+        early_flat = early_host.detach().to(torch.int32).contiguous().view(-1).cpu()
+        nonzero_count = int(torch.count_nonzero(early_flat).item())
+        early_is_all_zero = nonzero_count == 0
+        if early_is_all_zero:
+            return {}, True, 0
+
+        dump_root = os.getenv("TT_DEBUG_BITMASK_DUMP_DIR", "/tmp/tt_bitmask_debug")
+        os.makedirs(dump_root, exist_ok=True)
+
+        self._bitmask_debug_dump_counter += 1
+        unique_tag = "run{}_{}_m{}_c{}".format(
+            self._bitmask_debug_run_id,
+            stage,
+            model_idx,
+            self._bitmask_debug_dump_counter,
+        )
+
+        early_pt_path = os.path.join(dump_root, f"early_{unique_tag}.pt")
+        meta_json_path = os.path.join(dump_root, f"meta_{unique_tag}.json")
+
+        torch.save(early_flat, early_pt_path)
+
+        # Hashes make quick triage easier without loading full tensors.
+        early_hash = hashlib.sha256(early_flat.numpy().tobytes()).hexdigest()
+
+        with open(meta_json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "stage": stage,
+                    "model_idx": model_idx,
+                    "pid": os.getpid(),
+                    "counter": self._bitmask_debug_dump_counter,
+                    "time_ns": time.time_ns(),
+                    "early_numel": int(early_flat.numel()),
+                    "early_sha256": early_hash,
+                    "early_is_all_zero": early_is_all_zero,
+                    "early_nonzero_count": nonzero_count,
+                    "early_first_32": early_flat[:32].tolist(),
+                    "early_pt": early_pt_path,
+                },
+                f,
+                indent=2,
+            )
+
+        return (
+            {
+                "early_pt": early_pt_path,
+                "meta_json": meta_json_path,
+            },
+            early_is_all_zero,
+            nonzero_count,
+        )
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         ret = dict()
@@ -962,12 +1057,9 @@ class Generator(WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
-        # Transfer bitmask to device for structured outputs
-        # TODO this means we transfer even if this dp rank doesnt have a structured output request
+        # Debug mode: force a zero ground-truth mask payload.
         if bitmask is not None:
-            bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
-            for i in range(self.data_parallel):
-                self.model[i].bitmask_to_device(bitmasks[i])
+            bitmask = torch.zeros_like(bitmask)
 
         sampling_params_list = None
         if sampling_params is not None:
@@ -1031,9 +1123,11 @@ class Generator(WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs, reset_batch=mode_switched, bitmask=bitmask
+            )
         else:
-            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs, bitmask=bitmask)
 
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
@@ -1047,6 +1141,7 @@ class Generator(WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         sampling_on_device=False,
+        bitmask=None,
     ):
         """
         Performs text decode step.
@@ -1071,6 +1166,12 @@ class Generator(WarmupForwardMixin):
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
 
+        if sampling_on_device and bitmask is not None:
+            bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
+            for i in range(self.data_parallel):
+                self.model[i].bitmask_to_device(bitmasks[i])
+                self._debug_probe_bitmask_stage(i, "pre_no_trace_exec")
+
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             # For device sampling, always capture logits only (not tokens) so we can apply bitmask
@@ -1088,10 +1189,15 @@ class Generator(WarmupForwardMixin):
 
         # Apply bitmask and sample for device sampling (same as trace path)
         if sampling_on_device:
+            if bitmask is not None:
+                for i in range(self.data_parallel):
+                    self._debug_probe_bitmask_stage(i, "post_no_trace_exec")
+
             for i in range(self.data_parallel):
                 # Apply bitmask to logits
-                # TODO apply only if new bitmask was passed in this iteration
-                tt_output[i] = self.model[i].apply_bitmask_to_logits(tt_output[i])
+                if bitmask is not None:
+                    tt_output[i] = self.model[i].apply_bitmask_to_logits(tt_output[i])
+                    self._debug_probe_bitmask_stage(i, "post_no_trace_apply")
                 # Sample from logits
                 sampling_module = getattr(self.model[i], "sampling", None)
                 if sampling_module is not None:
@@ -1129,6 +1235,7 @@ class Generator(WarmupForwardMixin):
             page_table=page_table,
             kv_cache=kv_cache,
             sampling_on_device=sampling_on_device,
+            bitmask=None,
         )
         logger.info("Done Compiling Model")
 
@@ -1173,7 +1280,14 @@ class Generator(WarmupForwardMixin):
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        reset_batch=False,
+        bitmask=None,
     ):
         """
         Run decode forward text with tracing
@@ -1206,6 +1320,13 @@ class Generator(WarmupForwardMixin):
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
+
+        if sampling_on_device and bitmask is not None:
+            bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
+            for i in range(self.data_parallel):
+                self.model[i].bitmask_to_device(bitmasks[i])
+                self._debug_probe_bitmask_stage(i, "pre_trace")
+
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
@@ -1213,11 +1334,18 @@ class Generator(WarmupForwardMixin):
         # Apply bitmask to logits AFTER trace execution but BEFORE sampling
         # This avoids baking the bitmask conditional into the trace
         if sampling_on_device:
+            if bitmask is not None:
+                for i in range(self.data_parallel):
+                    self._debug_probe_bitmask_stage(i, "post_trace")
+
             # Apply bitmask to logits before sampling
             for i in range(self.data_parallel):
-                outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
+                if bitmask is not None:
+                    outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
                 ttnn.synchronize_device(self.model_args[i].mesh_device)
                 print(f"Synchronized device after applying bitmask to logits for model {i}")
+                if bitmask is not None:
+                    self._debug_probe_bitmask_stage(i, "post_apply")
 
             new_outputs = []
             for i in range(self.data_parallel):
