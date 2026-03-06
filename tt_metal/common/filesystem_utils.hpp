@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 // NFS-Specific Filesystem Utilities
@@ -107,6 +109,37 @@ inline bool is_estale_error(const std::error_code& ec) { return ec.value() == ES
 
 // Check if error is ENOENT (file/directory not found)
 inline bool is_not_found_error(const std::error_code& ec) { return ec == std::errc::no_such_file_or_directory; }
+
+// Get random jitter (0 to kFsRetryJitterMs) for retry delays.
+// Uses thread-local RNG for thread safety.
+int get_retry_jitter_ms();
+
+// Generic ESTALE retry helper for low-level operations using errno.
+// Calls `operation()` up to kMaxFsRetries times, retrying only if
+// errno == ESTALE after a failed attempt. Sleeps between retries with
+// random jitter to prevent thundering herd issues.
+//
+// The operation should:
+// - Clear errno before the syscall if needed
+// - Return true on success, false to retry
+//
+// Returns true if operation eventually succeeded, false if all retries failed.
+template <typename Operation>
+bool retry_on_estale(Operation&& operation) {
+    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+        if (operation()) {
+            return true;
+        }
+        if (errno != ESTALE) {
+            break;
+        }
+        if (attempt < kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+        }
+    }
+    return false;
+}
 
 // Safe remove that ignores ENOENT and retries on ESTALE.
 // Calls ::sync() after successful removal. Includes jitter on retries.

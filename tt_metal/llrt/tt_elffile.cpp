@@ -6,12 +6,10 @@
 
 #include <elf.h>
 #include <cerrno>
-#include <chrono>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <thread>
 #include <unistd.h>
 #include <algorithm>
 #include <cstring>
@@ -313,7 +311,8 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
     void* buffer = MAP_FAILED;
     int saved_errno = 0;
 
-    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+    tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
         int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (fd >= 0 && fstat(fd, &st) >= 0) {
             buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
@@ -322,16 +321,8 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
         if (fd >= 0) {
             close(fd);
         }
-        if (buffer != MAP_FAILED) {
-            break;
-        }
-        if (saved_errno != ESTALE) {
-            break;
-        }
-        if (attempt < tt::filesystem::kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
-        }
-    }
+        return buffer != MAP_FAILED;
+    });
 
     if (buffer == MAP_FAILED) {
         TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(saved_errno));
@@ -365,7 +356,8 @@ void ElfFile::WriteImage(std::string const& path) {
     bool failed = true;
     int saved_errno = 0;
 
-    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+    tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
         int file_descriptor = open(
             path.c_str(),
             O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
@@ -378,16 +370,8 @@ void ElfFile::WriteImage(std::string const& path) {
         } else {
             saved_errno = errno;
         }
-        if (!failed) {
-            break;
-        }
-        if (saved_errno != ESTALE) {
-            break;
-        }
-        if (attempt < tt::filesystem::kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
-        }
-    }
+        return !failed;
+    });
 
     if (failed) {
         TT_THROW("{}: cannot write elf file: {}", path, strerror(saved_errno));

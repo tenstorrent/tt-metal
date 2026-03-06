@@ -11,7 +11,6 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -20,7 +19,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <vector>
 
 #include <unistd.h>
@@ -514,42 +512,36 @@ static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
 
 bool JitBuildState::build_state_matches(const string& out_dir) const {
     std::string hash_path = out_dir + string(BUILD_STATE_HASH_FILE);
+    uint64_t stored_hash{};
+    bool hash_matches = false;
 
-    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
-        // Open the file directly - this avoids TOCTOU race between exists() and open().
-        // If the file doesn't exist, is_open() returns false without ESTALE.
+    bool success = tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
         std::ifstream file(hash_path);
         if (!file.is_open()) {
-            // Check errno to distinguish "file not found" from "stale file handle"
-            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
-                continue;
-            }
-            // File doesn't exist or other non-retryable error
             return false;
         }
-        uint64_t stored_hash{};
         file >> stored_hash;
         if (file.fail()) {
-            // Check if read failure is due to ESTALE and retry
-            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
-                continue;
-            }
             return false;
         }
-        if (stored_hash != build_state_hash_) {
-            log_debug(
-                tt::LogBuildKernels,
-                "Build state hash mismatch in {}: stored={}, current={}",
-                out_dir,
-                stored_hash,
-                build_state_hash_);
-            return false;
-        }
+        hash_matches = (stored_hash == build_state_hash_);
         return true;
+    });
+
+    if (!success) {
+        return false;
     }
-    return false;
+    if (!hash_matches) {
+        log_debug(
+            tt::LogBuildKernels,
+            "Build state hash mismatch in {}: stored={}, current={}",
+            out_dir,
+            stored_hash,
+            build_state_hash_);
+        return false;
+    }
+    return true;
 }
 
 void JitBuildState::write_build_state_hash(const string& out_dir) const {

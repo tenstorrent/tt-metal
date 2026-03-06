@@ -4,8 +4,6 @@
 
 #include "jit_build_utils.hpp"
 
-#include <cerrno>
-#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -14,11 +12,8 @@
 #include <mutex>
 #include <random>
 #include <string>
-#include <system_error>
-#include <thread>
 
 #include <tt-logger/tt-logger.hpp>
-#include <unistd.h>
 #include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 
@@ -78,35 +73,10 @@ FileRenamer::~FileRenamer() {
     if (target_path_.empty()) {
         return;
     }
-
-    // Retry rename operation with sleep for NFS ESTALE (stale file handle) errors.
-    // Uses constants from filesystem_utils.hpp for consistency across the codebase.
-    std::error_code ec;
-
-    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
-        std::filesystem::rename(temp_path_, target_path_, ec);
-        if (!ec) {
-            // Success - sync to ensure data is flushed to NFS
-            ::sync();
-            return;
-        }
-        // Only retry on ESTALE (stale file handle) errors
-        if (!tt::filesystem::is_estale_error(ec)) {
-            break;
-        }
-        // If this is not the last attempt, sleep and retry
-        if (attempt < tt::filesystem::kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
-        }
+    if (!tt::filesystem::safe_rename(temp_path_, target_path_)) {
+        log_error(
+            tt::LogBuildKernels, "Failed to rename temporary file {} to target file {}", temp_path_, target_path_);
     }
-
-    // All retries failed or non-retryable error - log error
-    log_error(
-        tt::LogBuildKernels,
-        "Failed to rename temporary file {} to target file {}: {}",
-        temp_path_,
-        target_path_,
-        ec.message());
 }
 
 }  // namespace tt::jit_build::utils

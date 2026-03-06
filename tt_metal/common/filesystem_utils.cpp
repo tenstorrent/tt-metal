@@ -15,13 +15,19 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-namespace {
+namespace tt::filesystem {
+
 // Thread-local random number generator for jitter in retry delays.
 // Using thread_local ensures thread-safety (avoids data races on rand()).
-thread_local std::mt19937 rng{std::random_device{}()};
-thread_local std::uniform_int_distribution<> jitter_dist(0, tt::filesystem::kFsRetryJitterMs);
+int get_retry_jitter_ms() {
+    thread_local std::mt19937 rng{std::random_device{}()};
+    thread_local std::uniform_int_distribution<> jitter_dist(0, kFsRetryJitterMs);
+    return jitter_dist(rng);
+}
 
-int get_retry_jitter_ms() { return jitter_dist(rng); }
+}  // namespace tt::filesystem
+
+namespace {
 
 // Sync the filesystem containing the given path.
 // Uses syncfs() when available (Linux) to limit scope to specific filesystem,
