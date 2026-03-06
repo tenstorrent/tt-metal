@@ -96,6 +96,22 @@ class CircularBufferIdManager:
         return descs
 
 
+def deinterleave_kv_cache(kv, device_chunk_size: int, num_devices: int):
+    """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+    The global KV cache is written in round-robin device_chunk_size blocks:
+      [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+    ShardTensor2dMesh splits dim-2 contiguously, so each device would
+    receive the wrong data.  This function reorders to:
+      [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+    so that after the contiguous split each device gets its own chunks.
+    """
+    b, h, seq, d = kv.shape
+    num_chunks = seq // device_chunk_size
+    chunks_per_device = num_chunks // num_devices
+    return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
+
+
 def cb_descriptor_from_overlapped_tensor(
     cb_index: int,
     overlapped: OverlappedTensor,
@@ -123,6 +139,42 @@ def cb_descriptor_from_overlapped_tensor(
             buffer_index=cb_index,
             data_format=overlapped.dtype,
             page_size=tile.get_tile_size(overlapped.dtype),
+            tile=ttnn.TileDescriptor(tile),
+        )
+    ]
+    return cb_desc
+
+
+def cb_descriptor_from_overlapped_tensors(
+    cb_index: int,
+    overlapped_list: list[OverlappedTensor],
+    fused_tensor_device: ttnn.Tensor,
+) -> ttnn.CBDescriptor:
+    """Create a single CBDescriptor spanning multiple OverlappedTensors in the same fused buffer.
+
+    All tensors must share the same backing fused tensor and have identical
+    dtype and tile_shape properties.  Core range sets are merged (unioned).
+    """
+    assert len(overlapped_list) > 0
+
+    first = overlapped_list[0]
+    merged_core_ranges = first.core_range_set
+    for ot in overlapped_list[1:]:
+        assert ot.dtype == first.dtype
+        assert ot.tile_shape == first.tile_shape
+        merged_core_ranges = merged_core_ranges.merge(ot.core_range_set)
+
+    cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
+        cb_index,
+        fused_tensor_device,
+        core_ranges=merged_core_ranges,
+    )
+    tile = ttnn.Tile(first.tile_shape)
+    cb_desc.format_descriptors = [
+        ttnn.CBFormatDescriptor(
+            buffer_index=cb_index,
+            data_format=first.dtype,
+            page_size=tile.get_tile_size(first.dtype),
             tile=ttnn.TileDescriptor(tile),
         )
     ]

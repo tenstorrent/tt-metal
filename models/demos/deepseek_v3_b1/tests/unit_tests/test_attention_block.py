@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.utils import deinterleave_kv_cache
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 
 
 def create_fabric_router_config(max_payload_size):
