@@ -437,14 +437,18 @@ class TtBarkGPT:
         elif inputs_embeds is None:
             raise ValueError("Either input_ids or inputs_embeds must be provided")
 
-        # Position embeddings (handle offset if caching)
-        # Use [batch, seq_len] shape so embedding output is 3D [batch, seq, hidden]
-        if isinstance(input_ids, torch.Tensor):
-            seq_len = input_ids.shape[-1]
-        elif hasattr(tt_input_ids, "shape"):
-            seq_len = tt_input_ids.shape[-1]
+        # Determine sequence length from available input
+        if input_ids is not None:
+            if isinstance(input_ids, torch.Tensor):
+                seq_len = input_ids.shape[-1]
+            else:
+                seq_len = input_ids.shape[-1]  # ttnn tensor
         else:
-            seq_len = inputs_embeds.shape[-2]
+            # inputs_embeds path: [batch, seq, hidden] for torch, [-2] for TTNN
+            if isinstance(inputs_embeds, torch.Tensor):
+                seq_len = inputs_embeds.shape[1]
+            else:
+                seq_len = inputs_embeds.shape[-2]
 
         if layer_past is not None:
             past_len = layer_past[0][0].shape[-2]
