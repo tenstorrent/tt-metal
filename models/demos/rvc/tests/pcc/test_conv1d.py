@@ -40,10 +40,6 @@ def test_conv1d(device):
     dilation = 1
     groups = 16
 
-    # weight_tensor shape: Shape([768, 48, 1, 128])
-    # input_tesnor: shape: Shape([1, 732, 768])
-    print(f"core_grid: {device.core_grid}")
-
     torch_conv = torch.nn.Conv1d(
         in_channels=in_channels,
         out_channels=out_channels,
