@@ -20,7 +20,7 @@ def sdxl_base_unet_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL base UNet model weights.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -37,7 +37,7 @@ def sdxl_base_pipeline_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for full SDXL base pipeline.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -54,7 +54,7 @@ def sdxl_base_vae_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL base VAE model weights.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -71,7 +71,7 @@ def sdxl_base_text_encoder_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL base text_encoder (CLIP) model weights.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -88,7 +88,7 @@ def sdxl_base_text_encoder_2_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL base text_encoder_2 (CLIP with projection) model weights.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -105,7 +105,7 @@ def sdxl_base_tokenizer_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL base tokenizer.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -122,7 +122,7 @@ def sdxl_base_tokenizer_2_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL base tokenizer_2.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -179,7 +179,7 @@ def sdxl_refiner_unet_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL refiner UNet model weights.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
@@ -196,7 +196,7 @@ def sdxl_refiner_pipeline_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for full SDXL refiner pipeline.
     In CIv2: Downloads once per session from large file cache.
-    In CIv1/local: Returns MLPerf path or HF repo ID.
+    In CIv1/local: Returns HF repo ID (resolved via HF_HUB_CACHE to local cache or MLPerf mount).
     """
     if is_ci_v2_env:
         return model_location_generator(
