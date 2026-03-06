@@ -87,6 +87,13 @@ jobs:
           cpu_fmt="$((cpu_time / 60))m $((cpu_time % 60))s"
           echo "## ⏱️ Wall Time: ${wall_time}s (${wall_fmt})  |  CPU Time: ${cpu_time}s (${cpu_fmt})" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 🔑 Verify metrics repo PAT
+        run: |
+          if [ -z "${{ secrets.WILDER_PAT }}" ]; then
+            echo "::error::WILDER_PAT secret is not set. Add a PAT with repo scope for tenstorrent/tt-metal-compile-time-tracker."
+            exit 1
+          fi
+
       - name: ⬇️ Checkout metrics repo (gh-pages)
         uses: actions/checkout@v4
         with:
