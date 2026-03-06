@@ -9,10 +9,7 @@
 #include <numeric>
 #include <vector>
 
-#include "tt_metal/api/tt-metalium/buffer.hpp"
-#include "tt_metal/api/tt-metalium/core_coord.hpp"
-#include "tt_metal/api/tt-metalium/device.hpp"
-#include "tt_metal/api/tt-metalium/program.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::tt_metal;
 
@@ -33,12 +30,20 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     Program program{};
 
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
 
     // ----- Core grid setup using DRAM-aligned cores -----
     const auto dram_bank2core_coords = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::RISCV_0_default);
     const uint32_t num_cores = dram_bank2core_coords.size();  // 12 on WH
     auto all_cores = CoreRangeSet(dram_bank2core_coords);
+
+    // Validate sufficient cores for kernel architecture (4 groups × 3 cores = 12)
+    constexpr uint32_t required_cores = NUM_GROUPS * CORES_PER_GROUP;
+    TT_FATAL(
+        num_cores >= required_cores,
+        "topk_router_gpt requires at least {} DRAM-aligned cores (4 groups × 3 cores), got {}",
+        required_cores,
+        num_cores);
 
     // ----- Tensor shapes -----
     const auto& input_shape = tensor_args.input_tensor.logical_shape();
@@ -68,9 +73,9 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     const auto collector_physical = device->worker_core_from_logical_core(collector_logical);
 
     // ----- Tensor buffer addresses -----
-    auto input_buffer = tensor_args.input_tensor.buffer();
-    auto weight_buffer = tensor_args.weight_tensor.buffer();
-    auto bias_buffer = tensor_args.bias_tensor.buffer();
+    auto* input_buffer = tensor_args.input_tensor.buffer();
+    auto* weight_buffer = tensor_args.weight_tensor.buffer();
+    auto* bias_buffer = tensor_args.bias_tensor.buffer();
 
     // ----- Semaphores -----
     // sem_partial_ready: on worker cores, incremented by senders to signal partial is ready
@@ -338,12 +343,12 @@ void TopkRouterGptProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared = cached_program.shared_variables;
 
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
     const auto dram_bank2core_coords = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::RISCV_0_default);
 
-    auto input_buffer = tensor_args.input_tensor.buffer();
-    auto weight_buffer = tensor_args.weight_tensor.buffer();
-    auto bias_buffer = tensor_args.bias_tensor.buffer();
+    auto* input_buffer = tensor_args.input_tensor.buffer();
+    auto* weight_buffer = tensor_args.weight_tensor.buffer();
+    auto* bias_buffer = tensor_args.bias_tensor.buffer();
 
     // Dispatch output addresses (indices_rm + weights_rm)
     uint32_t indices_rm_addr = std::get<0>(output_tensor).buffer()->address();

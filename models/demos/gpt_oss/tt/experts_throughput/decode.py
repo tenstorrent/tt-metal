@@ -44,7 +44,7 @@ def prepare_expert_weights(
     # topk_expert_weights is [1, 1, tokens_per_device, K] (tokens on dim -2)
     # We want [K, 1, tokens_per_device, 1] so it can broadcast across hidden_size.
     # Permute requires RM input; skip to_layout if weights are already RM
-    # (e.g. from fused topk router with untilize_output).
+    # (e.g. from fused topk router which always returns RM outputs).
     if topk_expert_weights.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(topk_expert_weights)

@@ -5,7 +5,10 @@
 #pragma once
 
 #include "topk_router_gpt_device_operation_types.hpp"
-#include "tt_metal/api/tt-metalium/program.hpp"
+
+#include <tt-metalium/kernel_types.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 

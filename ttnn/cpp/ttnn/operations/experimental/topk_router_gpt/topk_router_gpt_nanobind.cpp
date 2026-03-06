@@ -22,7 +22,7 @@ void bind_topk_router_gpt(nb::module_& mod) {
         Args:
             input_tensor: [B, hidden_dim] bf16 input hidden states
             weight_tensor: [hidden_dim, num_experts] bf16 router weight in DRAM
-            bias_tensor: [1, num_experts] bf16 router bias in DRAM
+            bias_tensor: [B, num_experts] bf16 router bias in DRAM, pre-broadcast across batch
             k: Number of top experts (metadata)
             num_experts: Total number of experts
         )doc",
