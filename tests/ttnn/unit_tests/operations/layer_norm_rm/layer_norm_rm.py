@@ -1,17 +1,8 @@
-# Stub for layer_norm_rm operation - to be implemented by generic-op-builder
-# This file provides the Python entry point that TDD tests import.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
 
+# Re-export layer_norm_rm for TDD test imports.
+# Stage tests use: from .layer_norm_rm import layer_norm_rm
+from ttnn.operations.layer_norm_rm import layer_norm_rm
 
-def layer_norm_rm(input_tensor, gamma=None, beta=None, epsilon=1e-5):
-    """Layer normalization on row-major interleaved tensors.
-
-    Args:
-        input_tensor: Input ttnn tensor (bfloat16, row-major, interleaved)
-        gamma: Scale parameter tensor, shape (1, 1, 1, W)
-        beta: Bias parameter tensor, shape (1, 1, 1, W)
-        epsilon: Numerical stability constant
-
-    Returns:
-        Normalized tensor with same shape as input
-    """
-    raise NotImplementedError("layer_norm_rm not yet implemented")
+__all__ = ["layer_norm_rm"]
