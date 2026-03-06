@@ -127,14 +127,11 @@ def run_demo(
     moe_layer_id_override: int | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
-    # All ranks tokenize so they can agree on total_iterations.
     tokenizer = load_tokenizer(tokenizer_name_or_path)
     prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
     if not prompt_ids:
         prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
-
-    total_iterations = len(prompt_ids) + max_new_tokens
-    logger.info(f"Starting DeepSeek V3 B1 demo (total_iterations={total_iterations})")
+    logger.debug(f"Encoded prompt ({len(prompt_ids)} tokens)")
 
     with open_mesh_device() as mesh_device:
         model_pipeline = ModelPipeline(
@@ -150,8 +147,7 @@ def run_demo(
         is_input_rank = model_pipeline.pipeline.is_input_rank
 
         generated_tokens = model_pipeline.run_inference(
-            total_iterations=total_iterations,
-            prompt_token_ids=prompt_ids if is_input_rank else None,
+            prompt_token_ids=prompt_ids,
             max_new_tokens=max_new_tokens,
             eos_token_id=tokenizer.eos_token_id,
             return_generated_tokens=is_input_rank,
