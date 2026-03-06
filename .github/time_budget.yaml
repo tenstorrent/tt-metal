@@ -119,6 +119,7 @@ models:
     wh_galaxy: 280
     wh_n150: 500
     bh_p150: 500
+    bh_p300: 500
 
   demo:
     wh_llmbox_perf: 1090
