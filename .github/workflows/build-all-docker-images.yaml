@@ -91,7 +91,8 @@ jobs:
             .github
             dockerfile
             scripts
-            tt_metal
+            tt_metal/sfpi-info.sh
+            tt_metal/sfpi-version
           sparse-checkout-cone-mode: false
 
       - name: Check Harbor availability

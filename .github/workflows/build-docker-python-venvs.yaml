@@ -50,7 +50,7 @@ jobs:
       fromJson(inputs.platform-data).ci_build_venv_exists != true ||
       fromJson(inputs.platform-data).ci_test_venv_exists != true
     timeout-minutes: 45
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: Checkout
         uses: actions/checkout@v4
