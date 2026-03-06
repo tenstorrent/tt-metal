@@ -596,9 +596,9 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
                 ct_args.push_back(static_cast<uint32_t>(i + num_unused_channels));
             }
         }
-        // Padding for unused channels
+        // Padding for unused channels — map to their actual (unserviced) entry indices
         for (size_t i = 0; i < num_unused_channels; ++i) {
-            ct_args.push_back(0);
+            ct_args.push_back(static_cast<uint32_t>(num_used_vc0_sender_channels + i));
         }
     } else {
         for (size_t i = 0; i < num_used_sender_channels; ++i) {
