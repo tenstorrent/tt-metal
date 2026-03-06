@@ -390,7 +390,6 @@ struct ReduceToOneB1 {
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
                         uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
-
                         for (uint32_t i = 0; i < CTArgs::total_num_workers; i++) {
                             uint32_t shard_l1_addr = args.output_base_addr + i * CTArgs::payload_size_bytes;
                             uint64_t fifo_dst = get_noc_addr(
