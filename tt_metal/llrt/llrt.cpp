@@ -116,8 +116,7 @@ void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, virtual_core);
     const auto& hal = tt_metal::MetalContext::instance().hal();
     const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
-    uint64_t l1_noc_offset = hal.get_l1_noc_offset(dispatch_core_type);
-    uint64_t go_signal_adrr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG) + l1_noc_offset;
+    uint64_t go_signal_adrr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
     auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
     reset_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
@@ -125,7 +124,7 @@ void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
         reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_adrr);
     cluster.l1_barrier(chip);
     uint64_t go_message_index_addr =
-        hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX) + l1_noc_offset;
+        hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
     cluster.write_core_immediate(
         &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
@@ -143,9 +142,8 @@ void write_launch_msg_to_core(
 
     msg.kernel_config().mode() = tt_metal::dev_msgs::DISPATCH_MODE_HOST;
 
-    uint64_t l1_noc_offset = hal.get_l1_noc_offset(dispatch_core_type);
-    uint64_t launch_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH) + l1_noc_offset;
-    uint64_t go_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG) + l1_noc_offset;
+    uint64_t launch_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
+    uint64_t go_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
     tt_driver_atomics::sfence();
