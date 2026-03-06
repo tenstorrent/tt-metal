@@ -12,6 +12,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
+// UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <bitset>

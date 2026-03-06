@@ -728,9 +728,7 @@ static void sdpa_inner_loop_step(
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
-            static_assert(
-                kt_num_subblocks >= 1 && kt_num_subblocks <= 4,
-                "kt_num_subblocks must be 1-4 (sbh=1: Sk=8/16, sbh=2: Sk=4/8/16)");
+            static_assert(kt_num_subblocks >= 1, "kt_num_subblocks must be >= 1");
 
             if constexpr (sbh == 1) {
                 // sbh=1: split-matmul overlap (inner dim split across kt_num_subblocks)

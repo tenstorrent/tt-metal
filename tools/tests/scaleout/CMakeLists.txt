@@ -53,6 +53,7 @@ add_executable(
     test_link_retraining.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/cluster_validation_utils.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_metrics_serialization.cpp
+    ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_api.cpp
 )
 
 set_target_properties(

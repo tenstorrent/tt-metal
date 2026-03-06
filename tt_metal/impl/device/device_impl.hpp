@@ -9,7 +9,6 @@
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>

@@ -34,7 +34,6 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
