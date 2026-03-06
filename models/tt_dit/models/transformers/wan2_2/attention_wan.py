@@ -326,9 +326,9 @@ class WanAttention(Module):
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
+                    joint_tensor_q=self.dummy_joint_input,
+                    joint_tensor_k=self.dummy_joint_input,
+                    joint_tensor_v=self.dummy_joint_input,
                     persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                         k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                     ),

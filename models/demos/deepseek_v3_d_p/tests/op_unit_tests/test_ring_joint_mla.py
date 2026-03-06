@@ -33,7 +33,6 @@ def create_balanced_chunk_order(rp_factor):
     This interleaves chunks from start and end to balance workload.
     """
     num_chunks = 2 * rp_factor
-    chunks = list(range(num_chunks))
     balanced_order = []
 
     left = 0
@@ -145,7 +144,8 @@ def run_ring_joint_sdpa(
     ag_output_shape_v = (b, nhv, padded_seq_len, head_dim_v)
 
     persistent_k_output_shard_dims = [None, None]
-    persistent_k_output_shard_dims[up_axis] == 1 if nhk != 1 else None
+    if nhk != 1:
+        persistent_k_output_shard_dims[up_axis] = 1
 
     persistent_output_buffers = [
         [
@@ -316,9 +316,9 @@ def run_ring_joint_sdpa(
                     tt_Q,
                     tt_K,
                     tt_V,
-                    tt_joint_Q,
-                    tt_joint_K,
-                    tt_joint_V,
+                    joint_tensor_q=tt_joint_Q,
+                    joint_tensor_k=tt_joint_K,
+                    joint_tensor_v=tt_joint_V,
                     persistent_output_buffer_k=persistent_output_buffers[i][0],
                     persistent_output_buffer_v=persistent_output_buffers[i][1],
                     joint_strategy="rear",

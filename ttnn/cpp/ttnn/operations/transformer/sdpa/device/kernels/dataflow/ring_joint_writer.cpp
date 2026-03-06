@@ -207,7 +207,7 @@ void kernel_main() {
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
             // Only truly causal case appear in the iteration with local KV
-            // Other iterations will just skip the conmputation with subsequent KV chunks
+            // Other iterations will just skip the computation with subsequent KV chunks
             bool causality = (ring_iter == 0 ? is_causal : false);
 
             if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
