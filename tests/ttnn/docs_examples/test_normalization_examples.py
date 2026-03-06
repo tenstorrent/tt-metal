@@ -30,7 +30,8 @@ def test_group_norm(device):
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Prepare TTNN input
-    # Determine how to shard the input tensor
+    # Determine how to shard the input tensor.
+    # For interleaved (non-sharded) tensors, use ttnn.determine_expected_group_norm_dram_grid_size instead to determine the grid size.
     sharded_mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
         device=device,
         num_channels=C,
