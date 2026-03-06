@@ -590,7 +590,8 @@ install_gcc_versioned() {
     if is_debian_based; then
         # Step 2: Try distro repos
         echo "[INFO] Attempting to install g++-${ver} from apt..."
-        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "g++-${ver}" 2>/dev/null; then
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "g++-${ver}" 2>/dev/null \
+           && command -v "g++-${ver}" >/dev/null 2>&1; then
             return 0
         fi
         echo "[WARNING] g++-${ver} not available in configured repos"
@@ -602,7 +603,8 @@ install_gcc_versioned() {
                 add-apt-repository -y ppa:ubuntu-toolchain-r/test
                 apt-get update
             fi
-            if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "g++-${ver}" 2>/dev/null; then
+            if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "g++-${ver}" 2>/dev/null \
+               && command -v "g++-${ver}" >/dev/null 2>&1; then
                 return 0
             fi
         fi
