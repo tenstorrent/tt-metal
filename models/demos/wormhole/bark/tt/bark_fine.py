@@ -113,21 +113,28 @@ class TtBarkFineModel:
 
         # Sum embeddings of codebooks 0..codebook_idx
         tt_hidden = None
-        for i in range(codebook_idx + 1):
-            # Extract i-th codebook
-            if isinstance(input_ids, list):
-                tokens_i = input_ids[i]
-            else:
-                # Slice from full tensor: [1, batch, seq, n_codes] -> [1, batch, seq, 1]
-                tokens_i = ttnn.slice(input_ids, [0, 0, 0, i], [1, input_ids.shape[1], input_ids.shape[2], i + 1])
 
-            # Ensure shape [1, batch, seq] for embedding op
-            if tokens_i.shape[-1] == 1:
-                tokens_i = ttnn.reshape(tokens_i, [1, tokens_i.shape[1], tokens_i.shape[2]])
+        # Convert input to torch for reliable codebook extraction (ensures uint32 dtype)
+        if isinstance(input_ids, ttnn.Tensor):
+            input_ids_torch = ttnn.to_torch(input_ids)
+        else:
+            input_ids_torch = None
+
+        for i in range(codebook_idx + 1):
+            # Extract i-th codebook tokens on host, upload as uint32
+            if isinstance(input_ids, list):
+                tokens_torch = input_ids[i] if isinstance(input_ids[i], torch.Tensor) else ttnn.to_torch(input_ids[i])
+            else:
+                # input_ids_torch: [1, batch, seq, n_codes] → slice codebook i
+                tokens_torch = input_ids_torch[..., i]  # [1, batch, seq]
+
+            tokens_i = ttnn.from_torch(
+                tokens_torch.to(torch.int32), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
 
             emb_i = ttnn.embedding(tokens_i, self.input_embeds_layers[i], memory_config=memory_config)
-            # ttnn.embedding returns ROW_MAJOR; convert to TILE for downstream ops
             emb_i = ttnn.to_layout(emb_i, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(tokens_i)
 
             if tt_hidden is None:
                 tt_hidden = emb_i
@@ -136,9 +143,6 @@ class TtBarkFineModel:
                 tt_hidden = ttnn.add(tt_hidden, emb_i, memory_config=memory_config)
                 ttnn.deallocate(prev_hidden)
                 ttnn.deallocate(emb_i)
-
-            if not isinstance(input_ids, list):
-                ttnn.deallocate(tokens_i)
 
         # Position embeddings — use [1, seq_len] for 3D output
         seq_len = tt_hidden.shape[-2]
