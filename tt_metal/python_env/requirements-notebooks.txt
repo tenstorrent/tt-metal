@@ -1,0 +1,10 @@
+# Notebook and visualization dependencies.
+# Only needed in dev images or for interactive exploration.
+
+jupyterlab==4.2.5
+ipywidgets==8.1.1
+bokeh==3.1.1
+dash==2.15.0
+plotly==5.18.0
+pandas==2.3.3
+seaborn==0.13.2

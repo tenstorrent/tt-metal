@@ -47,6 +47,9 @@ on:
       basic-ttnn-runtime-tag:
         description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
         value: ${{ jobs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
+      runtime-tag:
+        description: "Docker tag for the minimal runtime Docker image for upstream consumers"
+        value: ${{ jobs.check-docker-images.outputs.runtime-tag }}
       manylinux-tag:
         description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
@@ -81,6 +84,8 @@ jobs:
       basic-dev-tag: ${{ steps.tags.outputs.basic-dev-tag }}
       basic-ttnn-runtime-exists: ${{ steps.images.outputs.basic-ttnn-runtime-exists }}
       basic-ttnn-runtime-tag: ${{ steps.tags.outputs.basic-ttnn-runtime-tag }}
+      runtime-exists: ${{ steps.images.outputs.runtime-exists }}
+      runtime-tag: ${{ steps.tags.outputs.runtime-tag }}
       manylinux-exists: ${{ steps.images.outputs.manylinux-exists }}
       manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
       distro: ${{ steps.platform.outputs.distro }}
@@ -122,6 +127,7 @@ jobs:
           echo "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> $GITHUB_ENV
           echo "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> $GITHUB_ENV
           echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
+          echo "RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-runtime-${ARCH}" >> $GITHUB_ENV
           echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
 
       - name: Compute tags
@@ -133,6 +139,7 @@ jobs:
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.RUNTIME_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
@@ -157,6 +164,14 @@ jobs:
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
             echo "dev-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          if docker manifest inspect ${{ steps.tags.outputs.runtime-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.runtime-tag }} exists"
+            echo "runtime-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.runtime-tag }} does not exist"
+            echo "runtime-exists=false" >> $GITHUB_OUTPUT
           fi
 
           if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
@@ -186,7 +201,7 @@ jobs:
   build-ubuntu-images:
     name: "🐳️ Build Ubuntu images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.distro == 'ubuntu' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
+    if: needs.check-docker-images.outputs.distro == 'ubuntu' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.runtime-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -241,6 +256,19 @@ jobs:
           build-args: |
             UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
             PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
+          cache-to: type=inline
+          pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      - name: Build and push Runtime image
+        if: needs.check-docker-images.outputs.runtime-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: runtime
+          tags: ${{ needs.check-docker-images.outputs.runtime-tag }}
+          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -339,6 +367,13 @@ jobs:
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.check-docker-images.outputs.dev-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest Runtime tag"
+        if: needs.check-docker-images.outputs.runtime-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.runtime-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic Dev tag"

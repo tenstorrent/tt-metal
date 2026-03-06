@@ -1,0 +1,28 @@
+# Core test dependencies needed by most test images and upstream consumers.
+# Keep this minimal -- only packages required to run basic tests.
+
+loguru==0.6.0
+
+tt-smi==3.0.38; platform_machine == "x86_64"
+
+pytest==8.4.2
+pytest-cov==7.0.0
+pytest-timeout==2.4.0
+pytest-split==0.10.0
+pytest-benchmark==5.1.0
+pytest-github-actions-annotate-failures==0.3.0
+
+numpy>=1.24.4,<2
+networkx==3.1
+pyyaml>=5.4
+click==8.1.7
+tqdm==4.66.3
+tabulate==0.9.0
+pydantic==2.9.2
+
+# CPU-only torch for x86_64 to avoid installing CUDA dependencies
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.7.1 ; platform_machine == 'x86_64'
+torch==2.7.1 ; platform_machine == 'aarch64'
+torchvision==0.22.1 ; platform_machine == 'x86_64'
+torchvision==0.22.1 ; platform_machine == 'aarch64'

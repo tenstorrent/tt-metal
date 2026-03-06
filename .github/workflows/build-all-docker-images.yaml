@@ -28,6 +28,9 @@ on:
       ubuntu-2204-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 22.04 Basic TTNN Runtime image"
         value: ${{ jobs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
+      ubuntu-2204-runtime-tag:
+        description: "Docker tag for Ubuntu 22.04 Runtime image"
+        value: ${{ jobs.check-images.outputs.ubuntu-2204-runtime-tag }}
       # Ubuntu 24.04 images
       ubuntu-2404-ci-build-tag:
         description: "Docker tag for Ubuntu 24.04 CI Build image"
@@ -44,6 +47,9 @@ on:
       ubuntu-2404-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 24.04 Basic TTNN Runtime image"
         value: ${{ jobs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
+      ubuntu-2404-runtime-tag:
+        description: "Docker tag for Ubuntu 24.04 Runtime image"
+        value: ${{ jobs.check-images.outputs.ubuntu-2404-runtime-tag }}
       # ManyLinux image (shared)
       manylinux-tag:
         description: "Docker tag for ManyLinux image"
@@ -64,6 +70,7 @@ jobs:
       ubuntu-2204-dev-tag: ${{ steps.ubuntu-2204-tags.outputs.dev-tag }}
       ubuntu-2204-basic-dev-tag: ${{ steps.ubuntu-2204-tags.outputs.basic-dev-tag }}
       ubuntu-2204-basic-ttnn-runtime-tag: ${{ steps.ubuntu-2204-tags.outputs.basic-ttnn-runtime-tag }}
+      ubuntu-2204-runtime-tag: ${{ steps.ubuntu-2204-tags.outputs.runtime-tag }}
       ubuntu-2204-needs-build: ${{ steps.ubuntu-2204-check.outputs.needs-build }}
       # Ubuntu 24.04
       ubuntu-2404-ci-build-tag: ${{ steps.ubuntu-2404-tags.outputs.ci-build-tag }}
@@ -71,6 +78,7 @@ jobs:
       ubuntu-2404-dev-tag: ${{ steps.ubuntu-2404-tags.outputs.dev-tag }}
       ubuntu-2404-basic-dev-tag: ${{ steps.ubuntu-2404-tags.outputs.basic-dev-tag }}
       ubuntu-2404-basic-ttnn-runtime-tag: ${{ steps.ubuntu-2404-tags.outputs.basic-ttnn-runtime-tag }}
+      ubuntu-2404-runtime-tag: ${{ steps.ubuntu-2404-tags.outputs.runtime-tag }}
       ubuntu-2404-needs-build: ${{ steps.ubuntu-2404-check.outputs.needs-build }}
       # ManyLinux
       manylinux-tag: ${{ steps.manylinux-tags.outputs.manylinux-tag }}
@@ -93,6 +101,7 @@ jobs:
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-runtime-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
@@ -122,6 +131,7 @@ jobs:
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-runtime-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
@@ -243,6 +253,19 @@ jobs:
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      - name: Build and push Runtime image
+        id: build-runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: runtime
+          tags: ${{ needs.check-images.outputs.ubuntu-2204-runtime-tag }}
+          build-args: UBUNTU_VERSION=22.04
+          cache-to: type=inline
+          pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -322,6 +345,19 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
+          build-args: UBUNTU_VERSION=24.04
+          cache-to: type=inline
+          pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      - name: Build and push Runtime image
+        id: build-runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: runtime
+          tags: ${{ needs.check-images.outputs.ubuntu-2404-runtime-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true

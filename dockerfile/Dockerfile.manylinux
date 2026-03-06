@@ -22,7 +22,8 @@ RUN chmod +x /tmp/install_dependencies.sh && \
 
 # Install additional packages needed for manylinux builds and OpenMPI compilation
 # that are not covered by the install_dependencies.sh script
-RUN dnf install -y \
+RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
+    dnf install -y \
     autoconf \
     automake \
     bison \
@@ -41,8 +42,7 @@ RUN dnf install -y \
     pmix-devel \
     texinfo \
     wget \
-    zlib-devel \
-    && dnf clean all
+    zlib-devel
 
 # Install mold linker for faster linking
 ARG MOLD_VERSION=2.40.4

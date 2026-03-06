@@ -36,19 +36,10 @@ on:
   schedule:
     - cron: '0 12 * * *'
 
-# any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
-# well, that's because of the two builds...
+# Consolidated to 2 images; topology is a runtime parameter.
 env:
-  WH_6U_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u
-  WH_6U_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u
-  BLACKHOLE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh
-  BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
-  BLACKHOLE_LLMBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-llmbox
-  BLACKHOLE_DESKBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-deskbox
-  BLACKHOLE_LOUDBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-loudbox
-  BLACKHOLE_P300_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-p300
-  BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
-  BLACKHOLE_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
+  UPSTREAM_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests
+  UPSTREAM_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests
 
 jobs:
   build-artifact:
@@ -67,16 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
-      wh-6u-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-image-tag }}
-      wh-6u-profiler-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-profiler-image-tag }}
-      bh-image-tag: ${{ steps.set-image-tags.outputs.bh-image-tag }}
-      bh-profiler-image-tag: ${{ steps.set-image-tags.outputs.bh-profiler-image-tag }}
-      bh-llmbox-image-tag: ${{ steps.set-image-tags.outputs.bh-llmbox-image-tag }}
-      bh-deskbox-image-tag: ${{ steps.set-image-tags.outputs.bh-deskbox-image-tag }}
-      bh-loudbox-image-tag: ${{ steps.set-image-tags.outputs.bh-loudbox-image-tag }}
-      bh-p300-image-tag: ${{ steps.set-image-tags.outputs.bh-p300-image-tag }}
-      bh-qb-ge-image-tag: ${{ steps.set-image-tags.outputs.bh-qb-ge-image-tag }}
-      bh-glx-image-tag: ${{ steps.set-image-tags.outputs.bh-glx-image-tag }}
+      upstream-image-tag: ${{ steps.set-image-tags.outputs.upstream-image-tag }}
+      upstream-profiler-image-tag: ${{ steps.set-image-tags.outputs.upstream-profiler-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -89,27 +72,11 @@ jobs:
         id: set-image-tags
         run: |
           image_suffix="${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}"
-          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
-          echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-deskbox-image-tag=${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${image_suffix}" \
-            >> "$GITHUB_OUTPUT"
-          echo "bh-glx-image-tag=${{ env.BLACKHOLE_GLX_IMAGE_NAME }}:${image_suffix}" \
+          echo "upstream-image-tag=${{ env.UPSTREAM_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
+          echo "upstream-profiler-image-tag=${{ env.UPSTREAM_PROFILER_IMAGE_NAME }}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
   build-images:
     needs:
-      - build-artifact
       - build-artifact
       - get-image-tags
     permissions:
@@ -117,75 +84,17 @@ jobs:
       contents: read
     strategy:
       matrix:
-        # Ultimate goal will be to have a master script that people can call via
-        # <url_to_script_on_main.sh> | sh -c or something like that which will download
-        # the images and run them.
         image-config:
-          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.upstream-image-tag }}
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: wh_6u
+            default-hw-topology: blackhole
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
-            hw-topology: wh_6u
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.upstream-profiler-image-tag }}
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
-            hw-topology: blackhole
+            default-hw-topology: blackhole
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_llmbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_deskbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_loudbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_p300
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_qb_ge
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_glx
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-            techdebt-install-ttt-reqs: true
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - uses: actions/checkout@v4
@@ -193,22 +102,46 @@ jobs:
         id: download-artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: ${{ matrix.image-config.build-artifact-name }}
       - run: mkdir -p _tt-metal
       - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
       - run: ls -hal _tt-metal
-      - name: 🧪 Download Python Wheel
+      - name: Download Python Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: ${{ matrix.image-config.wheel-artifact-name }}
-      - name: 💿 Verify Wheel exists
+      - name: Verify Wheel exists
+        shell: bash
+        run: ls -la *.whl
+      - name: Prepare test scripts for build context
         shell: bash
         run: |
-          echo "📂 In directory: $(pwd)"
-          echo "📄 Files:"
-          ls -la .
-      # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
+          # Copy only the test scripts and model configs needed at runtime
+          # instead of cloning the entire repo inside the container
+          mkdir -p _test_scripts _test_scripts_extra _model_tests _tests
+
+          # Upstream test runner scripts
+          cp dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh _test_scripts/
+          mkdir -p _test_scripts_extra/single_card && cp tests/scripts/single_card/run_bh_upstream_profiler_tests.sh _test_scripts_extra/single_card/
+          mkdir -p _test_scripts_extra/wh_6u && cp tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh _test_scripts_extra/wh_6u/
+
+          # Test directories referenced by the test scripts
+          cp -r tests/ttnn/ _tests/ttnn/ || true
+          cp -r tests/tt_metal/ _tests/tt_metal/ || true
+          cp -r tests/tt_eager/ _tests/tt_eager/ || true
+          cp -r tests/didt/ _tests/didt/ || true
+          cp -r tests/scripts/ _tests/scripts/ || true
+          cp -r tests/conftest.py _tests/ || true
+
+          # Model test directories referenced by test suites
+          cp -r models/demos/ _model_tests/demos/ || true
+          cp -r models/tt_transformers/ _model_tests/tt_transformers/ || true
+
+          # Cabling descriptor configs referenced by cluster validation tests
+          mkdir -p _extra_sources/tools/tests/scaleout/cabling_descriptors
+          cp -r tools/tests/scaleout/cabling_descriptors/ _extra_sources/tools/tests/scaleout/cabling_descriptors/ || true
+          mkdir -p _extra_sources/tt_metal/fabric/cabling_descriptors
+          cp -r tt_metal/fabric/cabling_descriptors/ _extra_sources/tt_metal/fabric/cabling_descriptors/ || true
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -221,8 +154,8 @@ jobs:
           sudo apt update
           sudo apt install -y gettext
           export TEST_COMMAND=${{ matrix.image-config.test-command }}
-          export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
-          export TT_METAL_DEV_VERSION=latest
+          export HW_TOPOLOGY=${{ matrix.image-config.default-hw-topology }}
+          export TT_METAL_RUNTIME_VERSION=latest
           export TT_METAL_COMMIT_SHA=${{ github.sha }}
           envsubst < dockerfile/upstream_test_images/Dockerfile.template \
             > dockerfile/upstream_test_images/Dockerfile-generated
@@ -235,8 +168,6 @@ jobs:
           pull: true
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
-          build-args: |
-            TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
   test-wh-6u-image:
@@ -249,11 +180,9 @@ jobs:
       - in-service
       - pipeline-functional
     steps:
-      # TODO -likely need to put this into a script which can be parameterized
-      # on the build number and whether to only pull
       - name: Pull image
         timeout-minutes: 10
-        run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        run: docker pull ${{ needs.get-image-tags.outputs.upstream-image-tag }}
       - name: Run image
         timeout-minutes: 45
         env:
@@ -262,13 +191,14 @@ jobs:
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro \
-            -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            -e LLAMA_DIR \
+            ${{ needs.get-image-tags.outputs.upstream-image-tag }} wh_6u
       - name: Run profiler image
         timeout-minutes: 10
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent \
-            ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            ${{ needs.get-image-tags.outputs.upstream-profiler-image-tag }} wh_6u
   test-bh-glx-image:
     needs:
       - get-image-tags
@@ -279,11 +209,9 @@ jobs:
       - in-service
       - pipeline-functional
     steps:
-      # TODO -likely need to put this into a script which can be parameterized
-      # on the build number and whether to only pull
       - name: Pull image
         timeout-minutes: 10
-        run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+        run: docker pull ${{ needs.get-image-tags.outputs.upstream-image-tag }}
       - name: Run image
         timeout-minutes: 65
         env:
@@ -293,7 +221,7 @@ jobs:
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
             -e HF_MODEL -e TT_CACHE_PATH \
-            ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+            ${{ needs.get-image-tags.outputs.upstream-image-tag }} blackhole_glx
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -303,16 +231,16 @@ jobs:
       matrix:
         bh-config:
           - runner-label: BH-LLMBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+            hw-topology: blackhole_llmbox
             extra-tag: pipeline-perf
           - runner-label: BH-DeskBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+            hw-topology: blackhole_deskbox
             extra-tag: pipeline-functional
           - runner-label: BH-LoudBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+            hw-topology: blackhole_loudbox
             extra-tag: pipeline-functional
           - runner-label: BH-QB-GE
-            image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
+            hw-topology: blackhole_qb_ge
             extra-tag: pipeline-perf
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
@@ -322,7 +250,6 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          # For different environments, BH VLAN vs. cloud
           HF_MODEL: >-
             ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
             && '/localdev/blackhole_demos/huggingface_data'
@@ -334,7 +261,9 @@ jobs:
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
-            -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
+            -e HF_MODEL -e TT_CACHE_PATH \
+            ${{ needs.get-image-tags.outputs.upstream-image-tag }} \
+            ${{ matrix.bh-config.hw-topology }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -344,7 +273,6 @@ jobs:
       matrix:
         bh-config:
           - runner-label: P300
-            image-name: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
@@ -367,7 +295,7 @@ jobs:
         run: |
           docker run --network none --device /dev/tenstorrent \
             -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH \
-            ${{ matrix.bh-config.image-name }}
+            ${{ needs.get-image-tags.outputs.upstream-image-tag }} blackhole_p300
   test-bh-image:
     needs:
       - get-image-tags
@@ -382,14 +310,11 @@ jobs:
       - ${{ matrix.bh-card }}
       - in-service
       - cloud-virtual-machine
-      # Targeting cloud machines with pipeline-functional per now per
-      # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
       - pipeline-functional
     steps:
       - name: Run image
         timeout-minutes: 40
         env:
-          # For different environments, yyz BH VLAN vs. cloud
           HF_MODEL: >-
             ${{ contains(runner.name, 'gh')
             && '/localdev/blackhole_demos/huggingface_data'
@@ -401,12 +326,12 @@ jobs:
         run: |
           docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
             -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH \
-            ${{ needs.get-image-tags.outputs.bh-image-tag }}
+            ${{ needs.get-image-tags.outputs.upstream-image-tag }} blackhole
       - name: Run profiler image
         timeout-minutes: 10
         run: |
           docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
-            ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+            ${{ needs.get-image-tags.outputs.upstream-profiler-image-tag }} blackhole
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:
@@ -427,7 +352,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Load configuration from external JSON file
           config_file=".github/workflows/job_configs/upstream-tests.json"
           if [[ ! -f "$config_file" ]]; then
             echo "ERROR: Configuration file $config_file not found" >&2
@@ -436,24 +360,12 @@ jobs:
 
           echo "Using configuration from $config_file"
 
-          # Get all hw_topology keys
           hw_topologies=($(jq -r '.hw_topologies | keys[]' "$config_file"))
 
-          # Create mapping of image output names to actual image tags
-          declare -A image_output_to_tag=(
-            ["bh-image-tag"]="${{ needs.get-image-tags.outputs.bh-image-tag }}"
-            ["bh-profiler-image-tag"]="${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}"
-            ["wh-6u-image-tag"]="${{ needs.get-image-tags.outputs.wh-6u-image-tag }}"
-            ["wh-6u-profiler-image-tag"]="${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}"
-            ["bh-llmbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}"
-            ["bh-deskbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}"
-            ["bh-loudbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}"
-            ["bh-p300-image-tag"]="${{ needs.get-image-tags.outputs.bh-p300-image-tag }}"
-            ["bh-qb-ge-image-tag"]="${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}"
-            ["bh-glx-image-tag"]="${{ needs.get-image-tags.outputs.bh-glx-image-tag }}"
-          )
+          # With consolidated images, all topologies map to the same 2 images
+          upstream_image_tag="${{ needs.get-image-tags.outputs.upstream-image-tag }}"
+          upstream_profiler_image_tag="${{ needs.get-image-tags.outputs.upstream-profiler-image-tag }}"
 
-          # Get test job results
           declare -A test_job_results=(
             ["test-bh-image"]="${{ needs.test-bh-image.result }}"
             ["test-wh-6u-image"]="${{ needs.test-wh-6u-image.result }}"
@@ -462,113 +374,57 @@ jobs:
             ["test-bh-glx-image"]="${{ needs.test-bh-glx-image.result }}"
           )
 
-          # Initialize array for images to push (optimized approach)
-          images_to_push_array=()
-
-          # Parse the request-force-publish input
-          # Single-quotes because of the doubles in this string for JSON
           request_input='${{ inputs.request-force-publish || 'passing-only' }}'
-
           echo "Processing request: $request_input"
 
-          # Function to add images for a hw_topology
-          add_images_for_topology() {
-            local hw_topology="$1"
-            local reason="$2"
+          # Determine if we should publish based on test results
+          should_publish=false
 
-            echo "Adding images for $hw_topology ($reason)"
-
-            # Get image outputs for this hw_topology from config
-            local image_outputs
-            image_outputs=($(jq -r ".hw_topologies[\"$hw_topology\"].image_outputs[]" "$config_file"))
-
-            # Add each image to our array
-            for image_output in "${image_outputs[@]}"; do
-              if [[ -v image_output_to_tag[$image_output] ]]; then
-                local image_tag="${image_output_to_tag[$image_output]}"
-                echo "  Adding: $image_tag"
-                images_to_push_array+=("$image_tag")
-              else
-                echo "ERROR: Unknown image output '$image_output' for hw_topology '$hw_topology'" >&2
-                exit 1
-              fi
-            done
-          }
-
-          if [[ "$request_input" == "passing-only" ]]; then
-            echo "Mode: Publishing only passing images"
-
-            # Check each hw_topology's test job result
-            for hw_topology in "${hw_topologies[@]}"; do
-              test_job=$(jq -r ".hw_topologies[\"$hw_topology\"].test_job" "$config_file")
-              test_result="${test_job_results[$test_job]}"
-
-              echo "Checking $hw_topology (test job: $test_job, result: $test_result)"
-
-              if [[ "$test_result" == "success" ]]; then
-                add_images_for_topology "$hw_topology" "test passed"
-              else
-                echo "Skipping images for $hw_topology (test failed or skipped: $test_result)"
-              fi
-            done
-
-          elif [[ "$request_input" == "all" ]]; then
+          if [[ "$request_input" == "all" ]]; then
             echo "Mode: Publishing all images regardless of test status"
-
-            # Add all images for all hw_topologies
-            for hw_topology in "${hw_topologies[@]}"; do
-              add_images_for_topology "$hw_topology" "forced all"
-            done
-
-          else
-            echo "Mode: Publishing specific hw_topology list"
-
-            # Validate it's a JSON array
-            if [[ $(echo ${request_input} | jq 'type') != '"array"' ]]; then
-              echo "ERROR: When providing specific hw_topology values," \
-                "input must be a JSON array like [\"wh-6u\", \"bh\"]" >&2
-              exit 1
-            fi
-
-            # Get valid hw_topology values for error messages
-            valid_topologies=$(printf '%s ' "${hw_topologies[@]}")
-
-            echo "Valid JSON array is provided"
-
-            # Process each requested requested_hw_topology
-            while IFS= read -r requested_hw_topology; do
-              echo "Processing requested hw_topology: $requested_hw_topology"
-
-              # Validate requested_hw_topology exists in config
-              if ! jq -e ".hw_topologies[\"$requested_hw_topology\"]" "$config_file" >/dev/null; then
-                echo "ERROR: Unknown hw_topology '$requested_hw_topology'. Valid values are: $valid_topologies" >&2
-                exit 1
+            should_publish=true
+          elif [[ "$request_input" == "passing-only" ]]; then
+            echo "Mode: Publishing only if all tests pass"
+            all_passed=true
+            for job_name in "${!test_job_results[@]}"; do
+              result="${test_job_results[$job_name]}"
+              echo "  $job_name: $result"
+              if [[ "$result" != "success" ]]; then
+                all_passed=false
               fi
-
-              add_images_for_topology "$requested_hw_topology" "forced specific"
-            done < <(echo ${request_input} | jq -r '.[]')
+            done
+            if [[ "$all_passed" == "true" ]]; then
+              should_publish=true
+            else
+              echo "Some test jobs did not pass; checking individual topology results"
+              for hw_topology in "${hw_topologies[@]}"; do
+                test_job=$(jq -r ".hw_topologies[\"$hw_topology\"].test_job" "$config_file")
+                test_result="${test_job_results[$test_job]}"
+                if [[ "$test_result" == "success" ]]; then
+                  should_publish=true
+                  break
+                fi
+              done
+            fi
+          else
+            echo "Mode: Force publishing for specific topologies"
+            should_publish=true
           fi
 
-          # Convert bash array to JSON (optimized single conversion)
-          if [[ ${#images_to_push_array[@]} -eq 0 ]]; then
-            images_to_push_json="[]"
-            # TODO: I wonder if we want to just fail here and print a helpful error message?
-            echo "No images to push"
+          if [[ "$should_publish" == "true" ]]; then
+            images_to_push_json=$(jq -c -n \
+              --arg vanilla "$upstream_image_tag" \
+              --arg profiler "$upstream_profiler_image_tag" \
+              '[{"image-tag": $vanilla}, {"image-tag": $profiler}]')
           else
-            echo "Converting ${#images_to_push_array[@]} images to JSON for next job's matrix"
-            # Use -c because whitespace in GITHUB_OUTPUT might cause issues
-            images_to_push_json=$(printf '%s\n' "${images_to_push_array[@]}" \
-              | jq -R '.' | jq -c -s 'map({"image-tag": .})')
+            images_to_push_json="[]"
+            echo "No images to push -- all test jobs failed"
           fi
 
           echo "Final images to push:"
           echo "$images_to_push_json" | jq '.'
-
-          # Set output
           echo "images-to-push=$images_to_push_json" >> "$GITHUB_OUTPUT"
   push-latest:
-    # Push images based on the dynamic matrix calculated by calculate-to-publish
-    # This job will only run if calculate-to-publish has images to push
     if: >-
       ${{
         !cancelled() &&

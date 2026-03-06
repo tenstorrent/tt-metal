@@ -1,45 +1,56 @@
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:${TT_METAL_DEV_VERSION} as base
+ARG TT_METAL_RUNTIME_VERSION=latest
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-runtime-amd64:${TT_METAL_RUNTIME_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Build argument to control whether to install tt_transformers requirements
-ARG TECHDEBT_INSTALL_TTT_REQS="false"
 
 LABEL org.opencontainers.image.source=https://github.com/tenstorrent/tt-metal
 LABEL org.opencontainers.image.description="Run upstream smoke tests"
 LABEL org.opencontainers.image.licenses=MIT
 
-# Switch to user "user"
+# Runtime image doesn't include the user from the dev stage, so create it here
+RUN adduser --uid 1000 --shell /bin/bash user && \
+    usermod -aG sudo user && \
+    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && \
+    chmod 0440 /etc/sudoers.d/user
+
 USER user
-
-RUN git clone https://github.com/tenstorrent/tt-metal --recurse-submodules /home/user/tt-metal
-
 WORKDIR /home/user/tt-metal
-
-RUN git reset --hard ${TT_METAL_COMMIT_SHA} && git submodule update --init --recursive
 
 ENV PYTHONPATH=/home/user/tt-metal
 ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
 ENV TT_METAL_HOME=/home/user/tt-metal
 
-RUN ls -hal
-
-# Can delete these to reduce container image size?
+# Copy build artifacts, wheel, and test scripts from build context
 COPY _tt-metal/build/ ./build/
 COPY _tt-metal/runtime/ ./runtime/
 COPY ttnn-*.whl ./
 
+# Copy only the test scripts and model configs needed at runtime
+COPY _test_scripts/ ./dockerfile/upstream_test_images/
+COPY _test_scripts_extra/ ./tests/scripts/
+
+# Copy model test directories needed by the test suites
+COPY _model_tests/ ./models/
+COPY _tests/ ./tests/
+
+# Copy cabling descriptors and other source-tree configs needed by test scripts
+COPY _extra_sources/tools/ ./tools/
+COPY _extra_sources/tt_metal/ ./tt_metal/
+
 RUN uv pip install $(ls -1 *.whl)
 
-RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
+RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 \
+    ./build/test/tt_metal/unit_tests_dispatch \
+    --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" \
+    --gtest_list_tests
 RUN TRACY_NO_INVARIANT_CHECK=1 python3 -c 'import ttnn'
 
-# Give other full access to the user directory (for cross-user MPI runs)
+# Cross-user MPI runs need open permissions
 RUN sudo chmod -R 777 /home/user
 
-# Allow files with insecure permissions to be used as authorized keys by disabling SSH StrictModes (for MPI operator key mounts)
-RUN sudo mkdir -p /run/sshd
-RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+# SSH StrictModes disabled for MPI operator key mounts
+RUN sudo mkdir -p /run/sshd && \
+    echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
 
-ENTRYPOINT ["$TEST_COMMAND"]
-CMD ["$HW_TOPOLOGY"]
+ENTRYPOINT ["${TEST_COMMAND}"]
+CMD ["${HW_TOPOLOGY}"]

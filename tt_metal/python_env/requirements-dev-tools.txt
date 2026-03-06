@@ -1,0 +1,11 @@
+# Development tooling -- linters, formatters, build tools.
+# Only needed in ci-build and dev images, not by test runners.
+
+platformdirs<4.0.0
+pre-commit==3.5.0
+black==24.3.0
+clang-format==19.1.4
+build==0.10.0
+twine==4.0.2
+yamllint==1.32.0
+mypy==1.9.0
