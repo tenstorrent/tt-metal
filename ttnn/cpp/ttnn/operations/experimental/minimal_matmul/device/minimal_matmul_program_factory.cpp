@@ -909,28 +909,27 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
     auto& compute_runtime_args = GetRuntimeArgs(program, override_variables.compute_kernels_id);
 
-    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
-    // [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
-    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
-    // [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4),
+    //   defer_write_k_block, max_defer_write_k_block, [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4),
+    //   defer_write_k_block, max_defer_write_k_block, [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 13;  // After defer_write_k_block (index 12) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 14;
+    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
+    constexpr uint32_t in0_ternary_b_addr_idx = 15;
 
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
-    constexpr uint32_t in1_ternary_a_addr_idx = 12;  // After defer_write_k_block (index 11)
-    constexpr uint32_t in1_ternary_b_addr_idx = 13;
+    constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
+    constexpr uint32_t in1_ternary_b_addr_idx = 14;
 
     // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after ternary addresses (if present)
-    uint32_t in0_out_addr_start_idx =
-        has_fused_ternary ? 15 : 13;  // After defer_write_k_block and optional ternary addresses
-    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 14 : 12;
+    // Output addresses start after max_defer_write_k_block and optional ternary addresses
+    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 16 : 14;
+    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 15 : 13;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
