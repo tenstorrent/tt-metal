@@ -35,10 +35,10 @@ void kernel_main() {
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
-    float eps_f;
-    std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
     cb_reserve_back(cb_id_eps, onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
+    float eps_f = 0;
+    std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
     FILL_WITH_VALUE_FLOAT(cb_id_eps, eps_f);
 #endif
 #ifdef FILL_WITH_VALUE

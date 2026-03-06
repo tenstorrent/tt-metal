@@ -445,7 +445,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     auto compile_time_args = CompileTimeArgs::build(ct_ctx);
 
     // Pack eps for later use
-    uint32_t e_u = std::bit_cast<uint32_t>(eps);
+    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     // Build runtime args using helper
     const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
@@ -481,7 +481,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),
         .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
-        .eps_u = e_u,
+        .eps_u = eps_u,
         .gamma_dram_addr = gamma_dram_addr,
         .beta_dram_addr = beta_dram_addr,
         .single_tile_size = single_tile_size,
