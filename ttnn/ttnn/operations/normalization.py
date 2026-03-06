@@ -293,7 +293,7 @@ def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_gr
     Returns: CoreGrid
     """
     assert num_channels % num_groups == 0
-    assert num_channels % 32 == 0
+    assert num_channels % ttnn.TILE_SIZE == 0
     compute_grid = device.compute_with_storage_grid_size()
     max_x, max_y = compute_grid.x, compute_grid.y
     Ht = math.ceil(input_nhw / ttnn.TILE_SIZE)
