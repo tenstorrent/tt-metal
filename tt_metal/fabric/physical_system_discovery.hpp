@@ -39,12 +39,14 @@ LocalEthernetMetrics query_local_ethernet_metrics(
     const PhysicalSystemDescriptor& psd, tt::umd::Cluster& cluster, const Hal* hal);
 
 namespace discovery_impl {
-// Internal discovery function - runs local discovery only
+// Internal discovery function - runs local discovery only.
+// all_hostnames_unique must be from resolve_hostname_uniqueness() called before this.
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::Cluster& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
-    bool run_live_discovery);
+    bool run_live_discovery,
+    bool all_hostnames_unique);
 }  // namespace discovery_impl
 
 }  // namespace tt::tt_metal

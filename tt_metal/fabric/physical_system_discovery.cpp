@@ -412,7 +412,8 @@ PhysicalSystemDescriptor run_local_discovery(
     tt::umd::Cluster& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
-    bool run_live_discovery) {
+    bool run_live_discovery,
+    bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
 
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
@@ -429,11 +430,12 @@ PhysicalSystemDescriptor run_local_discovery(
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
 
-    // When multiple ranks exist, use hostname_rank as key to ensure each rank gets its own
-    // entry during merge (avoids overwriting when all ranks share the same hostname, e.g. mock).
-    // This ensures get_all_hostnames() returns one entry per rank and host_connectivity_graph
-    // is populated with the correct keys.
-    auto hostname_key = (*(distributed_context->size()) > 1) ? (hostname + "_" + std::to_string(my_rank)) : hostname;
+    // When multiple ranks exist and hostnames are not unique (e.g. mock, same machine), use hostname_rank
+    // so each rank gets its own entry during merge. When hostnames are unique (different machines),
+    // use hostname so graph keys match my_host_name() for lookups (e.g. get_host_neighbors).
+    auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
+                            ? (hostname + "_" + std::to_string(my_rank))
+                            : hostname;
 
     // Set local hostname and rank (friend access allows direct access to private members)
     psd.get_host_mobo_name_map()[hostname_key] = get_mobo_name();
@@ -523,14 +525,15 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
     distributed_context->barrier();
 
-    auto psd =
-        discovery_impl::run_local_discovery(cluster, distributed_context, target_device_type, run_live_discovery);
+    // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
+    // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
+    bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
+    auto psd = discovery_impl::run_local_discovery(
+        cluster, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
-    // Set all discovery data including hostname uniqueness (local_hostname_, local_rank_, all_hostnames_unique_)
-    bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
     psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
