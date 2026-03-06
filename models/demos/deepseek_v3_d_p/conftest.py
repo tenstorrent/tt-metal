@@ -77,13 +77,15 @@ def automatically_detect_current_device_type() -> str:
         else:
             raise ValueError(f"N300 cluster type detected but unexpected device count: {num_devices} (expected 1 or 2)")
     elif cluster_type == ttnn.cluster.ClusterType.P150_X4:
-        if num_devices == 4 or num_devices == 8:
+        if num_devices == 4:
             return "P150_X4"
         else:
-            raise ValueError(
-                f"P150_X4 cluster type detected but unexpected device count: {num_devices} (expected 4 or 8)"
-            )
-
+            raise ValueError(f"P150_X4 cluster type detected but unexpected device count: {num_devices} (expected 4)")
+    elif cluster_type == ttnn.cluster.ClusterType.P150_X8:
+        if num_devices == 8:
+            return "P150_X8"
+        else:
+            raise ValueError(f"P150_X8 cluster type detected but unexpected device count: {num_devices} (expected 8)")
     raise ValueError(
         f"Unable to determine device type: cluster_type={cluster_type}, "
         f"num_devices={num_devices}, arch_name={ttnn.get_arch_name()}"
