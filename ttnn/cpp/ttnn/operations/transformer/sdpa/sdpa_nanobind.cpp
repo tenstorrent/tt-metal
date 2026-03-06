@@ -314,6 +314,8 @@ void bind_sdpa(nb::module_& mod) {
             use_column_major_ccl (bool, optional): If True, allocate CCL worker cores in column-major order.
                 This places CCL workers in a column (useful when reserving the last column for CCL).
                 If False (default), uses row-major allocation. Defaults to False.
+            is_causal (bool): Whether to use causal attention masking. Defaults to False.
+            is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -333,12 +335,8 @@ void bind_sdpa(nb::module_& mod) {
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
-               const ttnn::Tensor& joint_tensor_q,
-               const ttnn::Tensor& joint_tensor_k,
-               const ttnn::Tensor& joint_tensor_v,
                ttnn::Tensor& persistent_output_buffer_k,
                ttnn::Tensor& persistent_output_buffer_v,
-               const std::string& joint_strategy,
                std::size_t logical_n,
                const SDPAProgramConfig& program_config,
                std::optional<float> scale,
@@ -351,19 +349,21 @@ void bind_sdpa(nb::module_& mod) {
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                CoreCoord ccl_core_grid_offset,
-               bool use_column_major_ccl) {
+               bool use_column_major_ccl,
+               bool is_causal,
+               bool is_balanced,
+               const std::optional<ttnn::Tensor>& joint_tensor_q,
+               const std::optional<ttnn::Tensor>& joint_tensor_k,
+               const std::optional<ttnn::Tensor>& joint_tensor_v,
+               const std::optional<std::string>& joint_strategy) {
                 auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                                      : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
                 auto outputs = self(
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
-                    joint_tensor_q,
-                    joint_tensor_k,
-                    joint_tensor_v,
                     persistent_output_buffer_k,
                     persistent_output_buffer_v,
-                    joint_strategy,
                     logical_n,
                     program_config,
                     dim,
@@ -374,21 +374,23 @@ void bind_sdpa(nb::module_& mod) {
                     topology,
                     subdevice_id,
                     ccl_core_grid_offset,
+                    is_causal,
+                    is_balanced,
                     scale,
                     compute_kernel_config,
-                    strategy);
+                    strategy,
+                    joint_tensor_q,
+                    joint_tensor_k,
+                    joint_tensor_v,
+                    joint_strategy);
                 return outputs;
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
-            nb::arg("joint_tensor_q").noconvert(),
-            nb::arg("joint_tensor_k").noconvert(),
-            nb::arg("joint_tensor_v").noconvert(),
             nb::kw_only(),
             nb::arg("persistent_output_buffer_k").noconvert(),
             nb::arg("persistent_output_buffer_v").noconvert(),
-            nb::arg("joint_strategy"),
             nb::arg("logical_n"),
             nb::arg("program_config").noconvert(),
             nb::arg("scale") = nb::none(),
@@ -401,7 +403,13 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("ccl_core_grid_offset"),
-            nb::arg("use_column_major_ccl") = false});
+            nb::arg("use_column_major_ccl") = false,
+            nb::arg("is_causal").noconvert() = false,
+            nb::arg("is_balanced").noconvert() = false,
+            nb::arg("joint_tensor_q").noconvert() = nb::none(),
+            nb::arg("joint_tensor_k").noconvert() = nb::none(),
+            nb::arg("joint_tensor_v").noconvert() = nb::none(),
+            nb::arg("joint_strategy") = nb::none()});
 
     const auto* mla_doc =
         R"doc(

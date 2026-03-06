@@ -567,6 +567,10 @@ run_t3000_deepseek_tests() {
   MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
 }
 
+run_t3000_deepseek_prefill_tests() {
+  pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests --timeout 600 --durations=0
+}
+
 run_t3000_ccl_tests() {
   # Record the start time
   fail=0

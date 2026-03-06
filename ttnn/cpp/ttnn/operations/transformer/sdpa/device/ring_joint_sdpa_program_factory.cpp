@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
@@ -9,6 +9,7 @@
 #include <cmath>
 #include <string>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -92,16 +93,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& input_tensor_k = tensor_args.input_k;
     const auto& input_tensor_v = tensor_args.input_v;
 
-    const auto& joint_tensor_q = tensor_args.joint_q;
-    const auto& joint_tensor_k = tensor_args.joint_k;
-    const auto& joint_tensor_v = tensor_args.joint_v;
+    // Check if joint tensors are provided
+    const bool use_joint_tensors =
+        tensor_args.joint_q.has_value() && tensor_args.joint_k.has_value() && tensor_args.joint_v.has_value();
+    uint32_t L = 0;  // Default joint sequence length
+    if (use_joint_tensors) {
+        const auto& joint_q_shape = tensor_args.joint_q.value().logical_shape();
+        L = joint_q_shape[2];
+    }
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
     auto& output_tensor = output_tensors.output;
-    auto& joint_output_tensor = output_tensors.joint_output;
     auto& lse_output_tensor = output_tensors.lse_output;
+
+    // Check if joint output tensor exists
+    const bool has_joint_output = output_tensors.joint_output.has_value();
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -125,6 +133,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         -1,
         args.all_gather_operation_attributes.topology,
         args.all_gather_operation_attributes.cluster_axis);
+
+    log_debug(tt::LogOp, "device index: {}", device_index);
+    log_debug(tt::LogOp, "is_causal: {}", args.is_causal);
+    log_debug(tt::LogOp, "is_balanced: {}", args.is_balanced);
 
     auto scale = args.scale;
     if (not scale.has_value()) {
@@ -157,16 +169,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const uint32_t B = q_shape[0], NH = q_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
-    const uint32_t padded_N = k_shape[2];
-    const uint32_t L = joint_q_shape[2];
+    const auto& v_shape = gathered_input_tensor_v.logical_shape();
 
+    log_debug(tt::LogOp, "q_shape: {}", q_shape);
+    log_debug(tt::LogOp, "k_shape (gathered): {}", k_shape);
+    log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
+
+    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
+    const uint32_t padded_N = k_shape[2];
+    const uint32_t vDH = v_shape[3];
+
+    // L (joint sequence length) already calculated above
     const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
+    const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
 
     /*
@@ -183,7 +202,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !args.is_causal;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
@@ -200,8 +219,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
+    log_debug(tt::LogOp, "NHK: {}", NHK);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
+    log_debug(tt::LogOp, "vDH: {}", vDH);
 
     // Log padded dimensions
     log_debug(tt::LogOp, "local_padded_N: {}", local_padded_N);
@@ -210,6 +231,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Log tile dimensions
     log_debug(tt::LogOp, "DHt: {}", DHt);
+    log_debug(tt::LogOp, "vDHt: {}", vDHt);
     log_debug(tt::LogOp, "local_padded_Nt: {}", local_padded_Nt);
     log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
     log_debug(tt::LogOp, "Lt: {}", Lt);
@@ -269,10 +291,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * DHt;
-    uint32_t out0_t = Sq_chunk_t * DHt;
+    uint32_t out_im_tiles = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
@@ -280,6 +303,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
     log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
+    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
@@ -298,16 +322,17 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
+    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
+    // This is done only in the non-causal case:
     // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     const bool use_streaming_compute =
-        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0;
+        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && !args.is_causal;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
@@ -330,7 +355,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
+    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
+    // so the granularity must evenly divide both to avoid dropping tiles.
+    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
+    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
+        dht_granularity--;
+    }
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
@@ -356,7 +386,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
+        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -371,16 +403,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size};
+        args.all_gather_operation_attributes.ring_size,
+        args.is_causal,
+        args.is_balanced};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.joint_q.has_value() ? tensor_args.joint_q->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.joint_k.has_value() ? tensor_args.joint_k->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.joint_v.has_value() ? tensor_args.joint_v->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -397,7 +434,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
+        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -417,10 +456,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
-    };
+        args.is_causal,
+        args.is_balanced};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
     TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Early format check: when all data formats are identical, reconfig calls can be skipped.
@@ -429,7 +470,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
     const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
+    const tt::DataFormat mask_df_early = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
     const bool uniform_dataformat =
         (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
          q_df_early == mask_df_early && q_df_early == im_df_early);
@@ -437,7 +478,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> compute_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
+        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -470,7 +513,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
-    };
+        args.is_causal,
+        args.is_balanced};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -508,9 +552,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
+
+    // This is done only in the non-causal case:
     // Lightweight mask: both streaming and non-streaming paths use Float16_b
     // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
+    tt::DataFormat mask_df = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -549,12 +595,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
-    if (needs_lightweight_mask) {
-        auto c_in3_config =
-            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                .set_page_size(tt::CB::c_in3, mask_tile_size);
+    if (args.is_causal) {
+        // attn_mask input
+        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                                .set_page_size(tt::CB::c_in3, mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
+    }
+    else {
+        // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
+        if (needs_lightweight_mask) {
+            auto c_in3_config =
+                CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                    .set_page_size(tt::CB::c_in3, mask_tile_size);
+            CreateCircularBuffer(program, core_grid, c_in3_config);
+        }
     }
 
     // scale input
@@ -645,11 +699,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t v_addr = input_tensor_v.buffer()->address();
     uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
     uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
-    uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
-    uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
+    uint32_t joint_q_addr = use_joint_tensors ? tensor_args.joint_q.value().buffer()->address() : 0;
+    uint32_t joint_k_addr = use_joint_tensors ? tensor_args.joint_k.value().buffer()->address() : 0;
+    uint32_t joint_v_addr = use_joint_tensors ? tensor_args.joint_v.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
+    uint32_t joint_out_addr = has_joint_output ? output_tensors.joint_output.value().buffer()->address() : 0;
     uint32_t lse_addr = lse_output_tensor.buffer()->address();
 
     /**
@@ -754,7 +808,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
     for (auto& segments : head_segments) {
-        if (segments.size() < 2) {
+        if (segments.size() < 2 || args.is_balanced) {
             continue;
         }
 
@@ -955,13 +1009,19 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         auto* v_buffer = tensor_args.input_v.buffer();
         auto* gathered_k_buffer = tensor_args.gathered_k.buffer();
         auto* gathered_v_buffer = tensor_args.gathered_v.buffer();
-        auto* joint_q_buffer = tensor_args.joint_q.buffer();
-        auto* joint_k_buffer = tensor_args.joint_k.buffer();
-        auto* joint_v_buffer = tensor_args.joint_v.buffer();
+        // Check if joint tensors are provided
+        const bool use_joint_tensors =
+            tensor_args.joint_q.has_value() && tensor_args.joint_k.has_value() && tensor_args.joint_v.has_value();
+        const bool has_joint_output = output_tensors.joint_output.has_value();
+
+        // Get joint buffer pointers conditionally
+        auto* joint_q_buffer = use_joint_tensors ? tensor_args.joint_q.value().buffer() : nullptr;
+        auto* joint_k_buffer = use_joint_tensors ? tensor_args.joint_k.value().buffer() : nullptr;
+        auto* joint_v_buffer = use_joint_tensors ? tensor_args.joint_v.value().buffer() : nullptr;
 
         // Get addresses for output tensors
         auto* out_buffer = output_tensors.output.buffer();
-        auto* joint_out_buffer = output_tensors.joint_output.buffer();
+        auto* joint_out_buffer = has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr;
         auto* lse_buffer = output_tensors.lse_output.buffer();
 
         uint32_t q_addr = q_buffer->address();
@@ -969,11 +1029,11 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         uint32_t v_addr = v_buffer->address();
         uint32_t gathered_k_addr = gathered_k_buffer->address();
         uint32_t gathered_v_addr = gathered_v_buffer->address();
-        uint32_t joint_q_addr = joint_q_buffer->address();
-        uint32_t joint_k_addr = joint_k_buffer->address();
-        uint32_t joint_v_addr = joint_v_buffer->address();
+        uint32_t joint_q_addr = use_joint_tensors ? joint_q_buffer->address() : 0;
+        uint32_t joint_k_addr = use_joint_tensors ? joint_k_buffer->address() : 0;
+        uint32_t joint_v_addr = use_joint_tensors ? joint_v_buffer->address() : 0;
         uint32_t out_addr = out_buffer->address();
-        uint32_t joint_out_addr = joint_out_buffer->address();
+        uint32_t joint_out_addr = has_joint_output ? joint_out_buffer->address() : 0;
         uint32_t lse_addr = lse_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
