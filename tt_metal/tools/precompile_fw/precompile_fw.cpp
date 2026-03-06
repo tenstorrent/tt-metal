@@ -70,11 +70,14 @@ void enumerate_jit_device_configs(
     YAML::Node core_descriptor_yaml = YAML::LoadFile(core_descriptor_path);
     for (const auto& product : core_descriptor_yaml) {
         const std::string product_name = product.first.as<std::string>();
-        std::vector<bool> routing_fw_enabled_cfgs = {true};
+        std::vector<bool> routing_fw_enabled_cfgs = {false};
         std::vector<uint32_t> dram_harvesting_cfgs = {0};
         // FIXME: hardcoded logic adopted from core_descriptor.cpp
-        if (arch == tt::ARCH::WORMHOLE_B0 && (product_name == "galaxy" || product_name == "nebula_x1")) {
-            routing_fw_enabled_cfgs.push_back(false);
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            routing_fw_enabled_cfgs = {true};
+            if (product_name == "galaxy" || product_name == "nebula_x1") {
+                routing_fw_enabled_cfgs.push_back(false);
+            }
         }
         // FIXME: hardcoded values adopted from expected_dram_harvested_units_map in UMD
         if (arch == tt::ARCH::BLACKHOLE && product_name == "2xharvested") {
