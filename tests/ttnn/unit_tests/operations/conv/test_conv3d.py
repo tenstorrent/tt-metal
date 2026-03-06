@@ -160,34 +160,35 @@ def run_conv3d_test(
     # Prepare weights and bias for TTNN
     tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, dtype=dtype)
 
-    # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size, dilation=dilation, weights_dtype=dtype)
+    with device.cache_entries_counter.measure():
+        # Create config and run TTNN conv3d
+        config = create_conv3d_config(compute_with_storage_grid_size=grid_size, dilation=dilation, weights_dtype=dtype)
 
-    tt_output = ttnn.experimental.conv3d(
-        input_tensor=tt_input,
-        weight_tensor=tt_weight,
-        bias_tensor=tt_bias,
-        dtype=dtype,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        padding_mode=padding_mode,
-        config=config,
-        compute_kernel_config=kernel_config,
-    )
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            bias_tensor=tt_bias,
+            dtype=dtype,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            padding_mode=padding_mode,
+            config=config,
+            compute_kernel_config=kernel_config,
+        )
 
-    # Reshape output and verify results
-    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+        # Reshape output and verify results
+        tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
-    print(f"gt output shape = {gt_output.shape}")
-    print(f"tt output shape = {tt_output.shape}")
-    assert tt_output.shape == gt_output.shape
+        print(f"gt output shape = {gt_output.shape}")
+        print(f"tt output shape = {tt_output.shape}")
+        assert tt_output.shape == gt_output.shape
 
-    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
-    logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
-    assert pcc_passed, pcc_message
+        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+        logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
+        assert pcc_passed, pcc_message
 
 
 @pytest.mark.parametrize("B", [1, 2])
@@ -246,7 +247,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
                 device, new_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
             )
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 @skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")

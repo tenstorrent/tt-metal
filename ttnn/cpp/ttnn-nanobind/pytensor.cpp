@@ -123,6 +123,7 @@ struct PreprocessedPyTensor {
 };
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
+    ZoneScopedN("ttnn::parse_py_tensor(typecast)");
     auto py_tensor_dtype = py_tensor.dtype();
     // handle bool types by changing them to uint8
     // TODO: add proper handling for bool types as a DataType
@@ -638,6 +639,7 @@ void pytensor_module(nb::module_& mod) {
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
                const distributed::TensorToMesh* mesh_mapper,
+               bool preserve_nan_values,
                bool col_tilize) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
@@ -670,6 +672,7 @@ void pytensor_module(nb::module_& mod) {
                     cq_id,
                     mesh_mapper,
                     pad_value,
+                    preserve_nan_values,
                     col_tilize));
             },
             nb::arg("tensor").noconvert(false),
@@ -681,6 +684,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
+            nb::arg("preserve_nan_values") = false,
             nb::arg("col_tilize") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,

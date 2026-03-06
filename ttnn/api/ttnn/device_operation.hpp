@@ -413,6 +413,9 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
+    ZoneScopedN(__PRETTY_FUNCTION__);
+    log_info(
+        tt::LogOp, "Launching operation: {}", detail::get_operation_name<device_operation_t>(operation_attributes));
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
@@ -496,6 +499,7 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
+    ZoneScopedN(__PRETTY_FUNCTION__);
     return launch<device_operation_t>(operation_attributes, tensor_args);
 }
 

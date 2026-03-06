@@ -251,6 +251,7 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = None,
+    preserve_nan_values: bool = False,
     col_tilize: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
@@ -333,6 +334,7 @@ def from_torch(
         cq_id=cq_id,
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        preserve_nan_values=preserve_nan_values,
         col_tilize=col_tilize,
     )
 

@@ -921,6 +921,12 @@ std::vector<T> convert_layout_row_major_to_tile(
 
 template <typename T>
 std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
+    log_info(
+        tt::LogOp,
+        "[HOST] To Tile:Encoding tensor data from logical data size: {} to physical data size: {}",
+        logical_data.size(),
+        tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
+
     if (logical_data.size() == 0) {
         return {};
     }
