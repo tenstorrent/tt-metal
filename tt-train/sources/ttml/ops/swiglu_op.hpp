@@ -5,6 +5,7 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "metal/ops/swiglu_fw/swiglu_fw.hpp"
 
 namespace ttml::ops {
 
