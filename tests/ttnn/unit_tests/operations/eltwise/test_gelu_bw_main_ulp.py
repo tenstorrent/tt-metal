@@ -174,7 +174,7 @@ class TestGeluBwDerivativeAtZero:
         expected = gelu_derivative_expected_bf16_daz(input_val)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
-        logger.info(f"x=0: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        logger.debug(f"x=0: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
 
         assert ulp_error <= 2, f"Expected ULP <= 2, got {ulp_error}"
 
@@ -208,7 +208,7 @@ class TestGeluBwPositiveValues:
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
-        logger.info(f"x={input_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        logger.debug(f"x={input_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
 
         assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
 
@@ -244,7 +244,7 @@ class TestGeluBwNegativeValues:
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
-        logger.info(f"x={input_value}: expected={expected:.6e}, actual={actual:.6e}, ULP={ulp_error}")
+        logger.debug(f"x={input_value}: expected={expected:.6e}, actual={actual:.6e}, ULP={ulp_error}")
 
         assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
 
@@ -271,7 +271,7 @@ class TestGeluBwNearZero:
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
-        logger.info(f"x={input_value:.2e}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        logger.debug(f"x={input_value:.2e}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
 
         assert ulp_error <= 2, f"Expected ULP <= 2, got {ulp_error}"
 
@@ -299,7 +299,7 @@ class TestGeluBwLocalMinimum:
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
-        logger.info(f"x={input_value}: expected={expected:.6f}, actual={actual:.6f}, ULP={ulp_error}")
+        logger.debug(f"x={input_value}: expected={expected:.6f}, actual={actual:.6f}, ULP={ulp_error}")
 
         # Near the zero-crossing, expected ≈ 0 so ULP can be large even for tiny absolute errors
         assert (
@@ -335,7 +335,7 @@ class TestGeluBwWithGradientScaling:
         expected = gelu_bw_expected_bf16_daz(grad_value, input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
-        logger.info(
+        logger.debug(
             f"x={input_value}, grad={grad_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}"
         )
 
@@ -346,10 +346,10 @@ def test_gelu_bw_ulp_summary(device):
     """Correctness guard: comprehensive summary of GELU backward ULP across all regions.
     Tests 6 key points (zero, ±1, local min, ±5) and asserts max ULP <= 2.
     Catches any single broken code path quickly via representative sampling."""
-    logger.info("")
-    logger.info("=" * 100)
-    logger.info("GELU BACKWARD ULP SUMMARY (DAZ+FTZ MODEL)")
-    logger.info("=" * 100)
+    logger.debug("")
+    logger.debug("=" * 100)
+    logger.debug("GELU BACKWARD ULP SUMMARY (DAZ+FTZ MODEL)")
+    logger.debug("=" * 100)
 
     # Key test points
     test_points = [
@@ -366,9 +366,9 @@ def test_gelu_bw_ulp_summary(device):
         ("Deep negative", -8.0),
     ]
 
-    logger.info("")
-    logger.info(f"{'Description':>20} | {'x':>10} | {'Expected':>12} | {'Actual':>12} | {'ULP':>8}")
-    logger.info("-" * 70)
+    logger.debug("")
+    logger.debug(f"{'Description':>20} | {'x':>10} | {'Expected':>12} | {'Actual':>12} | {'ULP':>8}")
+    logger.debug("-" * 70)
 
     max_ulp = 0
     worst_x = 0
@@ -390,17 +390,17 @@ def test_gelu_bw_ulp_summary(device):
             max_ulp = ulp
             worst_x = x
 
-        logger.info(f"{desc:>20} | {x:>10.4f} | {expected:>12.6f} | {actual:>12.6f} | {ulp:>8}")
+        logger.debug(f"{desc:>20} | {x:>10.4f} | {expected:>12.6f} | {actual:>12.6f} | {ulp:>8}")
 
-    logger.info("-" * 70)
-    logger.info(f"Max ULP: {max_ulp} at x = {worst_x}")
-    logger.info("")
-    logger.info("Expected behavior:")
-    logger.info("- GELU'(0) ≈ 0.5")
-    logger.info("- GELU'(x) → 1 as x → +∞")
-    logger.info("- GELU'(x) → 0 as x → -∞")
-    logger.info("- Local minimum near x ≈ -0.751 where GELU'(x) ≈ 0")
-    logger.info("=" * 100)
+    logger.debug("-" * 70)
+    logger.debug(f"Max ULP: {max_ulp} at x = {worst_x}")
+    logger.debug("")
+    logger.debug("Expected behavior:")
+    logger.debug("- GELU'(0) ≈ 0.5")
+    logger.debug("- GELU'(x) → 1 as x → +∞")
+    logger.debug("- GELU'(x) → 0 as x → -∞")
+    logger.debug("- Local minimum near x ≈ -0.751 where GELU'(x) ≈ 0")
+    logger.debug("=" * 100)
 
     # Regression guard: all key points must be within 5 ULP
     assert max_ulp <= 2, (
