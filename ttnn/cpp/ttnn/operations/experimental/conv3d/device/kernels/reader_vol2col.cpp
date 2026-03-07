@@ -52,6 +52,26 @@ inline void zeroPad(uint32_t cb_write_addr) {
     }
 }
 
+template <bool IsSharded, typename Reader>
+FORCE_INLINE uint64_t
+get_input_noc_addr(const Reader& reader, uint32_t in_page_idx, uint32_t c_in_offset_bytes, uint32_t in_row_size_bytes) {
+    if constexpr (!IsSharded) {
+        return reader.get_noc_addr(in_page_idx, c_in_offset_bytes);
+    } else {
+        // For width/block sharded RowMajor tensors, a "row" is split into multiple pages of size in_row_size_bytes.
+        // TensorAccessor expects page_id to be flattened over (row_idx, col_page_idx).
+        const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
+        const uint32_t in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+
+        const auto& dspec = reader.dspec();
+        const uint32_t width_in_pages = dspec.tensor_shape()[dspec.rank() - 1];
+        ASSERT(col_page_idx < width_in_pages);
+
+        const uint32_t in_page_id = in_page_idx * width_in_pages + col_page_idx;
+        return reader.get_noc_addr(in_page_id, in_offset_bytes);
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
     constexpr uint32_t N = get_compile_time_arg_val(1);
@@ -84,7 +104,6 @@ void kernel_main() {
     constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-
     // L1 prefetch buffer parameters
     constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
     constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
@@ -148,7 +167,6 @@ void kernel_main() {
 
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
-
                             if constexpr (use_l1_prefetch) {
                                 // ============================================================
                                 // TWO-PHASE READER (L1 prefetch for kernels > 1x1x1)
@@ -188,7 +206,8 @@ void kernel_main() {
                                                 C_in_block_bytes;
                                             for (uint32_t w_local = 0; w_local < W_shard_cur; w_local++) {
                                                 const uint64_t noc_addr =
-                                                    in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                    get_input_noc_addr<decltype(in_args)::is_sharded>(
+                                                        in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
                                                 noc_async_read(
                                                     noc_addr, shard_l1_base + shard_offset, C_in_block_bytes);
                                                 page_idx++;
@@ -233,7 +252,11 @@ void kernel_main() {
                                                             static_cast<uint32_t>(h_clamped) * W_in +
                                                             static_cast<uint32_t>(w_clamped);
                                                         const uint64_t noc_addr =
-                                                            in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                            get_input_noc_addr<decltype(in_args)::is_sharded>(
+                                                                in_reader,
+                                                                page_idx,
+                                                                c_in_offset_bytes,
+                                                                in_row_size_bytes);
                                                         noc_async_read(noc_addr, shard_addr, C_in_block_bytes);
                                                     }
                                                 } else {
@@ -242,7 +265,8 @@ void kernel_main() {
                                                                               static_cast<uint32_t>(h_in) * W_in +
                                                                               static_cast<uint32_t>(w_in);
                                                     const uint64_t noc_addr =
-                                                        in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                        get_input_noc_addr<decltype(in_args)::is_sharded>(
+                                                            in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
                                                     noc_async_read(noc_addr, shard_addr, C_in_block_bytes);
                                                 }
 
@@ -390,7 +414,11 @@ void kernel_main() {
                                                             static_cast<uint32_t>(h_idx) * W_in +
                                                             static_cast<uint32_t>(w_idx);
                                                         const uint64_t noc_addr =
-                                                            in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                            get_input_noc_addr<decltype(in_args)::is_sharded>(
+                                                                in_reader,
+                                                                page_idx,
+                                                                c_in_offset_bytes,
+                                                                in_row_size_bytes);
                                                         noc_async_read(noc_addr, cb_write_addr, C_in_block_bytes);
                                                         cb_write_addr += C_in_block_bytes;
                                                     }
