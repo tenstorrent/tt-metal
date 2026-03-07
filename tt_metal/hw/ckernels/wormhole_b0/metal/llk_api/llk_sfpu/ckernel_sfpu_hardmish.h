@@ -6,28 +6,75 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+
+#include "ckernel_sfpu_piecewise_polynomial.h"
+
+using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-// hardmish(x) = x * clamp(x + 2.8, 0.0, 5.0) / 5
-//             = x * clamp(x + 2.8, 0.0, 5.0) * 0.2
+// ======================================================================
+// LUT-based hardmish via piecewise rational P(x)/Q(x)
+//
+// BF16: n2/d0, 3 segment(s), range [-10.0, 10.0]
+// FP32: n2/d0, 3 segment(s), range [-10.0, 10.0]
+// ======================================================================
+
+#ifdef INP_FLOAT32
+constexpr uint32_t HARDMISH_NUM_DEGREE = 2;
+constexpr uint32_t HARDMISH_NUM_SEGMENTS = 3;
+constexpr uint32_t HARDMISH_LUT_SIZE = 13;
+constexpr std::array<float, 13> HARDMISH_LUT = {
+    {-1.0000000000e+01f,
+     -2.0000000000e+00f,
+     0.0000000000e+00f,
+     1.0000000000e+01f,
+     0.0000000000e+00f,
+     0.0000000000e+00f,
+     0.0000000000e+00f,
+     0.0000000000e+00f,
+     1.0000000000e+00f,
+     5.0000000000e-01f,
+     0.0000000000e+00f,
+     1.0000000000e+00f,
+     0.0000000000e+00f}};
+
+#else
+
+constexpr uint32_t HARDMISH_NUM_DEGREE = 2;
+constexpr uint32_t HARDMISH_NUM_SEGMENTS = 3;
+constexpr uint32_t HARDMISH_LUT_SIZE = 13;
+constexpr std::array<float, 13> HARDMISH_LUT = {
+    {-1.0000000000e+01f,
+     -2.0000000000e+00f,
+     0.0000000000e+00f,
+     1.0000000000e+01f,
+     0.0000000000e+00f,
+     0.0000000000e+00f,
+     0.0000000000e+00f,
+     0.0000000000e+00f,
+     1.0000000000e+00f,
+     5.0000000000e-01f,
+     0.0000000000e+00f,
+     1.0000000000e+00f,
+     0.0000000000e+00f}};
+
+#endif
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = x + 2.8f;
-
-        // sfpi::vec_min_max(a, b) puts min in a, max in b
-        sfpi::vFloat low_bound = 0.0f;
-        sfpi::vFloat high_bound = 5.0f;
-        sfpi::vec_min_max(low_bound, a);   // a = max(a, 0.0)
-        sfpi::vec_min_max(a, high_bound);  // a = min(a, 5.0)
-
-        sfpi::dst_reg[0] = x * a * 0.2f;
-        sfpi::dst_reg++;
+        vFloat x = dst_reg[0];
+        dst_reg[0] =
+            piecewise_polynomial_eval<HARDMISH_NUM_DEGREE, HARDMISH_NUM_SEGMENTS, HARDMISH_LUT_SIZE>(HARDMISH_LUT, x);
+        dst_reg++;
     }
 }
+
+template <bool APPROXIMATION_MODE>
+void hardmish_init() {}
 
 }  // namespace sfpu
 }  // namespace ckernel
