@@ -184,8 +184,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     )
 
     ##### Run the op #####
-    tt_mm_out_tensor_list = []
-    tt_rs_out_tensor_list = []
+    rs_zone_capacity = (compute_grid_size.y - mm_core_grid.y) * compute_grid_size.x
+    num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
     def run_op(i):
         (
@@ -216,61 +216,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         ttnn.synchronize_device(mesh_device)
         tracy.signpost(f"{sweep_key}-start")
         tt_mm_out, tt_rs_out = run_op(i)
-        #   tt_mm_out_tensor_list.append(tt_mm_out)
-        #   tt_rs_out_tensor_list.append(tt_rs_out)
-
-        # logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device)
         tracy.signpost(f"{sweep_key}-end")
-
-    ##### Verify results #####
-    # Setup concat mesh to use 1D mesh concatenation.
-    # concat_mesh_shape = list(mesh_device.shape)
-    # concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
-    # for i in range(num_iters):
-    #     golden_idx = i if not enable_trace else 0
-
-    #     # Check MM output (each device has different output since weights differ)
-    #     # Setup concatenation dimension per axis
-    #     concat_dims = [0, 0]
-    #     concat_dims[
-    #         1 - cluster_axis
-    #     ] = 1  # Dimensions have to be unique. Set to anything but the concatenation dimension.
-    #     tt_mm_out_torch = ttnn.to_torch(
-    #         tt_mm_out_tensor_list[i],
-    #         mesh_composer=ttnn.create_mesh_composer(
-    #             mesh_device, ttnn.MeshComposerConfig(concat_dims, ttnn.MeshShape(concat_mesh_shape))
-    #         ),
-    #     )
-    #     mm_goldens = torch_mm_output_per_device_list[golden_idx]
-
-    #     for device_id in range(num_devices):
-    #         tt_mm_slice = tt_mm_out_torch[device_id : device_id + 1, :, :, :]
-    #         eq, output = comp_pcc(tt_mm_slice, mm_goldens[device_id], allowed_pcc)
-    #         logger.info(f"MM output device {device_id}, iter {i}: {output}")
-    #         assert eq, f"iter {i} device {device_id} MM FAILED: {output}"
-
-    #     # Check RS output
-    #     # Setup concatenation dimension per axis
-    #     concat_dims = [dim, dim]
-    #     concat_dims[1 - cluster_axis] = (
-    #         0 if dim != 0 else 1
-    #     )  # Get any other index not dim (needs to be unique). Setting the number of devices to 1 on that dimension will prevent concatenations.
-    #     tt_rs_out_torch = ttnn.to_torch(
-    #         tt_rs_out_tensor_list[i],
-    #         mesh_composer=ttnn.create_mesh_composer(
-    #             mesh_device, ttnn.MeshComposerConfig(concat_dims, ttnn.MeshShape(concat_mesh_shape))
-    #         ),
-    #     )
-    #     torch_rs_golden = torch_rs_output_list[golden_idx]
-
-    #     tt_rs_chunks = torch.chunk(tt_rs_out_torch, num_devices, dim=dim)
-    #     for device_id in range(num_devices):
-    #         eq, output = comp_pcc(tt_rs_chunks[device_id], torch_rs_golden[device_id], allowed_pcc)
-    #         logger.info(f"RS output device {device_id}, iter {i}: {output}")
-    #         assert eq, f"iter {i} device {device_id} RS FAILED: {output}"
-
-    # logger.info("All checks passed!")
 
 
 def write_error_to_file(error):
@@ -288,7 +235,7 @@ def write_error_to_file(error):
     [
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
-                M=9472,
+                M=9472 // 4,  # Sweep for quad
                 K=3456,
                 N=5120,
                 dim=3,
@@ -329,7 +276,7 @@ def write_error_to_file(error):
 @pytest.mark.parametrize(
     "device_params, topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
     ids=["fabric_ring"],
@@ -352,9 +299,11 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     Nt = cfg.N // TILE_SIZE
     Nt_per_core = Nt // cfg.mm_core_grid.x
 
-    M_Block_range = range(TILE_SIZE, 512 + TILE_SIZE, TILE_SIZE)
-    K_Block_range = range(TILE_SIZE, 512 + TILE_SIZE, TILE_SIZE)
-    N_Block_range = range(TILE_SIZE, 512 + TILE_SIZE, TILE_SIZE)
+    M_Block_range = range(TILE_SIZE + 32, 512 + TILE_SIZE, TILE_SIZE)
+    K_Block_range = range(TILE_SIZE + 32, 512 + TILE_SIZE, TILE_SIZE)
+    N_Block_range = range(TILE_SIZE + 32, 512 + TILE_SIZE, TILE_SIZE)
+    sub_h_range = range(1, 8 + 1)
+    sub_w_range = range(1, 8 + 1)
 
     cache_file = f"test_minimal_matmul_strided_reduce_scatter_async_sweep_cache.log"
     processed_cache = set()
@@ -366,48 +315,50 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         for mm_block_m in M_Block_range:
             for mm_block_k in K_Block_range:
                 for mm_block_n in N_Block_range:
-                    cache_key = f"M_block={mm_block_m}-K_block={mm_block_k}-N_block={mm_block_n}"
-                    if cache_key in processed_cache:
-                        continue
-                    if Nt_per_core < (mm_block_n // TILE_SIZE):
-                        write_error_to_file(
-                            f"{cache_key} - block_n size is {mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
-                        )
-                        continue
+                    for sub_h in sub_h_range:
+                        for sub_w in sub_w_range:
+                            cache_key = f"M_block={mm_block_m}-K_block={mm_block_k}-N_block={mm_block_n}-sub_h={sub_h}-sub_w={sub_w}"
+                            if cache_key in processed_cache:
+                                continue
+                            if Nt_per_core < (mm_block_n // TILE_SIZE):
+                                write_error_to_file(
+                                    f"{cache_key} - block_n size is {mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
+                                )
+                                continue
 
-                    f.write(
-                        cache_key + "\n"
-                    )  # No need to add to processed_cache since it's already in the file, and combinations are unique
-                    f.flush()
-                    try:
-                        run_minimal_matmul_strided_reduce_scatter_impl(
-                            mesh_device,
-                            cfg.M,
-                            cfg.K,
-                            cfg.N,
-                            cfg.dim,
-                            num_links,
-                            cfg.input_dtype,
-                            cfg.layout,
-                            mem_config_input,
-                            mem_config_mm,
-                            mem_config_rs,
-                            topology=topology,
-                            enable_trace=enable_trace,
-                            num_iters=num_iters,
-                            num_workers_per_link=cfg.num_workers_per_link,
-                            mm_block_m=mm_block_m,
-                            mm_block_k=mm_block_k,
-                            mm_block_n=mm_block_n,
-                            subblock_h=1,  # cfg.subblock_h,
-                            subblock_w=1,  # cfg.subblock_w,
-                            mm_core_grid=cfg.mm_core_grid,
-                            chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
-                            rs_mode=rs_mode,
-                            cluster_axis=cluster_axis,
-                            sweep_key=cache_key,
-                        )
-                    except Exception as e:
-                        write_error_to_file(f"{cache_key} - Error: {e}")
+                            f.write(
+                                cache_key + "\n"
+                            )  # No need to add to processed_cache since it's already in the file, and combinations are unique
+                            f.flush()
+                            try:
+                                run_minimal_matmul_strided_reduce_scatter_impl(
+                                    mesh_device,
+                                    cfg.M,
+                                    cfg.K,
+                                    cfg.N,
+                                    cfg.dim,
+                                    num_links,
+                                    cfg.input_dtype,
+                                    cfg.layout,
+                                    mem_config_input,
+                                    mem_config_mm,
+                                    mem_config_rs,
+                                    topology=topology,
+                                    enable_trace=enable_trace,
+                                    num_iters=num_iters,
+                                    num_workers_per_link=cfg.num_workers_per_link,
+                                    mm_block_m=mm_block_m,
+                                    mm_block_k=mm_block_k,
+                                    mm_block_n=mm_block_n,
+                                    subblock_h=sub_h,  # cfg.subblock_h,
+                                    subblock_w=sub_w,  # cfg.subblock_w,
+                                    mm_core_grid=cfg.mm_core_grid,
+                                    chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
+                                    rs_mode=rs_mode,
+                                    cluster_axis=cluster_axis,
+                                    sweep_key=cache_key,
+                                )
+                            except Exception as e:
+                                write_error_to_file(f"{cache_key} - Error: {e}")
 
             ttnn.ReadDeviceProfiler(mesh_device)
