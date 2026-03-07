@@ -19,6 +19,9 @@
 #include <unordered_set>
 #include <optional>
 #include <filesystem>
+#include <string>
+#include <climits>
+#include <unistd.h>
 
 namespace tt::tt_fabric {
 
@@ -73,3 +76,14 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric
+
+namespace tt::tt_metal {
+
+// Get the local hostname
+inline std::string get_host_name() {
+    char hostname[HOST_NAME_MAX + 1];
+    gethostname(hostname, sizeof(hostname));
+    return std::string(hostname);
+}
+
+}  // namespace tt::tt_metal
