@@ -11,7 +11,7 @@ import os
 import ttnn
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 
@@ -26,7 +26,7 @@ def reference_vision_rms(model_args):
 
 
 @torch.no_grad()
-@run_for_wormhole_b0()
+@run_for_wormhole_b0_or_blackhole
 @pytest.mark.parametrize(
     "device",
     [
@@ -79,7 +79,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     )
     input = torch.rand(batch_size, seq_len, 1024)
 
-    reference_output = reference_model(input)
+    reference_output = reference_model(input.float())
 
     tt_input = ttnn.from_torch(
         input,

@@ -75,9 +75,6 @@ def test_vision_attention_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     cos, sin = position_embeddings
-    print(f"{cos.shape=}")
-    print(f"{cos[:,:10]=}")
-    print(f"{sin[:,:10]=}")
 
     # thanks, gemini 2.5 pro
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
@@ -147,8 +144,11 @@ def test_vision_attention_inference(
     # Remove sequence padding
     tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
 
+    # Cast input to reference model dtype (e.g. bfloat16 for 32B) to avoid mat1/mat2 dtype mismatch
+    ref_dtype = next(reference_model.parameters()).dtype
+    pt_ref_input = pt_attention_input.squeeze(0).squeeze(0).to(ref_dtype)
     reference_output = reference_model(
-        pt_attention_input.squeeze(0).squeeze(0),
+        pt_ref_input,
         cu_seqlens=cu_seqlens,
         rotary_pos_emb=None,
         position_embeddings=position_embeddings,
