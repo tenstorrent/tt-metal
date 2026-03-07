@@ -626,7 +626,9 @@ static void sdpa_inner_loop_step(
     [[maybe_unused]] const bool apply_mask = false,
     const uint32_t lw_num_padded = 0,
     const uint32_t lw_partial_tile_idx = 0,
-    const uint32_t effective_Sk = 0) {
+    const uint32_t effective_Sk = 0,
+    const bool skip_cur_push = false,
+    const uint32_t direct_output_cb = 0) {
     constexpr uint32_t sbh = subblock_h;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t qkt_subblock_w = 8 / sbh;
@@ -649,7 +651,8 @@ static void sdpa_inner_loop_step(
     constexpr bool uniform_unpack_format = uniform_dataformat;
     constexpr bool uniform_pack_format = uniform_dataformat;
 
-    uint32_t pushed_rows = 0;
+    uint32_t pushed_rows = 0;      // Rows pushed from BOTH cur.out and cur.sum (normalize_row)
+    uint32_t out_only_pushed = 0;  // Rows pushed from cur.out ONLY (output_row_direct)
     uint32_t q_wait_tiles = q_subblock_num_tiles;
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
@@ -1000,30 +1003,54 @@ static void sdpa_inner_loop_step(
             }
         };
 
-        // SALAD correction + optional normalization lambda
-        auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
-            PACK((llk_pack_reconfig_l1_acc(1)));
-            {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
-                mul_bcast_cols_l1_acc(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad, sbh);
+        // Direct output lambda — streams finalized rows to cb_out during the last K chunk,
+        // eliminating the post-loop copy_block_row_by_row. Same push/pop/adjust pattern as normalize_row
+        // but only pushes/pops cur.out (not cur.sum), so uses out_only_pushed counter.
+        [[maybe_unused]] auto output_row_direct = [&]() {
+            cb_push_back(cur.out, sbh * vDHt);
+            copy_tile_to_dst_init_short(cur.out);
+            cb_wait_front(cur.out, sbh * vDHt);
+            cb_reserve_back(direct_output_cb, sbh * vDHt);
+#pragma GCC unroll 0
+            for (uint32_t i = 0; i < sbh * vDHt; i++) {
+                acquire_dst();
+                copy_tile(cur.out, i, 0);
+                pack_tile(0, direct_output_cb);
+                cb_push_back(direct_output_cb, 1);
+                release_dst();
             }
-            {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
-                mul_block_bcast_cols_acc<vDHt>(prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad, sbh);
-            }
-            PACK((llk_pack_reconfig_l1_acc(0)));
-            if (last_iter) {
-                normalize_row(w_salad, pushed);
-            }
+            cb_pop_front(cur.out, sbh * vDHt);
+            out_only_pushed++;
         };
+
+        // SALAD correction + optional normalization lambda.
+        // w_out/w_sum are separate because output_row_direct pushes/pops cur.out
+        // but not cur.sum, causing their wr_ptrs to diverge.
+        auto salad_correct_row =
+            [&](uint32_t salad_row, uint32_t w_out, uint32_t w_sum, bool last_iter, uint32_t& pushed) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+                {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
+                    mul_bcast_cols_l1_acc(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_sum, sbh);
+                }
+                {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
+                    mul_block_bcast_cols_acc<vDHt>(prev.out, cb_exp_max_diff, cur.out, salad_row, w_out, sbh);
+                }
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                if (last_iter) {
+                    normalize_row(w_out, pushed);
+                }
+            };
 
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
         exp_packthread_tile_init<EXP_APPROX_MODE, false>();
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
-            uint32_t w_salad = salad_row - pushed_rows;
-            uint32_t w_q = q_subblock - pushed_rows;
+            uint32_t w_out = salad_row - pushed_rows - out_only_pushed;  // cur.out write offset
+            uint32_t w_sum = salad_row - pushed_rows;                    // cur.sum write offset
+            uint32_t w_q = q_subblock - pushed_rows - out_only_pushed;   // V matmul cur.out offset
 
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, sbh);
@@ -1065,11 +1092,14 @@ static void sdpa_inner_loop_step(
                 }
             }
 
-            // SALAD corrections + optional per-row normalization
+            // SALAD corrections + optional per-row normalization or direct output
             if (!is_first_iter) {
-                salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
+                salad_correct_row(salad_row, w_out, w_sum, is_last_iter, pushed_rows);
+                if (direct_output_cb != 0 && !is_last_iter) {
+                    output_row_direct();
+                }
             } else if (is_last_iter) {
-                normalize_row(w_salad, pushed_rows);
+                normalize_row(w_out, pushed_rows);
             }
 
             qktv_in0_index_offset += qktv_subblock_h * KT_stride;
@@ -1079,7 +1109,8 @@ static void sdpa_inner_loop_step(
         // Pipeline drain: SALAD for last row
         {
             const uint32_t salad_row = qktv_q_num_subblocks - 1;
-            uint32_t w_salad = salad_row - pushed_rows;
+            uint32_t w_out = salad_row - pushed_rows - out_only_pushed;
+            uint32_t w_sum = salad_row - pushed_rows;
 
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, sbh);
@@ -1087,7 +1118,10 @@ static void sdpa_inner_loop_step(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, sbh);
                 cb_push_back(cb_exp_max_diff, sbh);
 
-                salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
+                salad_correct_row(salad_row, w_out, w_sum, is_last_iter, pushed_rows);
+                if (direct_output_cb != 0 && !is_last_iter) {
+                    output_row_direct();
+                }
             } else if constexpr (!ring_mode || ring_deferred_norm) {
                 if (is_last_iter) {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
@@ -1103,10 +1137,13 @@ static void sdpa_inner_loop_step(
         // Bulk push — skip on last iteration when rows are consumed by normalization.
         // In ring_mode (non-deferred), always bulk push — caller handles finalization.
         // In deferred norm mode, behave like standard: only push if not last (normalization consumed them).
+        // skip_cur_push: caller will L1-accumulate onto cur before pushing (deferred merge).
         if constexpr (!ring_mode || ring_deferred_norm) {
-            if (!is_last_iter) {
+            if (!is_last_iter && !skip_cur_push) {
                 cb_push_back(cur.sum, Sq_chunk_t);
-                cb_push_back(cur.out, qktv_output_num_tiles);
+                if (direct_output_cb == 0) {
+                    cb_push_back(cur.out, qktv_output_num_tiles);
+                }
             }
         } else {
             cb_push_back(cur.sum, Sq_chunk_t);
@@ -1116,6 +1153,95 @@ static void sdpa_inner_loop_step(
         cb_pop_front(cb_v_in, KT_stride * vDHt);
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
+}
+
+/**
+ * Row-by-row variant of copy_block for output tiles.
+ * Reserves out_cb per row group (sbh × vDHt tiles) instead of all at once,
+ * enabling the writer to start consuming earlier (cross-Q-chunk overlap).
+ * Input is read with cumulative waits; popped all at once at the end.
+ */
+void copy_block_row_by_row(uint32_t in_cb, uint32_t out_cb, uint32_t Sq_chunk_t, uint32_t vDHt, uint32_t sbh) {
+    copy_tile_to_dst_init_short(in_cb);
+#pragma GCC unroll 0
+    for (uint32_t g = 0; g < Sq_chunk_t; g += sbh) {
+        const uint32_t group_rows = std::min(sbh, Sq_chunk_t - g);
+        const uint32_t group_tiles = group_rows * vDHt;
+        cb_wait_front(in_cb, group_tiles);
+        cb_reserve_back(out_cb, group_tiles);
+        for (uint32_t i = 0; i < group_tiles; i++) {
+            acquire_dst();
+            copy_tile(in_cb, i, 0);
+            pack_tile(0, out_cb);
+            cb_push_back(out_cb, 1);
+            release_dst();
+        }
+        cb_pop_front(in_cb, group_tiles);
+    }
+}
+
+/**
+ * Standalone merge of DRAM-restored accumulators with K0's fresh result.
+ *
+ * Called after K0 runs with is_first=true (skip_cur_push=true), then prev/cur are swapped.
+ * At call time:
+ *   q_prev = K0 result: max PUSHED, sum/out in RESERVED state (not pushed)
+ *   q_cur = DRAM accumulators: max/sum PUSHED, out empty
+ *   cb_prev_out = DRAM prev_out (pushed by writer)
+ *
+ * Merges via: q_prev.out += DRAM_out * exp(DRAM_max - K0_max),
+ *             q_prev.sum += DRAM_sum * exp(DRAM_max - K0_max).
+ * Then pushes q_prev.out/sum and pops DRAM data from q_cur.max/sum and cb_prev_out.
+ */
+template <
+    bool PROFILING_ENABLED,
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t subblock_h,
+    uint32_t cb_exp_max_diff>
+void merge_prev_accumulators(
+    AccumulatorHalf& q_prev,   // K0 result (post-swap): max pushed, sum/out reserved
+    AccumulatorHalf& q_cur,    // DRAM accumulators (post-swap): max/sum pushed, out empty
+    uint32_t cb_prev_out,      // DRAM prev_out from writer
+    uint32_t Sq_chunk_t_rt) {  // runtime Sq_chunk_t (same as template, for clarity)
+    constexpr uint32_t sbh = subblock_h;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    const uint32_t q_num_subblocks = Sq_chunk_t / sbh;
+    const uint32_t partial_rows = Sq_chunk_t % sbh;
+
+    // Init exp for sub_exp_first_col_blocks
+    exp_packthread_tile_init<EXP_APPROX_MODE, false>();
+
+    for (uint32_t g = 0; g < q_num_subblocks + (partial_rows > 0 ? 1 : 0); ++g) {
+        const uint32_t actual_sbh = (g < q_num_subblocks) ? sbh : partial_rows;
+        const uint32_t salad_row = g;
+
+        // exp_diff = exp(DRAM_max - K0_max) for this row group
+        cb_reserve_back(cb_exp_max_diff, actual_sbh);
+        sub_exp_first_col_blocks<PROFILING_ENABLED, scale_fp32>(
+            q_cur.max, q_prev.max, cb_exp_max_diff, salad_row, actual_sbh);
+        cb_push_back(cb_exp_max_diff, actual_sbh);
+
+        // L1-accumulate DRAM_out * exp_diff onto K0_out (reserved in q_prev.out)
+        // L1-accumulate DRAM_sum * exp_diff onto K0_sum (reserved in q_prev.sum)
+        PACK((llk_pack_reconfig_l1_acc(1)));
+        mul_bcast_cols_l1_acc(q_cur.sum, cb_exp_max_diff, q_prev.sum, salad_row, salad_row, actual_sbh);
+        mul_block_bcast_cols_acc<vDHt>(cb_prev_out, cb_exp_max_diff, q_prev.out, salad_row, salad_row, actual_sbh);
+        PACK((llk_pack_reconfig_l1_acc(0)));
+    }
+
+    // Pop all accumulated exp_max_diff tiles at once (cumulative waits require them to stay)
+    cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
+
+    // Push merged results (were in reserved state)
+    cb_push_back(q_prev.sum, Sq_chunk_t);
+    cb_push_back(q_prev.out, out_chunk_tiles);
+
+    // Pop consumed DRAM data
+    cb_pop_front(q_cur.max, Sq_chunk_t);
+    cb_pop_front(q_cur.sum, Sq_chunk_t);
+    cb_pop_front(cb_prev_out, out_chunk_tiles);
 }
 
 /**
@@ -1318,18 +1444,30 @@ void sdpa_ring_v2(
                 if (ring_iter == 0) {
                     q_is_first = true;
                 } else {
-                    // Restore accumulators from DRAM (writer pushed to these CBs).
-                    // copy_block handles cb_wait_front + cb_reserve_back + copy + cb_push_back + cb_pop_front.
-                    copy_block(cb_prev_out, q_prev.out, out_chunk_tiles);
+                    // Restore max/sum from DRAM upfront (small, needed for merge).
+                    // DON'T restore prev_out — K0 runs with is_first=true (no SALAD),
+                    // then merge_prev_accumulators blends DRAM prev_out with K0's result.
+                    // This overlaps the writer's DRAM read with K0's compute.
                     copy_block(cb_lse_in, q_prev.max, Sq_chunk_t);
                     copy_block(cb_sum_in, q_prev.sum, Sq_chunk_t);
 
-                    q_is_first = false;
+                    // Fallback: if only 1 valid K chunk, we can't defer the merge
+                    // (K0 would also be the last, triggering normalization without DRAM data).
+                    if (total_valid_kv == 1) {
+                        copy_block(cb_prev_out, q_prev.out, out_chunk_tiles);
+                        q_is_first = false;
+                    } else {
+                        // K0 will run with is_first=true; merge happens after K0.
+                        q_is_first = true;
+                    }
                 }
             }
         }
 
         uint32_t KV_chunks_processed = 0;
+        // Deferred merge: K0 ran with is_first=true, merge DRAM prev_out after K0.
+        const bool needs_deferred_merge = deferred_norm && q_is_first && (q_per_core > 1) && (ring_iter > 0);
+        bool used_direct_output = false;
 
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
             // Skip KV chunks beyond logical sequence length (non-joint only)
@@ -1391,6 +1529,19 @@ void sdpa_ring_v2(
                 }
             }
 
+            // Direct output: stream last K chunk's output to cb_out during SALAD,
+            // eliminating the post-loop copy_block_row_by_row. Only for multi-Q
+            // non-last ring iterations (where copy_block_row_by_row would otherwise run).
+            uint32_t direct_cb = 0;
+            if constexpr (deferred_norm) {
+                if (q_per_core > 1 && !is_last_ring_iter && KV_chunks_processed == total_valid_kv) {
+                    if constexpr (!uniform_format) {
+                        pack_reconfig_data_format(cb_out);
+                    }
+                    direct_cb = cb_out;
+                }
+            }
+
             sdpa_inner_loop_step<
                 false,  // PROFILING_ENABLED
                 Sq_chunk_t,
@@ -1415,7 +1566,20 @@ void sdpa_ring_v2(
                 cb_recip_scratch,
                 cb_normalized_out,
                 cb_mask_in>(
-                q_prev, q_cur, is_last, is_first, apply_mask, lw_num_padded, lw_partial_tile_idx, effective_Sk_param);
+                q_prev,
+                q_cur,
+                is_last,
+                is_first,
+                apply_mask,
+                lw_num_padded,
+                lw_partial_tile_idx,
+                effective_Sk_param,
+                needs_deferred_merge && is_first,  // skip_cur_push on K0 for deferred merge
+                direct_cb);
+
+            if (direct_cb != 0) {
+                used_direct_output = true;
+            }
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
@@ -1431,6 +1595,19 @@ void sdpa_ring_v2(
             } else {
                 std::swap(q_prev, q_cur);
             }
+
+            // Deferred merge: after K0's swap, blend DRAM prev_out with K0's result.
+            // q_prev now holds K0 result (max pushed, sum/out reserved).
+            // q_cur holds DRAM max/sum (pushed). cb_prev_out has DRAM prev_out.
+            if (needs_deferred_merge && KV_chunks_processed == 1) {
+                merge_prev_accumulators<
+                    false,  // PROFILING_ENABLED
+                    Sq_chunk_t,
+                    vDHt,
+                    scale_fp32,
+                    subblock_h,
+                    cb_exp_max_diff>(q_prev, q_cur, cb_prev_out, Sq_chunk_t);
+            }
         }
 
         // Pop Q — not popped inside step since ring_mode gates the early Q pop
@@ -1445,11 +1622,14 @@ void sdpa_ring_v2(
             } else if (!is_last_ring_iter) {
                 // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
                 // q_prev holds final accumulators after the last swap.
-                if constexpr (!uniform_format) {
-                    pack_reconfig_data_format(cb_out);
+                if (!used_direct_output) {
+                    // Output not yet in cb_out — copy it now (row-by-row for overlap with writer).
+                    if constexpr (!uniform_format) {
+                        pack_reconfig_data_format(cb_out);
+                    }
+                    copy_block_row_by_row(q_prev.out, cb_out, Sq_chunk_t, vDHt, subblock_h);
                 }
-                // copy_block handles wait + reserve + copy + push + pop internally.
-                copy_block(q_prev.out, cb_out, out_chunk_tiles);
+                // Output already in cb_out from direct output during last K chunk.
                 copy_block(q_prev.max, cb_lse_out, Sq_chunk_t);
                 copy_block(q_prev.sum, cb_sum_out, Sq_chunk_t);
             }

@@ -424,6 +424,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)use_deferred_norm,
+        qk_out_subblock_h,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
