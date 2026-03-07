@@ -122,7 +122,6 @@ def filter_modified_files(files: list[Path]) -> list[Path]:
 def main() -> None:
     root = get_repo_root()
     output_dir = root / "ttnn/tutorials/basic_python"
-    notebooks_dir = root / "ttnn/tutorials"
     template_dir = root / "scripts/nbconvert_template"
 
     output_dir.mkdir(parents=True, exist_ok=True)
