@@ -163,8 +163,8 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores():
-        # 13 form pre sdpa, 4 from post
-        return 17
+        # 14 form pre sdpa, 4 from post
+        return 18
 
     @staticmethod
     def create_semaphores(mesh_device):
@@ -537,19 +537,15 @@ class AttentionBlock:
         gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul4_cores)]
 
         # Gather/CCL receiver core: (12, 9)
-        gather_core = ttnn.CoreCoord(12, 9)
-        gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
+        gather_core = rmsnorm_core
+        gather_core_grid = rmsnorm_core_grid
 
         # CCL sender core: (11, 9) - adjacent to gather core
         ccl_sender_core = ttnn.CoreCoord(11, 9)
         ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
 
-        mcast3_grid = ttnn.CoreRange(
-            ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
-            ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
-        )
-        mcast3_core_grid = ttnn.CoreRangeSet([mcast3_grid])
-        num_mcast3_cores = mcast3_grid.grid_size().x * mcast3_grid.grid_size().y  # 130
+        # TODO: Subtract the pipeline core
+        is_full_mcast_grid_core = ttnn.CoreRangeSet([main_grid]).subtract(rmsnorm_core_grid)
 
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
@@ -563,7 +559,8 @@ class AttentionBlock:
         gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
 
         # Full grid (union of all cores for semaphore allocation)
-        full_grid = matmul4_core_grid.merge(gather_core_grid).merge(mcast3_core_grid).merge(ccl_sender_core_grid)
+        # TODO: Subtract the pipeline core
+        full_grid = rmsnorm_core_grid.merge(ttnn.CoreRangeSet([main_grid])).merge(ccl_sender_core_grid)
 
         # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
         sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
@@ -731,7 +728,10 @@ class AttentionBlock:
         )
         semaphore_index += 1
 
-        mcast3_data_sender_semaphore_addr = mcast_data_sender_semaphore_addr
+        mcast2_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
 
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
@@ -1621,12 +1621,8 @@ class AttentionBlock:
 
         # Get NOC coordinates for this device
         gather_dest_noc_core = device.worker_core_from_logical_core(gather_core)
-        mcast3_dest_noc_start_core = device.worker_core_from_logical_core(mcast3_grid.start)
-        mcast3_dest_noc_end_core = device.worker_core_from_logical_core(mcast3_grid.end)
         ccl_sender_noc_core = device.worker_core_from_logical_core(ccl_sender_core)
         ccl_receiver_noc_core = gather_dest_noc_core  # Same as gather core
-
-        mcast3_is_part_of_receiver_grid = mcast3_grid.contains(gather_core)
 
         # ========================================================================
         # NCRISC compile-time args
@@ -1732,18 +1728,11 @@ class AttentionBlock:
             ("gather2_dst_cb", gather2_dst_cb),
             ("gather2_dst_num_pages", gather2_dst_num_pages),
             # Mcast3 sender
-            ("mcast3_dest_noc_start_x", mcast3_dest_noc_start_core.x),
-            ("mcast3_dest_noc_start_y", mcast3_dest_noc_start_core.y),
-            ("mcast3_dest_noc_end_x", mcast3_dest_noc_end_core.x),
-            ("mcast3_dest_noc_end_y", mcast3_dest_noc_end_core.y),
-            ("mcast3_num_cores", num_mcast3_cores),
-            ("mcast3_data_sender_semaphore_addr", mcast3_data_sender_semaphore_addr),
             ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
             ("mcast3_data_size_bytes", mcast3_data_size_bytes),
             ("mcast3_src_cb", gather2_dst_cb),
             ("mcast3_src_num_pages", mcast3_src_num_pages),
             ("mcast3_dst_cb", matmul5_in0_cb),
-            ("mcast3_is_part_of_receiver_grid", mcast3_is_part_of_receiver_grid),
             # Gather3 receiver
             ("gather3_noc0_num_senders", gather3_noc0_num_senders),
             ("gather3_noc1_num_senders", gather3_noc1_num_senders),
@@ -2697,7 +2686,6 @@ class AttentionBlock:
                     page_size=tile_1x32_size,
                     tile=matmul4_out_tile_descriptor,
                 )
-                matmul5_in0_cb_grid = mcast3_core_grid.merge(gather_core_grid)
                 matmul5_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul5_in0_cb,
                     sdpa_kv_cache_buffer_device,
@@ -3007,12 +2995,14 @@ class AttentionBlock:
                 # ========================================================================
                 # BRISC sender: data_size_bytes, src_num_pages, rmsnorm2_output_cb (grid/semaphores reused from mcast)
                 mcast2_brisc_named_compile_time_args = [
+                    ("mcast2_data_receiver_semaphore_addr", mcast2_data_receiver_semaphore_addr),
                     ("mcast2_data_size_bytes", mcast2_data_size_bytes),
                     ("mcast2_src_num_pages", mcast2_src_num_pages),
                     ("rmsnorm2_output_cb", rmsnorm2_output_cb),  # Source CB for mcast2 sender
                 ]
                 # NCRISC receiver: dst_num_pages (semaphore reused from mcast)
                 mcast2_ncrisc_named_compile_time_args = [
+                    ("mcast2_data_receiver_semaphore_addr", mcast2_data_receiver_semaphore_addr),
                     ("mcast2_dst_num_pages", mcast2_dst_num_pages),
                 ]
 
@@ -3385,8 +3375,8 @@ class AttentionBlock:
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_mcast3_receiver_core",
-                        core_range=mcast3_core_grid,
+                        named_compile_time_arg="is_full_mcast_grid_core",
+                        core_range=is_full_mcast_grid_core,
                         value=1,
                         other_value=0,
                     ),
