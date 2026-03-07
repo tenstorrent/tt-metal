@@ -364,7 +364,7 @@ jobs:
   # Update 'latest' tags on main branch pushes
   tag-latest:
     name: "🏷️ Update latest tags"
-    needs: [ubuntu, manylinux]
+    needs: [metadata, ubuntu, manylinux]
     if: |
       always() && !failure() && !cancelled() &&
       github.event_name == 'push' &&

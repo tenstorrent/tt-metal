@@ -61,9 +61,13 @@ variable "PYTHON_VERSION" {
 }
 
 variable "UV_IMAGE" {
-  # Pinned SHA256 of the official uv distroless image for reproducible builds
+  # SINGLE SOURCE OF TRUTH for the uv image SHA256 digest.
+  # When upgrading uv, update this value and the fallback defaults in:
+  #   - dockerfile/Dockerfile        (ARG UV_IMAGE)
+  #   - dockerfile/Dockerfile.python  (ARG UV_IMAGE)
+  # The Dockerfile defaults are only used for standalone `docker build` without
+  # Bake; Bake always passes this variable, so it takes precedence.
   # See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-  # Update this when upgrading uv - verify the SHA256 matches the published value
   default = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
 }
 

@@ -96,6 +96,13 @@ awk '
     { print }
 ' dockerfile/Dockerfile.python > "$CI_BUILD_VENV_DOCKERFILE"
 
+if [ ! -s "$CI_BUILD_VENV_DOCKERFILE" ]; then
+    echo "ERROR: awk split of Dockerfile.python produced an empty file." >&2
+    echo "The stage pattern 'FROM python-base AS ci-test-venv-builder' was not found." >&2
+    echo "If Dockerfile.python stage names changed, update the awk pattern above." >&2
+    exit 1
+fi
+
 CI_BUILD_VENV_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_VENV_DOCKERFILE" $VENV_EXTRA_FILES)
 CI_TEST_VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python $VENV_EXTRA_FILES)
 

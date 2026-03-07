@@ -40,7 +40,10 @@ runs:
           DATA="$PRECOMPUTED_DATA"
         elif [ -n "$COMPUTE_SCRIPT" ]; then
           echo "Running compute script: $COMPUTE_SCRIPT"
-          DATA=$(eval "$COMPUTE_SCRIPT")
+          # Run via bash -c rather than eval to reduce injection surface.
+          # TRUST BOUNDARY: compute-script values come from workflow files in
+          # this repository; do not pass untrusted/user-supplied strings here.
+          DATA=$(bash -c "$COMPUTE_SCRIPT")
         else
           echo "Error: Either precomputed-data or compute-script must be provided" >&2
           exit 1

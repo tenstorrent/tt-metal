@@ -20,8 +20,9 @@
 # Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
 ARG UBUNTU_VERSION=22.04
 ARG PYTHON_VERSION=''
-# UV_IMAGE can be overridden via build-arg for centralized version management.
-# The default value is kept in sync with docker-bake.hcl (single source of truth).
+# Fallback UV_IMAGE for standalone `docker build` without Bake.
+# The single source of truth is docker-bake.hcl variable "UV_IMAGE".
+# When upgrading uv, update docker-bake.hcl first, then sync this default.
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################

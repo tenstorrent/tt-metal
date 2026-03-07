@@ -30,8 +30,9 @@ ARG UBUNTU_VERSION=22.04
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
 ARG PYTHON_VERSION=""
-# UV_IMAGE can be overridden via build-arg for centralized version management.
-# The default value is kept in sync with docker-bake.hcl (single source of truth).
+# Fallback UV_IMAGE for standalone `docker build` without Bake.
+# The single source of truth is docker-bake.hcl variable "UV_IMAGE".
+# When upgrading uv, update docker-bake.hcl first, then sync this default.
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################
@@ -75,9 +76,9 @@ ARG PYTHON_VERSION
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-# IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
-# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
-# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
+# IMPORTANT: OMPI_TAG must match the ARG OMPI_TAG in Dockerfile.tools.
+# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/.
+# A mismatch causes a silent empty copy; validated after COPY below.
 
 # For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
 # shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
@@ -95,6 +96,10 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=cmake-layer /install/ /usr/local/
 COPY --from=openmpi-layer /install/ /opt/
+
+# Fail-fast if OMPI_TAG drifted from Dockerfile.tools (empty dir = version mismatch)
+RUN test -d "${OMPI_PREFIX}/bin" || \
+    { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_TAG (${OMPI_TAG}) likely differs from Dockerfile.tools ARG OMPI_TAG." >&2; exit 1; }
 
 # Auto-detect Python version from Ubuntu version if not explicitly provided
 RUN set -e; \

@@ -1,5 +1,5 @@
+# Check if Harbor registry is available and return the appropriate prefix
 name: "[internal] Check Harbor Availability"
-description: "Check if Harbor registry is available and return the appropriate prefix"
 
 on:
   workflow_call:
