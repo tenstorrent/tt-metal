@@ -248,7 +248,7 @@ void device_module(nb::module_& m_device) {
     )doc");
     m_device.def(
         "CloseDevices",
-        [](const std::map<tt::tt_metal::ChipId, MeshDevice*>& devices) {
+        [](const std::map<tt::ChipId, MeshDevice*>& devices) {
             for (const auto& device_entry : devices) {
                 device_entry.second->close();
             }

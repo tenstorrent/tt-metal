@@ -15,7 +15,7 @@
 #include <tt-metalium/device_types.hpp>
 
 namespace tt::tt_fabric {
-using tt::tt_metal::ChipId;
+using tt::ChipId;
 class TopologyMapper;
 
 using RoutingTable =

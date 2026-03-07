@@ -20,7 +20,7 @@ using tt::tt_metal::FWMailboxMsg;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 struct ResetLink {
-    tt::tt_metal::ChipId chip_id;
+    tt::ChipId chip_id;
     uint32_t channel;
     std::string log_message;
 };

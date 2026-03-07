@@ -9,6 +9,6 @@
 #include <vector>
 
 namespace tt {
-void ClearNocData(tt_metal::ChipId device_id);
-void DumpNocData(const std::vector<tt_metal::ChipId>& devices);
+void ClearNocData(ChipId device_id);
+void DumpNocData(const std::vector<ChipId>& devices);
 }  // namespace tt

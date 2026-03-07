@@ -22,7 +22,7 @@ namespace {
 
 namespace ttm = tt::tt_metal::experimental;
 
-nb::dict convert_sets_to_lists(const std::map<tt::tt_metal::ChipId, std::set<ttm::ProgramAnalysisData>>& perf_data) {
+nb::dict convert_sets_to_lists(const std::map<tt::ChipId, std::set<ttm::ProgramAnalysisData>>& perf_data) {
     nb::dict out;
     for (const auto& [chip_id, program_set] : perf_data) {
         nb::list programs;
@@ -34,7 +34,7 @@ nb::dict convert_sets_to_lists(const std::map<tt::tt_metal::ChipId, std::set<ttm
     return out;
 }
 
-nb::dict convert_kernel_duration_summaries_to_dict(const std::map<tt::tt_metal::ChipId, ttm::KernelDurationSummary>& summaries) {
+nb::dict convert_kernel_duration_summaries_to_dict(const std::map<tt::ChipId, ttm::KernelDurationSummary>& summaries) {
     nb::dict out;
     for (const auto& [chip_id, summary] : summaries) {
         out[nb::int_(chip_id)] = nb::cast(summary);
