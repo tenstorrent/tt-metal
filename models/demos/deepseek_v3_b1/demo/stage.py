@@ -385,11 +385,7 @@ class LMHeadStage(StageKind):
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=LMHeadStage.ARGMAX_FINAL_CORE,
             argmax_final_mesh_coord=pipeline_config[my_mesh_id].exit_node_coord,
-            semaphores=[
-                d["out_ready_semaphore"],
-                d["barrier_semaphore"],
-                d["secondary_sync_semaphore"],
-            ],
+            bcast_semaphores=[d["out_ready_semaphore"]],
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
             fabric_scratch_tensor=d["scratch_buffer"],
