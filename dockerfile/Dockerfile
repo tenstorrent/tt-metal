@@ -207,7 +207,10 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-# Copy pre-built ci-test venv from tool image
+# Merge ci-test venv into existing ci-build venv.
+# cp -ua merges contents (-u updates only newer/missing files, -a preserves attrs).
+# The trailing /. and / are required: "venv/." references the directory CONTENTS,
+# preventing cp from nesting venv/ inside the existing ${PYTHON_ENV_DIR}/.
 RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
     cp -ua /venv-staging/venv/. ${PYTHON_ENV_DIR}/
@@ -270,15 +273,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# IWYU could be useful to developers
-# Not currently building, and unclear whether this is used; can put it back in if needed
-# RUN mkdir -p /tmp/iwyu \
-#     && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
-#     && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
-#     && cmake --build /tmp/iwyu/build --parallel \
-#     && cmake --install /tmp/iwyu/build \
-#     && rm -rf /tmp/iwyu
+# IWYU (Include What You Use) could be useful to developers.
+# Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh
+# To add: create iwyu tool target in Dockerfile.tools using install-iwyu.sh
 
 #############################################################
 # Release image

@@ -72,6 +72,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 | `install-clangbuildanalyzer.sh` | Build and install ClangBuildAnalyzer |
 | `install-doxygen.sh` | Build and install doxygen from source |
 | `install-gdb.sh` | Build and install GDB from source |
+| `install-iwyu.sh` | Build and install Include What You Use (not currently in Docker image) |
 | `install-mold.sh` | Install mold linker binary release |
 | `install-openmpi.sh` | Build and install OpenMPI with ULFM support |
 | `install-sfpi.sh` | Install SFPI compiler tools |
@@ -122,6 +123,7 @@ CCACHE_VERSION=4.11.0 ./dockerfile/scripts/compute-hashes.sh
 | doxygen | SourceForge release page |
 | cba | GitHub release (compute from download) |
 | gdb | GNU announcement mailing list or FTP .sig files |
+| iwyu | GitHub release (compute from download) |
 | yq | GitHub release checksums file |
 | sfpi | Internal release artifacts |
 | openmpi | OpenMPI download page checksums |

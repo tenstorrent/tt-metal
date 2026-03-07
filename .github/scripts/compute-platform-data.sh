@@ -92,13 +92,13 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 CI_BUILD_VENV_DOCKERFILE="$TMP_DIR/Dockerfile.python.ci-build"
 awk '
-    /^FROM python-base AS ci-test-venv-builder$/ { exit }
+    /^FROM ci-build-venv-builder AS ci-test-venv-builder$/ { exit }
     { print }
 ' dockerfile/Dockerfile.python > "$CI_BUILD_VENV_DOCKERFILE"
 
 if [ ! -s "$CI_BUILD_VENV_DOCKERFILE" ]; then
     echo "ERROR: awk split of Dockerfile.python produced an empty file." >&2
-    echo "The stage pattern 'FROM python-base AS ci-test-venv-builder' was not found." >&2
+    echo "The stage pattern 'FROM ci-build-venv-builder AS ci-test-venv-builder' was not found." >&2
     echo "If Dockerfile.python stage names changed, update the awk pattern above." >&2
     exit 1
 fi

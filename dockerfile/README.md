@@ -244,7 +244,28 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 | `build-docker-artifact.yaml` | Builds images for a single platform (Ubuntu 22.04 or 24.04) |
 | `build-docker-tools.yaml` | Builds tool images, outputs `tool-tags` JSON |
 | `build-docker-python-venvs.yaml` | Builds Python venv images |
+| `build-evaluation-image.yaml` | Builds the evaluation image with explicit tool layer build-contexts |
 | `check-harbor.yaml` | Checks Harbor registry availability, outputs `harbor-prefix` |
+
+## Utility Scripts And Actions
+
+These utilities are part of the build architecture even though they are not Dockerfiles or top-level workflows. They explain why adding a tool touches more than just `Dockerfile.tools`.
+
+| Utility | Purpose | Why it is separate |
+|---------|---------|--------------------|
+| `.github/scripts/compute-tool-tags.sh` | Computes deterministic `tool-tags` JSON such as `ccache-tag` or `sfpi-tag` from the tool version source of truth plus install-script content hashes | This script is pure tag computation. It does not check the registry. Keeping it pure makes the tag format reusable anywhere a workflow needs the canonical tag values |
+| `.github/scripts/compute-tool-data.sh` | Wraps `compute-tool-tags.sh`, checks whether each tool image already exists, and emits `*_exists` booleans plus `any_missing` | CI needs both the tag values and the build/no-build decision. Separating this from `compute-tool-tags.sh` avoids duplicating tag logic while keeping registry access optional |
+| `.github/scripts/compute-platform-data.sh` | Computes tags and existence metadata for platform images and Python venv images | Tool changes affect downstream image hashes. This script keeps platform metadata computation centralized instead of scattering tag logic across workflows |
+| `.github/scripts/dockerfile-hash.sh` | Hashes a Dockerfile together with its `COPY` inputs and selected extra files | This is the cache-drift guardrail for content-addressed image tags. When tool-related files change, downstream image tags change automatically |
+| `.github/actions/manual-docker-bake` | Shared wrapper that runs `docker buildx bake` via CLI with retries, env setup, and post-build validation | CI intentionally uses manual Bake instead of `docker/bake-action`, so this action centralizes the reliable invocation pattern in one place |
+| `.github/actions/prewarm-images` | Pulls images through Harbor or GHCR to warm caches after builds | `tool-tags` is consumed as structured JSON outside the build steps themselves, so adding a new `"<tool>-tag"` key may require updating explicit key lists in callers such as `build-all-docker-images.yaml` |
+
+### Why both `compute-tool-tags` and `compute-tool-data` exist
+
+- `compute-tool-tags.sh` answers: "What should the tag be for this tool image?"
+- `compute-tool-data.sh` answers: "What should the tags be, and which of those images are already present in the registry?"
+- The split matters because some callers only need canonical tags, while others also need existence checks to decide whether to skip or trigger builds.
+- It also keeps local validation easy: you can run `compute-tool-tags.sh` without requiring registry access, and only use `compute-tool-data.sh` when you want the CI-style missing-image decision.
 
 ## Adding a New Tool
 
@@ -252,20 +273,60 @@ Use this checklist when adding a new tool. All listed files must be updated to a
 
 | # | File | Change |
 |---|------|--------|
-| 1 | `dockerfile/Dockerfile.tools` | Add `ARG TOOL_VERSION=x.y.z` (or `ARG TOOL_TAG=...` for tag-style versions), `ARG TOOL_SHA256=...`, build stage with install script, and `FROM scratch AS <tool>` final stage |
-| 2 | `dockerfile/scripts/install-<tool>.sh` | Create install script if a Docker artifact (e.g. uv) is unavailable |
-| 3 | `dockerfile/docker-bake.hcl` | Add `target "<tool>"` block, add to `tools` group, add to `contexts` in `_main-common`, `_basic-common`, and/or `manylinux` as appropriate |
-| 4 | Consuming Dockerfiles (e.g. `dockerfile/Dockerfile`) | Add `FROM scratch AS <tool>-layer` stub to each Dockerfile that uses the tool |
-| 5 | `.github/scripts/compute-tool-tags.sh` | Add version extraction (from Dockerfile.tools or version file), hash computation, and `--arg` + JSON key in `jq -n` output |
-| 6 | `.github/workflows/build-docker-tools.yaml` | Add `<tool>` to the `for key in` loop in "Check if tool images exist" step; add `add_if_missing <tool> ...` in "Prepare bake overrides" step |
-| 7 | `.github/workflows/build-docker-artifact.yaml` | Add to `ALL_TOOLS` (main images), `BASIC_TOOLS` (basic-dev, basic-ttnn-runtime), or manylinux `for tool in` list as appropriate |
+| 1 | `dockerfile/Dockerfile.tools` | Add version metadata (`ARG <TOOL>_VERSION` or `ARG <TOOL>_TAG`, plus `ARG <TOOL>_SHA256` when applicable) unless the tool already has an external single source of truth like `sfpi`. Add a builder stage that installs into `/install`, then add `FROM scratch AS <tool>` as the exported tool target |
+| 2 | `dockerfile/scripts/install-<tool>.sh` | Create or reuse an install script unless the tool is copied directly from an official pinned image. Follow existing script conventions: `set -euo pipefail`, SHA256 verification, and install into `/install` or `/install/...` |
+| 3 | `dockerfile/docker-bake.hcl` | Add `target "<tool>"`, add it to group `tools`, and wire `<tool>-layer = "target:<tool>"` into every consumer target that should receive it: `_main-common`, `_basic-common`, `manylinux`, and/or `evaluation` |
+| 4 | Consuming Dockerfiles (`dockerfile/Dockerfile`, `dockerfile/Dockerfile.basic-dev`, `dockerfile/Dockerfile.manylinux`, `dockerfile/Dockerfile.evaluation`) | For each image that uses the tool, add `FROM scratch AS <tool>-layer` and the actual `COPY --from=<tool>-layer ...` or `RUN --mount=from=<tool>-layer ...` usage. Do not add only the stub; the tool must also be consumed in the build stage |
+| 5 | `.github/scripts/compute-tool-tags.sh` | Add version extraction from the real source of truth, compute the content hash from the install script and any version file(s), then add the new `--arg` and `"<tool>-tag"` JSON entry |
+| 6 | `.github/scripts/compute-tool-data.sh` | Add the tool to `TOOLS`, add `<tool>_exists` handling, and include the field in the final JSON. This is what drives missing-image detection in CI |
+| 7 | `.github/workflows/build-docker-tools.yaml` | Add `add_if_missing <tool>` in "Prepare bake overrides" so CI can build and push the new tool image when absent |
+| 8 | `.github/workflows/build-docker-artifact.yaml` | Add the tool anywhere the corresponding downstream images need it: `ALL_TOOLS` for main images, `BASIC_TOOLS` for basic images, and/or the manylinux tool loop |
+| 9 | `.github/workflows/build-evaluation-image.yaml` | If `dockerfile/Dockerfile.evaluation` uses the tool, expose `<tool>-tag` from `check-tool-images` and add `<tool>-layer=docker-image://...` to `build-contexts` |
+| 10 | Other explicit `tool-tags` consumers (currently `build-all-docker-images.yaml`) | If a workflow enumerates JSON keys explicitly, add the new `"<tool>-tag"` key there too so prewarming/reporting includes the new image |
+
+### Validation steps
+
+Before considering the change complete, validate all of the following:
+
+1. `docker buildx bake -f dockerfile/docker-bake.hcl --print tools` shows the new tool target.
+2. `docker buildx bake -f dockerfile/docker-bake.hcl --print <consumer-target>` shows the new `<tool>-layer` context for each image that should consume it.
+3. `.github/scripts/compute-tool-tags.sh <repo>` emits a `"<tool>-tag"` entry.
+4. `.github/scripts/compute-tool-data.sh <repo> --no-check-exists` emits a `<tool>_exists` field.
+
+Optional but recommended follow-up docs:
+
+- Add the new script to `dockerfile/scripts/README.md` if you created one.
+- Update any comments or tool lists in Dockerfiles that enumerate the available tools.
 
 ### AI agent prompt
 
 Use this prompt when asking an AI to add a new tool:
 
 ```
-Add a new tool "<tool-name>" to the TT-Metalium Docker build system. Follow the "Adding a New Tool" checklist in dockerfile/README.md: update Dockerfile.tools, create install-<tool>.sh, update docker-bake.hcl, add FROM scratch stubs to consuming Dockerfiles (check which images use the tool—main, basic, manylinux, evaluation), update compute-tool-tags.sh, build-docker-tools.yaml, and build-docker-artifact.yaml. Match the patterns used by existing tools like ccache or sfpi.
+Add a new tool "<tool-name>" to the TT-Metalium Docker build system.
+
+Requirements:
+- First inspect the existing patterns in `dockerfile/Dockerfile.tools`, `dockerfile/docker-bake.hcl`, `.github/scripts/compute-tool-tags.sh`, `.github/scripts/compute-tool-data.sh`, `.github/workflows/build-docker-tools.yaml`, `.github/workflows/build-docker-artifact.yaml`, and `.github/workflows/build-evaluation-image.yaml`.
+- Determine which images should consume the tool: main (`dockerfile/Dockerfile`), basic (`dockerfile/Dockerfile.basic-dev`), manylinux (`dockerfile/Dockerfile.manylinux`), and/or evaluation (`dockerfile/Dockerfile.evaluation`).
+- Update every required file from the "Adding a New Tool" checklist in `dockerfile/README.md`.
+- In `Dockerfile.tools`, add the builder stage and exported `FROM scratch AS <tool>` stage. Install into `/install`. If the tool follows a special source-of-truth pattern like `sfpi` or `openmpi`, preserve that pattern instead of forcing a generic `<TOOL>_VERSION`/`<TOOL>_SHA256` layout.
+- Create or reuse `dockerfile/scripts/install-<tool>.sh` unless the tool can be copied from an official pinned image.
+- In consumer Dockerfiles, add both the `FROM scratch AS <tool>-layer` stub and the actual `COPY --from` or `RUN --mount=from` usage.
+- In CI scripts, update both tag computation and existence detection: `.github/scripts/compute-tool-tags.sh` and `.github/scripts/compute-tool-data.sh`.
+- In workflows, update `.github/workflows/build-docker-tools.yaml`, `.github/workflows/build-docker-artifact.yaml`, and, if evaluation uses the tool, `.github/workflows/build-evaluation-image.yaml`.
+- Match the style of existing tools such as `ccache`, `cmake`, `openmpi`, or `sfpi`, whichever is structurally closest.
+
+Validation:
+- Run `docker buildx bake -f dockerfile/docker-bake.hcl --print tools`
+- Run `docker buildx bake -f dockerfile/docker-bake.hcl --print <each consumer target you changed>`
+- Run `.github/scripts/compute-tool-tags.sh <repo>`
+- Run `.github/scripts/compute-tool-data.sh <repo> --no-check-exists`
+
+After editing, summarize:
+1. which files changed,
+2. which images now consume the tool,
+3. the generated JSON key name (`<tool>-tag`),
+4. any special cases or assumptions.
 ```
 
 ## Scripts

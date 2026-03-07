@@ -35,12 +35,13 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05e
 FROM ${UV_IMAGE} AS uv-layer
 
 #############################################################
-# Common Python base stage
-# Shared setup for Python version detection and uv installation
-# Used by both ci-build-venv and ci-test-venv builders
+# ci-build-venv-builder
+# Base stage with Python, uv, and virtual environment creation.
+# Packages: uv, build, numpy, setuptools (base packages for building)
+# ci-test-venv-builder extends this stage to add test dependencies.
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS python-base
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
@@ -66,7 +67,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Determine Python version based on UBUNTU_VERSION or PYTHON_VERSION override
-# Outputs: DETECTED_PYTHON_VERSION environment variable
+# Outputs: DETECTED_PYTHON_VERSION environment variable persisted for child stages
 RUN if [ -n "${PYTHON_VERSION}" ]; then \
     DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     elif [ "${UBUNTU_VERSION}" = "24.04" ]; then \
@@ -77,23 +78,9 @@ RUN if [ -n "${PYTHON_VERSION}" ]; then \
     echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
     echo "DETECTED_PYTHON_VERSION=${DETECTED_PYTHON_VERSION}" > /tmp/python-version.env
 
-#############################################################
-# ci-build-venv
-# Packages: build, numpy, setuptools (base packages for building)
-#############################################################
-
-FROM python-base AS ci-build-venv-builder
-
-ARG UBUNTU_VERSION
-ARG PYTHON_VERSION
-
-# Re-source the detected Python version from the base stage
-RUN source /tmp/python-version.env && echo "Using Python ${DETECTED_PYTHON_VERSION}"
-
-# Auto-detect Python version from Ubuntu version if not explicitly provided,
-# then install Python with uv and create relocatable virtual environment
-# umask 000 ensures the venv is world-writable for multi-host NFS access
-# MAKEFLAGS accelerates builds for packages that compile with make
+# Install Python with uv and create relocatable virtual environment with base packages.
+# umask 000 ensures the venv is world-writable for multi-host NFS access.
+# MAKEFLAGS accelerates builds for packages that compile with make.
 RUN source /tmp/python-version.env && \
     export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
@@ -103,7 +90,9 @@ RUN source /tmp/python-version.env && \
     source ${PYTHON_ENV_DIR}/bin/activate && \
     uv pip install --no-cache uv build numpy setuptools==80 && \
     uv clean --force
+
 # Export as scratch image with only the venv
+# NOTE: Use literal /opt/venv path, not ${PYTHON_ENV_DIR}. FROM scratch doesn't inherit ENV.
 FROM scratch AS ci-build-venv
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
 LABEL org.opencontainers.image.description="Pre-built Python virtual environment for CI builds"
@@ -112,14 +101,13 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 COPY --from=ci-build-venv-builder /opt/venv /install/venv
 
 #############################################################
-# ci-test-venv
+# ci-test-venv-builder
+# Extends ci-build-venv-builder with test dependencies.
 # Packages: torch (CPU) + requirements-dev.txt + docs + triage
 #############################################################
 
-FROM python-base AS ci-test-venv-builder
+FROM ci-build-venv-builder AS ci-test-venv-builder
 
-ARG UBUNTU_VERSION
-ARG PYTHON_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Install additional build dependencies required for test packages
@@ -134,22 +122,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Python with uv and create relocatable virtual environment
-# Pre-install setuptools so pkg_resources is available for packages like mmcv
-# that use it at build time. This must be a separate RUN from the requirements
-# install so the package is fully on disk when uv resolves build dependencies.
-# MAKEFLAGS accelerates builds for packages that compile with make
-RUN source /tmp/python-version.env && \
-    echo "Using Python ${DETECTED_PYTHON_VERSION}" && \
-    export MAKEFLAGS="-j$(nproc)" && \
-    umask 000 && \
-    uv python install "${DETECTED_PYTHON_VERSION}" && \
-    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
-    uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
-    source ${PYTHON_ENV_DIR}/bin/activate && \
-    uv pip install uv setuptools==80 && \
-    uv clean --force
-
 # Create directory structure for requirements files
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
@@ -162,7 +134,7 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 
-# Install all packages
+# Install test packages into the existing venv inherited from ci-build-venv-builder.
 # - torch from CPU index first
 # - Then requirements files with unsafe-best-match to avoid transitive dep conflicts
 # umask 000 ensures the venv is world-writable for runtime pip installs
@@ -176,10 +148,12 @@ RUN export MAKEFLAGS="-j$(nproc)" && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
     uv clean --force
+
 # Export as scratch image with only the venv
+# NOTE: Use literal /opt/venv path, not ${PYTHON_ENV_DIR}. FROM scratch doesn't inherit ENV.
 FROM scratch AS ci-test-venv
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
 LABEL org.opencontainers.image.description="Pre-built Python virtual environment for CI testing"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
-COPY --from=ci-test-venv-builder ${PYTHON_ENV_DIR} /install/venv
+COPY --from=ci-test-venv-builder /opt/venv /install/venv
