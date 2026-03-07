@@ -367,6 +367,31 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
 
 
 @pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        # C_in=4, kernel=3x3x3 → patch_size=3*3*3*32=864 (C_in padded to 32)
+        [(1, 4, 8, 28, 28), 16, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # C_in=3, kernel=3x3x3 → patch_size=3*3*3*32=864 (C_in padded to 32)
+        [(1, 3, 8, 14, 14), 32, (3, 3, 3), (1, 1, 1), (1, 1, 1), "zeros"],
+        # C_in=12, kernel=3x3x3 → patch_size=3*3*3*12=324 (not multiple of 32)
+        [(1, 12, 8, 10, 10), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+        # C_in=12, kernel=1x1x1 → patch_size=1*1*1*12=12 (not multiple of 32)
+        [(1, 12, 8, 10, 10), 32, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
+    ],
+    ids=[
+        "issue_39103_C4_k333",
+        "C3_k333_pad",
+        "C12_k333_non_aligned_patch",
+        "C12_k111_non_aligned_patch",
+    ],
+)
+def test_conv3d_non_aligned_patch_size(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+    """Regression test for issue #39103: conv3d with non tile-aligned patch_size (kD*kH*kW*C_in_block)."""
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
+
+
+@pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
     [
         [
