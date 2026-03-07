@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prefill_dispatch_nanobind.hpp"
+#include "dispatch_nanobind.hpp"
 
 #include <array>
 #include <cstdint>
@@ -13,13 +13,13 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "prefill_dispatch.hpp"
+#include "dispatch.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::operations::experimental::deepseek::prefill_dispatch::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail {
 
-void bind_prefill_dispatch(nb::module_& mod) {
+void bind_dispatch(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Prefill dispatch operation for DeepSeek MoE models.
@@ -54,7 +54,7 @@ void bind_prefill_dispatch(nb::module_& mod) {
                 - metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
 
         Example:
-            >>> dispatched, metadata = ttnn.experimental.deepseek.prefill_dispatch(
+            >>> dispatched, metadata = ttnn.experimental.deepseek_prefill.dispatch(
                     input_tensor,
                     weights_tensor,
                     indices_tensor,
@@ -66,10 +66,10 @@ void bind_prefill_dispatch(nb::module_& mod) {
                     max_dispatched_tokens_per_expert=256)
         )doc";
 
-    using OperationType = decltype(ttnn::prefill_dispatch);
+    using OperationType = decltype(ttnn::dispatch);
     ttnn::bind_registered_operation(
         mod,
-        ttnn::prefill_dispatch,
+        ttnn::dispatch,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -126,10 +126,10 @@ void bind_prefill_dispatch(nb::module_& mod) {
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_dispatch::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail
 
-namespace ttnn::operations::experimental::deepseek::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::detail {
 
-void bind_prefill_dispatch(::nanobind::module_& mod) { prefill_dispatch::detail::bind_prefill_dispatch(mod); }
+void bind_dispatch(::nanobind::module_& mod) { dispatch::detail::bind_dispatch(mod); }
 
-}  // namespace ttnn::operations::experimental::deepseek::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::detail

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prefill_combine_nanobind.hpp"
+#include "combine_nanobind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -11,13 +11,13 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "prefill_combine.hpp"
+#include "combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::operations::experimental::deepseek::prefill_combine::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::combine::detail {
 
-void bind_prefill_combine(nb::module_& mod) {
+void bind_combine(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Prefill combine operation for DeepSeek MoE models.
@@ -46,7 +46,7 @@ void bind_prefill_combine(nb::module_& mod) {
             ttnn.Tensor: Combined output tensor of shape (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
 
         Example:
-            >>> output = ttnn.experimental.deepseek.prefill_combine(
+            >>> output = ttnn.experimental.deepseek_prefill.combine(
                     dispatched_buffer,
                     dispatched_metadata,
                     expert_token_counts,
@@ -56,10 +56,10 @@ void bind_prefill_combine(nb::module_& mod) {
                     seq_len_per_chip=512)
         )doc";
 
-    using OperationType = decltype(ttnn::prefill_combine);
+    using OperationType = decltype(ttnn::combine);
     ttnn::bind_registered_operation(
         mod,
-        ttnn::prefill_combine,
+        ttnn::combine,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -104,10 +104,10 @@ void bind_prefill_combine(nb::module_& mod) {
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_combine::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail
 
-namespace ttnn::operations::experimental::deepseek::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::detail {
 
-void bind_prefill_combine(::nanobind::module_& mod) { prefill_combine::detail::bind_prefill_combine(mod); }
+void bind_combine(::nanobind::module_& mod) { combine::detail::bind_combine(mod); }
 
-}  // namespace ttnn::operations::experimental::deepseek::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::detail

@@ -9,17 +9,21 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
-namespace operations::experimental::deepseek::prefill_combine {
+namespace operations::experimental::deepseek_prefill::dispatch {
 
-struct ExecutePrefillCombine {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& dispatched_buffer,
-        const ttnn::Tensor& dispatched_metadata,
-        const ttnn::Tensor& expert_token_counts,
+struct ExecuteDispatch {
+    static std::array<ttnn::Tensor, 2> invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& weights_tensor,
+        const ttnn::Tensor& indices_tensor,
+        const ttnn::Tensor& expert_offsets_tensor,
+        const ttnn::Tensor& expert_dispatch_table_tensor,
         uint32_t dispatch_group_size,
         uint32_t experts_per_chip,
+        uint32_t num_routed_experts,
         uint32_t num_experts_per_tok,
-        uint32_t seq_len_per_chip,
+        uint32_t metadata_len,
+        uint32_t max_dispatched_tokens_per_expert,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
         std::optional<uint32_t> cluster_axis = 0,
@@ -27,10 +31,10 @@ struct ExecutePrefillCombine {
         std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear);
 };
 
-}  // namespace operations::experimental::deepseek::prefill_combine
+}  // namespace operations::experimental::deepseek_prefill::dispatch
 
-constexpr auto prefill_combine = ttnn::register_operation<
-    "ttnn::experimental::deepseek::prefill_combine",
-    ttnn::operations::experimental::deepseek::prefill_combine::ExecutePrefillCombine>();
+constexpr auto dispatch = ttnn::register_operation<
+    "ttnn::experimental::deepseek_prefill::dispatch",
+    ttnn::operations::experimental::deepseek_prefill::dispatch::ExecuteDispatch>();
 
 }  // namespace ttnn

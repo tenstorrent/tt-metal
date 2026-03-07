@@ -6,13 +6,13 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-#include "prefill_dispatch_device_operation.hpp"
+#include "dispatch_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::experimental::deepseek::prefill_dispatch {
+namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
-void PrefillDispatchDeviceOperation::validate_on_program_cache_miss(
+void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Validate input tensor layouts are ROW_MAJOR
     TT_FATAL(
@@ -69,12 +69,12 @@ void PrefillDispatchDeviceOperation::validate_on_program_cache_miss(
     //     weights_shape[-1]);
 }
 
-void PrefillDispatchDeviceOperation::validate_on_program_cache_hit(
+void DispatchDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // Empty for now
 }
 
-PrefillDispatchDeviceOperation::spec_return_value_t PrefillDispatchDeviceOperation::compute_output_specs(
+DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Extract necessary dimensions from operation attributes
     uint32_t experts_per_chip = operation_attributes.experts_per_chip;
@@ -113,7 +113,7 @@ PrefillDispatchDeviceOperation::spec_return_value_t PrefillDispatchDeviceOperati
     return {dispatch_buffer_spec, dispatch_metadata_spec};
 }
 
-PrefillDispatchDeviceOperation::topology_return_value_t PrefillDispatchDeviceOperation::compute_output_topologies(
+DispatchDeviceOperation::topology_return_value_t DispatchDeviceOperation::compute_output_topologies(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Output tensors should have the same distribution topology as input tensor (sharded on dim 0)
     const auto& input_tensor = tensor_args.input_tensor;
@@ -127,7 +127,7 @@ PrefillDispatchDeviceOperation::topology_return_value_t PrefillDispatchDeviceOpe
     return {output_topology, output_topology};
 }
 
-PrefillDispatchDeviceOperation::tensor_return_value_t PrefillDispatchDeviceOperation::create_output_tensors(
+DispatchDeviceOperation::tensor_return_value_t DispatchDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
@@ -136,10 +136,10 @@ PrefillDispatchDeviceOperation::tensor_return_value_t PrefillDispatchDeviceOpera
     return {output_tensor, metadata_tensor};
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_dispatch
+}  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
 
 namespace ttnn::prim {
-ttnn::operations::experimental::deepseek::prefill_dispatch::PrefillDispatchDeviceOperation::tensor_return_value_t
+ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation::tensor_return_value_t
 prefill_dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weights_tensor,
@@ -157,7 +157,7 @@ prefill_dispatch(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
-    using OperationType = ttnn::operations::experimental::deepseek::prefill_dispatch::PrefillDispatchDeviceOperation;
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dispatch_group_size = dispatch_group_size,

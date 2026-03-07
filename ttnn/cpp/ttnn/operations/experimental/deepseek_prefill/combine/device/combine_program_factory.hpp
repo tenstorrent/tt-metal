@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "prefill_combine_device_operation.hpp"
+#include "combine_device_operation.hpp"
 
-namespace ttnn::operations::experimental::deepseek::prefill_combine {
+namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
 // Program factory functions declared in device operation header
 // This file can be used for additional helper functions if needed
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::combine

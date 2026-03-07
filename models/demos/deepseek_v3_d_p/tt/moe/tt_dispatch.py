@@ -181,7 +181,7 @@ class TtDispatchModule(LightweightModule):
         (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
-        ) = ttnn.experimental.deepseek.prefill_dispatch(
+        ) = ttnn.experimental.deepseek_prefill.dispatch(
             input_tensor=x,
             weights_tensor=weights,
             indices_tensor=indices,

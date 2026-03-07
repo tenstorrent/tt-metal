@@ -6,15 +6,14 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-#include "prefill_combine_device_operation.hpp"
+#include "combine_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::experimental::deepseek::prefill_combine {
+namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
-void PrefillCombineDeviceOperation::validate_on_program_cache_miss(
+void CombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     // Validate layouts
     TT_FATAL(
         tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -63,14 +62,13 @@ void PrefillCombineDeviceOperation::validate_on_program_cache_miss(
         counter_shape[2]);
 }
 
-void PrefillCombineDeviceOperation::validate_on_program_cache_hit(
+void CombineDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // Empty for now
 }
 
-PrefillCombineDeviceOperation::spec_return_value_t PrefillCombineDeviceOperation::compute_output_specs(
+CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     // Get input shape to extract hidden_dim
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
     uint32_t per_device_batch = dispatched_shape[0];  // Should be 1 for sharded input
@@ -98,14 +96,13 @@ PrefillCombineDeviceOperation::spec_return_value_t PrefillCombineDeviceOperation
     return output_spec;
 }
 
-PrefillCombineDeviceOperation::tensor_return_value_t PrefillCombineDeviceOperation::create_output_tensors(
+CombineDeviceOperation::tensor_return_value_t CombineDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.dispatched_buffer.device());
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 
 namespace ttnn::prim {
 ttnn::Tensor prefill_combine(
@@ -121,7 +118,7 @@ ttnn::Tensor prefill_combine(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
-    using OperationType = ttnn::operations::experimental::deepseek::prefill_combine::PrefillCombineDeviceOperation;
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dispatch_group_size = dispatch_group_size,

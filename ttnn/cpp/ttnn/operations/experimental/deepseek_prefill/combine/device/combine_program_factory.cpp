@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prefill_combine_device_operation.hpp"
-#include "prefill_combine_program_factory.hpp"
+#include "combine_device_operation.hpp"
+#include "combine_program_factory.hpp"
 #include <algorithm>
 #include <array>
 #include <utility>
@@ -17,21 +17,15 @@
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-namespace ttnn::operations::experimental::deepseek::prefill_combine {
+namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) {
-    return (uint32_t)tensor.buffer()->num_pages();
-}
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) {
-    return (uint32_t)tensor.buffer()->page_size();
-}
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
-    return (uint32_t)tensor.buffer()->aligned_page_size();
-}
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -47,7 +41,6 @@ void create_tensor_cb(
     uint32_t buffering_factor,
     tt::CBIndex cb_id,
     const std::string& tensor_name = "tensor") {
-
     auto page_size = get_page_size(tensor);
     auto num_pages = get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
@@ -57,7 +50,8 @@ void create_tensor_cb(
 
     log_debug(
         tt::LogOp,
-        "{} shape: {}, pages: {}, page_size: {}, aligned_page_size: {} buffering_factor: {} cb_id: {} cb_size: {} cb_dtype: {}",
+        "{} shape: {}, pages: {}, page_size: {}, aligned_page_size: {} buffering_factor: {} cb_id: {} cb_size: {} "
+        "cb_dtype: {}",
         tensor_name,
         tensor.logical_shape(),
         num_pages,
@@ -69,20 +63,18 @@ void create_tensor_cb(
         data_format);
 
     tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_size, {{cb_id, data_format}})
-            .set_page_size(cb_id, aligned_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_size, {{cb_id, data_format}}).set_page_size(cb_id, aligned_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
 }  // namespace detail
 
-PrefillCombineDeviceOperation::PrefillCombineProgramFactory::cached_mesh_workload_t
-PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_mesh_workload(
+CombineDeviceOperation::CombineProgramFactory::cached_mesh_workload_t
+CombineDeviceOperation::CombineProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -111,8 +103,8 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_mesh_workloa
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<PrefillCombineDeviceOperation::PrefillCombineProgramFactory::shared_variables_t>
-PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
+ttnn::device_operation::CachedProgram<CombineDeviceOperation::CombineProgramFactory::shared_variables_t>
+CombineDeviceOperation::CombineProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
@@ -120,7 +112,6 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
-
     tt::tt_metal::Program program{};
 
     // Extract input tensors
@@ -181,11 +172,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     CoreCoord worker_core = subdevice_cores.at(0);
     CoreRangeSet worker_core_grid = CoreRangeSet({CoreRange(worker_core, worker_core)});
 
-    log_debug(
-        tt::LogOp,
-        "Creating prefill combine program with hidden_size: {} on core: {}",
-        hidden_size,
-        worker_core);
+    log_debug(tt::LogOp, "Creating prefill combine program with hidden_size: {} on core: {}", hidden_size, worker_core);
 
     // Create input CBs (readers)
     detail::create_tensor_cb(
@@ -309,7 +296,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/reader_prefill_combine.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",
         worker_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -333,7 +320,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/writer_prefill_combine.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/writer_combine.cpp",
         worker_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -397,16 +384,14 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
          .writer_kernel_id = writer_kernel_id,
          .worker_core = worker_core,
          .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}
-    };
+         .cross_device_semaphore = cross_device_semaphore}};
 }
 
-void PrefillCombineDeviceOperation::PrefillCombineProgramFactory::override_runtime_arguments(
+void CombineDeviceOperation::CombineProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-
     // Update buffer addresses in runtime args when tensors are reallocated
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
@@ -430,4 +415,4 @@ void PrefillCombineDeviceOperation::PrefillCombineProgramFactory::override_runti
     }
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::combine

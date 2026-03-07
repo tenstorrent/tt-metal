@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prefill_combine.hpp"
-#include "device/prefill_combine_device_operation.hpp"
+#include "combine.hpp"
+#include "device/combine_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-namespace ttnn::operations::experimental::deepseek::prefill_combine {
+namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
-ttnn::Tensor ExecutePrefillCombine::invoke(
+ttnn::Tensor ExecuteCombine::invoke(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,
@@ -65,4 +65,4 @@ ttnn::Tensor ExecutePrefillCombine::invoke(
         subdevice_core_range_set);
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::combine

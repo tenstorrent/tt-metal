@@ -65,7 +65,7 @@ class TtCombineModule(LightweightModule):
         Returns:
             output: Combined output tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
         """
-        output = ttnn.experimental.deepseek.prefill_combine(
+        output = ttnn.experimental.deepseek_prefill.combine(
             dispatched_buffer,
             dispatched_metadata,
             expert_token_counts,
