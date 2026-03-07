@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
 from loguru import logger
 
 import ttnn
@@ -206,6 +205,7 @@ class ContextParallelConv3d(Module):
             input_tensor=x_pad_NTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data if self.bias is not None else None,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
