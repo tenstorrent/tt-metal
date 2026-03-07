@@ -32,7 +32,7 @@ namespace tt::tt_metal::distributed::test {
 
 class DispatchContextFixture : public ::testing::Test {
 protected:
-    void TearDown() override { experimental::DispatchContext::get().reset_for_testing(); }
+    void TearDown() override { experimental::DispatchContext::get().reset(); }
 };
 
 TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {

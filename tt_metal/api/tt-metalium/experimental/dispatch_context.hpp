@@ -32,9 +32,8 @@ public:
     void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
     void disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
 
-    // Reset DispatchContext state between tests to allow multiple FD init/terminate cycles
-    // NOTE: This is for testing purposes only and should not be called in production code
-    void reset_for_testing() {
+    // Reset DispatchContext state to allow reinitialization
+    void reset() {
         num_fd_inits_ = 0;
         fast_dispatch_enabled_ = false;
     }
