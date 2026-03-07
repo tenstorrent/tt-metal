@@ -7,30 +7,31 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
-
-struct ReshapeOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_output_shape,
-        const ttnn::Shape& padded_output_shape,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_output_shape,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        tt::stl::Span<const int32_t> shape_vector,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
-};
-
-}  // namespace operations::data_movement
 
 // TODO: unify with ttnn::reshape in core.cpp
-constexpr auto reshape_on_device =
-    ttnn::register_operation<"ttnn::reshape_on_device", ttnn::operations::data_movement::ReshapeOperation>();
+ttnn::Tensor reshape_on_device(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_output_shape,
+    const ttnn::Shape& padded_output_shape,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+
+ttnn::Tensor reshape_on_device(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_output_shape,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+
+ttnn::Tensor reshape_on_device(
+    const ttnn::Tensor& input_tensor,
+    tt::stl::Span<const int32_t> shape_vector,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+
+// Python binding overload: takes W, Z, Y, X as separate parameters
+ttnn::Tensor reshape_on_device(
+    const ttnn::Tensor& input_tensor,
+    int W,
+    int Z,
+    int Y,
+    int X,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 
 }  // namespace ttnn

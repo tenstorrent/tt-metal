@@ -7,10 +7,10 @@
 #include <functional>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
-namespace ttnn::operations::expand {
 
+namespace {
 
-ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::span<const int32_t> shape) {
+ttnn::SmallVector<uint32_t> create_repetition_vector(const ttnn::Tensor& tensor, std::span<const int32_t> shape) {
     ttnn::SmallVector<uint32_t> expansion_vector(shape.size());
     auto tensor_shape = tensor.logical_shape();
     const auto source_rank = tensor_shape.rank();
@@ -29,11 +29,15 @@ ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::
     return expansion_vector;
 }
 
-ttnn::Tensor ExpandOperation::invoke(
+}  // namespace
+
+namespace ttnn {
+
+Tensor expand(
     const ttnn::Tensor& tensor,
     const tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config) {
     return ttnn::repeat(tensor, create_repetition_vector(tensor, shape_vector), memory_config);
 }
 
-}  // namespace ttnn::operations::expand
+}  // namespace ttnn

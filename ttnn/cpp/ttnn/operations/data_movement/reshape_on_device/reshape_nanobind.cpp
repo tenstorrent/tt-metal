@@ -9,45 +9,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/types.hpp"
+#include "reshape.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement {
 
-namespace {
-
-template <typename data_movement_operation_t>
-void bind_reshape_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int W,
-               int Z,
-               int Y,
-               int X,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("W"),
-            nb::arg("Z"),
-            nb::arg("Y"),
-            nb::arg("X"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
-}
-
-}  // namespace
-
 void bind_reshape(nb::module_& mod) {
-    bind_reshape_op(
-        mod,
-        ttnn::reshape_on_device,
+    const auto* doc =
         R"doc(
 
         Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
@@ -79,7 +47,21 @@ void bind_reshape(nb::module_& mod) {
             >>> tensor = ttnn.from_torch(torch.tensor((1, 4), dtype=torch.bfloat16), device=device)
             >>> output = ttnn.reshape(tensor, 1, 1, 2, 2)
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"reshape_on_device">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, int, int, int, int, const std::optional<ttnn::MemoryConfig>&>(
+                &ttnn::reshape_on_device),
+            nb::arg("input_tensor"),
+            nb::arg("W"),
+            nb::arg("Z"),
+            nb::arg("Y"),
+            nb::arg("X"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

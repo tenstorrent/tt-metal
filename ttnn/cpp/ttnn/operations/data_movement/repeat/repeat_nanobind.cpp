@@ -8,34 +8,12 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "repeat.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace nb = nanobind;
-
-namespace {
-template <typename data_movement_operation_t>
-void bind_repeat_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    ttnn::bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<uint32_t>& repetition_vector,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, repetition_vector, memory_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("repeat_dims"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
-}
-
-}  // namespace
 
 void bind_repeat(nb::module_& mod) {
     const auto* doc = R"doc(
@@ -52,7 +30,17 @@ void bind_repeat(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
     )doc";
 
-    bind_repeat_op(mod, ttnn::repeat, doc);
+    ttnn::bind_function<"repeat">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(
+                const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&)>(
+                &ttnn::repeat),
+            nb::arg("input_tensor"),
+            nb::arg("repeat_dims"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

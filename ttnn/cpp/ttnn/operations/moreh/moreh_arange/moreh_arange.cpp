@@ -6,8 +6,9 @@
 
 #include "device/moreh_arange_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_arange {
-Tensor MorehArange::invoke(
+namespace ttnn {
+
+Tensor moreh_arange(
     float start,
     float end,
     float step,
@@ -18,4 +19,5 @@ Tensor MorehArange::invoke(
     const MemoryConfig& memory_config) {
     return ttnn::prim::moreh_arange(start, end, step, mesh_device, output, untilize_out, dtype, memory_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_arange
+
+}  // namespace ttnn
