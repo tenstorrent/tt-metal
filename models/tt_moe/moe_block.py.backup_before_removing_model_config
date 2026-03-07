@@ -296,98 +296,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         }
 
     @classmethod
-    def _get_base_config(cls, backend: str, mode: str) -> dict:
-        """
-        Load base configuration from JSON files.
-
-        Args:
-            backend: Backend type ("deepseek" or "gptoss")
-            mode: Mode type ("decode" or "prefill")
-
-        Returns:
-            Dictionary containing base configuration
-        """
-        try:
-            from models.tt_moe.config.config_loader import (
-                get_architecture_config,
-                get_cluster_configurations,
-                get_common_config,
-                get_mode_config,
-                get_throughput_config,
-                get_weight_config,
-                load_config,
-            )
-
-            config = load_config(backend, mode)
-
-            base_config = {
-                "architecture": get_architecture_config(config),
-                "common": get_common_config(config),
-                "model": config.get("model", {}),
-                mode: get_mode_config(config, mode),  # Add mode-specific config
-                "weights": get_weight_config(config),
-            }
-
-            # Add backend-specific configurations
-            if backend == "deepseek":
-                base_config["cluster_configurations"] = get_cluster_configurations(config)
-            elif backend in ["gptoss", "gpt_oss", "gpt-oss"]:
-                base_config["throughput_config"] = get_throughput_config(config)
-
-            return base_config
-        except Exception as e:
-            # If config loading fails, return empty dict (fallback to hardcoded values)
-            logger.warning(f"Failed to load config for {backend}/{mode}: {e}")
-            return {}
-
-    @classmethod
-    def model_config_v2(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.Device,
-        mode: str,
-        topk_fallback: bool = False,
-        backend: Literal["deepseek", "gptoss"] = "deepseek",
-    ) -> ModelDecodeConfig | ModelPrefillConfig:
-        """
-        Consolidated configuration method using JSON-based configs.
-
-        NOTE: This is a simplified version for demonstration. A full implementation
-        would need to handle all the complex object creation currently in model_config.
-        For now, this method falls back to the original model_config to ensure functionality.
-
-        Args:
-            hf_config: HuggingFace model configuration
-            mesh_device: TTNN mesh device
-            mode: "decode" or "prefill"
-            topk_fallback: Whether to use topk fallback (DeepSeek only)
-            backend: "deepseek" or "gptoss"
-
-        Returns:
-            ModelDecodeConfig or ModelPrefillConfig based on mode
-        """
-        # Load base configuration from JSON
-        base_config = cls._get_base_config(backend, mode)
-
-        if not base_config:
-            # If config loading failed, fall back to original method
-            logger.warning("model_config_v2: Falling back to original model_config due to config loading failure")
-            return cls.model_config(hf_config, mesh_device, mode, topk_fallback, backend)
-
-        # For now, use the original model_config as the full implementation
-        # would require refactoring all the complex object creation logic.
-        # This demonstrates the concept while maintaining functionality.
-        logger.debug(f"model_config_v2: Loaded config from JSON for {backend}/{mode}")
-        logger.debug(f"  Architecture config: {base_config.get('architecture', {})}")
-        logger.debug(f"  Common config: {base_config.get('common', {})}")
-        logger.debug(f"  Mode config: {base_config.get(mode, {})}")
-
-        # Use original model_config but with JSON configs loaded
-        # In a full implementation, we would build the config dict here
-        # using the JSON values instead of hardcoded ones.
-        return cls.model_config(hf_config, mesh_device, mode, topk_fallback, backend)
-
-    @classmethod
     def model_config(
         cls,
         hf_config: PretrainedConfig,
@@ -507,39 +415,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                     use_fused_weights=False,  # Default to False
                 )
 
-                # Pre-create GPT-OSS expert config and program config
-                # Import locally to avoid issues if GPT-OSS components are not available
-                try:
-                    from models.demos.gpt_oss.tt.experts_throughput.config import (
-                        ThroughputExpertConfig,
-                        ThroughputProgramConfig,
-                    )
-
-                    # Create ThroughputExpertConfig at config time
-                    gptoss_expert_config = ThroughputExpertConfig(
-                        num_experts=mesh_device.get_num_devices() * num_experts_per_device,
-                        num_devices=mesh_device.get_num_devices(),
-                        hidden_size=hf_config.hidden_size,
-                        intermediate_size=unified_config.intermediate_size
-                        if unified_config
-                        else getattr(hf_config, "intermediate_size", hf_config.hidden_size * 4),
-                        num_experts_per_tok=hf_config.num_experts_per_tok,
-                        alpha=unified_config.activation.swiglu_alpha
-                        if unified_config and unified_config.activation
-                        else 1.702,
-                        swiglu_limit=unified_config.activation.swiglu_limit
-                        if unified_config and unified_config.activation
-                        else 7.0,
-                    )
-
-                    # Create ThroughputProgramConfig at config time
-                    gptoss_program_config = ThroughputProgramConfig()
-                except ImportError:
-                    # If GPT-OSS components are not available, set to None
-                    gptoss_expert_config = None
-                    gptoss_program_config = None
-                    logger.warning("GPT-OSS components not available, expert config will be created at runtime")
-
                 config.update(
                     {
                         "moe_experts": experts_config,
@@ -549,10 +424,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                         "unified_expert_config": unified_config,
                         "intermediate_size": getattr(hf_config, "intermediate_size", 11520),
                         "use_fused_gate_up": False,  # Default configuration
-                        # Add GPT-OSS specific configs (created at config time)
-                        "gptoss_expert_weights": None,  # Will be loaded on first use
-                        "gptoss_expert_config": gptoss_expert_config,  # Pre-created
-                        "gptoss_program_config": gptoss_program_config,  # Pre-created
                     }
                 )
 
@@ -627,39 +498,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                     use_fused_weights=False,  # Default to False
                 )
 
-                # Pre-create GPT-OSS expert config and program config
-                # Import locally to avoid issues if GPT-OSS components are not available
-                try:
-                    from models.demos.gpt_oss.tt.experts_throughput.config import (
-                        ThroughputExpertConfig,
-                        ThroughputProgramConfig,
-                    )
-
-                    # Create ThroughputExpertConfig at config time
-                    gptoss_expert_config = ThroughputExpertConfig(
-                        num_experts=mesh_device.get_num_devices() * num_experts_per_device,
-                        num_devices=mesh_device.get_num_devices(),
-                        hidden_size=hf_config.hidden_size,
-                        intermediate_size=unified_config.intermediate_size
-                        if unified_config
-                        else getattr(hf_config, "intermediate_size", hf_config.hidden_size * 4),
-                        num_experts_per_tok=hf_config.num_experts_per_tok,
-                        alpha=unified_config.activation.swiglu_alpha
-                        if unified_config and unified_config.activation
-                        else 1.702,
-                        swiglu_limit=unified_config.activation.swiglu_limit
-                        if unified_config and unified_config.activation
-                        else 7.0,
-                    )
-
-                    # Create ThroughputProgramConfig at config time
-                    gptoss_program_config = ThroughputProgramConfig()
-                except ImportError:
-                    # If GPT-OSS components are not available, set to None
-                    gptoss_expert_config = None
-                    gptoss_program_config = None
-                    logger.warning("GPT-OSS components not available, expert config will be created at runtime")
-
                 config.update(
                     {
                         "moe_experts": experts_config,
@@ -669,10 +507,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                         "unified_expert_config": unified_config,
                         "intermediate_size": getattr(hf_config, "intermediate_size", 11520),
                         "use_fused_gate_up": False,  # Default configuration
-                        # Add GPT-OSS specific configs (created at config time)
-                        "gptoss_expert_weights": None,  # Will be loaded on first use
-                        "gptoss_expert_config": gptoss_expert_config,  # Pre-created
-                        "gptoss_program_config": gptoss_program_config,  # Pre-created
                     }
                 )
 
@@ -685,18 +519,8 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         topk_fallback: bool = False,
         backend: Literal["deepseek", "gptoss"] = "deepseek",
-        use_v2: bool = True,
     ) -> ModelDecodeConfig:
-        """
-        Create decode configuration.
-
-        Args:
-            use_v2: If True, use the new model_config_v2 method. Defaults to True.
-        """
-        if use_v2:
-            return cls.model_config_v2(hf_config, mesh_device, "decode", topk_fallback=topk_fallback, backend=backend)
-        else:
-            return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback, backend=backend)
+        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback, backend=backend)
 
     @classmethod
     def prefill_model_config(
@@ -705,21 +529,27 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         topk_fallback: bool = False,
         backend: Literal["deepseek", "gptoss"] = "deepseek",
-        use_v2: bool = True,
     ) -> ModelPrefillConfig:
-        """
-        Create prefill configuration.
-
-        Args:
-            use_v2: If True, use the new model_config_v2 method. Defaults to True.
-        """
-        if use_v2:
-            return cls.model_config_v2(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback, backend=backend)
-        else:
-            return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback, backend=backend)
+        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback, backend=backend)
 
     @classmethod
-    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def forward(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        handle_tensor_parallel: bool = False
+    ) -> ttnn.Tensor:
+        """Forward pass with optional tensor parallelism handling.
+
+        Args:
+            x: Input tensor
+            cfg: Configuration (RunPrefillConfig or RunDecodeConfig)
+            handle_tensor_parallel: Whether to handle TP operations (DeepSeek only)
+        """
+        # Handle all_gather if tensor parallel is enabled (DeepSeek only)
+        if handle_tensor_parallel:
+            x = ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
+
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -727,8 +557,18 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         global_tokens = x.shape[2] * num_dispatch_devices
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
-            return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_impl(x, cfg)
+            output = cls._forward_chunked_prefill(x, cfg, chunk_size)
+        else:
+            output = cls._forward_impl(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled (DeepSeek only)
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                output, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
+            )
+
+        return output
 
     @classmethod
     def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
@@ -1034,41 +874,38 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
             elif config.expert_type in ["throughput_decode", "throughput_prefill"]:
                 # GPT-OSS: Use expert-only computation
                 # First check if we need to load GPT-OSS weights
-                if cfg.get("gptoss_expert_weights") is None:
+                if "gptoss_expert_weights" not in cfg:
                     # Extract state dicts from config
                     experts_state_dict = cfg.get("moe_experts", {}).get("experts_state_dict", {})
 
                     if experts_state_dict:
+                        from models.demos.gpt_oss.tt.experts_throughput.config import (
+                            ThroughputExpertConfig,
+                            ThroughputProgramConfig,
+                        )
                         from models.demos.gpt_oss.tt.experts_throughput.weights import load_throughput_expert_weights
 
-                        # Get pre-created expert config from cfg
-                        expert_config = cfg.get("gptoss_expert_config")
-                        if not expert_config:
-                            # Fallback: Create config if not pre-created (shouldn't happen normally)
-                            from models.demos.gpt_oss.tt.experts_throughput.config import ThroughputExpertConfig
-
-                            unified_config = cfg.get("unified_expert_config")
-                            expert_config = ThroughputExpertConfig(
-                                num_experts=cfg["num_devices"] * cfg["num_experts_per_device"],
-                                num_devices=cfg["num_devices"],
-                                hidden_size=cfg["hidden_size"],
-                                intermediate_size=unified_config.intermediate_size
-                                if unified_config
-                                else cfg.get("intermediate_size", cfg["hidden_size"] * 4),
-                                num_experts_per_tok=cfg["num_experts_per_tok"],
-                                alpha=unified_config.activation.swiglu_alpha
-                                if unified_config and unified_config.activation
-                                else 1.702,
-                                swiglu_limit=unified_config.activation.swiglu_limit
-                                if unified_config and unified_config.activation
-                                else 7.0,
-                            )
-                            logger.warning("GPT-OSS expert config not found in cfg, creating at runtime")
-
-                        # Get unified config from cfg
+                        # Get unified config from cfg if available
                         unified_config = cfg.get("unified_expert_config")
 
-                        # Load weights (lazy loading on first use)
+                        # Create ThroughputExpertConfig
+                        expert_config = ThroughputExpertConfig(
+                            num_experts=cfg["num_devices"] * cfg["num_experts_per_device"],
+                            num_devices=cfg["num_devices"],
+                            hidden_size=cfg["hidden_size"],
+                            intermediate_size=unified_config.intermediate_size
+                            if unified_config
+                            else cfg.get("intermediate_size", cfg["hidden_size"] * 4),
+                            num_experts_per_tok=cfg["num_experts_per_tok"],
+                            alpha=unified_config.activation.swiglu_alpha
+                            if unified_config and unified_config.activation
+                            else 1.702,
+                            swiglu_limit=unified_config.activation.swiglu_limit
+                            if unified_config and unified_config.activation
+                            else 7.0,
+                        )
+
+                        # Load weights
                         cfg["gptoss_expert_weights"] = load_throughput_expert_weights(
                             mesh_device=x.device(),
                             config=expert_config,
@@ -1078,6 +915,8 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                             else ttnn.bfloat4_b,
                             tensor_cache_path=cfg.get("moe_experts", {}).get("cache_path"),
                         )
+                        cfg["gptoss_expert_config"] = expert_config
+                        cfg["gptoss_program_config"] = ThroughputProgramConfig()
 
                 # Use expert-only computation
                 from models.demos.gpt_oss.tt.experts_throughput.expert_only import expert_mlp_compute_only
@@ -1229,73 +1068,69 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
 
         # Use pre-configured unified expert config
         if "unified_expert_config" not in cfg:
-            # This should not happen as unified_expert_config should be created in model_config
-            raise RuntimeError(
-                f"unified_expert_config not found in configuration for backend '{backend}'. "
-                "Configuration should be created using model_config() method."
-            )
+            # Fallback: create unified config at runtime (for backward compatibility)
+            hf_config = cfg.get("hf_config")
+            if backend == "gptoss":
+                if not hf_config:
+                    hf_config = type(
+                        "obj",
+                        (object,),
+                        {
+                            "hidden_size": cfg["hidden_size"],
+                            "intermediate_size": cfg.get("intermediate_size", 11520),
+                            "num_experts_per_tok": cfg["num_experts_per_tok"],
+                        },
+                    )
+                    logger.warning("GPT-OSS: Creating fallback hf_config at runtime")
+
+                cfg["unified_expert_config"] = create_gptoss_expert_config(
+                    hf_config,
+                    mode=mode,
+                    num_experts_per_device=cfg["num_experts_per_device"],
+                    use_fused_weights=cfg.get("use_fused_gate_up", False),
+                )
+            else:  # deepseek
+                if not hf_config:
+                    hf_config = type(
+                        "obj",
+                        (object,),
+                        {
+                            "hidden_size": cfg["hidden_size"],
+                            "moe_intermediate_size": cfg.get("moe_intermediate_size", 2048),
+                            "num_experts_per_tok": cfg["num_experts_per_tok"],
+                        },
+                    )
+                    logger.warning("DeepSeek: Creating fallback hf_config at runtime")
+
+                cfg["unified_expert_config"] = create_deepseek_expert_config(
+                    hf_config, mode=mode, num_experts_per_device=cfg["num_experts_per_device"]
+                )
 
         # Get MoE unified config based on backend and mode
         if backend == "gptoss":
             config = get_gptoss_decode_config() if mode == "decode" else get_gptoss_prefill_config()
         else:  # deepseek
             config = get_deepseek_config(mode)
-            # Note: DeepSeek config may have default chunk_size that needs to be overridden
-            # with the value from model_config. This is the only runtime config modification
-            # allowed, as the get_deepseek_config() function doesn't accept chunk_size parameter.
-            # TODO: Refactor get_deepseek_config to accept chunk_size parameter
-            if "moe_chunk_size" in cfg and config.chunk_size != cfg["moe_chunk_size"]:
-                logger.debug(f"Overriding chunk_size from {config.chunk_size} to {cfg['moe_chunk_size']}")
+            # Adjust chunk size if specified in cfg
+            if "moe_chunk_size" in cfg:
                 config.chunk_size = cfg["moe_chunk_size"]
 
         # Use the unified forward path for both backends
         return cls._fwd_moe_unified(x, topk_experts_indices, topk_experts_weights, cfg, config)
 
-    @classmethod
-    def _fwd_reduce_scatter(
-        cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
-    ) -> ttnn.Tensor:
-        return ttnn.experimental.reduce_scatter_minimal_async(
-            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
-        )
 
-    @classmethod
-    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
-
+    # Backward compatibility aliases
     @classmethod
     def forward_prefill(
         cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
     ) -> ttnn.Tensor:
-        # Handle all_gather if tensor parallel is enabled (DeepSeek only)
-        if handle_tensor_parallel:
-            x = cls._fwd_all_gather(x, cfg)
-
-        # Run the forward pass
-        output = cls.forward(x, cfg)
-
-        # Handle reduce_scatter if tensor parallel is enabled (DeepSeek only)
-        if handle_tensor_parallel:
-            ccl = cfg["ccl"]
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
-
-        return output
+        """Backward compatibility alias for forward."""
+        return cls.forward(x, cfg, handle_tensor_parallel)
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
-        # Handle all_gather if tensor parallel is enabled (DeepSeek only)
-        if handle_tensor_parallel:
-            x = cls._fwd_all_gather(x, cfg)
-
-        # Run the forward pass
-        output = cls.forward(x, cfg)
-
-        # Handle reduce_scatter if tensor parallel is enabled (DeepSeek only)
-        if handle_tensor_parallel:
-            ccl = cfg["ccl"]
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
-
-        return output
+        """Backward compatibility alias for forward."""
+        return cls.forward(x, cfg, handle_tensor_parallel)
 
 
 # Backward compatibility alias

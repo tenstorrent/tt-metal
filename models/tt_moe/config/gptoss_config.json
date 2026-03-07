@@ -1,0 +1,67 @@
+{
+  "model": {
+    "name": "gpt_oss",
+    "cache_dir": "/tmp/gptoss_cache",
+    "weights": {
+      "router": {
+        "mode": "generated",
+        "distribution": "normal",
+        "parameters": {
+          "mean": 0.0,
+          "std_dev": 1.0,
+          "seed": 42
+        }
+      },
+      "experts": {
+        "mode": "generated",
+        "distribution": "normal",
+        "parameters": {
+          "mean": 0.0,
+          "std_dev": 1.0,
+          "seed": 43
+        }
+      }
+    }
+  },
+  "architecture": {
+    "num_local_experts": 128,
+    "num_experts_per_device": "auto",
+    "num_experts_per_tok": 8,
+    "hidden_size": 1536,
+    "intermediate_size": 11520,
+    "n_routed_experts": 128,
+    "num_devices": 32
+  },
+  "common": {
+    "backend": "gptoss",
+    "activation_function": "swiglu",
+    "swiglu_alpha": 1.702,
+    "swiglu_limit": 7.0,
+    "use_fused_gate_up": false,
+    "use_throughput_experts": true,
+    "weight_dtype": "bfloat8_b",
+    "output_shape_format": "gptoss",
+    "use_experimental_all_reduce": false,
+    "all_reduce_num_links": 4,
+    "all_reduce_cluster_axis": 1
+  },
+  "decode": {
+    "chunk_size": 32,
+    "users_per_row": 32,
+    "memory_config": "L1",
+    "input_output_memory_config": "DRAM",
+    "use_all_to_all": true
+  },
+  "prefill": {
+    "chunk_size": 512,
+    "max_chunk_tokens": 16384,
+    "memory_config": "DRAM",
+    "input_output_memory_config": "DRAM",
+    "use_all_to_all": true
+  },
+  "throughput_config": {
+    "comment": "ThroughputExpertConfig and ThroughputProgramConfig parameters",
+    "alpha": 1.702,
+    "swiglu_limit": 7.0
+  }
+}

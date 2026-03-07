@@ -1,0 +1,66 @@
+{
+  "model": {
+    "name": "deepseek_v3",
+    "cache_dir": "/tmp/deepseek_cache",
+    "weights": {
+      "router": {
+        "mode": "real",
+        "path": "/data/deepseek/DeepSeek-R1-0528",
+        "module_path": "model.layers.{layer_id}.mlp.gate"
+      },
+      "experts": {
+        "mode": "real",
+        "path": "/data/deepseek/DeepSeek-R1-0528",
+        "module_path": "model.layers.{layer_id}.mlp.experts"
+      }
+    }
+  },
+  "architecture": {
+    "num_experts": 256,
+    "num_experts_per_device": "auto",
+    "num_experts_per_tok": 6,
+    "hidden_size": 7168,
+    "moe_intermediate_size": 2048,
+    "n_routed_experts": 256,
+    "topk_fallback": false,
+    "num_devices": 32
+  },
+  "common": {
+    "backend": "deepseek",
+    "activation_function": "silu",
+    "use_fused_gate_up": false,
+    "weight_dtype": "bfloat8_b",
+    "output_shape_format": "deepseek",
+    "cluster_configurations": {
+      "all_to_all_dispatch_axis": 0,
+      "all_to_all_combine_axis": 0,
+      "reduce_scatter_axis": 1,
+      "reduce_scatter_dim": 3,
+      "all_gather_axis": 1,
+      "all_gather_dim": -1
+    }
+  },
+  "decode": {
+    "chunk_size": 32,
+    "users_per_row": 32,
+    "memory_config": "L1",
+    "input_output_memory_config": {
+      "type": "SHARDED",
+      "shape": [32, "hidden_size/tp_size"],
+      "core_grid": {"y": 7, "x": 4},
+      "strategy": "WIDTH"
+    },
+    "all_to_all_dispatch_metadata_memory": "DRAM",
+    "activations_repeat_dims": [1, "num_experts_per_device", 1, 1],
+    "topk_weights_repeat_dims": ["hidden_size", 1, 1, 1]
+  },
+  "prefill": {
+    "chunk_size": 512,
+    "max_chunk_tokens": 16384,
+    "memory_config": "DRAM",
+    "input_output_memory_config": "DRAM",
+    "all_to_all_dispatch_metadata_memory": "DRAM",
+    "activations_repeat_dims": [1, "num_experts_per_device", 1, 1],
+    "topk_weights_repeat_dims": ["hidden_size", 1, 1, 1]
+  }
+}
