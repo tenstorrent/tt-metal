@@ -13,7 +13,7 @@
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
-#include "llk_unpack_AB_reduce_custom.h"
+#include "experimental/llk_unpack_AB_reduce_custom.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
