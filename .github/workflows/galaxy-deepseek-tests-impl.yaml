@@ -61,6 +61,11 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"${{ inputs.test-type }}\")]")
           fi
 
+          # Remove final-op-unit tests when Tracy profiling is not enabled
+          if [ "${{ inputs.enable-tracy }}" != "true" ]; then
+            matrix=$(echo "$matrix" | jq -c '[.[] | select(."test-type" != "final-op-unit")]')
+          fi
+
           # Fail fast if the matrix is empty (invalid test-type selected)
           if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
             echo "Error: Invalid test-type selected: '${{ inputs.test-type }}'"
@@ -169,7 +174,7 @@ jobs:
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
-        if: ${{ matrix.test-group.test-type == 'final-op-unit' && inputs.enable-tracy }}
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
