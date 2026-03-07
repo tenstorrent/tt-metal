@@ -695,48 +695,69 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
         physical_core_coords.push_back(physical_input_core.y);
     }
 
+    const bool page_size_diff = input.buffer()->page_size() != output.buffer()->page_size();
+    const auto output_core_to_page_range_pair_diff =
+        page_size_diff ? detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input)
+                       : std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>>{};
+    const auto output_core_to_page_range_pair =
+        !page_size_diff ? detail::get_core_page_ranges(input.buffer(), output.buffer())
+                        : std::unordered_map<CoreCoord, std::vector<detail::PageStride>>{};
+
     for (const auto& core : cores) {
         std::vector<uint32_t> runtime_args_0;
         std::vector<uint32_t> runtime_args_1;
-        if (input.buffer()->page_size() != output.buffer()->page_size()) {
-            auto output_core_to_page_range_pair =
-                detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
-            runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
-                physical_core_coords,
-                page_stride_vector,
-                0,
-                input.buffer()->address(),
-                0,
-                tt::div_up(page_stride_vector.size(), 2));
-            auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
-            runtime_args_1 = detail::get_runtime_args_for_given_ranges_diff_width(
-                physical_core_coords,
-                page_stride_vector,
-                output_page_offset,
-                input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
-                page_stride_vector.size());
+        if (page_size_diff) {
+            auto it = output_core_to_page_range_pair_diff.find(core);
+            if (it != output_core_to_page_range_pair_diff.end()) {
+                const auto& page_stride_vector = it->second;
+                runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
+                    physical_core_coords,
+                    page_stride_vector,
+                    0,
+                    input.buffer()->address(),
+                    0,
+                    tt::div_up(page_stride_vector.size(), 2));
+                auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
+                runtime_args_1 = detail::get_runtime_args_for_given_ranges_diff_width(
+                    physical_core_coords,
+                    page_stride_vector,
+                    output_page_offset,
+                    input.buffer()->address(),
+                    tt::div_up(page_stride_vector.size(), 2),
+                    page_stride_vector.size());
+            } else {
+                runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
+                    physical_core_coords, {}, 0, input.buffer()->address(), 0, 0);
+                runtime_args_1 = detail::get_runtime_args_for_given_ranges_diff_width(
+                    physical_core_coords, {}, 0, input.buffer()->address(), 0, 0);
+            }
         } else {
-            auto output_core_to_page_range_pair = detail::get_core_page_ranges(input.buffer(), output.buffer());
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
-            runtime_args_0 = detail::get_runtime_args_for_given_ranges(
-                physical_core_coords,
-                page_stride_vector,
-                0,
-                input.buffer()->address(),
-                0,
-                tt::div_up(page_stride_vector.size(), 2));
-            auto output_page_offset =
-                runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output in
-                                                                  // previous risc core
-            runtime_args_1 = detail::get_runtime_args_for_given_ranges(
-                physical_core_coords,
-                page_stride_vector,
-                output_page_offset,
-                input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
-                page_stride_vector.size());
+            auto it = output_core_to_page_range_pair.find(core);
+            if (it != output_core_to_page_range_pair.end()) {
+                const auto& page_stride_vector = it->second;
+                runtime_args_0 = detail::get_runtime_args_for_given_ranges(
+                    physical_core_coords,
+                    page_stride_vector,
+                    0,
+                    input.buffer()->address(),
+                    0,
+                    tt::div_up(page_stride_vector.size(), 2));
+                auto output_page_offset =
+                    runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output
+                                                                      // in previous risc core
+                runtime_args_1 = detail::get_runtime_args_for_given_ranges(
+                    physical_core_coords,
+                    page_stride_vector,
+                    output_page_offset,
+                    input.buffer()->address(),
+                    tt::div_up(page_stride_vector.size(), 2),
+                    page_stride_vector.size());
+            } else {
+                runtime_args_0 = detail::get_runtime_args_for_given_ranges(
+                    physical_core_coords, {}, 0, input.buffer()->address(), 0, 0);
+                runtime_args_1 = detail::get_runtime_args_for_given_ranges(
+                    physical_core_coords, {}, 0, input.buffer()->address(), 0, 0);
+            }
         };
 
         tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
