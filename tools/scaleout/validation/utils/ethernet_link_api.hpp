@@ -13,7 +13,7 @@
 
 namespace tt::scaleout_tools {
 
-using tt::ChipId;
+using tt::tt_metal::ChipId;
 using tt::CoordSystem;
 using tt::CoreType;
 using tt::tt_metal::CoreCoord;
