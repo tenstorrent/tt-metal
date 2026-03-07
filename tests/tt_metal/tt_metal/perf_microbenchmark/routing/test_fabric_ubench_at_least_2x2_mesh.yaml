@@ -176,6 +176,24 @@ Tests:
       - type: half_ring
         iterations: 3
 
+  ### RING LATENCY TESTS ###
+  - name: "LatencyRingUnicast"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]
+
   ### MESH BANDWIDTH TESTS ###
   - name: "MeshMulticast"
     benchmark_mode: true
