@@ -346,9 +346,6 @@ class RowParallelLinear(Module):
             needs_reshape = len(x.shape) <= 3
             if needs_reshape:
                 x = ttnn.unsqueeze(x, 0)
-            mm_core_grid = ttnn.CoreCoord(core_grid.x, core_grid.y - 2)
-            rs_core_grid_offset = ttnn.CoreCoord(0, mm_core_grid.y)
-            matmul_config = get_matmul_config(M, K, N, mm_core_grid, default_block_size)
             _, _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
                 input_tensor=x,
                 weight_tensor=weight,
