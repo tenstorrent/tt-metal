@@ -163,7 +163,7 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores():
-        # 14 form pre sdpa, 4 from post
+        # 14 from pre-SDPA, 4 from post
         return 18
 
     @staticmethod
@@ -536,7 +536,7 @@ class AttentionBlock:
         matmul4_cores = ttnn.corerange_to_cores(matmul4_core_grid, row_wise=True)
         gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul4_cores)]
 
-        # Gather/CCL receiver core: (12, 9)
+        # Gather/CCL receiver core: same as rmsnorm_core
         gather_core = rmsnorm_core
         gather_core_grid = rmsnorm_core_grid
 
@@ -2993,7 +2993,7 @@ class AttentionBlock:
                 # =======================================================================
                 # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
                 # ========================================================================
-                # BRISC sender: data_size_bytes, src_num_pages, rmsnorm2_output_cb (grid/semaphores reused from mcast)
+                # BRISC sender: data_size_bytes, src_num_pages, rmsnorm2_output_cb (grid reused from mcast)
                 mcast2_brisc_named_compile_time_args = [
                     ("mcast2_data_receiver_semaphore_addr", mcast2_data_receiver_semaphore_addr),
                     ("mcast2_data_size_bytes", mcast2_data_size_bytes),
