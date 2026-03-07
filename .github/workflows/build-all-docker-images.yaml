@@ -287,3 +287,66 @@ jobs:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ steps.images-2404.outputs.list }}
           title: "Ubuntu 24.04 images"
+
+      - name: Debug - Print image sizes
+        run: |
+          get_image_size() {
+            local image="$1"
+            local name="$2"
+            if [ -z "$image" ]; then
+              return
+            fi
+            # Get manifest and calculate total compressed size (config + layers)
+            local size_bytes
+            size_bytes=$(docker manifest inspect "$image" 2>/dev/null | jq '
+              if .manifests then
+                # Multi-arch manifest: sum sizes of all platform manifests
+                [.manifests[].size] | add
+              else
+                # Single manifest: config size + layer sizes
+                (.config.size // 0) + ([.layers[].size] | add)
+              end
+            ' 2>/dev/null || echo "0")
+
+            if [ "$size_bytes" != "0" ] && [ -n "$size_bytes" ]; then
+              local size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
+              local size_gb=$(echo "scale=2; $size_bytes / 1073741824" | bc)
+              printf "  %-30s %10s MB (%s GB)\n" "$name" "$size_mb" "$size_gb"
+            else
+              printf "  %-30s %10s\n" "$name" "(unavailable)"
+            fi
+          }
+
+          echo "::group::Docker Image Sizes (compressed)"
+          echo ""
+          echo "Tool Images:"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).ccache-tag }}" "ccache"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).mold-tag }}" "mold"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).doxygen-tag }}" "doxygen"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).cba-tag }}" "clang-build-analyzer"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).gdb-tag }}" "gdb"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).cmake-tag }}" "cmake"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).yq-tag }}" "yq"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).sfpi-tag }}" "sfpi"
+          get_image_size "${{ fromJson(needs.build-tools.outputs.tool-tags).openmpi-tag }}" "openmpi"
+          echo ""
+          echo "Ubuntu 22.04 Images:"
+          get_image_size "${{ needs.build-2204.outputs.ci-build-tag }}" "ci-build"
+          get_image_size "${{ needs.build-2204.outputs.ci-test-tag }}" "ci-test"
+          get_image_size "${{ needs.build-2204.outputs.dev-tag }}" "dev"
+          get_image_size "${{ needs.build-2204.outputs.basic-dev-tag }}" "basic-dev"
+          get_image_size "${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}" "basic-ttnn-runtime"
+          get_image_size "${{ needs.build-2204.outputs.manylinux-tag }}" "manylinux"
+          get_image_size "${{ needs.build-2204.outputs.python-ci-build-venv-tag }}" "python-ci-build-venv"
+          get_image_size "${{ needs.build-2204.outputs.python-ci-test-venv-tag }}" "python-ci-test-venv"
+          echo ""
+          echo "Ubuntu 24.04 Images:"
+          get_image_size "${{ needs.build-2404.outputs.ci-build-tag }}" "ci-build"
+          get_image_size "${{ needs.build-2404.outputs.ci-test-tag }}" "ci-test"
+          get_image_size "${{ needs.build-2404.outputs.dev-tag }}" "dev"
+          get_image_size "${{ needs.build-2404.outputs.basic-dev-tag }}" "basic-dev"
+          get_image_size "${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}" "basic-ttnn-runtime"
+          get_image_size "${{ needs.build-2404.outputs.python-ci-build-venv-tag }}" "python-ci-build-venv"
+          get_image_size "${{ needs.build-2404.outputs.python-ci-test-venv-tag }}" "python-ci-test-venv"
+          echo ""
+          echo "::endgroup::"
