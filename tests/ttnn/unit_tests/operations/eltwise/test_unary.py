@@ -1077,7 +1077,7 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
 )
 @pytest.mark.parametrize(
     "param",
-    (0.65, 7.7, 36.49, 58.6, 97.2),
+    (0.65, 7.7, 36, 58.6, 74, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
