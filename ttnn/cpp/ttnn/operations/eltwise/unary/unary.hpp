@@ -246,13 +246,6 @@ struct AsymmetricBinop {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-struct Mish {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
 struct Tanhshrink {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -504,7 +497,7 @@ REGISTER_UNARY_OPERATION_WITH_OPTIONAL_INTEGER_PARAMETER(round, ROUND, int32_t);
 constexpr auto identity = ttnn::register_operation<"ttnn::identity", ttnn::operations::unary::Identity>();
 constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::unary::Abs>();
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
-constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH);
 constexpr auto hardmish = ttnn::register_operation<"ttnn::hardmish", ttnn::operations::unary::Hardmish>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
 constexpr auto logit = ttnn::register_operation<"ttnn::logit", ttnn::operations::unary::Logit>();
