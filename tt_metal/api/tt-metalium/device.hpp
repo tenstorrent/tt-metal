@@ -23,8 +23,7 @@
 
 // UMD: re-exports tt::ARCH
 #include <umd/device/types/arch.hpp>
-// UMD: re-exports ChipId (used in IDevice::id/build_id virtual interface).
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/chip_types.hpp>
 // UMD: re-exports CoreType (used in IDevice::virtual_core_from_logical_core parameter).
 #include <umd/device/types/core_coordinates.hpp>
 

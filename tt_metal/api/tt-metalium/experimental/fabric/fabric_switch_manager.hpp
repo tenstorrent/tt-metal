@@ -6,8 +6,7 @@
 
 #include <map>
 #include <tt_stl/indestructible.hpp>
-// UMD: re-exports ChipId (used in FabricSwitchManager::switch_devices_ data member).
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/chip_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
@@ -71,7 +70,7 @@ private:
     ~FabricSwitchManager() = default;
 
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
-    std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
+    std::map<tt::tt_metal::ChipId, tt::tt_metal::IDevice*> switch_devices_;
 };
 
 }  // namespace tt::tt_fabric

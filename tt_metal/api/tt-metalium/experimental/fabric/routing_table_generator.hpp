@@ -12,10 +12,10 @@
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-// UMD: re-exports ChipId (used in exit_node_lut_ and get_first_hops_to_all_meshes).
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/chip_types.hpp>
 
 namespace tt::tt_fabric {
+using tt::tt_metal::ChipId;
 class TopologyMapper;
 
 using RoutingTable =
