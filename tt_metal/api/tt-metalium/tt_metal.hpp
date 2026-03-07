@@ -22,8 +22,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
-// UMD: re-exports ChipId (used in CreateDevices/CloseDevices/GetActiveDevice APIs).
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/chip_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
 

@@ -5,8 +5,7 @@
 #pragma once
 
 #include <cstdint>
-// UMD: re-exports ChipId (used in DeviceProgramId::device_id member).
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/chip_types.hpp>
 
 namespace tt::tt_metal {
 

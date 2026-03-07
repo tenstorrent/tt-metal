@@ -8,8 +8,8 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <umd/device/types/arch.hpp>                      // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <umd/device/types/arch.hpp>  // tt::ARCH
+#include <tt-metalium/chip_types.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -32,6 +32,7 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 namespace tt::tt_fabric {
 
+using tt::tt_metal::ChipId;
 using tt::tt_metal::distributed::MeshContainer;
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshCoordinateRange;
