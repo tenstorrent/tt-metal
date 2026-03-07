@@ -29,6 +29,11 @@ on:
         type: string
         default: "amd64"
         description: "Architecture for legacy callers; only amd64 is currently supported"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout (defaults to github.sha if not provided)"
       build-manylinux:
         required: false
         type: boolean
@@ -84,6 +89,7 @@ jobs:
         if: ${{ inputs.platform-data == '' || inputs.tool-tags == '' }}
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
           sparse-checkout: |
             .github
@@ -172,6 +178,7 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
 
       - name: Login to GitHub Container Registry
@@ -293,6 +300,7 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
 
       - name: Login to GitHub Container Registry

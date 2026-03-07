@@ -153,4 +153,5 @@ enum class SfpuType {
     addcdiv,
     lerp,
     xielu,
+    lgamma,
 };

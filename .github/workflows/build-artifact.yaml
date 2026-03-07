@@ -1,8 +1,6 @@
 name: "Build tt-metal artifacts"
-
 permissions:
   packages: write
-
 on:
   workflow_call:
     inputs:
@@ -70,15 +68,13 @@ on:
         type: string
         default: ""
         description: >-
-          Platform string (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04').
-          If provided, overrides distro/version/toolchain.
+          Platform string (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04'). If provided, overrides distro/version/toolchain.
       fetch-depth:
         required: false
         type: number
         default: 500
         description: >-
-          Git fetch depth for the checkout step. Must be large enough to
-          include all tags and history needed for `git describe`.
+          Git fetch depth for the checkout step. Must be large enough to include all tags and history needed for `git describe`.
       ref:
         required: false
         type: string
@@ -150,6 +146,7 @@ on:
         description: "Name to give download-artifact to get the packages"
         value: >-
           ${{ jobs.build-artifact.result == 'success' &&
+
               jobs.build-artifact.outputs.packages-artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.packages-artifact-name || '') }}
@@ -157,6 +154,7 @@ on:
         description: "Name of the published build artifact"
         value: >-
           ${{ jobs.build-artifact.result == 'success' &&
+
               jobs.build-artifact.outputs.build_artifact_name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.build_artifact_name || '') }}
@@ -164,10 +162,10 @@ on:
         description: "Name of the published wheel artifact"
         value: >-
           ${{ jobs.build-wheel.result == 'success' &&
+
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
-
   workflow_dispatch:
     inputs:
       tracy:
@@ -226,7 +224,6 @@ on:
         type: string
         default: ""
         description: "Harbor prefix to use (empty for direct GHCR)"
-
 jobs:
   # =============================================================================
   # ARCHITECTURE NOTE: Platform Parsing
@@ -258,7 +255,6 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
           enable-lto: ${{ inputs.enable-lto || false }}
-
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
   # =============================================================================
@@ -281,7 +277,7 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
-
+      ref: ${{ inputs.ref }}
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
@@ -295,7 +291,6 @@ jobs:
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
-
       - name: Download artifacts from workflow run
         id: download
         env:
@@ -305,7 +300,6 @@ jobs:
           workflow_run_id: ${{ inputs.use-artifacts-from-run }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
-
       - name: Upload build artifact for downstream jobs
         uses: actions/upload-artifact@v4
         with:
@@ -313,7 +307,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
           if-no-files-found: error
           retention-days: 1
-
       - name: Upload wheel artifact
         if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
         uses: actions/upload-artifact@v4
@@ -322,7 +315,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.whl
           if-no-files-found: ignore
           retention-days: 1
-
       - name: Upload packages artifact
         if: ${{ steps.download.outputs.packages-artifact-name != '' }}
         uses: actions/upload-artifact@v4
@@ -331,14 +323,11 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.deb
           if-no-files-found: ignore
           retention-days: 1
-
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
     name: >-
-      🛠️ Build ${{ inputs.build-type }}
-      ${{ needs.parse-platform.outputs.distro }}
-      ${{ needs.parse-platform.outputs.version }}
+      🛠️ Build ${{ inputs.build-type }} ${{ needs.parse-platform.outputs.distro }} ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
     runs-on: tt-ubuntu-2204-large-stable
@@ -354,6 +343,7 @@ jobs:
     container:
       image: >-
         ${{ inputs.harbor-prefix }}${{
+
           inputs.ci-build-docker-image ||
           needs.build-docker-image.outputs.ci-build-tag ||
           'docker-image-unresolved!' }}
@@ -370,13 +360,12 @@ jobs:
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
-        --group-add 1457
-        --tmpfs /tmp
+        --group-add 1457 --tmpfs /tmp
+
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-
     steps:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
@@ -402,7 +391,6 @@ jobs:
           CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-
       - name: Set artifact name
         id: set-artifact-name
         run: |
@@ -432,7 +420,6 @@ jobs:
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
-
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
@@ -440,24 +427,20 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
-
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
-
       - name: Prepare ccache summary
         run: |
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
-
       - name: 🔧 Configure git safe.directory
         run: |
           # The checkout action adds $GITHUB_WORKSPACE (/__w/tt-metal/tt-metal) as a safe directory,
           # but not /work which is mounted from the host. Git commands from /work fail due to
           # ownership mismatch (host uid vs container root). Add /work to safe.directory.
           git config --global --add safe.directory /work
-
       - name: 📦 Restore CPM source cache
         uses: actions/cache@v4
         with:
@@ -465,7 +448,6 @@ jobs:
           key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
           restore-keys: |
             cpm-
-
       - name: 🔧 CMake configure
         run: |
           set -eu # basic shell hygiene
@@ -506,20 +488,17 @@ jobs:
           fi
           echo "build-artifact.yaml running: ${build_args[*]}"
           "${build_args[@]}"
-
       - name: 🛠️ Compile
         timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
-
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
           ClangBuildAnalyzer --all build capture.bin
           ClangBuildAnalyzer --analyze capture.bin
-
       - name: 📦 Package
         timeout-minutes: 10
         run: |
@@ -530,14 +509,12 @@ jobs:
           else
             ls -1sh build/*.deb build/*.ddeb || true
           fi
-
       - name: Publish ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
         uses: actions/upload-artifact@v4
@@ -549,7 +526,6 @@ jobs:
             /work/build/*.ddeb
           compression-level: 0
           if-no-files-found: error
-
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
@@ -558,7 +534,6 @@ jobs:
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
           tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
-
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
@@ -583,7 +558,6 @@ jobs:
           BUILD_ARTIFACT_NAME=$(IFS='_'; echo "${BUILD_ARTIFACT_PARTS[*]}")
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
@@ -593,7 +567,6 @@ jobs:
           path: /work/ttm_any.tar.zst
           if-no-files-found: error
           compression-level: 0
-
   # Determine Python version based on platform
   determine-python-version:
     needs: parse-platform
@@ -616,7 +589,6 @@ jobs:
 
           echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
           echo "Determined Python version: $PYTHON_VERSION for distro=$DISTRO, version=$VERSION"
-
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
@@ -628,6 +600,7 @@ jobs:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
       docker-image: >-
         ${{ inputs.manylinux-docker-image ||
+
             needs.build-docker-image.outputs.manylinux-tag ||
             'docker-image-unresolved!' }}
       harbor-prefix: ${{ inputs.harbor-prefix }}
