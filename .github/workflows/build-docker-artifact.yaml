@@ -208,6 +208,7 @@ jobs:
         env:
           PLATFORM_DATA: ${{ needs.metadata.outputs.platform_data }}
           TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
         run: |
           set -euo pipefail
 
@@ -225,20 +226,22 @@ jobs:
           TARGETS=""
           SET=""
 
+          # Add tool layer contexts with Harbor prefix for pull-through cache
           add_tool_contexts() {
             local target="$1"
             shift
             for tool in "$@"; do
               local tag
               tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
-              SET+="${target}.contexts.${tool}-layer=docker-image://${tag}"$'\n'
+              SET+="${target}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
             done
           }
 
+          # Add venv layer contexts with Harbor prefix for pull-through cache
           add_venv_contexts() {
             local target="$1"
-            SET+="${target}.contexts.ci-build-venv-layer=docker-image://${CI_BUILD_VENV_TAG}"$'\n'
-            SET+="${target}.contexts.ci-test-venv-layer=docker-image://${CI_TEST_VENV_TAG}"$'\n'
+            SET+="${target}.contexts.ci-build-venv-layer=docker-image://${HARBOR_PREFIX}${CI_BUILD_VENV_TAG}"$'\n'
+            SET+="${target}.contexts.ci-test-venv-layer=docker-image://${HARBOR_PREFIX}${CI_TEST_VENV_TAG}"$'\n'
           }
 
           ALL_TOOLS=(ccache mold doxygen cba gdb cmake yq sfpi openmpi)
@@ -330,15 +333,17 @@ jobs:
         env:
           PLATFORM_DATA: ${{ needs.metadata.outputs.platform_data }}
           TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
         run: |
           set -euo pipefail
 
           MANYLINUX_TAG=$(echo "$PLATFORM_DATA" | jq -r '.manylinux_tag')
 
           SET=""
+          # Add tool layer contexts with Harbor prefix for pull-through cache
           for tool in ccache mold sfpi openmpi; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
-            SET+="manylinux.contexts.${tool}-layer=docker-image://${tag}"$'\n'
+            SET+="manylinux.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
           done
 
           SET+="manylinux.tags=${MANYLINUX_TAG}"$'\n'
