@@ -2155,6 +2155,8 @@ def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
     ],
 )
 def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
+    if is_blackhole() and fast_and_approximate_mode and torch_dtype == torch.float32:
+        pytest.skip("Skipping Mish fast/approximate fp32 test on Blackhole due to PCC failure (TODO: #39360)")
     torch.manual_seed(0)
     in_data = torch.empty((2, 32, 64), dtype=torch_dtype).uniform_(-20, 100)
 
