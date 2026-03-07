@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "llk_unpack_A.h"
+#include "experimental/llk_unpack_A_custom.h"
 #include "llk_unpack_common_api.h"
 
 inline void llk_unpack_A_custom(const std::uint32_t operand, const std::uint32_t tile_index) {
