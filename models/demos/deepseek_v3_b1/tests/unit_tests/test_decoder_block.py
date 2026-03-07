@@ -658,6 +658,7 @@ def create_decoder_block_tensors(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
+            "worker_l1_size": 1463168,
         }
     ],
     indirect=True,

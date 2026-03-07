@@ -105,7 +105,6 @@ struct Core {
 };
 
 void kernel_main() {
-    DPRINT << "DECODER BLOCK KERNEL MAIN" << ENDL();
     // ============================================================================
     // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
     // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
@@ -134,7 +133,6 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
     if constexpr (!Core::skip_ccl && Core::is_input_core) {
-        DPRINT << " BCAST ARGS " << per_core_rta_arg_idx << ENDL();
         uint32_t offset_fabric_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
@@ -153,7 +151,6 @@ void kernel_main() {
             per_core_rta_arg_idx,
         };
         per_core_rta_arg_idx += offset_fabric_args;
-        DPRINT << " BCAST ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -434,7 +431,6 @@ void kernel_main() {
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
         per_core_rta_arg_idx += fabric_args_offset;
-        DPRINT << " SDPA REDUCE FORWARDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     // CCL Sender NCRISC CTArgs (reads from gather core)
@@ -467,21 +463,16 @@ void kernel_main() {
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     if constexpr (Core::is_ccl_sender_core) {
-        DPRINT << " CCL SENDER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_sender_args = {
             .tensor_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-        DPRINT << " CCL SENDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     if constexpr (Core::is_ccl_receiver_core) {
-        DPRINT << " CCL RECEIVER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_receiver_args = {
             .sender_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-        DPRINT << " CCL RECEIVER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
-    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
     // ========================================================================
     // MoE NCRISC args (nested in struct Moe to avoid naming conflicts)
     // ========================================================================
@@ -878,8 +869,6 @@ void kernel_main() {
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
-        DPRINT << " THIS IS MLA CORE " << ENDL();
-        DPRINT << " PER CORE RTA ARG IDX " << per_core_rta_arg_idx << ENDL();
         constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
         uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -893,8 +882,6 @@ void kernel_main() {
         uint32_t mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
         per_core_rta_arg_idx += num_tree_reduction_steps * 4;
-
-        DPRINT << " AFTTER MLA ARGS " << per_core_rta_arg_idx << ENDL();
 
         flash_mla_args = {
             .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
@@ -1037,7 +1024,6 @@ void kernel_main() {
             .scatter_arrival_sem_addr = get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
         };
         per_core_rta_arg_idx += SdpaReduceWorkerCTArgs::scatter_num_rows * 2;
-        DPRINT << " SDPA REDUCE WORKER ARGS " << per_core_rta_arg_idx << ENDL();
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
@@ -1047,7 +1033,6 @@ void kernel_main() {
 
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
     if constexpr (Core::is_sdpa_forwarder_core) {
-        DPRINT << " SDPA REDUCE FORWARDER ARGS " << per_core_rta_arg_idx << ENDL();
         sdpa_reduce_forwarder_args = {
             .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -1057,7 +1042,6 @@ void kernel_main() {
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
         per_core_rta_arg_idx += fabric_args_offset;
-        DPRINT << " SDPA REDUCE FORWARDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
     // CCL Sender BRISC CTArgs (sends via fabric)
@@ -1079,7 +1063,6 @@ void kernel_main() {
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     if constexpr (Core::is_ccl_sender_core) {
-        DPRINT << " CCL SENDER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_sender_args = {
             .receiver_base_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .receive_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -1087,9 +1070,7 @@ void kernel_main() {
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         ccl_sender_args.fabric_args_start_index = per_core_rta_arg_idx;
         per_core_rta_arg_idx += fabric_args_offset;
-        DPRINT << " CCL SENDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
-    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
 
     // ========================================================================
     // MoE BRISC args
@@ -1654,8 +1635,6 @@ void kernel_main() {
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
-    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
-
     // ========================================================================
     // MoE TRISC args
     // ========================================================================
@@ -1899,7 +1878,6 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
     }
 #endif
-    DPRINT << " DONE ARGS" << ENDL();
 
     // ====================================================================
     // Mcast: Initialize persistent mcast
@@ -1915,7 +1893,6 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
-    DPRINT << " DONE MCAST INIT" << ENDL();
 
     // ========================================================================
     // CCL Broadcast (optional, skip if single-device mode)
@@ -1938,8 +1915,6 @@ void kernel_main() {
     }
 #endif
 
-    DPRINT << " DONE CCL BROADCAST" << ENDL();
-
     // SP position handling
 #if defined(COMPILE_FOR_BRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
@@ -1957,8 +1932,6 @@ void kernel_main() {
     const uint32_t local_cur_pos = cur_pos;
 
     if (!skip_attention) {
-        DPRINT << " DOING ATTENTION" << ENDL();
-
         // ========================================================================
         // Input core: RMSNorm + Mcast send
         // ========================================================================
@@ -2144,8 +2117,6 @@ void kernel_main() {
             kv_cache_update.signal_cache_ready(kv_cache_update_args);
         }
 
-        DPRINT << " DONE KV CACHE UPDATE" << ENDL();
-
         // ====================================================================
         // Flash MLA: Compute
         // ====================================================================
@@ -2169,38 +2140,30 @@ void kernel_main() {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                 sdpa_reduce_worker(sdpa_reduce_worker_args);
             }
-            DPRINT << " DONE SDPA REDUCE WORKER" << ENDL();
             if constexpr (Core::is_sdpa_forwarder_core) {
                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
             }
-            DPRINT << " DONE SDPA REDUCE FORWARDER" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_matmul4_core) {
-                DPRINT << " MATMUL4 SYNC" << ENDL();
                 constexpr uint32_t scatter_arrival_semaphore_id =
                     get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
                 volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
-                DPRINT << " wait for scatter arrival semaphore" << ENDL();
                 noc_semaphore_wait(scatter_arrival_sem_addr, 1);
                 noc_semaphore_set(scatter_arrival_sem_addr, 0);
-                DPRINT << " scatter arrival semaphore waited" << ENDL();
                 constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
                 constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
                 unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
-                DPRINT << " DONE MATMUL4 SYNC" << ENDL();
             }
 #endif
         }
         {
-            DPRINT << " MATMUL4 " << ENDL();
             DeviceZoneScopedN("MATMUL4");
             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
             matmul4(matmul4_args);
         }
         {
-            DPRINT << " GATHER2 " << ENDL();
             DeviceZoneScopedN("GATHER2");
             deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
             gather2(gather2_args);
@@ -2211,19 +2174,16 @@ void kernel_main() {
             Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
                 mcast3;
         {
-            DPRINT << " MCAST3 " << ENDL();
             DeviceZoneScopedN("MCAST3");
             mcast3(mcast3_args);
         }
 
         {
-            DPRINT << " MATMUL5 " << ENDL();
             DeviceZoneScopedN("MATMUL5");
             deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
         }
         {
-            DPRINT << " GATHER3 " << ENDL();
             DeviceZoneScopedN("GATHER3");
             deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
             gather3(gather3_args);
@@ -2268,7 +2228,6 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_ccl_sender_core) {
-            DPRINT << " CCL SENDER SEND" << ENDL();
             DeviceZoneScopedN("CCL_SENDER_SEND");
 
             deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
@@ -2278,7 +2237,6 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_ccl_receiver_core) {
-            DPRINT << " CCL RECEIVER COMPUTE" << ENDL();
             DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
 
             deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
@@ -2288,11 +2246,8 @@ void kernel_main() {
 #endif
     }
 
-    DPRINT << " DONE POST_SDPA" << ENDL();
+    DPRINT << " MOE START" << ENDL();
 
-#ifdef COMPILE_TEST_ONLY
-    return;
-#endif
     // ========================================================================
     // Phase 2: CB Reconfiguration — attention_block layout → MOE layout
     // ========================================================================

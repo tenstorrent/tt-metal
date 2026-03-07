@@ -92,13 +92,11 @@ struct Gather {
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
-            DPRINT << "      START GATHER" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Sender) - DataMovementProcessor.RISCV_1
             // ================================================================
             if constexpr (IsSenderCore) {
-                DPRINT << "      GATHER SENDER CORE" << ENDL();
                 // Compute per-core offset using compile-time branching
                 // For scattered cores (UsePerCoreSenderIdx=true), use the provided sender_idx
                 // For rectangular grids (UsePerCoreSenderIdx=false), compute from grid position
@@ -118,9 +116,6 @@ struct Gather {
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
                 uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
-                DPRINT << "      DST NOC COORD: " << dst_noc_coord << ENDL();
-                DPRINT << "      DST DATA NOC ADDR: " << dst_data_noc_addr << ENDL();
-                DPRINT << "      DST SEMAPHORE NOC ADDR: " << dst_semaphore_noc_addr << ENDL();
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
@@ -146,37 +141,20 @@ struct Gather {
                     (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
                 // Reserve space in destination CB
-                DPRINT << "      RESERVE DST CB" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << "      WAIT FOR SEMAPHORE 1" << ENDL();
-                DPRINT << "      RECEIVER NOC ADDR: " << get_noc_addr(args.noc0_receiver_semaphore_addr) << ENDL();
-                invalidate_l1_cache();
-                while (*(uint32_t*)(noc0_receiver_semaphore_addr_ptr) != args.noc0_num_senders) {
-                    DPRINT << "      CURRENT SEMAPHORE VALUE: " << *(uint32_t*)(noc0_receiver_semaphore_addr_ptr)
-                           << ENDL();
-                    invalidate_l1_cache();
-                }
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
-                DPRINT << "      SEMAPHORE 1 SET" << ENDL();
                 invalidate_l1_cache();
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
-                DPRINT << "      SEMAPHORE 1 SET TO 0" << ENDL();
 
                 if (args.noc1_num_senders > 0) {
                     volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
                         (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
-                    DPRINT << "      WAIT FOR SEMAPHORE 2" << ENDL();
                     noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
-                    DPRINT << "      SEMAPHORE 2 SET" << ENDL();
                     noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
-                    DPRINT << "      SEMAPHORE 2 SET TO 0" << ENDL();
                 }
 
                 // Push to destination CB after data arrived
-                DPRINT << "      PUSH DST CB" << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << "      DONE PUSH DST CB" << ENDL();
-                DPRINT << "      END GATHER" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
