@@ -183,6 +183,8 @@ public:
     void add_defines(const std::map<std::string, std::string>& defines);
 
     virtual uint8_t expected_num_binaries() const = 0;
+    // Returns the HAL processor indices that use the given binary (for L1 offset / set_iram_text_size).
+    virtual std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const;
     uint32_t get_binary_packed_size(IDevice* device, int index) const;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
 
@@ -423,6 +425,7 @@ public:
     ~QuasarDataMovementKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
 
@@ -438,6 +441,7 @@ public:
     std::string_view get_linker_opt_level() const override;
 
     const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_processors_; }
+
 
 private:
     const QuasarDataMovementConfig config_;
