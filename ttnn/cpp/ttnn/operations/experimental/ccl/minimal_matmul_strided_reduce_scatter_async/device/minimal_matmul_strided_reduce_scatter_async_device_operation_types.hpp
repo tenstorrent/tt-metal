@@ -19,6 +19,9 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     /* Matmul Params */
     const MinimalMatmulParams matmul_struct;
 
+    /* Fused addcmul params (applied to MM output before RS) */
+    const std::optional<float> fused_ternary_scalar = std::nullopt;
+
     /* Reduce Scatter Params */
     const uint32_t dim;
     const uint32_t num_links;
@@ -46,6 +49,10 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
     const std::optional<Tensor> optional_rs_intermediate_tensor;
     const std::optional<Tensor> optional_rs_output_tensor;
     const std::optional<const Tensor> bias = std::nullopt;
+
+    /* Fused addcmul inputs: output = addcmul_a + scalar * mm_output * addcmul_b */
+    const std::optional<const Tensor> addcmul_input_tensor1 = std::nullopt;  // residual/base
+    const std::optional<const Tensor> addcmul_input_tensor2 = std::nullopt;  // gate/multiplier
 };
 
 }  // namespace ttnn::experimental::prim

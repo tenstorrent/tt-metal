@@ -27,6 +27,8 @@ struct StridedReduceScatterProgramArtifacts {
     uint32_t num_workers_per_direction;
     uint32_t num_mux_cores_per_direction_per_link;
     uint32_t num_cores_per_link;
+    // Index into the reader RT args where addcmul_a_address lives (0 = not used).
+    uint32_t reader_addcmul_rt_arg_offset = 0;
 };
 
 struct operation_attributes_t {

@@ -62,7 +62,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_ht,
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
-    std::optional<uint32_t> chunk_width_in_mm_blocks);
+    std::optional<uint32_t> chunk_width_in_mm_blocks,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
@@ -78,7 +81,10 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output);
+    const Tensor& output,
+    uint32_t reader_addcmul_rt_arg_offset = 0,
+    const std::optional<const Tensor>& addcmul_a = std::nullopt,
+    const std::optional<const Tensor>& addcmul_b = std::nullopt);
 }  // namespace ttnn
 
 namespace ttnn::experimental::prim {
@@ -123,11 +129,14 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             shared_variables.rs_shared_variables.num_cores_per_link,
             attributes.barrier_semaphore,
             attributes.semaphore,
-            output_tensor.at(0),   // RS input = MM output
-            output_tensor.at(1),   // RS intermediate
-            output_tensor.at(2));  // RS output
+            output_tensor.at(0),  // RS input = MM output
+            output_tensor.at(1),  // RS intermediate
+            output_tensor.at(2),  // RS output
+            shared_variables.rs_shared_variables.reader_addcmul_rt_arg_offset,
+            tensor_args.addcmul_input_tensor1,
+            tensor_args.addcmul_input_tensor2);
 
-        // Override MM runtime arguments
+        // Override MM runtime arguments (addcmul is now fused in RS, not MM)
         auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
             program, shared_variables.mm_shared_variables);
 
@@ -135,7 +144,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
-            {tensor_args.input_tensor, tensor_args.weight_tensor, tensor_args.bias, std::nullopt},
+            {tensor_args.input_tensor,
+             tensor_args.weight_tensor,
+             tensor_args.bias,
+             std::nullopt,
+             std::nullopt,  // addcmul fused in RS, not MM
+             std::nullopt},
             mm_output_vec);
     }
 }
@@ -170,7 +184,12 @@ minimal_matmul_strided_reduce_scatter_async_program(
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     ttnn::experimental::prim::MinimalMatmulConfig config,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+
+    /* Fused addcmul params */
+    const std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt) {
     tt::tt_metal::Program program{};
 
     // Derive matmul geometry parameters for the RS factory.
@@ -227,7 +246,11 @@ minimal_matmul_strided_reduce_scatter_async_program(
         mm_block_ht_val,
         mm_block_wt_val,
         mm_N_full_block_wt_val,
-        chunk_width_in_mm_blocks);
+        chunk_width_in_mm_blocks,
+        // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
+        fused_ternary_scalar,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2);
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
@@ -238,17 +261,22 @@ minimal_matmul_strided_reduce_scatter_async_program(
     // =========================================================================
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_mm_fused_op_signaler;
 
-    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper(
+    std::vector<Tensor> mm_output_tensors = {matmul_output_tensor};
+    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper_common(
         program,
         input_tensor,   // MM input (activations)
         weight_tensor,  // MM weights
         bias,
         fused_activation,
         config,
-        matmul_output_tensor,  // MM output (= RS input)
+        mm_output_tensors,  // MM output (= RS input)
         compute_kernel_config,
         empty_mm_fused_op_signaler,  // No AG -> MM signaling
-        srs_fused_op_signaler);      // MM -> RS signaling (populated from step 1)
+        1,                           // N_chunks = 1
+        std::nullopt,                // ternary fused in RS, not MM
+        std::nullopt,
+        std::nullopt,
+        srs_fused_op_signaler);  // MM -> RS signaling (populated from step 1)
 
     return {std::move(program), {rs_shared_variables, mm_shared_variables}};
 }
@@ -300,7 +328,12 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         tensor_args.bias,
         attributes.matmul_struct.fused_activation,
         attributes.matmul_struct.config.value(),
-        attributes.matmul_struct.compute_kernel_config);
+        attributes.matmul_struct.compute_kernel_config,
+
+        /* Fused addcmul params */
+        attributes.fused_ternary_scalar,
+        tensor_args.addcmul_input_tensor1,
+        tensor_args.addcmul_input_tensor2);
 }
 
 }  // namespace ttnn::experimental::prim
