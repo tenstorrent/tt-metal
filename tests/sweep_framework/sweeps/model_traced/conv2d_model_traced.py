@@ -10,8 +10,6 @@ import ttnn
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
 )
 
 # Import V2 master config loader for traced model configurations

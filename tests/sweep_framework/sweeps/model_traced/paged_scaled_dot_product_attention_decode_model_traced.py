@@ -43,6 +43,18 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_c_dtype": [ttnn.bfloat16],
+        "input_c_layout": [ttnn.TILE_LAYOUT],
+        "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_d_dtype": [ttnn.bfloat16],
+        "input_d_layout": [ttnn.TILE_LAYOUT],
+        "input_d_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_e_dtype": [ttnn.bfloat16],
+        "input_e_layout": [ttnn.TILE_LAYOUT],
+        "input_e_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
     },
@@ -122,52 +134,22 @@ def run(
             shape = input_a_shape
         shape_a = shape_b = shape_c = shape_d = shape_e = shape
 
-    # Use provided dtypes - fail if not provided (no fallbacks)
+    # Use provided params directly - these are optional (None is fine if not in V2 JSON)
     dtype_a = input_a_dtype
-    if input_b_dtype is None:
-        raise ValueError("input_b_dtype is None - required parameter missing")
-    if input_c_dtype is None:
-        raise ValueError("input_c_dtype is None - required parameter missing")
-    if input_d_dtype is None:
-        raise ValueError("input_d_dtype is None - required parameter missing")
-    if input_e_dtype is None:
-        raise ValueError("input_e_dtype is None - required parameter missing")
     dtype_b = input_b_dtype
     dtype_c = input_c_dtype
     dtype_d = input_d_dtype
     dtype_e = input_e_dtype
 
-    # Use provided layouts - fail if not provided (no fallbacks)
     layout_a = input_a_layout
-    if input_b_layout is None:
-        raise ValueError("input_b_layout is None - required parameter missing")
-    if input_c_layout is None:
-        raise ValueError("input_c_layout is None - required parameter missing")
-    if input_d_layout is None:
-        raise ValueError("input_d_layout is None - required parameter missing")
-    if input_e_layout is None:
-        raise ValueError("input_e_layout is None - required parameter missing")
     layout_b = input_b_layout
     layout_c = input_c_layout
 
-    # Use provided memory configs - fail if not provided (no fallbacks)
     mem_config_a = input_a_memory_config
-    if input_b_memory_config is None:
-        raise ValueError("input_b_memory_config is None - required parameter missing")
-    if input_c_memory_config is None:
-        raise ValueError("input_c_memory_config is None - required parameter missing")
-    if input_d_memory_config is None:
-        raise ValueError("input_d_memory_config is None - required parameter missing")
-    if input_e_memory_config is None:
-        raise ValueError("input_e_memory_config is None - required parameter missing")
-    if output_memory_config is None:
-        raise ValueError("output_memory_config is None - required parameter missing")
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
     mem_config_d = input_d_memory_config
     mem_config_e = input_e_memory_config
-    output_mem_config = output_memory_config
-
     # Create input tensors
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(shape_a)
     torch_input_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(shape_b)
@@ -178,49 +160,69 @@ def run(
     # TODO: Compute a true PyTorch attention golden using traced K/V/page table inputs.
     torch_output_tensor = torch_input_a.clone()
 
-    # Check if storage_type is HOST
-    is_host = storage_type and "HOST" in str(storage_type)
-
     # Convert to TTNN tensors
-    tensor_a = ttnn.from_torch(
-        torch_input_a,
-        dtype=dtype_a,
-        layout=layout_a,
-        device=device,
-        memory_config=mem_config_a,
-    )
-
-    tensor_b = ttnn.from_torch(
-        torch_input_b,
-        dtype=dtype_b,
-        layout=layout_b,
-        device=device,
-        memory_config=mem_config_b,
-    )
-
-    tensor_c = ttnn.from_torch(
-        torch_input_c,
-        dtype=dtype_c,
-        layout=layout_c,
-        device=device,
-        memory_config=mem_config_c,
-    )
-
-    tensor_d = ttnn.from_torch(
-        torch_input_d,
-        dtype=dtype_d,
-        layout=ttnn.ROW_MAJOR_LAYOUT,  # page_table_tensor must be ROW_MAJOR
-        device=device,
-        memory_config=mem_config_d,
-    )
-
-    tensor_e = ttnn.from_torch(
-        torch_input_e,
-        dtype=dtype_e,
-        layout=ttnn.ROW_MAJOR_LAYOUT,  # cur_pos_tensor must be ROW_MAJOR
-        device=device,
-        memory_config=mem_config_e,
-    )
+    if is_mesh_device and input_a_tensor_placement:
+        tensor_a = create_tensor_on_mesh(
+            torch_input_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
+        )
+        tensor_b = create_tensor_on_mesh(
+            torch_input_b, device, dtype_b, layout_b, mem_config_b, input_b_tensor_placement
+        )
+        tensor_c = create_tensor_on_mesh(
+            torch_input_c, device, dtype_c, layout_c, mem_config_c, input_c_tensor_placement
+        )
+        tensor_d = create_tensor_on_mesh(
+            torch_input_d,
+            device,
+            dtype_d,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mem_config_d,
+            input_d_tensor_placement,
+        )
+        tensor_e = create_tensor_on_mesh(
+            torch_input_e,
+            device,
+            dtype_e,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mem_config_e,
+            input_e_tensor_placement,
+        )
+    else:
+        tensor_a = ttnn.from_torch(
+            torch_input_a,
+            dtype=dtype_a,
+            layout=layout_a,
+            device=device,
+            memory_config=mem_config_a,
+        )
+        tensor_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=dtype_b,
+            layout=layout_b,
+            device=device,
+            memory_config=mem_config_b,
+        )
+        tensor_c = ttnn.from_torch(
+            torch_input_c,
+            dtype=dtype_c,
+            layout=layout_c,
+            device=device,
+            memory_config=mem_config_c,
+        )
+        tensor_d = ttnn.from_torch(
+            torch_input_d,
+            dtype=dtype_d,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=mem_config_d,
+        )
+        tensor_e = ttnn.from_torch(
+            torch_input_e,
+            dtype=dtype_e,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=mem_config_e,
+        )
 
     start_time = start_measuring_time()
     # paged_scaled_dot_product_attention_decode signature:
@@ -232,7 +234,8 @@ def run(
         tensor_c,  # V
         tensor_d,  # page_table (required positional)
         is_causal=True,
-        cur_pos_tensor=tensor_e,  # cur_pos (optional keyword), **op_kwargs,
+        cur_pos_tensor=tensor_e,
+        **op_kwargs,
     )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

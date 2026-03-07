@@ -133,6 +133,9 @@ def run(
     input_d_dtype=None,
     input_d_layout=None,
     input_d_memory_config=None,
+    input_e_dtype=None,
+    input_e_layout=None,
+    input_e_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
@@ -172,12 +175,7 @@ def run(
         shape_e = (1, 1, head_dim, head_dim)  # transformation matrix
 
     # Check which inputs are provided
-    has_input_e = kwargs.get("input_e_dtype") is not None or (
-        isinstance(input_a_shape, dict) and "input_e" in input_a_shape
-    )
-    input_e_dtype = kwargs.get("input_e_dtype")
-    input_e_layout = kwargs.get("input_e_layout")
-    input_e_memory_config = kwargs.get("input_e_memory_config")
+    has_input_e = input_e_dtype is not None or (isinstance(input_a_shape, dict) and "input_e" in input_a_shape)
 
     # Extract dimensions
     batch, n_heads_q, seq_len, head_dim = shape_a
@@ -227,78 +225,84 @@ def run(
         sin_k.float(),
     ).to(torch.bfloat16)
 
-    # Check if storage_type is HOST
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Use defaults for non-traced parameters
-    if input_b_dtype is None:
-        input_b_dtype = input_a_dtype
-    if input_b_layout is None:
-        input_b_layout = input_a_layout
-    if input_b_memory_config is None:
-        input_b_memory_config = input_a_memory_config
-    if input_c_dtype is None:
-        input_c_dtype = ttnn.bfloat16
-    if input_c_layout is None:
-        input_c_layout = ttnn.TILE_LAYOUT
-    if input_c_memory_config is None:
-        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_d_dtype is None:
-        input_d_dtype = ttnn.bfloat16
-    if input_d_layout is None:
-        input_d_layout = ttnn.TILE_LAYOUT
-    if input_d_memory_config is None:
-        input_d_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
     # Convert to ttnn tensors with mesh support
-    input_tensor_a = ttnn.from_torch(
-        torch_input_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
-
-    input_tensor_b = ttnn.from_torch(
-        torch_input_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
-    input_tensor_c = ttnn.from_torch(
-        torch_input_c,
-        dtype=input_c_dtype,
-        layout=input_c_layout,
-        device=device,
-        memory_config=input_c_memory_config,
-    )
-
-    input_tensor_d = ttnn.from_torch(
-        torch_input_d,
-        dtype=input_d_dtype,
-        layout=input_d_layout,
-        device=device,
-        memory_config=input_d_memory_config,
-    )
+    if is_mesh_device and input_a_tensor_placement:
+        input_tensor_a = create_tensor_on_mesh(
+            torch_input_a, device, input_a_dtype, input_a_layout, input_a_memory_config, input_a_tensor_placement
+        )
+        input_tensor_b = create_tensor_on_mesh(
+            torch_input_b,
+            device,
+            input_b_dtype,
+            input_b_layout,
+            input_b_memory_config,
+            input_b_tensor_placement,
+        )
+        input_tensor_c = create_tensor_on_mesh(
+            torch_input_c,
+            device,
+            input_c_dtype,
+            input_c_layout,
+            input_c_memory_config,
+            input_c_tensor_placement,
+        )
+        input_tensor_d = create_tensor_on_mesh(
+            torch_input_d,
+            device,
+            input_d_dtype,
+            input_d_layout,
+            input_d_memory_config,
+            input_d_tensor_placement,
+        )
+    else:
+        input_tensor_a = ttnn.from_torch(
+            torch_input_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+        input_tensor_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+        input_tensor_c = ttnn.from_torch(
+            torch_input_c,
+            dtype=input_c_dtype,
+            layout=input_c_layout,
+            device=device,
+            memory_config=input_c_memory_config,
+        )
+        input_tensor_d = ttnn.from_torch(
+            torch_input_d,
+            dtype=input_d_dtype,
+            layout=input_d_layout,
+            device=device,
+            memory_config=input_d_memory_config,
+        )
 
     # Convert transformation matrix
     if torch_input_e is not None:
-        if input_e_dtype is None:
-            input_e_dtype = ttnn.bfloat16
-        if input_e_layout is None:
-            input_e_layout = ttnn.TILE_LAYOUT
-        if input_e_memory_config is None:
-            input_e_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
-        input_tensor_e = ttnn.from_torch(
-            torch_input_e,
-            dtype=input_e_dtype,
-            layout=input_e_layout,
-            device=device,
-            memory_config=input_e_memory_config,
-        )
+        if is_mesh_device and input_e_tensor_placement:
+            input_tensor_e = create_tensor_on_mesh(
+                torch_input_e,
+                device,
+                input_e_dtype,
+                input_e_layout,
+                input_e_memory_config,
+                input_e_tensor_placement,
+            )
+        else:
+            input_tensor_e = ttnn.from_torch(
+                torch_input_e,
+                dtype=input_e_dtype,
+                layout=input_e_layout,
+                device=device,
+                memory_config=input_e_memory_config,
+            )
     else:
         # If no trans_mat, create a default one
         torch_input_e = get_rot_transformation_mat(dhead=head_dim).to(torch.bfloat16)

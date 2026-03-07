@@ -127,9 +127,7 @@ def run(
     chunk_start_idx = kwargs.get("chunk_start_idx", 0)
     if chunk_start_idx is None:
         chunk_start_idx = 0
-    op_kwargs = build_op_kwargs(
-        kwargs, exclude={"chunk_start_idx"}, output_memory_config=output_memory_config or input_a_memory_config
-    )
+    op_kwargs = build_op_kwargs(kwargs, exclude={"chunk_start_idx"}, output_memory_config=output_memory_config)
 
     # Extract shapes for Q and K/V paged from separate inputs or dict fallback
     if isinstance(input_a_shape, dict):
@@ -157,12 +155,12 @@ def run(
     s = max_num_blocks_per_seq * page_block_size
 
     # Create unpaged K and V for torch reference
-    torch_k_unpaged = gen_func_with_cast_tt(
-        partial(torch_random, low=-1, high=1, dtype=torch.float32), input_b_dtype or input_a_dtype
-    )((b, nkv, s, d))
-    torch_v_unpaged = gen_func_with_cast_tt(
-        partial(torch_random, low=-1, high=1, dtype=torch.float32), input_c_dtype or input_a_dtype
-    )((b, nkv, s, d))
+    torch_k_unpaged = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_b_dtype)(
+        (b, nkv, s, d)
+    )
+    torch_v_unpaged = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_c_dtype)(
+        (b, nkv, s, d)
+    )
 
     # Create Q
     torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(shape_q)
@@ -214,30 +212,52 @@ def run(
     )
 
     # Create TTNN tensors with paged K, V
-    q_tensor = ttnn.from_torch(
-        torch_q, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
-    )
-    k_tensor = ttnn.from_torch(
-        torch_k_paged,
-        dtype=input_b_dtype or input_a_dtype,
-        layout=input_b_layout or ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
-    )
-    v_tensor = ttnn.from_torch(
-        torch_v_paged,
-        dtype=input_c_dtype or input_a_dtype,
-        layout=input_c_layout or ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=input_c_memory_config or input_a_memory_config,
-    )
-    page_table_tensor = ttnn.from_torch(
-        torch_page_table,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
+    dtype_k = input_b_dtype
+    dtype_v = input_c_dtype
+    layout_k = input_b_layout
+    layout_v = input_c_layout
+    mem_k = input_b_memory_config
+    mem_v = input_c_memory_config
+
+    if is_mesh_device and input_a_tensor_placement:
+        q_tensor = create_tensor_on_mesh(
+            torch_q, device, input_a_dtype, input_a_layout, input_a_memory_config, input_a_tensor_placement
+        )
+        k_tensor = create_tensor_on_mesh(torch_k_paged, device, dtype_k, layout_k, mem_k, input_b_tensor_placement)
+        v_tensor = create_tensor_on_mesh(torch_v_paged, device, dtype_v, layout_v, mem_v, input_c_tensor_placement)
+        page_table_tensor = create_tensor_on_mesh(
+            torch_page_table,
+            device,
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            input_a_memory_config,
+            input_d_tensor_placement,
+        )
+    else:
+        q_tensor = ttnn.from_torch(
+            torch_q, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
+        )
+        k_tensor = ttnn.from_torch(
+            torch_k_paged,
+            dtype=dtype_k,
+            layout=layout_k,
+            device=device,
+            memory_config=mem_k,
+        )
+        v_tensor = ttnn.from_torch(
+            torch_v_paged,
+            dtype=dtype_v,
+            layout=layout_v,
+            device=device,
+            memory_config=mem_v,
+        )
+        page_table_tensor = ttnn.from_torch(
+            torch_page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.chunked_scaled_dot_product_attention(

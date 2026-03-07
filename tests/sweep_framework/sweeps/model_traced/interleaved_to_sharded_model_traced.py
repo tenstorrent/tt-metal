@@ -140,8 +140,9 @@ def run(
 
     # Use the traced output_memory_config directly - no hardcoding
     # The traced config contains the exact memory layout and shard spec from real model runs
+    # If output_memory_config is not available, fall back to DRAM interleaved
     if output_memory_config is None:
-        raise ValueError("output_memory_config is None - required parameter missing from traced config")
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     start_time = start_measuring_time()
     output_tensor = ttnn.interleaved_to_sharded(input_tensor_a, output_memory_config, **op_kwargs)

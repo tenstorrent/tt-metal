@@ -126,13 +126,23 @@ def run(
 
     if is_input_sharded:
         # Input should be sharded - create interleaved first, then convert to sharded
-        input_tensor_interleaved = ttnn.from_torch(
-            torch_input_tensor_a,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_interleaved = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                ttnn.DRAM_MEMORY_CONFIG,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_interleaved = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Convert to sharded using the traced config
         try:
@@ -147,13 +157,23 @@ def run(
             raise
     else:
         # Input is interleaved - use the traced config directly (op supports this)
-        input_tensor = ttnn.from_torch(
-            torch_input_tensor_a,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
 
     # Run sharded_to_interleaved
     start_time = start_measuring_time()

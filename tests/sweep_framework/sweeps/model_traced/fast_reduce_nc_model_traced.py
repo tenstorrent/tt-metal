@@ -137,7 +137,11 @@ def run(
         output_shape[dim] = 1
 
     # Convert to torch, unpad from tile, then compare
-    output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
+    if is_mesh_device:
+        device_tensors = ttnn.get_device_tensors(output_tensor)
+        output_tensor = device_tensors[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
+    else:
+        output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - use 0.999 threshold like unit test

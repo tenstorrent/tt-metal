@@ -148,32 +148,15 @@ def run(
         shape_k = tuple(input_b_shape) if input_b_shape is not None else shape_q
         shape_v = tuple(input_c_shape) if input_c_shape is not None else shape_k
 
-    # Use provided dtypes with fallback to input_a_dtype
     dtype_q = input_a_dtype
-    if input_b_dtype is None:
-        input_b_dtype = input_a_dtype
-    if input_c_dtype is None:
-        input_c_dtype = input_a_dtype
     dtype_k = input_b_dtype
     dtype_v = input_c_dtype
 
-    # Use provided layouts with fallback to input_a_layout
     layout_q = input_a_layout
-    if input_b_layout is None:
-        input_b_layout = input_a_layout
-    if input_c_layout is None:
-        input_c_layout = input_a_layout
     layout_k = input_b_layout
     layout_v = input_c_layout
 
-    # Use provided memory configs - fail if not provided (no fallbacks)
     mem_config_q = input_a_memory_config
-    if input_b_memory_config is None:
-        raise ValueError("input_b_memory_config is None - required parameter missing")
-    if input_c_memory_config is None:
-        raise ValueError("input_c_memory_config is None - required parameter missing")
-    if output_memory_config is None:
-        output_memory_config = input_a_memory_config
     mem_config_k = input_b_memory_config
     mem_config_v = input_c_memory_config
     output_mem_config = output_memory_config
@@ -224,9 +207,14 @@ def run(
     )
 
     # TTNN execution
-    q_tensor = ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
-    k_tensor = ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
-    v_tensor = ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
+    if is_mesh_device and input_a_tensor_placement:
+        q_tensor = create_tensor_on_mesh(torch_q, device, dtype_q, layout_q, mem_config_q, input_a_tensor_placement)
+        k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
+        v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)
+    else:
+        q_tensor = ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
+        k_tensor = ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
+        v_tensor = ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.scaled_dot_product_attention(

@@ -28,7 +28,20 @@ loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("update_cache")
 
 # Parameters provided to the test vector generator are defined here.
-parameters = {}
+parameters = {
+    # Quick sample test with basic configurations for fast validation
+    "model_traced_sample": {
+        "input_a_shape": [(1, 1, 32, 32)],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_shape": [(1, 1, 1, 32)],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],
+    },
+}
 
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
@@ -122,14 +135,6 @@ def run(
         else:
             # Fallback if not provided
             return [1.0, 0.0]
-
-    # Default input_b params to input_a params if not provided
-    if input_b_dtype is None:
-        input_b_dtype = input_a_dtype
-    if input_b_layout is None:
-        input_b_layout = input_a_layout
-    if input_b_memory_config is None:
-        input_b_memory_config = input_a_memory_config
 
     # Parse scalars - cache_idx and batch_offset
     if scalar and isinstance(scalar, dict):

@@ -8,7 +8,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 
@@ -84,10 +83,6 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Extract kwargs
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-
-    # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 

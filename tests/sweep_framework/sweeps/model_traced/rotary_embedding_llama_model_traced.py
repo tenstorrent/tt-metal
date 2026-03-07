@@ -350,6 +350,7 @@ def run(
     torch.manual_seed(0)
 
     is_mesh_device = hasattr(device, "get_num_devices")
+    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -514,26 +515,6 @@ def run(
         ).to(torch.bfloat16)
 
     # --- Create TTNN Tensors ---
-    # Use defaults for non-traced parameters
-    if input_b_dtype is None:
-        input_b_dtype = ttnn.bfloat16
-    if input_b_layout is None:
-        input_b_layout = ttnn.TILE_LAYOUT
-    if input_b_memory_config is None:
-        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_c_dtype is None:
-        input_c_dtype = ttnn.bfloat16
-    if input_c_layout is None:
-        input_c_layout = ttnn.TILE_LAYOUT
-    if input_c_memory_config is None:
-        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_d_dtype is None:
-        input_d_dtype = ttnn.bfloat16
-    if input_d_layout is None:
-        input_d_layout = ttnn.TILE_LAYOUT
-    if input_d_memory_config is None:
-        input_d_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
     if is_decode_mode:
         # --- Decode Mode: Create sharded tensors ---
         # Get core grid for sharding
@@ -599,41 +580,53 @@ def run(
 
     else:
         # --- Prefill Mode: Use interleaved memory ---
-        # Convert input tensor to TTNN
-        input_tensor_a = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
-
-        # Convert cos cache to TTNN
-        cos_cache_tt = ttnn.from_torch(
-            torch_cos_cache,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=input_b_memory_config,
-        )
-
-        # Convert sin cache to TTNN
-        sin_cache_tt = ttnn.from_torch(
-            torch_sin_cache,
-            dtype=input_c_dtype,
-            layout=input_c_layout,
-            device=device,
-            memory_config=input_c_memory_config,
-        )
-
-        # Convert transformation matrix to TTNN
-        trans_mat_tt = ttnn.from_torch(
-            torch_trans_mat,
-            dtype=input_d_dtype,
-            layout=input_d_layout,
-            device=device,
-            memory_config=input_d_memory_config,
-        )
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+            cos_cache_tt = create_tensor_on_mesh(
+                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+            )
+            sin_cache_tt = create_tensor_on_mesh(
+                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+            )
+            trans_mat_tt = create_tensor_on_mesh(
+                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+            cos_cache_tt = ttnn.from_torch(
+                torch_cos_cache,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=input_b_memory_config,
+            )
+            sin_cache_tt = ttnn.from_torch(
+                torch_sin_cache,
+                dtype=input_c_dtype,
+                layout=input_c_layout,
+                device=device,
+                memory_config=input_c_memory_config,
+            )
+            trans_mat_tt = ttnn.from_torch(
+                torch_trans_mat,
+                dtype=input_d_dtype,
+                layout=input_d_layout,
+                device=device,
+                memory_config=input_d_memory_config,
+            )
 
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()

@@ -59,6 +59,8 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "weight_dtype": [ttnn.bfloat16],
+        "weight_layout": [ttnn.TILE_LAYOUT],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
     },
@@ -135,14 +137,14 @@ def run(
         w_shape = (
             tuple(weight_info["shape"]) if isinstance(weight_info["shape"], (list, tuple)) else weight_info["shape"]
         )
-        w_dtype = weight_info["dtype"] or input_a_dtype
-        w_layout = weight_info["layout"] or input_a_layout
+        w_dtype = weight_info["dtype"]
+        w_layout = weight_info["layout"]
         w_mem = weight_info["memory_config"] or ttnn.DRAM_MEMORY_CONFIG
         w_placement = weight_info["tensor_placement"]
     else:
         w_shape = (input_shape[-1],)
-        w_dtype = input_a_dtype
-        w_layout = input_a_layout
+        w_dtype = kwargs.get("weight_dtype", None)
+        w_layout = kwargs.get("weight_layout", None)
         w_mem = ttnn.DRAM_MEMORY_CONFIG
         w_placement = None
 

@@ -87,7 +87,7 @@ def run(
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=output_memory_config or input_a_memory_config,
+        memory_config=output_memory_config,
         **op_kwargs,
     )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)

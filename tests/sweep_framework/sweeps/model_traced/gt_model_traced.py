@@ -109,13 +109,6 @@ def run(
     # Determine if this is a binary (tensor-tensor) or tensor-scalar operation
     is_binary = shape_b is not None or input_b_dtype is not None
 
-    if input_b_dtype is None:
-        input_b_dtype = input_a_dtype
-    if input_b_layout is None:
-        input_b_layout = input_a_layout
-    if input_b_memory_config is None:
-        input_b_memory_config = input_a_memory_config
-
     # Create tensor A
     torch_input_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

@@ -129,7 +129,7 @@ def run(
         weight_tensor = create_tensor_on_mesh(
             torch_gamma_4d,
             device,
-            input_b_dtype or input_a_dtype,
+            input_b_dtype,
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.DRAM_MEMORY_CONFIG,
             kwargs.get("weight_tensor_placement", input_a_tensor_placement),
@@ -144,7 +144,7 @@ def run(
         )
         weight_tensor = ttnn.from_torch(
             torch_gamma_4d,
-            dtype=input_b_dtype or input_a_dtype,
+            dtype=input_b_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

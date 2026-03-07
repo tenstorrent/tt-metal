@@ -103,20 +103,6 @@ def run(
         input_c_layout = page_table_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
         input_c_memory_config = page_table_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
 
-    # Fallback defaults for missing params
-    if input_b_dtype is None:
-        input_b_dtype = input_a_dtype
-    if input_b_layout is None:
-        input_b_layout = input_a_layout
-    if input_b_memory_config is None:
-        input_b_memory_config = input_a_memory_config
-    if input_c_dtype is None:
-        input_c_dtype = ttnn.int32
-    if input_c_layout is None:
-        input_c_layout = ttnn.ROW_MAJOR_LAYOUT
-    if input_c_memory_config is None:
-        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
     if isinstance(input_a_shape, dict):
         shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
         shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
@@ -148,10 +134,6 @@ def run(
     mem_config_a = input_a_memory_config
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
-    if output_memory_config is None:
-        output_memory_config = input_a_memory_config
-    output_mem_config = output_memory_config
-
     # Create input tensors
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(
         shape_a

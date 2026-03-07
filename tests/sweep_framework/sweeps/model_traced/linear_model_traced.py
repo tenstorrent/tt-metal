@@ -175,6 +175,9 @@ def run(
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
+    # Check if storage_type is HOST
+    is_host = storage_type and "HOST" in str(storage_type)
+
     # Create random tensors
     torch_a = torch.randn(*shape_a, dtype=torch.float32)
     torch_b = torch.randn(*shape_b, dtype=torch.float32)
@@ -190,9 +193,6 @@ def run(
     if has_bias:
         shape_bias = tuple(bias_shape) if isinstance(bias_shape, (list, tuple)) else bias_shape
         torch_bias = torch.randn(*shape_bias, dtype=torch.float32) if shape_bias != tuple() else torch.randn(())
-
-        # Check if storage_type is HOST
-        is_host = storage_type and "HOST" in str(storage_type)
 
         # Create bias tensor with mesh support if needed
         if not is_host:
@@ -243,9 +243,6 @@ def run(
             torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate=approx)
         elif "relu" in act:
             torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
-
-    # Check if storage_type is HOST
-    is_host = storage_type and "HOST" in str(storage_type)
 
     # Create input tensor A
     if not is_host:

@@ -31,6 +31,9 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
     },
@@ -107,9 +110,9 @@ def run(
     torch_cache = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         cache_shape
     )
-    torch_input = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
-    )(input_tensor_shape)
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype)(
+        input_tensor_shape
+    )
     torch_output = torch_cache.clone()
     if len(torch_cache.shape) >= 4 and len(torch_input.shape) >= 4 and torch_cache.shape[0] > batch_idx:
         seq_len = min(torch_input.shape[2], torch_cache.shape[2])
@@ -141,25 +144,25 @@ def run(
             input_tensor = create_tensor_on_mesh(
                 torch_input,
                 device,
-                input_b_dtype or input_a_dtype,
-                input_b_layout or input_a_layout,
-                input_b_memory_config or input_a_memory_config,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
                 input_b_tensor_placement,
             )
         else:
             input_tensor = ttnn.from_torch(
                 torch_input,
-                dtype=input_b_dtype or input_a_dtype,
-                layout=input_b_layout or input_a_layout,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
                 device=device,
-                memory_config=input_b_memory_config or input_a_memory_config,
+                memory_config=input_b_memory_config,
             )
     else:
         cache_tensor = ttnn.from_torch(torch_cache, dtype=input_a_dtype, layout=input_a_layout)
         input_tensor = ttnn.from_torch(
             torch_input,
-            dtype=input_b_dtype or input_a_dtype,
-            layout=input_b_layout or input_a_layout,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
         )
 
     # Op call

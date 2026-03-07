@@ -8,7 +8,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -100,9 +99,6 @@ def run(
 ) -> list:
     torch.manual_seed(1234)  # Match unit test seed
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
-    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     output_memory_config = kwargs.get("output_memory_config", None)
     parsed_op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
@@ -199,14 +195,14 @@ def run(
     tt_K = ttnn.as_tensor(
         K,
         device=device,
-        dtype=input_b_dtype or input_a_dtype,
+        dtype=input_b_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
     )
     tt_V = ttnn.as_tensor(
         V,
         device=device,
-        dtype=input_c_dtype or input_a_dtype,
+        dtype=input_c_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
     )

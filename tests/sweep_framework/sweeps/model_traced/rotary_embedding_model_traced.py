@@ -178,20 +178,6 @@ def run(
     ).to(torch.bfloat16)
 
     # --- Create TTNN Tensors ---
-    # Use defaults for non-traced parameters
-    if input_b_dtype is None:
-        input_b_dtype = ttnn.bfloat16
-    if input_b_layout is None:
-        input_b_layout = ttnn.TILE_LAYOUT
-    if input_b_memory_config is None:
-        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_c_dtype is None:
-        input_c_dtype = ttnn.bfloat16
-    if input_c_layout is None:
-        input_c_layout = ttnn.TILE_LAYOUT
-    if input_c_memory_config is None:
-        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
     is_host = storage_type and "HOST" in str(storage_type)
 
     # Convert input tensor to TTNN with mesh support
