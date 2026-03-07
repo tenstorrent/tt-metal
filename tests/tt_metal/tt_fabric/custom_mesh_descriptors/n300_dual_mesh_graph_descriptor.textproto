@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mesh Graph Descriptor for Dual N300 Devices
+#
+# Topology: Two separate 1x2 meshes (one N300 each) connected via Ethernet
+# Each N300 board has 2 chips (1x2 topology)
+# Use case: Disaggregated prefill on mesh_id=0, decode on mesh_id=1
+#
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] }  # N300: 2 chips per board
+  host_topology   { dims: [ 1, 1 ] }  # Single host per mesh
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+
+  # Two mesh instances: one for prefill (mesh_id=0), one for decode (mesh_id=1)
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  # Connection between the two N300 devices
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
