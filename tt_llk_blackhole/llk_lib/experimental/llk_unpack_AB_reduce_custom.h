@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ using namespace ckernel::unpacker;
  * This function should NOT be used as a substitute for native reduce unpacking LLK MOP configuration.
  * Use the standard _llk_unpack_AB_mop_config_ for general-purpose block reduction operations.
  */
-template <std::uint32_t block_ct_dim>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
     // Constraint on the outerloop and innerloop dim
@@ -40,7 +40,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
     static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    constexpr std::uint32_t outerloop = block_ct_dim;
+    constexpr std::uint32_t outerloop = respect_trigger ? (block_ct_dim / 2) : block_ct_dim;
     const std::uint32_t innerloop     = 1; // Unpack tile by tile of the input operand into SrcA
     ckernel_template tmp(outerloop, innerloop, unpack_srca_op);
     tmp.program();
@@ -61,7 +61,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
  * This function should NOT be used as a substitute for native reduce unpacking LLK initialization.
  * Use the standard _llk_unpack_AB_reduce_init_ for general-purpose reduction operations.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_()
 {
     if constexpr (is_fp32_dest_acc_en)
@@ -89,7 +89,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_()
     TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
-    _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim>(); // Unpack operand and scaler
+    _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim, respect_trigger>(); // Unpack operand and scaler
 }
 
 /**
@@ -106,6 +106,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_()
  * This function should NOT be used as a substitute for the native _llk_unpack_AB_ LLK.
  * Use the standard _llk_unpack_AB_ in a loop for general-purpose block reduction operations.
  */
+template <bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
@@ -127,8 +128,19 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
 
     TTI_UNPACR(SrcB, 0b00000000 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    // Run MOP
-    ckernel::ckernel_template::run();
+    if constexpr (respect_trigger)
+    {
+        // MOP is programmed for half of block_ct_dim; run first half immediately
+        ckernel::ckernel_template::run();
+        // Wait for blocked_matmul_and_pack to signal that second-half data is ready
+        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
+        // Run MOP again for the second half (Z counter continues from where first half stopped)
+        ckernel::ckernel_template::run();
+    }
+    else
+    {
+        ckernel::ckernel_template::run();
+    }
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -152,6 +164,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
  * This function should NOT be used as a substitute for native reduce unpacking cleanup.
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
+template <bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_uninit_(const std::uint32_t unpA_face_r_dim, const std::uint32_t unpB_face_r_dim)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
@@ -160,4 +173,9 @@ inline void _llk_unpack_AB_reduce_block_max_row_uninit_(const std::uint32_t unpA
     // TODO NC: Issue tt-llk#1036 will make this transient
     TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
+
+    if constexpr (respect_trigger)
+    {
+        t6_semaphore_get(semaphore::FPU_SFPU);
+    }
 }
