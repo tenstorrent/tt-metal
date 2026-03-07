@@ -55,6 +55,8 @@
 //       dQ[q] += dS[q,k] @ K[k]                                 // accumulate
 // ----------------------------------------------------------------------
 
+// For standard mode: num_rows_per_core = rows to process
+// For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t qWt = get_compile_time_arg_val(1);              // num tile in inner dim (qWt == kWt == vWt)
 constexpr uint32_t Ht = get_compile_time_arg_val(2);               // num_seq_len / TILE_H
@@ -62,6 +64,7 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-inf
 constexpr uint32_t block_size = get_compile_time_arg_val(6);       // block size
+constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
@@ -69,7 +72,7 @@ constexpr uint32_t cb_query = tt::CBIndex::c_2;               // Original query
 constexpr uint32_t cb_key = tt::CBIndex::c_3;                 // Original key
 constexpr uint32_t cb_value = tt::CBIndex::c_4;               // Original value
 #if defined(CAUSAL_MASK) || defined(USE_ATTN_MASK)
-constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;           // Original mask
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;  // Attention mask (causal or arbitrary)
 #endif
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
 constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
@@ -83,9 +86,109 @@ constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
 const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
 const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
 
+/**
+ * Process a single row of the SDPA backward Q computation.
+ * This function handles the full backward attention computation for one query row:
+ * - Recompute P = softmax(Q @ K^T / sqrt(d) + mask) using stored intermediates
+ * - Compute dP = dO @ V^T
+ * - Compute dS = P * (dP - u) * scale (softmax backward)
+ * - Accumulate dQ += dS @ K
+ *
+ * @param global_row_idx The global row index (across all batches/heads/sequences)
+ */
+FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
+    cb_wait_front(cb_attn_output, tiles_per_row);
+    cb_wait_front(cb_grad_output, tiles_per_row);
+    cb_wait_front(cb_query, tiles_per_row);
+
+    compute_u_scalar_row(
+        cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
+
+    const uint32_t q_row_tile = global_row_idx % Ht;
+
+#ifdef CAUSAL_MASK
+    const uint32_t num_kv_tiles_to_process = q_row_tile + 1;
+#else
+    const uint32_t num_kv_tiles_to_process = Ht;
+#endif
+
+    const uint32_t matmul_accum_reg = 0;
+    for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
+        cb_wait_front(cb_key, tiles_per_row);
+        cb_wait_front(cb_value, tiles_per_row);
+
+        reconfig_data_format(cb_query, cb_key);
+        mm_init_short(cb_query, cb_key, /*transpose*/ 1);
+        tile_regs_acquire();
+        for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+            matmul_tiles(
+                cb_query,
+                cb_key,
+                /* tile_idx */ tile_idx,
+                /* tile_idx */ tile_idx,
+                /* dst_reg_idx*/ matmul_accum_reg);
+        }
+
+#ifdef CAUSAL_MASK
+        if (h == q_row_tile) {
+            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+        } else {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(matmul_accum_reg, scaler_bits);
+        }
+#elif defined(USE_ATTN_MASK)
+        apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+        cb_pop_front(cb_attn_mask, onetile);
+#else
+        binop_with_scalar_tile_init();
+        mul_unary_tile(matmul_accum_reg, scaler_bits);
+#endif
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_attention_weights);
+        pack_tile(matmul_accum_reg, cb_attention_weights);
+        tile_regs_release();
+        cb_push_back(cb_attention_weights, onetile);
+
+        apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
+
+        compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
+
+        compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
+
+        update_grad_query(
+            cb_grad_scores,
+            cb_key,
+            cb_grad_query_accum,
+            tiles_per_row,
+            block_size,
+            /* do_accumulate */ (h > 0));
+        cb_wait_front(cb_grad_query_accum, tiles_per_row);
+
+        cb_pop_front(cb_key, tiles_per_row);
+        cb_pop_front(cb_value, tiles_per_row);
+        cb_pop_front(cb_attention_weights, onetile);
+        cb_pop_front(cb_grad_attn_weights, onetile);
+    }
+
+    pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, tiles_per_row);
+
+    cb_pop_front(cb_u_scalar_row, onetile);
+    cb_pop_front(cb_intermediates, num_of_interm_tiles);
+    cb_pop_front(cb_query, tiles_per_row);
+    cb_pop_front(cb_attn_output, tiles_per_row);
+    cb_pop_front(cb_grad_output, tiles_per_row);
+}
+
 void kernel_main() {
-    // Runtime args - needed for causal mask to know global position within sequence
-    const uint32_t start_row = get_arg_val<uint32_t>(0);
+    // Runtime args
+    // For standard mode: arg0 = start_row
+    // For balanced mode: arg0 = start_pair_idx, arg1 = num_pairs
+    const uint32_t start_idx = get_arg_val<uint32_t>(0);
+
+#ifdef BALANCED_PARALLELISM
+    const uint32_t num_pairs = get_arg_val<uint32_t>(1);
+#endif
 
     init_sfpu(cb_query, cb_key);
     binary_op_init_common(cb_grad_output, cb_query, cb_key);
@@ -98,118 +201,28 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, onetile);
 #endif
 
-    for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        cb_wait_front(cb_attn_output, tiles_per_row);
-        cb_wait_front(cb_grad_output, tiles_per_row);
-        cb_wait_front(cb_query, tiles_per_row);
+#ifdef BALANCED_PARALLELISM
+    for (uint32_t p = 0; p < num_pairs; ++p) {
+        const uint32_t global_pair_idx = start_idx + p;
 
-        // Step 1: calculate u_scalar row, one per query row
-        // Calculate u_scalar row once before K/V loop(could be shared with kv kernel for optimization)
-        compute_u_scalar_row(
-            cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
+        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
+        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
 
-#ifdef CAUSAL_MASK
-        // Calculate global position within sequence for causal mask
-        const uint32_t global_row_idx = start_row + row;
-        const uint32_t q_row_tile = global_row_idx % Ht;  // position within sequence (0 to Ht-1)
+        const uint32_t light_row_in_seq = pair_in_seq;
+        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
 
-        // For causal mask: only process K/V tiles up to and including the diagonal
-        // q_row_tile determines how many K/V chunks we need (0..q_row_tile inclusive)
-        const uint32_t num_kv_tiles_to_process = q_row_tile + 1;
-#else
-        const uint32_t num_kv_tiles_to_process = Ht;
-#endif
+        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        const uint32_t matmul_accum_reg = 0;
-        for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
-            cb_wait_front(cb_key, tiles_per_row);
-            cb_wait_front(cb_value, tiles_per_row);
-
-            // Step 2: Recompute attention scores(by row) Z = QK^T/sqrt(Et) + mask
-            reconfig_data_format(cb_query, cb_key);
-            // This call is required to set up the matmul correctly
-            mm_init_short(cb_query, cb_key, /*transpose*/ 1);
-            tile_regs_acquire();
-            for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
-                matmul_tiles(
-                    cb_query,
-                    cb_key,
-                    /* tile_idx */ tile_idx,
-                    /* tile_idx */ tile_idx,
-                    /* dst_reg_idx*/ matmul_accum_reg);  // accumulate in dest_reg 0
-            }
-
-#ifdef CAUSAL_MASK
-            // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)
-            // Writer generates causal mask tile once, reused for every diagonal
-            if (h == q_row_tile) {
-                apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-                // Don't pop - causal mask tile is reused for all diagonal positions
-            } else {
-                // Off-diagonal: just scale
-                binop_with_scalar_tile_init();
-                mul_unary_tile(matmul_accum_reg, scaler_bits);
-            }
-#elif defined(USE_ATTN_MASK)
-            // Apply attention mask from DRAM
-            // Transforms mask from 1/0 to 0/-inf and applies it on dest_reg
-            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-            cb_pop_front(cb_attn_mask, onetile);  // Pop each unique mask tile after use
-#else
-            // No mask: just scale
-            binop_with_scalar_tile_init();
-            mul_unary_tile(matmul_accum_reg, scaler_bits);
-#endif
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_attention_weights);
-            pack_tile(matmul_accum_reg, cb_attention_weights);
-            tile_regs_release();
-            cb_push_back(cb_attention_weights, onetile);
-
-            // Step 3: apply statistics inplace: P = softmax(Z) = softmax(QK^T / sqrt(Et) + mask)
-            apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
-
-            // Step 4: compute grad w.r.t attention weights
-            // dP = dO @ V^T (where dO is upstream grad_output)
-            compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
-
-            // Step 5: softmax backward block
-            // dZ = (dP - u_scalar_row) * P (where P is attention weights, * - element-wise multiplication)
-            compute_grad_scores(
-                cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
-
-            // Step 6: compute grad w.r.t. query
-            // dQ = dS @ K (scaling already applied in compute_grad_scores)
-            update_grad_query(
-                cb_grad_scores,
-                cb_key,
-                cb_grad_query_accum,
-                tiles_per_row,
-                block_size,
-                /* do_accumulate */ (h > 0));
-            cb_wait_front(cb_grad_query_accum, tiles_per_row);
-
-            // Pop CBs consumed in this K/V iteration
-            cb_pop_front(cb_key, tiles_per_row);
-            cb_pop_front(cb_value, tiles_per_row);
-            cb_pop_front(cb_attention_weights, onetile);
-            cb_pop_front(cb_grad_attn_weights, onetile);
-            // Note: Mask pops are handled explicitly after apply_mask_on_reg:
-            // - USE_ATTN_MASK: pops each unique mask tile after use
-            // - CAUSAL_MASK: doesn't pop (reuses same tile for all diagonals)
-            // Note: cb_grad_scores is popped inside update_grad_query
-        }
-
-        // Push final grad_query to output CB
-        pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, tiles_per_row);
-
-        cb_pop_front(cb_u_scalar_row, onetile);
-        cb_pop_front(cb_intermediates, num_of_interm_tiles);
-        cb_pop_front(cb_query, tiles_per_row);
-        cb_pop_front(cb_attn_output, tiles_per_row);
-        cb_pop_front(cb_grad_output, tiles_per_row);
+        process_single_row(light_global_row);
+        process_single_row(heavy_global_row);
     }
+#else
+    for (uint32_t row = 0; row < num_rows_per_core; ++row) {
+        const uint32_t global_row_idx = start_idx + row;
+        process_single_row(global_row_idx);
+    }
+#endif
 
 #ifdef CAUSAL_MASK
     // Pop the causal mask tile after all rows are processed (was reused for every diagonal)
