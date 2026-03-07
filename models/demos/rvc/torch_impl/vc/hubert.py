@@ -172,20 +172,6 @@ class TransposeLast(nn.Module):
         return x.transpose(-2, -1)
 
 
-class SamePad(nn.Module):
-    def __init__(self, kernel_size, causal=False):
-        super().__init__()
-        if causal:
-            self.remove = kernel_size - 1
-        else:
-            self.remove = 1 if kernel_size % 2 == 0 else 0
-
-    def forward(self, x):
-        if self.remove > 0:
-            x = x[:, :, : -self.remove]
-        return x
-
-
 def rotate_half(x):
     x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in earlier torch versions
@@ -516,8 +502,7 @@ class ConvolutionModule(nn.Module):
             channels,
             channels,
             depthwise_kernel_size,
-            stride=1,
-            padding=(depthwise_kernel_size - 1) // 2,
+            padding="same",
             groups=channels,
             bias=bias,
         )
@@ -680,7 +665,7 @@ def make_conv_pos(e, k, g, is_batch_norm=False):
         e,
         e,
         kernel_size=k,
-        padding=k // 2,
+        padding="same",
         groups=g,
     )
     std = math.sqrt(4 / (k * e))
@@ -688,10 +673,10 @@ def make_conv_pos(e, k, g, is_batch_norm=False):
     nn.init.constant_(pos_conv.bias, 0)
 
     if not is_batch_norm:
-        pos_conv = nn.Sequential(pos_conv, SamePad(k), nn.GELU())
+        pos_conv = nn.Sequential(pos_conv, nn.GELU())
     else:
         batch_norm = nn.BatchNorm1d(e)
-        pos_conv = nn.Sequential(batch_norm, pos_conv, SamePad(k), nn.GELU())
+        pos_conv = nn.Sequential(batch_norm, pos_conv, nn.GELU())
 
     return pos_conv
 
@@ -728,10 +713,9 @@ class TransformerEncoder(nn.Module):
                                 e,
                                 e,
                                 kernel_size=k,
-                                padding=k // 2,
+                                padding="same",
                                 groups=g,
                             ),
-                            SamePad(k),
                             TransposeLast(),
                             nn.LayerNorm(e, elementwise_affine=False),
                             TransposeLast(),

@@ -108,7 +108,7 @@ class Generator(nn.Module):
         super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
-        self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
+        self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, kernel_size=7, padding="same")
         resblock = modules.ResBlock1 if resblock == "1" else modules.ResBlock2
 
         self.ups = nn.ModuleList()
@@ -129,7 +129,7 @@ class Generator(nn.Module):
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes, strict=True):
                 self.resblocks.append(resblock(ch, k, d))
 
-        self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
+        self.conv_post = Conv1d(ch, 1, kernel_size=7, padding="same", bias=False)
         if gin_channels != 0:
             self.cond_linear = nn.Linear(gin_channels, upsample_initial_channel)
 
@@ -252,7 +252,7 @@ class GeneratorNSF(nn.Module):
         self.f0_upsamp = torch.nn.Upsample(scale_factor=math.prod(upsample_rates))
         self.m_source = SourceModuleHnNSF(sampling_rate=sr, harmonic_num=0)
         self.noise_convs = nn.ModuleList()
-        self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
+        self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, kernel_size=7, padding="same")
         resblock = modules.ResBlock1 if resblock == "1" else modules.ResBlock2
 
         self.ups = nn.ModuleList()
@@ -287,7 +287,7 @@ class GeneratorNSF(nn.Module):
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes, strict=True):
                 self.resblocks.append(resblock(ch, k, d))
 
-        self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
+        self.conv_post = Conv1d(ch, 1, kernel_size=7, padding="same", bias=False)
 
         if gin_channels != 0:
             self.cond_linear = nn.Linear(gin_channels, upsample_initial_channel)
