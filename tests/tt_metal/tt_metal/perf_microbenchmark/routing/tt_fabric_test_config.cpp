@@ -2205,9 +2205,11 @@ void TestConfigBuilder::optimize_worker_placement_for_benchmark(ParsedTestConfig
             }
         }
 
-        if (!dir.has_value()) {
-            continue;
-        }
+        TT_FATAL(
+            dir.has_value(),
+            "Benchmark mode: sender on device {} has no determinable routing direction. "
+            "Expected all senders to have destinations after split_senders_by_direction_for_benchmark.",
+            src_node);
 
         uint32_t link_idx = sender.link_id.value_or(0);
         auto router_virtual = device_info_provider_.get_router_virtual_coord(src_node, dir.value(), link_idx);
