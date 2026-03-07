@@ -84,19 +84,23 @@ class ModelPipeline:
         buf[0, 0] = token_id
         return ttnn.from_torch(buf, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+    @property
+    def is_input_rank(self) -> bool:
+        return bool(self.pipeline.is_input_rank)
+
     def run_inference(
         self,
-        prompt_token_ids: list[int],
-        max_new_tokens: int,
+        prompt_token_ids: list[int] | None,
+        max_new_tokens: int | None,
         on_token: Callable[[int], None] | None = None,
         eos_token_id: int | None = None,
         return_generated_tokens: bool = False,
     ) -> list[int] | None:
         """Run full inference across all ranks.
 
-        All ranks must pass the same prompt_token_ids and max_new_tokens so
-        they agree on the upper-bound iteration count.  Both input and output
-        ranks independently break early when EOS is produced after prefill.
+        Only the input rank needs real prompt_token_ids/max_new_tokens. The input rank
+        sends (num_prefill, max_new_tokens) to the output rank so other ranks may pass None.
+        Both input and output ranks independently break early when EOS is produced after prefill.
 
         - Input rank: writes tokens (prefill then decode) and receives output
           token ids from the output rank via recv_token.
@@ -104,8 +108,13 @@ class ModelPipeline:
           input rank via send_token.
         - Other ranks: no-op (pipeline kernels handle forwarding).
         """
-        num_prefill = len(prompt_token_ids)
         if self.pipeline.is_input_rank:
+            assert prompt_token_ids is not None, "Input rank requires prompt_token_ids"
+            assert max_new_tokens is not None, "Input rank requires max_new_tokens"
+
+            num_prefill = len(prompt_token_ids)
+            ttnn.send_token(num_prefill, ttnn.Rank(self.pipeline.output_rank))
+            ttnn.send_token(max_new_tokens, ttnn.Rank(self.pipeline.output_rank))
             return self._run_input_rank(
                 prompt_token_ids,
                 num_prefill=num_prefill,
@@ -115,6 +124,8 @@ class ModelPipeline:
                 return_generated_tokens=return_generated_tokens,
             )
         elif self.pipeline.is_output_rank:
+            num_prefill = int(ttnn.recv_token(ttnn.Rank(self.pipeline.input_rank)))
+            max_new_tokens = int(ttnn.recv_token(ttnn.Rank(self.pipeline.input_rank)))
             self._run_output_rank(
                 num_prefill=num_prefill,
                 max_new_tokens=max_new_tokens,
@@ -133,7 +144,7 @@ class ModelPipeline:
     ) -> list[int] | None:
         generated: list[int] = []
 
-        for i in range(num_prefill + max_new_tokens):
+        for i in range(num_prefill + max_new_tokens - 1):
             if i < num_prefill:
                 token_id = prompt_token_ids[i]
             elif generated:
@@ -164,7 +175,7 @@ class ModelPipeline:
         max_new_tokens: int,
         eos_token_id: int | None,
     ) -> None:
-        for i in range(num_prefill + max_new_tokens):
+        for i in range(num_prefill + max_new_tokens - 1):
             out_token = self.pipeline.read_and_send_output_token(self._d2h_output_tensor)
             if i >= num_prefill - 1 and eos_token_id is not None and out_token == eos_token_id:
                 break
