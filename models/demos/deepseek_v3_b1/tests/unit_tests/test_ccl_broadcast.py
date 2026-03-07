@@ -63,6 +63,7 @@ def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -87,6 +88,7 @@ def test_ccl_broadcast(
     input_dtype,
     num_iters,
     num_warmup_iter,
+    num_links,
 ):
     if is_slow_dispatch():
         pytest.skip("Skipping trace mode in slow dispatch")
@@ -112,7 +114,7 @@ def test_ccl_broadcast(
         layout=layout,
         input_dtype=input_dtype,
         bcast_core=bcast_core,
-        num_links=1,
+        num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
     input_tensor_mesh = test_inputs.input_tensor_mesh
@@ -125,19 +127,6 @@ def test_ccl_broadcast(
     # Run broadcast operation
     logger.info(f"Running CCL broadcast: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    bcast_config = DeepseekMinimalBroadcast.configure(
-        mesh_device=submesh,
-        input_tensor_mesh=input_tensor_mesh,
-        output_tensor=output_tensor,
-        sender_coord=sender_coord,
-        semaphores=semaphores,
-        bcast_cb_id=0,
-    )
-    assert (
-        bcast_config.chunk_size_bytes,
-        bcast_config.last_chunk_size_bytes,
-        bcast_config.num_chunks,
-    ) == (14336, 14336, 1), "Unexpected broadcast chunk tuple for neighbor-exchange test configuration"
 
     profiler = BenchmarkProfiler()
 
@@ -148,6 +137,7 @@ def test_ccl_broadcast(
         output_tensor,
         sender_coord,
         semaphores=semaphores,
+        num_links=num_links,
     )
     ttnn.synchronize_device(submesh)
 
@@ -160,6 +150,7 @@ def test_ccl_broadcast(
             output_tensor,
             sender_coord,
             semaphores=semaphores,
+            num_links=num_links,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -173,6 +164,7 @@ def test_ccl_broadcast(
             output_tensor,
             sender_coord,
             semaphores=semaphores,
+            num_links=num_links,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)

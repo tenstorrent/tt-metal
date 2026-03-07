@@ -64,7 +64,10 @@ void kernel_main() {
         bcast(bcast_args);
     };
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
-        body();
+    {
+        DeviceZoneScopedN("CCL_BROADCAST_LOOP");
+        for (uint32_t i = 0; i < num_iterations; i++) {
+            body();
+        }
     }
 }
