@@ -159,6 +159,51 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #endif
 }
 
+#if defined(ARCH_QUASAR)
+// Quasar L2 Cache Management
+// DM cores have an L2 cache between the core and TL1 (node memory).
+// Writes to cacheable addresses (< MEM_L1_SIZE) go through L2.
+// Flush is required for data to be visible to other agents (host, other cores).
+//
+// Cache line size: 64 bytes
+// Flush registers:
+//   FLUSH64 (0x04010200): Takes raw byte address
+//   FLUSH32 (0x04010240): Takes (address >> 4)
+//
+// Note: L2 invalidation is NOT supported per HW.
+
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+
+// Flush a single cache line from L2 to TL1 (node memory).
+// Includes fence instructions for proper memory ordering.
+inline __attribute__((always_inline)) void flush_l2_cache_line(uint32_t addr) {
+    asm volatile("fence" ::: "memory");
+    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
+    *flush_reg = (uint64_t)addr;
+    asm volatile("fence" ::: "memory");
+}
+
+// Flush a range of addresses from L2 to TL1.
+// Flushes all cache lines covering [start_addr, start_addr + size).
+inline __attribute__((always_inline)) void flush_l2_cache_range(uint32_t start_addr, uint32_t size) {
+    constexpr uint32_t CACHE_LINE_SIZE = 64;
+    constexpr uint32_t CACHE_LINE_MASK = ~(CACHE_LINE_SIZE - 1);
+
+    asm volatile("fence" ::: "memory");
+
+    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
+    uint32_t aligned_start = start_addr & CACHE_LINE_MASK;
+    uint32_t end_addr = start_addr + size;
+
+    for (uint32_t addr = aligned_start; addr < end_addr; addr += CACHE_LINE_SIZE) {
+        *flush_reg = (uint64_t)addr;
+    }
+
+    asm volatile("fence" ::: "memory");
+}
+
+#endif  // ARCH_QUASAR
+
 template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
