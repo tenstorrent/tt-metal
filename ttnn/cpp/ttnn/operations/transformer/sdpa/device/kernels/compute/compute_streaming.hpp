@@ -764,8 +764,9 @@ static void sdpa_inner_loop_step(
             reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
         }
 
-        // Ring mask: L1-accumulate lightweight mask tiles onto cb_qkt_im for this row group.
-        if constexpr (use_ring_mask) {
+        // Lightweight mask: L1-accumulate -inf tiles onto padded cb_qkt_im columns.
+        // Needed for both ring mask (ring_mode) and standard K-padding (use_padded_mask).
+        if constexpr (use_ring_mask || use_padded_mask) {
             if (apply_mask && (lw_partial_tile_idx > 0 || lw_num_padded > 0)) {
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1138,7 +1139,12 @@ void sdpa_standard_v2(
         uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
         uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
 
-        auto call_step = [&](auto profiling_tag, bool is_last, bool is_first, uint32_t eff_Sk) {
+        auto call_step = [&](auto profiling_tag,
+                             bool is_last,
+                             bool is_first,
+                             uint32_t eff_Sk,
+                             bool apply_mask,
+                             uint32_t lw_num_padded) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
                 Sq_chunk_t,
@@ -1170,9 +1176,9 @@ void sdpa_standard_v2(
                 alias_cur_out,
                 is_last,
                 is_first,
-                false,  // apply_mask
-                0,      // lw_num_padded
-                0,      // lw_partial_tile_idx
+                apply_mask,
+                lw_num_padded,
+                0,  // lw_partial_tile_idx
                 eff_Sk);
         };
 
@@ -1181,9 +1187,11 @@ void sdpa_standard_v2(
             bool is_last = (k_chunk == k_num_chunks - 1);
 
             // Last chunk with padding: pass effective_Sk to narrow Q@KT and V matmul.
-            // Non-padded chunks: pass 0 (= use full Sk_chunk_t).
+            // Apply lightweight mask to fill garbage columns with -inf before max-reduce.
             uint32_t eff_Sk = (is_last && padded_k_tiles_inner > 0) ? effective_Sk : 0;
-            call_step(std::false_type{}, is_last, is_first, eff_Sk);
+            bool needs_mask = (eff_Sk > 0);
+            uint32_t num_padded = needs_mask ? (Sk_chunk_t - eff_Sk) : 0;
+            call_step(std::false_type{}, is_last, is_first, eff_Sk, needs_mask, num_padded);
 
             // Post-iteration cleanup
             if (!is_first) {
