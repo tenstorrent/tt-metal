@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -193,10 +194,19 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
+    # Reshape reference outputs to match device mesh structure upfront
+    seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
+    reference_logits_reshaped = reference_logits.view(mesh_device.shape[0], seq_len_per_device, -1)
+    reference_topk_weights_reshaped = reference_topk_weights.view(mesh_device.shape[0], seq_len_per_device, -1)
+    reference_topk_indices_reshaped = reference_topk_indices.view(mesh_device.shape[0], seq_len_per_device, -1)
+
     tt_topk_weights, tt_topk_indices, tt_logits, dispatch_offsets = tt_model(tt_input)
     per_device_topk_weight = ttnn.get_device_tensors(tt_topk_weights)
     per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
     per_device_topk_logits = ttnn.get_device_tensors(tt_logits)
+
+    all_passed = True
+    assert_msgs = []
 
     for device_id in range(mesh_device.shape[0] * mesh_device.shape[1]):
         # Convert output back to torch
@@ -204,16 +214,49 @@ def test_forward_pass(
         tt_topk_indices_torch = ttnn.to_torch(per_device_topk_indices[device_id])
         tt_logits_torch = ttnn.to_torch(per_device_topk_logits[device_id])
 
-        column_id = device_id // mesh_device.shape[0]
-        sp_start = int(column_id * config.sp_dim)
-        sp_end = sp_start + config.sp_dim
+        # Calculate device position in mesh
+        row = device_id // mesh_device.shape[1]
+        col = device_id % mesh_device.shape[1]
 
-        logits_passed, logits_pcc = comp_pcc(tt_logits_torch, reference_logits[sp_start:sp_end, :], 0.99)
-        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, reference_topk_weights[sp_start:sp_end, :], 0.53)
-        recall = calculate_average_recall(tt_topk_indices_torch, reference_topk_indices[sp_start:sp_end, :])
-        assert recall > 0.95, f"Recall is {recall}, expected recal > 0.89"
-        assert logits_passed, f"Logits PCC is {logits_pcc}, expected PCC > 0.99"
-        assert weights_passed, f"Weights PCC is {weights_pcc}, expected PCC > 0.53"
+        # Get the corresponding reference slice (same across columns due to reduction)
+        ref_logits = reference_logits_reshaped[row, :, :]
+        ref_weights = reference_topk_weights_reshaped[row, :, :]
+        ref_indices = reference_topk_indices_reshaped[row, :, :]
+
+        # Test recall with individual logging
+        recall = calculate_average_recall(tt_topk_indices_torch, ref_indices)
+        recall_passed = recall > 0.95
+        status_char = "✅" if recall_passed else "❌"
+        logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Recall = {recall:.4f} (threshold: 0.95)")
+        if not recall_passed:
+            all_passed = False
+            assert_msgs.append(f"Device {device_id} (row={row}, col={col}): Recall is {recall:.4f}, expected > 0.95")
+
+        # Test logits PCC with individual logging
+        logits_passed, logits_pcc = comp_pcc(tt_logits_torch, ref_logits, 0.99)
+        status_char = "✅" if logits_passed else "❌"
+        logger.info(
+            f"{status_char} Device {device_id} (row={row}, col={col}): Logits PCC = {logits_pcc:.4f} (threshold: 0.99)"
+        )
+        if not logits_passed:
+            all_passed = False
+            assert_msgs.append(
+                f"Device {device_id} (row={row}, col={col}): Logits PCC is {logits_pcc:.4f}, expected > 0.99"
+            )
+
+        # Test weights PCC with individual logging
+        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.53)
+        status_char = "✅" if weights_passed else "❌"
+        logger.info(
+            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.53)"
+        )
+        if not weights_passed:
+            all_passed = False
+            assert_msgs.append(
+                f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.53"
+            )
+
+    assert all_passed, "\n".join(assert_msgs)
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_weights)

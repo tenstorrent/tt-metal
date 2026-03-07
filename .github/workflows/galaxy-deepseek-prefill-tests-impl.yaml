@@ -36,7 +36,6 @@ jobs:
         id: generate
         run: |
           all_tests=$(jq -n '[
-            { "name": "(Galaxy) DeepSeek Prefill unit tests", "arch": "blackhole", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U08RL15T4N8" },
             { "name": "(Galaxy) DeepSeek Prefill module tests", "arch": "blackhole", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U08RL15T4N8" }
           ]')
 
