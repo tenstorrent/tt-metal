@@ -329,6 +329,18 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     }
 }
 
+void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
+    bool has_dram_fw =
+        hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
+    if (has_dram_fw) {
+        const auto& soc_d = cluster_.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            CoreCoord virtual_core{dram_core.x, dram_core.y};
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+        }
+    }
+}
+
 void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     ZoneScoped;
     std::unordered_map<tt::ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
@@ -370,6 +382,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     assert_tensix_workers_impl(device_id);
+    assert_dram_cores(device_id);
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         assert_inactive_ethernet_cores(device_id);
     }
@@ -382,6 +395,7 @@ void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
         assert_active_ethernet_cores_to_reset(device_id);
     }
     assert_inactive_ethernet_cores(device_id);
+    assert_dram_cores(device_id);
 }
 
 CoreCoord RiscFirmwareInitializer::virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {

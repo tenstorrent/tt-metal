@@ -53,6 +53,7 @@ private:
     void assert_active_ethernet_cores_to_reset(tt::ChipId device_id);
     void assert_tensix_workers_impl(tt::ChipId device_id);
     void assert_inactive_ethernet_cores(tt::ChipId device_id);
+    void assert_dram_cores(tt::ChipId device_id);
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);
