@@ -125,14 +125,7 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
     torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
     torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    (
-        _,  # o_proj
-        ttnn_gate_mm_weights,  # gate_mm overlapped tensor on (12,0)-(12,7)
-        _,  # attn_norm
-        _,  # q_norm
-        _,  # kv_norm
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_attn_norm,
@@ -140,6 +133,7 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         torch_kv_norm,
         torch_ffn_norm,
     )
+    ttnn_gate_mm_weights = o_norms["gate_mm"]
     compute_core_grid = ttnn_gate_mm_weights.core_range_set
     logger.info(f"Created gate matmul weights as overlapped tensor on {compute_core_grid.num_cores()} cores")
 
@@ -651,14 +645,7 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
     torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
     torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    (
-        _,  # o_proj
-        ttnn_gate_mm_weights,  # gate_mm overlapped tensor on (12,0)-(12,7)
-        _,  # attn_norm
-        _,  # q_norm
-        _,  # kv_norm
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_attn_norm,
@@ -666,6 +653,7 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
         torch_kv_norm,
         torch_ffn_norm,
     )
+    ttnn_gate_mm_weights = o_norms["gate_mm"]
     compute_core_grid = ttnn_gate_mm_weights.core_range_set
     logger.info(f"Created gate matmul weights as overlapped tensor on {compute_core_grid.num_cores()} cores")
 

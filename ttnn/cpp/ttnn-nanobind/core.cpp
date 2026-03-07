@@ -11,6 +11,7 @@
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -19,14 +20,40 @@
 #include <reflect>
 
 #include "ttnn/core.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tile.hpp>
 #include "tt_stl/caseless_comparison.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/distributed/types.hpp"
+
+namespace {
+
+// Rearrange a flat 2D row-major float buffer into consecutive per-tile
+// row-major blocks expected by pack_as_bfp*_tiles(row_major_input=true).
+std::vector<float> rearrange_to_tile_blocks(const float* src, int H, int W, int tile_h, int tile_w) {
+    const int tiles_r = H / tile_h;
+    const int tiles_c = W / tile_w;
+    std::vector<float> tiled(static_cast<size_t>(H) * W);
+    size_t dst_idx = 0;
+    for (int tr = 0; tr < tiles_r; ++tr) {
+        for (int tc = 0; tc < tiles_c; ++tc) {
+            for (int r = 0; r < tile_h; ++r) {
+                for (int c = 0; c < tile_w; ++c) {
+                    tiled[dst_idx++] = src[(tr * tile_h + r) * W + tc * tile_w + c];
+                }
+            }
+        }
+    }
+    return tiled;
+}
+
+}  // namespace
 
 namespace ttnn::core {
 
@@ -135,6 +162,36 @@ void py_module(nb::module_& mod) {
             >>> ttnn.set_printoptions(profile="short", sci_mode=None)
             >>> ttnn.set_printoptions(profile="short", precision=6)
         )doc");
+
+    mod.def(
+        "tilize_and_pack_bfp8_b",
+        [](nb::ndarray<float, nb::c_contig> data, int H, int W, int tile_h, int tile_w) -> nb::bytes {
+            auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
+            tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
+            auto packed =
+                pack_as_bfp8_tiles<float>(tt::stl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
+            return nb::bytes(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(uint32_t));
+        },
+        nb::arg("data"),
+        nb::arg("H"),
+        nb::arg("W"),
+        nb::arg("tile_h") = 32,
+        nb::arg("tile_w") = 32);
+
+    mod.def(
+        "tilize_and_pack_bfp4_b",
+        [](nb::ndarray<float, nb::c_contig> data, int H, int W, int tile_h, int tile_w) -> nb::bytes {
+            auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
+            tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
+            auto packed =
+                pack_as_bfp4_tiles<float>(tt::stl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
+            return nb::bytes(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(uint32_t));
+        },
+        nb::arg("data"),
+        nb::arg("H"),
+        nb::arg("W"),
+        nb::arg("tile_h") = 32,
+        nb::arg("tile_w") = 32);
 
     mod.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);
 
