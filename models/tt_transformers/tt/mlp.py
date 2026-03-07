@@ -272,19 +272,27 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=li_ff2_compute_kernel_cfg,
-            dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-            program_config=pc_2,
-            memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
+        if seq_len > 128 and mode != Mode.DECODE:
+            w2_out = ttnn.experimental.minimal_matmul(
+                w2_in,
+                self.w2,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                config=pc_2,
+            )
+        else:
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+                program_config=pc_2,
+                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = tt_all_reduce(
