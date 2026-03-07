@@ -17,7 +17,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
-from ....utils.test import line_params, ring_params, ring_params_bh_wan2_2
+from ....utils.test import line_params, ring_params
 
 
 def t2v_metrics(mesh_device, height):
@@ -102,7 +102,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_bh_wan2_2, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
