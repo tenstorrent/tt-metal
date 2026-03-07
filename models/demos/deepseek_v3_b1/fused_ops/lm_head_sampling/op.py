@@ -465,6 +465,7 @@ class LMHeadSampling:
 
                 # All cores = mcast grid (sender is already included)
                 all_cores = mcast_grid_set
+                print("all cores", all_cores)
 
                 if enable_argmax:
                     if indices_tensor_device.memory_config().shard_spec.grid != argmax_core_grid:
@@ -1090,6 +1091,8 @@ class LMHeadSampling:
                     ),
                     defines=[("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
                 )
+
+                print("ENBALE SOCKET READER", enable_socket_input)
 
                 # ================================================================
                 # Program descriptor

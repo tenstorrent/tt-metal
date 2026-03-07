@@ -27,12 +27,14 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_single_galaxy_pipeline_configuration,
     create_single_pod_pipeline_configuration,
 )
-from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+token_page_size_bytes = TOKEN_PAGE_SIZE_BYTES
 
 
 def create_fabric_router_config(max_payload_size):

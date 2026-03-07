@@ -88,10 +88,10 @@ def create_single_pod_pipeline_configuration(
 
     # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
     def _dense_stage(layer_id: int):
-        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+        return lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
 
     def _moe_stage(layer_id: int):
-        return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+        return lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -105,6 +105,9 @@ def create_single_pod_pipeline_configuration(
         14: stage_14,
         15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }
+
+    assert len(stage_factories) == 16, "Single pod pipeline configuration should have 16 stages"
+
     return PipelineConfiguration(stage_factories)
 
 
