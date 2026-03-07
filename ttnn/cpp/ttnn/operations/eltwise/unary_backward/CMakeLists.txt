@@ -4,6 +4,8 @@ add_library(TTNN::Ops::Eltwise::Unary::Backward ALIAS ttnn_op_eltwise_unary_back
 target_precompile_headers(ttnn_op_eltwise_unary_backward REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary_backward)
 
+file(GLOB_RECURSE kernels gelu_bw/device/kernels/*)
+
 target_sources(
     ttnn_op_eltwise_unary_backward
     PUBLIC
@@ -11,8 +13,14 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES unary_backward.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         unary_backward.cpp
+        gelu_bw/device/gelu_bw_device_operation.cpp
+        gelu_bw/device/gelu_bw_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_unary_backward PRIVATE ${FixmeOpIncDirs})
