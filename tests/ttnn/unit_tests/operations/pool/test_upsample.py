@@ -10,8 +10,9 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+
+from ttnn.operations.pool import golden_upsample
 
 TILE_WIDTH = 32
 
@@ -83,18 +84,25 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
-    input = torch.rand(input_shapes, dtype=torch.bfloat16)
-    tt_input = input.permute(0, 2, 3, 1)
+    torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
+    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
     input_tensor = ttnn.from_torch(tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
         pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
 
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = torch_upsample(input)
 
-    scale_factor = (scale_h, scale_w)
+    torch_result = golden_upsample(
+        input_tensor=torch_input,
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=num_channels,
+        scale_factor=scale_factor,
+        mode="nearest",
+    )
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels)
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
 
@@ -104,14 +112,7 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch_result = torch_result.permute(0, 2, 3, 1)
-    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor)
-    logger.info(pcc_message)
-    allclose = torch.allclose(output_tensor, torch_result)
-    isclose = torch.all(torch.isclose(output_tensor, torch_result))
     isequal = torch.equal(output_tensor, torch_result)
-    assert allclose
-    assert isclose
     assert isequal
 
 
@@ -131,18 +132,29 @@ def upsample_multicore_common(
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
-    input = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    ## golden reference using torch
+    from ttnn.operations.pool import golden_upsample
+
+    torch_input = torch.randn((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
+
+    ## golden reference using golden function
     scale_factor = (scale_h, scale_w)
-    if mode == "bilinear":
-        torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="bilinear", align_corners=False)
-    else:
-        torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = torch_upsample(input)
+    mode_str = "bilinear" if mode == "bilinear" else "nearest"
+    align_corners = False if mode == "bilinear" else None
 
-    ## permute to N H W C, which is what the upsample op expects
-    tt_input = input.permute(0, 2, 3, 1)
+    torch_result = golden_upsample(
+        input_tensor=torch_input,
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=num_channels,
+        scale_factor=scale_factor,
+        mode=mode_str,
+        align_corners=align_corners,
+    )
+    torch_result = torch_result.reshape(batch_size, int(height * scale_h), int(width * scale_w), num_channels)
+
+    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
 
     num_bytes = 2  ## only BFLOAT16 is supported
 
@@ -290,8 +302,6 @@ def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strateg
         core_range=None,
         run_twice=run_twice,
     )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
     isequal = torch.equal(output_tensor, torch_result)
 
@@ -338,8 +348,6 @@ def test_upsample_multicore_corerange(
         core_range=core_range,
         run_twice=run_twice,
     )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
     isequal = torch.equal(output_tensor, torch_result)
 
@@ -416,7 +424,6 @@ def test_bilinear_multi_core(
         run_twice=run_twice,
     )
 
-    torch_result = torch_result.permute(0, 2, 3, 1)
     torch_result = torch_result[:, :, :, 0:num_channels]
     output_tensor = output_tensor[:, :, :, 0:num_channels]
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)

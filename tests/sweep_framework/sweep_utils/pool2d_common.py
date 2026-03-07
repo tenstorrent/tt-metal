@@ -1,21 +1,126 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, List
-import itertools
-import random
-import torch
-import math
+"""
+Shared utility functions for max_pool2d and avg_pool2d tests.
+"""
 
+import math
+import torch
 import ttnn
 
 
-def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype):
+def randomize_tensor(tensor_map, tensor_shape):
+    """Get or create a random tensor, caching by shape to avoid regeneration."""
+    tensor_shape = tuple(tensor_shape)
+    if tensor_shape in tensor_map:
+        return tensor_map[tensor_shape]
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tensor_map[tensor_shape] = torch_tensor
+    return torch_tensor
+
+
+def parse_padding(padding):
     """
-    Validate indices using logic from test_mpwi.py
-    Note input tensors should be in [N, H, W, C] format
-    Supports both uint16 and uint32 index tensors (indices should be converted to int64 before calling)
+    Parse 2D or 4D padding into individual pad values.
+
+    Args:
+        padding: Tuple of 2 (pad_h, pad_w) or 4 (pad_t, pad_b, pad_l, pad_r) values.
+
+    Returns:
+        (pad_t, pad_b, pad_l, pad_r, pad_h, pad_w, is_4d)
+        where pad_h = total vertical padding, pad_w = total horizontal padding
+    """
+    if len(padding) == 2:
+        pad_t = pad_b = padding[0]
+        pad_l = pad_r = padding[1]
+        pad_h = int(padding[0] * 2)
+        pad_w = int(padding[1] * 2)
+        is_4d = False
+    elif len(padding) == 4:
+        pad_t, pad_b, pad_l, pad_r = padding
+        pad_h = pad_t + pad_b
+        pad_w = pad_l + pad_r
+        is_4d = True
+    else:
+        raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
+    return pad_t, pad_b, pad_l, pad_r, pad_h, pad_w, is_4d
+
+
+def compute_output_shape(
+    in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, dilation_h, dilation_w, pad_h, pad_w, pad_t, pad_l, ceil_mode
+):
+    """
+    Compute the output spatial dimensions for a pool2d operation.
+
+    Args:
+        in_h, in_w: Input spatial dimensions
+        kernel_h, kernel_w: Kernel size
+        stride_h, stride_w: Stride
+        dilation_h, dilation_w: Dilation
+        pad_h, pad_w: Total padding (vertical, horizontal)
+        pad_t, pad_l: Top and left padding (for ceil_mode adjustment)
+        ceil_mode: Whether to use ceiling for output shape
+
+    Returns:
+        (out_h, out_w, ceil_mode_out_shape_adj)
+    """
+    ceil_mode_out_shape_adj = False
+    if ceil_mode:
+        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
+        if ((out_h - 1) * stride_h) >= (in_h + pad_t):
+            ceil_mode_out_shape_adj = True
+            out_h -= 1
+        if ((out_w - 1) * stride_w) >= (in_w + pad_l):
+            ceil_mode_out_shape_adj = True
+            out_w -= 1
+    else:
+        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
+    return out_h, out_w, ceil_mode_out_shape_adj
+
+
+def prepare_torch_pool_input(input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value):
+    """
+    Shared input preparation for pool2d golden functions.
+
+    Reshapes (1, 1, N*H*W, C) -> (N, C, H, W) and converts padding:
+    - 4D padding [pad_t, pad_b, pad_l, pad_r]: applies torch.nn.functional.pad manually, returns torch_padding=0
+    - 2D padding (pad_h, pad_w): passes through as-is
+
+    Returns:
+        (input_nchw, torch_padding)
+    """
+    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+
+    if isinstance(padding, (list, tuple)) and len(padding) == 4:
+        pad_t, pad_b, pad_l, pad_r = padding
+        input_nchw = torch.nn.functional.pad(
+            input_nchw, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=pad_fill_value
+        )
+        torch_padding = 0
+    elif isinstance(padding, (list, tuple)) and len(padding) == 2:
+        torch_padding = padding
+    else:
+        torch_padding = padding
+
+    return input_nchw, torch_padding
+
+
+def pool_output_to_flat_nhwc(output_tensor):
+    """Convert pool output from (N, C, H, W) -> (1, 1, N*H*W, C)."""
+    N, C, H, W = output_tensor.shape
+    return output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
+
+
+def validate_maxpool2d_indices(
+    input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype
+):
+    """
+    Validate indices by checking if differences are due to valid tie-breaking.
+    Note: input tensors should be in [N, H, W, C] format.
+    Supports both uint16 and uint32 index tensors (indices should be converted to int64 before calling).
     Returns (indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations)
     """
     batch_size, input_h, input_w, channels = input_tensor.shape
@@ -32,7 +137,6 @@ def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, str
     # Find positions where indices don't match
     diff = torch.abs(torch_indices - ttnn_indices)
     mismatch_positions = torch.nonzero(diff, as_tuple=False)
-    num_mismatches = len(mismatch_positions)
 
     tie_breaking_differences = 0
     actual_errors = 0
@@ -99,15 +203,6 @@ def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, str
             value_differences += 1
 
     # Indices are valid if there are no actual errors
-    assert num_mismatches == (
-        tie_breaking_differences + actual_errors
-    ), "Total mismatches should equal sum of tie-breaking differences and actual errors"
-    if actual_errors > 0:
-        assert actual_errors == (
-            value_differences + window_violations
-        ), "Actual errors should equal sum of value differences and window violations"
-    else:
-        assert actual_errors == 0 and value_differences == 0 and window_violations == 0, "No errors should be present"
     return (actual_errors == 0), tie_breaking_differences, actual_errors, value_differences, window_violations
 
 
@@ -140,18 +235,21 @@ def run_max_pool2d_with_indices(
     pad_h = pad_tb * 2  # total padding
     pad_w = pad_lr * 2  # total padding
 
-    if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
-        if ((out_h - 1) * stride_h) >= (in_h + pad_tb):
-            ceil_mode_out_shape_adj = True
-            out_h -= 1
-        if ((out_w - 1) * stride_w) >= (in_w + pad_lr):
-            ceil_mode_out_shape_adj = True
-            out_w -= 1
-    else:
-        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
+    out_h, out_w, _ = compute_output_shape(
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        dilation_h,
+        dilation_w,
+        pad_h,
+        pad_w,
+        pad_tb,
+        pad_lr,
+        ceil_mode,
+    )
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -159,12 +257,6 @@ def run_max_pool2d_with_indices(
     tensor_shape = (in_n, in_c, in_h, in_w)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    # torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-    # for n in range(in_n):
-    #     for c in range(in_c):
-    #         for h in range(in_h):
-    #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = h * in_w + w
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -253,7 +345,13 @@ def run_max_pool2d_with_indices(
         atol = 0.35
     output_match = torch.allclose(ttnn_output_reshaped, torch_output_reshaped, atol=atol, rtol=rtol)
 
-    indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations = validate_indices(
+    (
+        indices_valid,
+        tie_breaking_differences,
+        actual_errors,
+        value_differences,
+        window_violations,
+    ) = validate_maxpool2d_indices(
         torch_input_permuted,
         torch_indices_reshaped,
         ttnn_indices_reshaped,

@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.pool import golden_grid_sample
 
 
 @pytest.mark.parametrize(
@@ -42,17 +43,31 @@ def test_grid_sample_random_grid(device, input_shape, mode, align_corners, grid_
 
     torch.manual_seed(0)
 
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    batch_size, channels, height, width = input_shape
+    _, grid_h, grid_w, _ = grid_shape
+
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     # Create a random grid with coordinates in range [-1, 1]
     torch_grid_f32 = torch.rand(grid_shape, dtype=torch.float32) * 2.0 - 1.0
+    torch_grid_formatted = torch_grid_f32.reshape(1, 1, batch_size * grid_h * grid_w, 2)
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid_f32, mode=mode, padding_mode="zeros", align_corners=align_corners
+    golden_grid_dtype = torch.float32 if grid_dtype == ttnn.float32 else torch.bfloat16
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(golden_grid_dtype),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
     )
-
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -60,9 +75,6 @@ def test_grid_sample_random_grid(device, input_shape, mode, align_corners, grid_
 
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid, mode=mode, align_corners=align_corners)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
-
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-
     # Test allclose with grid type specific tolerances
     if grid_dtype == ttnn.float32:
         atol, rtol = 0.02, 1e-2
@@ -71,7 +83,6 @@ def test_grid_sample_random_grid(device, input_shape, mode, align_corners, grid_
 
     allclose_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
 
-    assert pcc_passed, f"Test failed with PCC below threshold"
     assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
@@ -103,10 +114,11 @@ def test_grid_sample_random_grid(device, input_shape, mode, align_corners, grid_
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, grid_dtype):
     torch.manual_seed(0)
 
-    batch_size, grid_h, grid_w, _ = grid_shape
+    batch_size, channels, height, width = input_shape
+    _, grid_h, grid_w, _ = grid_shape
 
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     # Generates a uniform grid using torch affine grid
     theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
@@ -117,11 +129,23 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     # Add small noise to the grid
     torch_grid += torch.randn(grid_shape) * 0.05
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
-    )
+    torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
 
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    golden_grid_dtype = torch.float32 if grid_dtype == ttnn.float32 else torch.bfloat16
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(golden_grid_dtype),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -169,9 +193,11 @@ def test_grid_sample_identity_transform(device, input_shape, mode, align_corners
 
     torch.manual_seed(0)
 
-    batch_size, height, width, _ = input_shape
+    # input_shape is NHWC format: (batch_size, height, width, channels)
+    batch_size, height, width, channels = input_shape
 
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     # Generates a grid that corresponds to the identity transformation
     theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
@@ -179,12 +205,26 @@ def test_grid_sample_identity_transform(device, input_shape, mode, align_corners
     shape = (batch_size, 1, height, width)
     torch_grid = F.affine_grid(theta_batched, shape, align_corners=align_corners)
 
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    # Grid shape is (batch_size, height, width, 2)
+    grid_h = torch_grid.shape[1]
+    grid_w = torch_grid.shape[2]
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
+    torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
+
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(torch.bfloat16),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
     )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -228,12 +268,15 @@ def test_grid_sample_scaling_patterns(device, input_shape, mode, align_corners, 
 
     torch.manual_seed(0)
 
-    # Calculate output size based on scale factor
-    batch_size = input_shape[0]
-    output_h = int(input_shape[1] * scale_factor)
-    output_w = int(input_shape[2] * scale_factor)
+    # input_shape is NHWC format: (batch_size, height, width, channels)
+    batch_size, height, width, channels = input_shape
 
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    # Calculate output size based on scale factor
+    output_h = int(height * scale_factor)
+    output_w = int(width * scale_factor)
+
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     # Generates a grid that corresponds to downsampling / integer factor upscaling and fractional factor upsampling
     theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
@@ -241,16 +284,26 @@ def test_grid_sample_scaling_patterns(device, input_shape, mode, align_corners, 
     shape = (batch_size, 1, output_h, output_w)
     torch_grid = F.affine_grid(theta_batched, shape, align_corners=align_corners)
 
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    # torch_grid.shape is (batch_size, output_h, output_w, 2)
+    grid_h = torch_grid.shape[1]
+    grid_w = torch_grid.shape[2]
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw,
-        torch_grid,
+    torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
+
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(torch.bfloat16),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
         mode=mode,
         padding_mode="zeros",
         align_corners=align_corners,
     )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     torch_grid_bf16 = torch_grid.to(torch.bfloat16)
 

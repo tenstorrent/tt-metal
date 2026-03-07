@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-
 from typing import Tuple
 
 
@@ -18,41 +17,31 @@ def golden_maxpool2d(
     padding,  # Can be Tuple[int, int] or List[int, int, int, int]
     dilation: Tuple[int, int],
     ceil_mode: bool = False,
+    return_indices: bool = False,
     **_,
 ):
     import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import prepare_torch_pool_input, pool_output_to_flat_nhwc
 
-    input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
-        0, 3, 1, 2
-    )  # 1, 1, NHW, C -> N, C, H, W
+    input_nchw, torch_padding = prepare_torch_pool_input(
+        input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value=float("-inf")
+    )
 
-    if isinstance(padding, (list, tuple)) and len(padding) == 4:
-        # Apply padding using torch.nn.functional.pad with 4D format
-        # ttnn format: [pad_t, pad_b, pad_l, pad_r]
-        # torch.nn.functional.pad expects: [pad_left, pad_right, pad_top, pad_bottom]
-        pad_t, pad_b, pad_l, pad_r = padding
-        input_tensor = torch.nn.functional.pad(
-            input_tensor, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=float("-inf")
-        )
-        torch_padding = 0  # No padding in max_pool2d since we already padded
-    elif isinstance(padding, (list, tuple)) and len(padding) == 2:
-        # Standard 2D padding format (pad_h, pad_w)
-        torch_padding = padding
-    else:
-        # Assume it's already in the correct format
-        torch_padding = padding
-
-    output_tensor = torch.nn.functional.max_pool2d(
-        input_tensor,
+    output_tensor, indices = torch.nn.functional.max_pool2d(
+        input_nchw,
         kernel_size=kernel_size,
         stride=stride,
         padding=torch_padding,
         dilation=dilation,
         ceil_mode=ceil_mode,
+        return_indices=True,
     )
 
-    N, C, H, W = output_tensor.shape
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+    output_tensor = pool_output_to_flat_nhwc(output_tensor)
+    indices = pool_output_to_flat_nhwc(indices)
+
+    if return_indices:
+        return output_tensor, indices
 
     return output_tensor
 
@@ -126,6 +115,255 @@ def golden_rotate(
 
 
 ttnn.attach_golden_function(ttnn.rotate, golden_rotate)
+
+
+def golden_avg_pool2d(
+    input_tensor: ttnn.Tensor,
+    batch_size: int,
+    input_h: int,
+    input_w: int,
+    channels: int,
+    kernel_size: Tuple[int, int],
+    stride: Tuple[int, int],
+    padding,  # Can be Tuple[int, int] or List[int, int, int, int]
+    ceil_mode: bool = False,
+    count_include_pad: bool = True,
+    divisor_override: int = None,
+    **_,
+):
+    """
+    Golden function for avg_pool2d operation using torch.nn.functional.avg_pool2d.
+
+    Args:
+        input_tensor: Input tensor in (1, 1, N*H*W, C) format
+        batch_size: Number of batches
+        input_h: Input height
+        input_w: Input width
+        channels: Number of channels
+        kernel_size: Pooling kernel size (kernel_h, kernel_w)
+        stride: Pooling stride (stride_h, stride_w)
+        padding: Can be 2D (pad_h, pad_w) or 4D [pad_t, pad_b, pad_l, pad_r]
+        ceil_mode: Use ceiling for output shape calculation
+        count_include_pad: Include padding in average calculation
+        divisor_override: Override the divisor used in averaging
+
+    Returns:
+        Output tensor in (1, 1, N*out_H*out_W, C) format
+    """
+    import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import prepare_torch_pool_input, pool_output_to_flat_nhwc
+
+    input_nchw, torch_padding = prepare_torch_pool_input(
+        input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value=0
+    )
+
+    output_tensor = torch.nn.functional.avg_pool2d(
+        input_nchw,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=torch_padding,
+        ceil_mode=ceil_mode,
+        count_include_pad=count_include_pad,
+        divisor_override=divisor_override,
+    )
+
+    return pool_output_to_flat_nhwc(output_tensor)
+
+
+ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
+
+
+def golden_adaptive_avg_pool2d(
+    input_tensor,
+    batch_size: int,
+    input_h: int,
+    input_w: int,
+    channels: int,
+    output_size: Tuple[int, int],
+    **_,
+):
+    """
+    Golden function for adaptive_avg_pool2d operation using torch.nn.functional.adaptive_avg_pool2d.
+
+    Args:
+        input_tensor: Input tensor in (1, 1, N*H*W, C) format
+        batch_size: Number of batches
+        input_h: Input height
+        input_w: Input width
+        channels: Number of channels
+        output_size: Target output size (out_h, out_w)
+
+    Returns:
+        Output tensor in (1, 1, N*out_H*out_W, C) format
+    """
+    import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import pool_output_to_flat_nhwc
+
+    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+    output_tensor = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=output_size)
+    return pool_output_to_flat_nhwc(output_tensor)
+
+
+if hasattr(ttnn, "adaptive_avg_pool2d"):
+    ttnn.attach_golden_function(ttnn.adaptive_avg_pool2d, golden_adaptive_avg_pool2d)
+
+
+def golden_adaptive_max_pool2d(
+    input_tensor,
+    batch_size: int,
+    input_h: int,
+    input_w: int,
+    channels: int,
+    output_size: Tuple[int, int],
+    **_,
+):
+    """
+    Golden function for adaptive_max_pool2d operation using torch.nn.functional.adaptive_max_pool2d.
+
+    Args:
+        input_tensor: Input tensor in (1, 1, N*H*W, C) format
+        batch_size: Number of batches
+        input_h: Input height
+        input_w: Input width
+        channels: Number of channels
+        output_size: Target output size (out_h, out_w)
+
+    Returns:
+        Output tensor in (1, 1, N*out_H*out_W, C) format
+    """
+    import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import pool_output_to_flat_nhwc
+
+    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+    output_tensor, _ = torch.nn.functional.adaptive_max_pool2d(input_nchw, output_size=output_size, return_indices=True)
+    return pool_output_to_flat_nhwc(output_tensor)
+
+
+if hasattr(ttnn, "adaptive_max_pool2d"):
+    ttnn.attach_golden_function(ttnn.adaptive_max_pool2d, golden_adaptive_max_pool2d)
+
+
+def golden_upsample(
+    input_tensor: ttnn.Tensor,
+    scale_factor,
+    mode: str = "nearest",
+    batch_size: int = None,
+    input_h: int = None,
+    input_w: int = None,
+    channels: int = None,
+    align_corners: bool = None,
+    **_,
+):
+    """
+    Golden function for upsample operation using torch.nn.functional.interpolate.
+
+    Supports two input formats:
+    - (N, H, W, C): Used by attach_golden_function (ttnn.upsample passes this format)
+    - (1, 1, N*H*W, C): Used by direct test calls with explicit batch_size/input_h/input_w/channels
+
+    Args:
+        input_tensor: Input tensor in (N, H, W, C) or (1, 1, N*H*W, C) format
+        scale_factor: Upsampling scale factor - int, float, [int, int], or [float, float]
+        mode: Interpolation mode ("nearest" or "bilinear")
+        batch_size: Number of batches (required for (1, 1, N*H*W, C) format)
+        input_h: Input height (required for (1, 1, N*H*W, C) format)
+        input_w: Input width (required for (1, 1, N*H*W, C) format)
+        channels: Number of channels (required for (1, 1, N*H*W, C) format)
+        align_corners: Whether to align corners (only for bilinear mode)
+
+    Returns:
+        Output tensor in the same spatial format as input
+    """
+    import torch
+
+    # Normalize scale_factor to a tuple
+    if isinstance(scale_factor, (int, float)):
+        scale_factor = (scale_factor, scale_factor)
+
+    if batch_size is not None:
+        # Direct call with (1, 1, N*H*W, C) format - reshape to (N, H, W, C) first
+        input_nhwc = input_tensor.reshape(batch_size, input_h, input_w, channels)
+        input_nchw = input_nhwc.permute(0, 3, 1, 2)
+        output_nchw = torch.nn.functional.interpolate(
+            input_nchw, scale_factor=scale_factor, mode=mode, align_corners=align_corners
+        )
+        N, C, H, W = output_nchw.shape
+        return output_nchw.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
+    else:
+        # attach_golden_function call with (N, H, W, C) format
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
+        output_nchw = torch.nn.functional.interpolate(
+            input_nchw, scale_factor=scale_factor, mode=mode, align_corners=align_corners
+        )
+        return output_nchw.permute(0, 2, 3, 1)
+
+
+ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
+
+
+def golden_grid_sample(
+    input_tensor: ttnn.Tensor,
+    grid: ttnn.Tensor,
+    mode: str = "bilinear",
+    padding_mode: str = "zeros",
+    align_corners: bool = False,
+    batch_size: int = None,
+    input_h: int = None,
+    input_w: int = None,
+    channels: int = None,
+    output_h: int = None,
+    output_w: int = None,
+    **_,
+):
+    """
+    Golden function for grid_sample operation using torch.nn.functional.grid_sample.
+
+    Supports two input formats:
+    - (N, H_in, W_in, C): Used by attach_golden_function (ttnn.grid_sample passes this format)
+    - (1, 1, N*H*W, C): Used by direct test calls with explicit batch_size/input_h/input_w/channels
+
+    Args:
+        input_tensor: Input tensor in (N, H_in, W_in, C) or (1, 1, N*H*W, C) format
+        grid: Grid tensor in (N, H_out, W_out, 2) or (1, 1, N*out_H*out_W, 2) format
+        mode: Interpolation mode ("bilinear" or "nearest")
+        padding_mode: Padding mode ("zeros", "border", or "reflection")
+        align_corners: Whether to align corners
+        batch_size: Number of batches (required for (1, 1, N*H*W, C) format)
+        input_h: Input height (required for (1, 1, N*H*W, C) format)
+        input_w: Input width (required for (1, 1, N*H*W, C) format)
+        channels: Number of channels (required for (1, 1, N*H*W, C) format)
+        output_h: Output height (required for (1, 1, N*out_H*out_W, 2) format)
+        output_w: Output width (required for (1, 1, N*out_H*out_W, 2) format)
+
+    Returns:
+        Output tensor in the same spatial format as input
+    """
+    import torch
+
+    if batch_size is not None:
+        # Direct call with (1, 1, N*H*W, C) format
+        input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+        grid_nhwc = grid.reshape(batch_size, output_h, output_w, 2)
+
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(), grid_nhwc.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
+        )
+
+        N, C, H, W = output_nchw.shape
+        return output_nchw.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C).to(input_tensor.dtype)
+    else:
+        # attach_golden_function call with (N, H_in, W_in, C) format
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
+        # grid is already (N, H_out, W_out, 2)
+
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(), grid.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
+        )
+
+        return output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+
+
+ttnn.attach_golden_function(ttnn.grid_sample, golden_grid_sample)
 
 
 def prepare_grid_sample_grid(*args, **kwargs):
