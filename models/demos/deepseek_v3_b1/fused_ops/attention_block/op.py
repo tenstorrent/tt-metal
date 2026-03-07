@@ -177,8 +177,8 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores():
-        # 14 from pre-SDPA, 4 from post
-        return 18
+        # 14 from pre-SDPA, 3 from post
+        return 17
 
     @staticmethod
     def create_semaphores(mesh_device):
@@ -799,12 +799,9 @@ class AttentionBlock:
         semaphore_index += 1
         sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphore1)
         sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphore2)
-        ccl_semaphore1 = attention_block_semaphores[semaphore_index]
+        ccl_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
-        ccl_semaphore2 = attention_block_semaphores[semaphore_index]
-        semaphore_index += 1
-        ccl_semaphore1_addr = ttnn.get_global_semaphore_address(ccl_semaphore1)
-        ccl_semaphore2_addr = ttnn.get_global_semaphore_address(ccl_semaphore2)
+        ccl_semaphore_addr = ttnn.get_global_semaphore_address(ccl_semaphore)
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -1894,8 +1891,8 @@ class AttentionBlock:
                 # Determine CCL neighbor and semaphores based on position (only when CCL is enabled)
                 ccl_sender_link = 0 if is_first_chip else 1
                 ccl_receiver_link = 1 if is_first_chip else 0
-                ccl_sender_semaphore_addr = ccl_semaphore1_addr if is_first_chip else ccl_semaphore2_addr
-                ccl_receiver_semaphore_addr = ccl_semaphore2_addr if is_first_chip else ccl_semaphore1_addr
+                ccl_sender_semaphore_addr = ccl_semaphore_addr
+                ccl_receiver_semaphore_addr = ccl_semaphore_addr
 
                 # Calculate neighbor coordinate
                 if is_first_chip:
