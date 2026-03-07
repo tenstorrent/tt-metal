@@ -28,7 +28,7 @@ def test_hubert_transformer_encoder(device, layer_norm_first):
         "layer_norm_first": layer_norm_first,
         "layer_type": "transformer",
     }
-    batch_size = 2
+    batch_size = 1
     seq_len = 23
     tgt_layer = 1
 

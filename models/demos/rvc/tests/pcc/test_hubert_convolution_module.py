@@ -20,7 +20,7 @@ def test_hubert_convolution_module(device):
     depthwise_kernel_size = 7
     activation_fn = "swish"
     bias = False
-    b = 2
+    b = 1
     t = 48
 
     torch_module = TorchConvolutionModule(

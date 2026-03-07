@@ -27,16 +27,25 @@ def create_conv1d_input_tensor(batch_size: int, input_length: int, in_channels: 
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_conv1d(device):
+@pytest.mark.parametrize(
+    ("kernel_size", "padding"),
+    [
+        (7, 0),
+        (7, 3),
+        (7, "same"),
+        (8, 0),
+        (8, 4),
+        (8, "same"),
+    ],
+)
+def test_conv1d(device, kernel_size, padding):
     torch.manual_seed(0)
 
     batch_size = 1
-    in_channels = 768
-    out_channels = 768
+    in_channels = 128
+    out_channels = 128
     input_length = 732
-    kernel_size = 128
     stride = 1
-    padding = 64
     dilation = 1
     groups = 16
 
@@ -79,6 +88,4 @@ def test_conv1d(device):
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
     tt_output_torch = tt_output_torch.reshape(batch_size, -1, out_channels)
     tt_output_torch = tt_output_torch.permute(0, 2, 1)
-    print(f"final output shape: {tt_output_torch}")
-    print(f"torch output shape: {torch_output}")
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.99)

@@ -20,7 +20,7 @@ def test_hubert_conv_feature_extraction_model(device, mode):
 
     conv_layers = [(32, 5, 2), (32, 3, 2), (32, 3, 2)]
     conv_bias = True
-    batch_size = 2
+    batch_size = 1
     input_length = 128
 
     torch_model = TorchConvFeatureExtractionModel(

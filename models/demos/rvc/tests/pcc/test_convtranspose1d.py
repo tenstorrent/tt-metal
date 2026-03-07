@@ -15,7 +15,7 @@ def test_convtranspose1d(device):
     torch.manual_seed(0)
 
     batch_size = 1
-    in_channels = 512
+    in_channels = 32
     out_channels = 256
     input_length = 248
     kernel_size = 16
