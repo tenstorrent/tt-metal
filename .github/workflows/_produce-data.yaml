@@ -166,6 +166,13 @@ jobs:
         run: |
           ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           find generated/cicd/ -type f
+      - name: Show artifacts metadata
+        run: |
+          echo "[Info] Artifacts uploaded in this workflow run:"
+          cat workflow_artifacts.json | jq '.artifacts[] | {name: .name, size_in_bytes: .size_in_bytes, created_at: .created_at, expired: .expired}'
+          echo ""
+          echo "[Info] Artifact names list:"
+          cat workflow_artifacts.json | jq -r '.artifacts[].name'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -199,6 +206,7 @@ jobs:
               pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
+              workflow_artifacts.json
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
