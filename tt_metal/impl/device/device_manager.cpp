@@ -16,7 +16,7 @@
 #include "dprint_server.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include "impl/context/context_descriptor.hpp"
 #include "firmware/command_queue_initializer.hpp"
 #include "firmware/profiler_initializer.hpp"
 #include "firmware/fabric_firmware_initializer.hpp"

@@ -17,7 +17,9 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
-#include "metalium_env_impl.hpp"
+#include "context/metal_env_accessor.hpp"
+#include "metal_env_impl.hpp"
+#include "context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -43,7 +45,6 @@
 #include "llrt/llrt.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -155,8 +156,6 @@ void MetalContext::initialize(
     size_t worker_l1_size,
     bool minimal) {
     ZoneScoped;
-    TT_ASSERT(query_descriptor_ != nullptr);
-    TT_FATAL(query_->is_initialized(), "MetaliumEnv not initialized");
 
     // Workaround for galaxy, need to always re-init
     if (rtoptions().get_force_context_reinit() or get_cluster().is_galaxy_cluster()) {
@@ -406,8 +405,11 @@ void MetalContext::teardown_base_objects() {
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
-    query_.reset();
-    query_descriptor_.reset();
+    if (env_owned_) {
+        delete env_;
+    }
+    env_ = nullptr;
+    env_owned_ = false;
 }
 
 void MetalContext::teardown_dispatch_state() {
@@ -427,13 +429,13 @@ void MetalContext::initialize_base_objects() {
     // For now, just pull out the mock device descriptor from get_mock_cluster_desc() global state
 
     // Check if mock mode was configured via API (before env vars take effect)
+    MetalEnvDescriptor settings;
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        query_descriptor_ = std::make_shared<MetaliumEnvDescriptor>(*mock_cluster_desc);
-    } else {
-        query_descriptor_ = std::make_shared<MetaliumEnvDescriptor>();
+        settings = MetalEnvDescriptor(*mock_cluster_desc);
     }
-    query_ = std::make_shared<tt::tt_metal::MetaliumEnv>();
+    env_ = new tt::tt_metal::MetalEnv(std::move(settings));
+    env_owned_ = true;
 
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
 }
@@ -478,15 +480,30 @@ MetalContext::~MetalContext() {
     teardown_base_objects();
 }
 
-llrt::RunTimeOptions& MetalContext::rtoptions() { return query_->impl().get_rtoptions(); }
+llrt::RunTimeOptions& MetalContext::rtoptions() {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_rtoptions();
+}
 
-Cluster& MetalContext::get_cluster() { return query_->impl().get_cluster(); }
+Cluster& MetalContext::get_cluster() {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_cluster();
+}
 
-const llrt::RunTimeOptions& MetalContext::rtoptions() const { return query_->impl().get_rtoptions(); }
+const llrt::RunTimeOptions& MetalContext::rtoptions() const {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_rtoptions();
+}
 
-const Cluster& MetalContext::get_cluster() const { return query_->impl().get_cluster(); }
+const Cluster& MetalContext::get_cluster() const {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_cluster();
+}
 
-const Hal& MetalContext::hal() const { return query_->impl().get_hal(); }
+const Hal& MetalContext::hal() const {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_hal();
+}
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
@@ -702,7 +719,10 @@ tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return f
 
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-    context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
+    TT_FATAL(env_ != nullptr, "MetalEnv is not initialized");
+    std::string mock_cluster_desc_path =
+        env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
+    context_descriptor_ = std::make_shared<ContextDescriptor>(
         hal(),
         get_cluster(),
         rtoptions(),
@@ -718,12 +738,12 @@ void MetalContext::init_context_descriptor(
         worker_l1_size,
         dispatch_core_config_,
         l1_bank_remap_,
-        query_descriptor_->is_mock_device() ? query_descriptor_->mock_cluster_desc_path() : ""));
+        mock_cluster_desc_path);
 }
 
 void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size) {
     // Various settings are not known and not relevant for risc firmware
-    risc_fw_context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
+    risc_fw_context_descriptor_ = std::make_shared<ContextDescriptor>(
         hal(),
         get_cluster(),
         rtoptions(),
@@ -737,9 +757,9 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,
         worker_l1_size,
-        {},
-        {},
-        rtoptions().get_mock_cluster_desc_path()));
+        DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t>{},
+        rtoptions().get_mock_cluster_desc_path());
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {

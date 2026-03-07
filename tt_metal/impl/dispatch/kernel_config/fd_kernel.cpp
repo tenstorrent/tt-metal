@@ -17,7 +17,7 @@
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include "impl/context/context_descriptor.hpp"
 // #include "impl/context/metal_context.hpp"
 #include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>

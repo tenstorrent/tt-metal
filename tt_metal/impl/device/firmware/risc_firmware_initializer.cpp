@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"

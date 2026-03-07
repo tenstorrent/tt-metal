@@ -10,7 +10,7 @@
 #include <tt_metal.hpp>
 #include "common/executor.hpp"
 #include "device/firmware/firmware_initializer.hpp"
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include "impl/context/context_descriptor.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "device/device_impl.hpp"

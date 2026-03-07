@@ -19,7 +19,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>

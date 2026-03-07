@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <hal.hpp>
-#include <experimental/hal.hpp>
-#include <tt-metalium/experimental/context/metalium_env.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <umd/device/types/arch.hpp>
@@ -12,7 +10,6 @@
 #include <string>
 
 #include "hal_types.hpp"
-#include "impl/context/metalium_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
 
 // NOLINTBEGIN(misc-unused-using-decls)
@@ -69,57 +66,3 @@ uint32_t get_arch_num_circular_buffers() {
 }
 
 }  // namespace tt::tt_metal::hal
-
-namespace tt::tt_metal::experimental::hal {
-
-tt::ARCH get_arch(const MetaliumEnv& env) { return MetaliumEnvAccessor(env).get_hal().get_arch(); }
-
-std::string get_arch_name(const MetaliumEnv& env) {
-    auto arch_enum = MetaliumEnvAccessor(env).get_hal().get_arch();
-    return tt::get_string_lowercase(arch_enum);
-}
-
-uint32_t get_l1_size(const MetaliumEnv& env) {
-    return MetaliumEnvAccessor(env).get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-}
-
-uint32_t get_dram_alignment(const MetaliumEnv& env) {
-    return MetaliumEnvAccessor(env).get_hal().get_alignment(HalMemType::DRAM);
-}
-
-uint32_t get_l1_alignment(const MetaliumEnv& env) {
-    return MetaliumEnvAccessor(env).get_hal().get_alignment(HalMemType::L1);
-}
-
-uint32_t get_pcie_alignment(const MetaliumEnv& env) {
-    return MetaliumEnvAccessor(env).get_hal().get_alignment(HalMemType::HOST);
-}
-
-uint32_t get_erisc_l1_unreserved_base(const MetaliumEnv& env) {
-    const auto& hal_ref = MetaliumEnvAccessor(env).get_hal();
-    return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-}
-
-uint32_t get_erisc_l1_unreserved_size(const MetaliumEnv& env) {
-    const auto& hal_ref = MetaliumEnvAccessor(env).get_hal();
-    return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-}
-
-uint32_t get_max_worker_l1_unreserved_size(const MetaliumEnv& env) {
-    const auto& hal_ref = MetaliumEnvAccessor(env).get_hal();
-    size_t l1_end = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                    hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    return l1_end - hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-}
-
-float get_eps(const MetaliumEnv& env) { return MetaliumEnvAccessor(env).get_hal().get_eps(); }
-
-float get_nan(const MetaliumEnv& env) { return MetaliumEnvAccessor(env).get_hal().get_nan(); }
-
-float get_inf(const MetaliumEnv& env) { return MetaliumEnvAccessor(env).get_hal().get_inf(); }
-
-uint32_t get_arch_num_circular_buffers(const MetaliumEnv& env) {
-    return MetaliumEnvAccessor(env).get_hal().get_arch_num_circular_buffers();
-}
-
-}  // namespace tt::tt_metal::experimental::hal

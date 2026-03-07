@@ -13,8 +13,7 @@
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/experimental/context/context_descriptor.hpp>
-#include <tt-metalium/experimental/context/metalium_env.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
@@ -200,8 +199,10 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
-    std::shared_ptr<MetaliumEnvDescriptor> query_descriptor_;
-    std::shared_ptr<tt::tt_metal::MetaliumEnv> query_;
+    // The MetalEnv is owned by the user
+    // For the legacy code, we will initialize it in the MetalContext constructor.
+    tt::tt_metal::MetalEnv* env_;
+    bool env_owned_ = false;
 
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
