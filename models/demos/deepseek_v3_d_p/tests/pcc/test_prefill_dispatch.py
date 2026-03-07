@@ -197,7 +197,6 @@ def test_ttnn_dispatch(
     signpost(
         f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
     )
-    print("\n")
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
@@ -230,7 +229,7 @@ def test_ttnn_dispatch(
         )
         logger.info("Using RANDOM test data")
 
-    logger.info(f"[TORCH INPUTS] x.shape={x.shape}, weights.shape={weights.shape}, indices.shape={indices.shape}")
+    logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
     # x and indices: replicated across EP ranks
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
@@ -242,7 +241,6 @@ def test_ttnn_dispatch(
     tt_x = ttnn.from_torch(
         x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
-    logger.info(f"[TTNN] tt_x.shape={tt_x.shape}")
 
     tt_weights = ttnn.from_torch(
         weights,
@@ -251,15 +249,10 @@ def test_ttnn_dispatch(
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
-    logger.info(f"[TTNN] tt_weights.shape={tt_weights.shape}")
 
     tt_indices = ttnn.from_torch(
         indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
     )
-    logger.info(f"[TTNN] tt_indices.shape={tt_indices.shape}")
-
-    logger.warning(f"{x.shape=}, {weights.shape=}, {indices.shape=}")
-    logger.warning(f"{tt_x.shape=}, {tt_weights.shape=}, {tt_indices.shape=}")
 
     # Create expert dispatch table
     expert_dispatch_table = create_expert_dispatch_table(
@@ -312,31 +305,17 @@ def test_ttnn_dispatch(
         seq_len_per_chip,
         num_experts_per_tok,
     )
-    logger.info(f"[TORCH GATE] expert_offsets.shape={expert_offsets.shape}")
-    logger.info(f"[TORCH GATE] expert_token_counts.shape={expert_token_counts.shape}")
-    logger.info(f"[TORCH GATE] cum_sum.shape={cum_sum.shape}")
 
     # Forward pass through TTNN dispatch
-    logger.info(f"{x.shape=}")
-    logger.info(f"{weights.shape=}")
-    logger.info(f"{indices.shape=}")
-
     tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
-    logger.info(f"[TTNN GATE] tt_expert_offsets.shape={tt_expert_offsets.shape}")
-
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
-    logger.info(f"[TTNN] tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
 
     tt_dispatched, tt_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
-    logger.info(f"[TTNN OUTPUT] tt_dispatched.shape={tt_dispatched.shape}")
-    logger.info(f"[TTNN OUTPUT] tt_metadata.shape={tt_metadata.shape}")
 
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
-    logger.info(f"[TORCH OUTPUT] torch_dispatched.shape={torch_dispatched.shape}")
-    logger.info(f"[TORCH OUTPUT] torch_metadata.shape={torch_metadata.shape}")
 
     # Convert TTNN outputs to torch for comparison
     mesh_composer = ttnn.create_mesh_composer(
@@ -345,27 +324,22 @@ def test_ttnn_dispatch(
             dims=[1, 0],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
         ),
     )
-    logger.warning(f"{torch_dispatched[0].shape=} {torch_metadata[0].shape=}")
-    logger.warning(f"{tt_dispatched.shape=} {tt_metadata.shape=}")
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
-    logger.info(f"[TTNN->TORCH] tt_out_dispatched.shape={tt_out_dispatched.shape}")
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
-    logger.info(f"[TTNN->TORCH] tt_out_metadata.shape={tt_out_metadata.shape}")
-    logger.warning(f"{tt_out_dispatched.shape=} {tt_out_metadata.shape=}")
 
     assert_output_shape(tt_out_dispatched, num_dispatch_groups, dispatch_group_size, "dispatched buffer")
 
-    # Quick sanity check of first elements
-    logger.info(f"{tt_out_dispatched[0][0][0][0][0]=} | {tt_out_dispatched[0][1][0][0][0]=}")
-    logger.info(f"{torch_dispatched[0][0][0][0][0]=} | {torch_dispatched[0][1][0][0][0]=}")
-    logger.info(f"{tt_out_metadata[0][0][0][0][0:4]=} | {tt_out_metadata[0][1][0][0][0:4]=}")
-    logger.info(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
-    logger.info(f"{expert_token_counts.shape=}, {expert_token_counts=}")
-    logger.info(f"{expert_offsets.shape=}, {expert_offsets=}")
-    logger.info(f"{cum_sum.shape=}, {cum_sum=}")
+    # Quick sanity check of first elements (verbose mode only)
+    if verbose:
+        logger.debug(f"{tt_out_dispatched[0][0][0][0][0]=} | {tt_out_dispatched[0][1][0][0][0]=}")
+        logger.debug(f"{torch_dispatched[0][0][0][0][0]=} | {torch_dispatched[0][1][0][0][0]=}")
+        logger.debug(f"{tt_out_metadata[0][0][0][0][0:4]=} | {tt_out_metadata[0][1][0][0][0:4]=}")
+        logger.debug(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
+        logger.debug(f"{expert_token_counts.shape=}, {expert_token_counts=}")
+        logger.debug(f"{expert_offsets.shape=}, {expert_offsets=}")
+        logger.debug(f"{cum_sum.shape=}, {cum_sum=}")
 
     # Verify dispatched data matches reference (each EP rank against its torch reference)
-    logger.warning("Comparing ALL dispatched buffer slots (including remote dispatch)...")
     buffer_result = validate_dispatch_buffer(
         torch_dispatched,
         tt_out_dispatched,
@@ -377,7 +351,6 @@ def test_ttnn_dispatch(
         verbose=verbose,
     )
 
-    logger.info("Comparing ALL dispatched metadata slots (including remote dispatch)...")
     metadata_result = validate_dispatch_metadata(
         torch_metadata,
         tt_out_metadata,
