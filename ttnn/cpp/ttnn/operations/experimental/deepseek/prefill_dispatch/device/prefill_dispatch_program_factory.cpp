@@ -114,7 +114,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.indices_tensor;
     auto weights_tensor = tensor_args.weights_tensor;
-    auto offsets_tensor = tensor_args.chip_to_n_routed_expert_offset_tensor;
+    auto offsets_tensor = tensor_args.expert_offsets_tensor;
     auto dispatch_table_tensor = tensor_args.expert_dispatch_table_tensor;
 
     const auto& output_tensor = tensor_return_value.at(0);
@@ -315,7 +315,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         mesh_view.num_devices(),  // num_devices
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
-        operation_attributes.n_routed_experts,
+        operation_attributes.num_routed_experts,
         operation_attributes.num_experts_per_tok,
         operation_attributes.metadata_len,
         operation_attributes.max_dispatched_tokens_per_expert,
@@ -498,7 +498,7 @@ void PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::override_run
             reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.indices_tensor.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.weights_tensor.buffer()->address();
-            reader_runtime_args.at(3) = tensor_args.chip_to_n_routed_expert_offset_tensor.buffer()->address();
+            reader_runtime_args.at(3) = tensor_args.expert_offsets_tensor.buffer()->address();
             reader_runtime_args.at(4) = output_tensor.buffer()->address();
             reader_runtime_args.at(5) = metadata_tensor.buffer()->address();
             reader_runtime_args.at(6) = tensor_args.expert_dispatch_table_tensor.buffer()->address();
@@ -511,7 +511,7 @@ void PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::override_run
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.indices_tensor.buffer()->address();
             writer_runtime_args.at(2) = tensor_args.weights_tensor.buffer()->address();
-            writer_runtime_args.at(3) = tensor_args.chip_to_n_routed_expert_offset_tensor.buffer()->address();
+            writer_runtime_args.at(3) = tensor_args.expert_offsets_tensor.buffer()->address();
             writer_runtime_args.at(4) = output_tensor.buffer()->address();
             writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(6) = tensor_args.expert_dispatch_table_tensor.buffer()->address();

@@ -23,7 +23,7 @@ void PrefillCombineDeviceOperation::validate_on_program_cache_miss(
         tensor_args.dispatched_metadata.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Dispatched metadata must be ROW_MAJOR layout");
     TT_FATAL(
-        tensor_args.experts_tok_counter.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        tensor_args.expert_token_counts.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Experts token counter must be ROW_MAJOR layout");
 
     // Validate dtypes
@@ -36,9 +36,9 @@ void PrefillCombineDeviceOperation::validate_on_program_cache_miss(
         "Dispatched metadata must be INT32, got {}",
         tensor_args.dispatched_metadata.dtype());
     TT_FATAL(
-        tensor_args.experts_tok_counter.dtype() == DataType::INT32,
+        tensor_args.expert_token_counts.dtype() == DataType::INT32,
         "Experts token counter must be INT32, got {}",
-        tensor_args.experts_tok_counter.dtype());
+        tensor_args.expert_token_counts.dtype());
 
     // Validate output memory config
     TT_FATAL(
@@ -50,7 +50,7 @@ void PrefillCombineDeviceOperation::validate_on_program_cache_miss(
     // Counter is 2D: (per_device_batch, experts_per_chip)
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
     auto metadata_shape = tensor_args.dispatched_metadata.tensor_spec().logical_shape();
-    auto counter_shape = tensor_args.experts_tok_counter.tensor_spec().logical_shape();
+    auto counter_shape = tensor_args.expert_token_counts.tensor_spec().logical_shape();
 
     TT_FATAL(
         dispatched_shape[0] == metadata_shape[0] && dispatched_shape[0] == counter_shape[0],
@@ -111,8 +111,8 @@ namespace ttnn::prim {
 ttnn::Tensor prefill_combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
-    const ttnn::Tensor& experts_tok_counter,
-    uint32_t num_chips,
+    const ttnn::Tensor& expert_token_counts,
+    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
@@ -121,11 +121,10 @@ ttnn::Tensor prefill_combine(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
-
     using OperationType = ttnn::operations::experimental::deepseek::prefill_combine::PrefillCombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .num_chips = num_chips,
+            .dispatch_group_size = dispatch_group_size,
             .experts_per_chip = experts_per_chip,
             .num_experts_per_tok = num_experts_per_tok,
             .seq_len_per_chip = seq_len_per_chip,
@@ -137,6 +136,6 @@ ttnn::Tensor prefill_combine(
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,
-            .experts_tok_counter = experts_tok_counter});
+            .expert_token_counts = expert_token_counts});
 }
 }  // namespace ttnn::prim

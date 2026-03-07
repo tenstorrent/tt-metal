@@ -24,8 +24,8 @@ void PrefillDispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Indices tensor must be ROW_MAJOR layout");
     TT_FATAL(
-        tensor_args.chip_to_n_routed_expert_offset_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Chip to expert offset tensor must be ROW_MAJOR layout");
+        tensor_args.expert_offsets_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Expert offsets tensor must be ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Expert dispatch table tensor must be ROW_MAJOR layout");
@@ -44,9 +44,9 @@ void PrefillDispatchDeviceOperation::validate_on_program_cache_miss(
         "Indices tensor must be INT32 or UINT32, got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
-        tensor_args.chip_to_n_routed_expert_offset_tensor.dtype() == DataType::INT32,
-        "Chip to expert offset tensor must be INT32, got {}",
-        tensor_args.chip_to_n_routed_expert_offset_tensor.dtype());
+        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32,
+        "Expert offsets tensor must be INT32, got {}",
+        tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
         "Expert dispatch table tensor must be INT32, got {}",
@@ -144,11 +144,11 @@ prefill_dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
+    const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
-    uint32_t num_chips,
+    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
-    uint32_t n_routed_experts,
+    uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatched_tokens_per_expert,
@@ -160,9 +160,9 @@ prefill_dispatch(
     using OperationType = ttnn::operations::experimental::deepseek::prefill_dispatch::PrefillDispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .num_chips = num_chips,
+            .dispatch_group_size = dispatch_group_size,
             .experts_per_chip = experts_per_chip,
-            .n_routed_experts = n_routed_experts,
+            .num_routed_experts = num_routed_experts,
             .num_experts_per_tok = num_experts_per_tok,
             .metadata_len = metadata_len,
             .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert,
@@ -175,7 +175,7 @@ prefill_dispatch(
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,
             .indices_tensor = indices_tensor,
-            .chip_to_n_routed_expert_offset_tensor = chip_to_n_routed_expert_offset_tensor,
+            .expert_offsets_tensor = expert_offsets_tensor,
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor});
 }
 }  // namespace ttnn::prim

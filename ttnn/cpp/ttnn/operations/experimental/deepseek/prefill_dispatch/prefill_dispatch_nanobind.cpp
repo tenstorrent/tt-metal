@@ -29,16 +29,16 @@ void bind_prefill_dispatch(nb::module_& mod) {
         Tokens are gathered into per-expert buffers with metadata tracking their origin.
 
         Args:
-            input_tensor (ttnn.Tensor): Input tensor of shape (num_chips, seq_len, hidden_dim)
-            weights_tensor (ttnn.Tensor): Router weights of shape (num_chips, seq_len, num_experts_per_tok)
-            indices_tensor (ttnn.Tensor): Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
-            chip_to_n_routed_expert_offset_tensor (ttnn.Tensor): Base offset for each expert from each chip in the dispatched buffer, shape (num_chips, n_routed_experts), dtype int32
-            expert_dispatch_table_tensor (ttnn.Tensor): Expert dispatch table mapping expert ID to destination chip ID, shape (num_chips_rep, n_routed_experts), dtype int32
+            input_tensor (ttnn.Tensor): Input tensor of shape (dispatch_group_size, seq_len, hidden_dim)
+            weights_tensor (ttnn.Tensor): Router weights of shape (dispatch_group_size, seq_len, num_experts_per_tok)
+            indices_tensor (ttnn.Tensor): Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
+            expert_offsets_tensor (ttnn.Tensor): Base offset for each expert from each chip in the dispatched buffer, shape (dispatch_group_size, num_routed_experts), dtype int32
+            expert_dispatch_table_tensor (ttnn.Tensor): Expert dispatch table mapping expert ID to destination chip ID, shape (dispatch_group_size_rep, num_routed_experts), dtype int32
 
         Keyword Args:
-            num_chips (int): Number of chips in the system
+            dispatch_group_size (int): Number of chips in the system
             experts_per_chip (int): Number of experts per chip
-            n_routed_experts (int): Total number of routed experts across all chips
+            num_routed_experts (int): Total number of routed experts across all chips
             num_experts_per_tok (int): Number of experts each token is routed to
             metadata_len (int): Length of metadata per token (stores: chip, token, topk_indice, routed_expert, weight)
             max_dispatched_tokens_per_expert (int): Maximum number of tokens that can be dispatched to each expert
@@ -50,18 +50,18 @@ void bind_prefill_dispatch(nb::module_& mod) {
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
-                - dispatched: Dispatched tokens of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-                - metadata: Metadata tensor of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+                - dispatched: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                - metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
 
         Example:
             >>> dispatched, metadata = ttnn.experimental.deepseek.prefill_dispatch(
                     input_tensor,
                     weights_tensor,
                     indices_tensor,
-                    chip_to_n_routed_expert_offset_tensor,
-                    num_chips=2,
+                    expert_offsets_tensor,
+                    dispatch_group_size=2,
                     experts_per_chip=8,
-                    n_routed_experts=16,
+                    num_routed_experts=16,
                     metadata_len=5,
                     max_dispatched_tokens_per_expert=256)
         )doc";
@@ -76,11 +76,11 @@ void bind_prefill_dispatch(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weights_tensor,
                const ttnn::Tensor& indices_tensor,
-               const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
+               const ttnn::Tensor& expert_offsets_tensor,
                const ttnn::Tensor& expert_dispatch_table_tensor,
-               uint32_t num_chips,
+               uint32_t dispatch_group_size,
                uint32_t experts_per_chip,
-               uint32_t n_routed_experts,
+               uint32_t num_routed_experts,
                uint32_t num_experts_per_tok,
                uint32_t metadata_len,
                uint32_t max_dispatched_tokens_per_expert,
@@ -93,11 +93,11 @@ void bind_prefill_dispatch(nb::module_& mod) {
                     input_tensor,
                     weights_tensor,
                     indices_tensor,
-                    chip_to_n_routed_expert_offset_tensor,
+                    expert_offsets_tensor,
                     expert_dispatch_table_tensor,
-                    num_chips,
+                    dispatch_group_size,
                     experts_per_chip,
-                    n_routed_experts,
+                    num_routed_experts,
                     num_experts_per_tok,
                     metadata_len,
                     max_dispatched_tokens_per_expert,
@@ -110,12 +110,12 @@ void bind_prefill_dispatch(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("weights_tensor").noconvert(),
             nb::arg("indices_tensor").noconvert(),
-            nb::arg("chip_to_n_routed_expert_offset_tensor").noconvert(),
+            nb::arg("expert_offsets_tensor").noconvert(),
             nb::arg("expert_dispatch_table_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("num_chips"),
+            nb::arg("dispatch_group_size"),
             nb::arg("experts_per_chip"),
-            nb::arg("n_routed_experts"),
+            nb::arg("num_routed_experts"),
             nb::arg("num_experts_per_tok"),
             nb::arg("metadata_len"),
             nb::arg("max_dispatched_tokens_per_expert"),

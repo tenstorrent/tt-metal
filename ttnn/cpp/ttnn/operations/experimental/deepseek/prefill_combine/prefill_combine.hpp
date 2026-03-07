@@ -15,8 +15,8 @@ struct ExecutePrefillCombine {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& dispatched_buffer,
         const ttnn::Tensor& dispatched_metadata,
-        const ttnn::Tensor& experts_tok_counter,
-        uint32_t num_chips,
+        const ttnn::Tensor& expert_token_counts,
+        uint32_t dispatch_group_size,
         uint32_t experts_per_chip,
         uint32_t num_experts_per_tok,
         uint32_t seq_len_per_chip,

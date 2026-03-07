@@ -20,51 +20,51 @@ class TorchDispatchModule(torch.nn.Module):
 
     def __init__(
         self,
-        num_chips: int,
+        dispatch_group_size: int,
         experts_per_chip: int,
-        n_routed_experts: int,
+        num_routed_experts: int,
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
         hidden_dim: int = 7 * 1024,
-        num_ep_ranks: int = 1,
+        num_dispatch_groups: int = 1,
         expert_dispatch_table: torch.Tensor = None,
     ):
         """
         Initialize dispatch module with configuration parameters.
 
         Args:
-            num_chips: Number of chips in the system
+            dispatch_group_size: Number of chips in each dispatch group
             experts_per_chip: Number of experts per chip
-            n_routed_experts: Total number of routed experts across all chips
-            metadata_len: Length of metadata per token (stores: chip, token, topk_indice, routed_expert, weight)
+            num_routed_experts: Total number of routed experts across all chips
+            metadata_len: Length of metadata per token (stores: chip, token, topk_idx, routed_expert, weight)
             max_dispatched_tokens_per_expert: Maximum number of tokens that can be dispatched to each expert
-            expert_dispatch_table: Optional dispatch table of shape (num_ep_ranks, n_routed_experts)
+            expert_dispatch_table: Optional dispatch table of shape (num_dispatch_groups, num_routed_experts)
                 Maps expert ID to logical chip ID in dispatch axis, -1 if not present
         """
         super().__init__()
-        self.num_chips = num_chips
+        self.dispatch_group_size = dispatch_group_size
         self.experts_per_chip = experts_per_chip
-        self.n_routed_experts = n_routed_experts
+        self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
         self.seq_len_per_chip = seq_len_per_chip
-        self.num_ep_ranks = num_ep_ranks
+        self.num_dispatch_groups = num_dispatch_groups
         self.expert_dispatch_table = expert_dispatch_table
 
         # Oversized buffer (max_dispatched_tokens_per_expert) to simplify dispatch logic
         self.dispatched_shape = (
-            num_ep_ranks,
-            num_chips,
+            num_dispatch_groups,
+            dispatch_group_size,
             self.experts_per_chip,
             self.max_dispatched_tokens_per_expert,
             hidden_dim,
         )
         self.dispatched_metadata_shape = (
-            num_ep_ranks,
-            num_chips,
+            num_dispatch_groups,
+            dispatch_group_size,
             self.experts_per_chip,
             self.max_dispatched_tokens_per_expert,
             self.metadata_len,
@@ -78,7 +78,7 @@ class TorchDispatchModule(torch.nn.Module):
         x: torch.Tensor,
         weights: torch.Tensor,
         indices: torch.Tensor,
-        chip_to_n_routed_expert_offset: torch.Tensor,
+        expert_offsets: torch.Tensor,
     ):
         """
         Route tokens from their original positions to expert-specific buffers distributed across chips.
@@ -87,37 +87,37 @@ class TorchDispatchModule(torch.nn.Module):
         Tokens are gathered into per-expert buffers with metadata tracking their origin for later recombination.
 
         Args:
-            x: Input tensor of shape (num_chips, seq_len, hidden_dim)
-            weights: Router weights of shape (num_ep_ranks, num_chips, seq_len, num_experts_per_tok) or
-                     (num_chips, seq_len, num_experts_per_tok)
-            indices: Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
-            chip_to_n_routed_expert_offset: Base offset for each expert from each chip
-                Shape: (num_chips, n_routed_experts) - from get_gate_outputs()
+            x: Input tensor of shape (dispatch_group_size, seq_len, hidden_dim)
+            weights: Router weights of shape (num_dispatch_groups, dispatch_group_size, seq_len, num_experts_per_tok) or
+                     (dispatch_group_size, seq_len, num_experts_per_tok)
+            indices: Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
+            expert_offsets: Base offset for each expert from each chip
+                Shape: (dispatch_group_size, num_routed_experts) - from get_gate_outputs()
 
         Returns:
-            If num_ep_ranks == 1:
-                dispatched: shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-                metadata: shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-            If num_ep_ranks > 1:
-                dispatched: shape (num_ep_ranks, num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-                metadata: shape (num_ep_ranks, num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+            If num_dispatch_groups == 1:
+                dispatched: shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                metadata: shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+            If num_dispatch_groups > 1:
+                dispatched: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                metadata: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
         logger.info(f"[TorchDispatchModule.forward] INPUT SHAPES:")
         logger.info(f"  x.shape={x.shape}")
         logger.info(f"  weights.shape={weights.shape}")
         logger.info(f"  indices.shape={indices.shape}")
-        logger.info(f"  chip_to_n_routed_expert_offset.shape={chip_to_n_routed_expert_offset.shape}")
+        logger.info(f"  expert_offsets.shape={expert_offsets.shape}")
         logger.info(f"[TorchDispatchModule.forward] CONFIG:")
-        logger.info(f"  num_chips={self.num_chips}, experts_per_chip={self.experts_per_chip}")
-        logger.info(f"  n_routed_experts={self.n_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
+        logger.info(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
+        logger.info(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
         logger.info(
             f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}"
         )
-        logger.info(f"  num_ep_ranks={self.num_ep_ranks}")
+        logger.info(f"  num_dispatch_groups={self.num_dispatch_groups}")
 
         assert (
-            self.num_chips == x.shape[0] == weights.shape[0] == indices.shape[0]
-        ), f"Mismatched num_chips across inputs. Expected {self.num_chips}, got {x.shape[0]}, {weights.shape[0]}, {indices.shape[0]}"
+            self.dispatch_group_size == x.shape[0] == weights.shape[0] == indices.shape[0]
+        ), f"Mismatched dispatch_group_size across inputs. Expected {self.dispatch_group_size}, got {x.shape[0]}, {weights.shape[0]}, {indices.shape[0]}"
         assert (
             self.seq_len_per_chip == x.shape[1] == weights.shape[1] == indices.shape[1]
         ), f"Mismatched seq_len_per_chip across inputs. Expected {self.seq_len_per_chip}, got {x.shape[1]}, {weights.shape[1]}, {indices.shape[1]}"
@@ -128,38 +128,37 @@ class TorchDispatchModule(torch.nn.Module):
         dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
         dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
-        for r in range(self.num_ep_ranks):
+        for group in range(self.num_dispatch_groups):
             # Make a mutable copy of offsets for dispatch loop
-            offset_copy = chip_to_n_routed_expert_offset.clone()
+            offset_copy = expert_offsets.clone()
 
             # Dispatch tokens and metadata
-            for chip in range(self.num_chips):
+            for chip in range(self.dispatch_group_size):
                 for token in range(self.seq_len_per_chip):
-                    for topk_indice in range(self.num_experts_per_tok):
-                        routed_expert = indices[chip, token, topk_indice]
+                    for topk_idx in range(self.num_experts_per_tok):
+                        routed_expert = indices[chip, token, topk_idx]
 
                         # Use dispatch table if available, otherwise fall back to division
                         if self.expert_dispatch_table is not None:
-                            expert_chip = self.expert_dispatch_table[r, routed_expert].item()
+                            expert_chip = self.expert_dispatch_table[group, routed_expert].item()
                             if expert_chip == -1:
-                                continue  # Expert not present in this EP rank, skip
+                                continue  # Expert not present in this dispatch group, skip
                         else:
                             assert (
                                 False
-                            ), "Dispatch table must be provided in multi-EP rank configuration to determine expert chip mapping"
-                            # expert_chip = routed_expert // self.experts_per_chip
+                            ), "Dispatch table must be provided in multi-group configuration to determine expert chip mapping"
 
                         expert_index_within_chip = routed_expert % self.experts_per_chip
                         dst_index = offset_copy[chip, routed_expert]
 
-                        dispatched_buffer[r, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
-                        dispatched_metadata[r, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
+                        dispatched_buffer[group, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                        dispatched_metadata[group, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
                             [
                                 chip,
                                 token,
-                                topk_indice,
+                                topk_idx,
                                 routed_expert,
-                                torch.tensor(weights[chip, token, topk_indice].item(), dtype=torch.bfloat16)
+                                torch.tensor(weights[chip, token, topk_idx].item(), dtype=torch.bfloat16)
                                 .view(torch.int16)
                                 .item(),
                             ]
@@ -168,8 +167,7 @@ class TorchDispatchModule(torch.nn.Module):
                         )
                         offset_copy[chip, routed_expert] += 1
 
-        # dispatched, metadata = self._dispatch_single_rank(x, weights, indices, chip_to_n_routed_expert_offset)
-        logger.info(f"[TorchDispatchModule.forward] OUTPUT SHAPES (single-rank):")
+        logger.info(f"[TorchDispatchModule.forward] OUTPUT SHAPES:")
         logger.info(f"  {dispatched_buffer.shape=}")
         logger.info(f"  {dispatched_metadata.shape=}")
         return dispatched_buffer, dispatched_metadata

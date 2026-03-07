@@ -27,12 +27,12 @@ void bind_prefill_combine(nb::module_& mod) {
         Accumulates contributions from multiple experts per token.
 
         Args:
-            dispatched_buffer (ttnn.Tensor): Expert outputs of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+            dispatched_buffer (ttnn.Tensor): Expert outputs of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
             dispatched_metadata (ttnn.Tensor): Metadata tensor containing token routing information
-            experts_tok_counter (ttnn.Tensor): Counter tracking tokens per expert of shape (num_chips, experts_per_chip)
+            expert_token_counts (ttnn.Tensor): Counter tracking tokens per expert of shape (dispatch_group_size, experts_per_chip)
 
         Keyword Args:
-            num_chips (int): Number of chips in the system
+            dispatch_group_size (int): Number of chips in the dispatch group
             experts_per_chip (int): Number of experts per chip
             num_experts_per_tok (int): Number of experts each token is routed to
             seq_len_per_chip (int): Sequence length per chip
@@ -43,14 +43,14 @@ void bind_prefill_combine(nb::module_& mod) {
             topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
 
         Returns:
-            ttnn.Tensor: Combined output tensor of shape (num_chips, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+            ttnn.Tensor: Combined output tensor of shape (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
 
         Example:
             >>> output = ttnn.experimental.deepseek.prefill_combine(
                     dispatched_buffer,
                     dispatched_metadata,
-                    experts_tok_counter,
-                    num_chips=2,
+                    expert_token_counts,
+                    dispatch_group_size=2,
                     experts_per_chip=8,
                     num_experts_per_tok=4,
                     seq_len_per_chip=512)
@@ -65,8 +65,8 @@ void bind_prefill_combine(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& dispatched_buffer,
                const ttnn::Tensor& dispatched_metadata,
-               const ttnn::Tensor& experts_tok_counter,
-               uint32_t num_chips,
+               const ttnn::Tensor& expert_token_counts,
+               uint32_t dispatch_group_size,
                uint32_t experts_per_chip,
                uint32_t num_experts_per_tok,
                uint32_t seq_len_per_chip,
@@ -78,8 +78,8 @@ void bind_prefill_combine(nb::module_& mod) {
                 return self(
                     dispatched_buffer,
                     dispatched_metadata,
-                    experts_tok_counter,
-                    num_chips,
+                    expert_token_counts,
+                    dispatch_group_size,
                     experts_per_chip,
                     num_experts_per_tok,
                     seq_len_per_chip,
@@ -91,9 +91,9 @@ void bind_prefill_combine(nb::module_& mod) {
             },
             nb::arg("dispatched_buffer").noconvert(),
             nb::arg("dispatched_metadata").noconvert(),
-            nb::arg("experts_tok_counter").noconvert(),
+            nb::arg("expert_token_counts").noconvert(),
             nb::kw_only(),
-            nb::arg("num_chips"),
+            nb::arg("dispatch_group_size"),
             nb::arg("experts_per_chip"),
             nb::arg("num_experts_per_tok"),
             nb::arg("seq_len_per_chip"),
