@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prefill_dispatch.hpp"
-#include "device/prefill_dispatch_device_operation.hpp"
+#include "dispatch.hpp"
+#include "device/dispatch_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-namespace ttnn::operations::experimental::deepseek::prefill_dispatch {
+namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
-std::array<ttnn::Tensor, 2> ExecutePrefillDispatch::invoke(
+std::array<ttnn::Tensor, 2> ExecuteDispatch::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
@@ -73,4 +73,4 @@ std::array<ttnn::Tensor, 2> ExecutePrefillDispatch::invoke(
         subdevice_core_range_set);
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_dispatch
+}  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

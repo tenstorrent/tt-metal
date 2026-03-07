@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prefill_dispatch_device_operation.hpp"
+#include "dispatch_device_operation.hpp"
 #include <algorithm>
 #include <array>
 #include <utility>
@@ -16,7 +16,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-namespace ttnn::operations::experimental::deepseek::prefill_dispatch {
+namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 namespace detail {
 
@@ -68,8 +68,8 @@ void create_tensor_cb(
 
 }  // namespace detail
 
-PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::cached_mesh_workload_t
-PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_mesh_workload(
+DispatchDeviceOperation::DispatchProgramFactory::cached_mesh_workload_t
+DispatchDeviceOperation::DispatchProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -100,8 +100,8 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_mesh_workl
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::shared_variables_t>
-PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
+ttnn::device_operation::CachedProgram<DispatchDeviceOperation::DispatchProgramFactory::shared_variables_t>
+DispatchDeviceOperation::DispatchProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
@@ -358,8 +358,8 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
     };
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/"
-        "reader_prefill_dispatch.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/"
+        "reader_dispatch.cpp",
         sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -389,8 +389,8 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/"
-        "writer_prefill_dispatch.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/"
+        "writer_dispatch.cpp",
         sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -476,7 +476,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
          .cross_device_semaphore = cross_device_semaphore}};
 }
 
-void PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::override_runtime_arguments(
+void DispatchDeviceOperation::DispatchProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
@@ -523,4 +523,4 @@ void PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::override_run
     }
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::prefill_dispatch
+}  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

@@ -60,8 +60,8 @@
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
-#include "ttnn/operations/experimental/deepseek/prefill_dispatch/prefill_dispatch_nanobind.hpp"
-#include "ttnn/operations/experimental/deepseek/prefill_combine/prefill_combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -140,8 +140,8 @@ void py_module(nb::module_& mod) {
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
-    deepseek::detail::bind_prefill_dispatch(mod);
-    deepseek::detail::bind_prefill_combine(mod);
+    deepseek_prefill::detail::bind_dispatch(mod);
+    deepseek_prefill::detail::bind_combine(mod);
 }
 
 }  // namespace ttnn::operations::experimental
