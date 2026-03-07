@@ -210,6 +210,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
     p.add_argument(
+        "--recalculate-weights",
+        action="store_true",
+        default=False,
+        help="Force regeneration of cached TTNN weight files and config.",
+    )
+    p.add_argument(
         "--kv-cache-debug",
         action="store_true",
         default=False,
@@ -453,6 +459,7 @@ def run_demo(
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
             )
         # Build the prompt list
@@ -700,6 +707,7 @@ def main() -> None:
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
+        force_recalculate=bool(args.recalculate_weights),
         sampling=bool(args.sampling),
         sampling_temperature=args.sampling_temperature,
         sampling_top_p=args.sampling_top_p,

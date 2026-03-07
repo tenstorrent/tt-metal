@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 import os
+import socket
 from copy import deepcopy
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from models.demos.deepseek_v3.utils.test_utils import get_valid_system_names, lo
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
+RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS = 6 * 60 * 60
+DEEPSEEK_DEMO_NODEID_PREFIX = "models/demos/deepseek_v3/demo/"
 
 # Shared test parametrization constants
 # Prefill sequence lengths: powers of 2 from 128 to 128K
@@ -27,6 +30,13 @@ def pytest_addoption(parser):
         action="store_true",
         help="Reset weight configs for tests",
     )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, f"rep_{report.when}", report)
 
 
 def automatically_detect_current_device_type() -> str:
@@ -140,6 +150,25 @@ def mesh_device(request, device_params):
 
     logger.debug(f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
     yield mesh_device
+
+    for phase in ("setup", "call"):
+        report = getattr(request.node, f"rep_{phase}", None)
+        if report is not None and report.failed:
+            rank = "unknown"
+            if ttnn.distributed_context_is_initialized():
+                try:
+                    rank = int(ttnn.distributed_context_get_rank())
+                except Exception:
+                    pass
+            logger.error(
+                "Rank {} on {} is tearing down mesh after {} failure in {}.\n{}",
+                rank,
+                socket.gethostname().split(".", 1)[0],
+                phase,
+                request.node.nodeid,
+                report.longreprtext,
+            )
+            break
 
     for submesh in mesh_device.get_submeshes():
         ttnn.close_mesh_device(submesh)
@@ -301,6 +330,51 @@ def pytest_configure(config):
     )
 
 
+def _get_timeout_override_marker(item, timeout_seconds: float) -> pytest.MarkDecorator:
+    timeout_marker = item.get_closest_marker("timeout")
+    if timeout_marker is None:
+        return pytest.mark.timeout(timeout_seconds)
+
+    args = list(timeout_marker.args)
+    kwargs = dict(timeout_marker.kwargs)
+    if args:
+        args[0] = timeout_seconds
+    elif "timeout" in kwargs:
+        kwargs["timeout"] = timeout_seconds
+    else:
+        args = [timeout_seconds]
+
+    return pytest.mark.timeout(*args, **kwargs)
+
+
+def _maybe_extend_demo_timeout_for_weight_recalculation(config: pytest.Config, item: pytest.Item) -> None:
+    if not config.getoption(RESET_WEIGHT_CACHE_OPTION):
+        return
+    if not item.nodeid.startswith(DEEPSEEK_DEMO_NODEID_PREFIX):
+        return
+    if "force_recalculate_weight_config" not in item.fixturenames:
+        return
+
+    timeout_marker = item.get_closest_marker("timeout")
+    current_timeout = None
+    if timeout_marker is not None:
+        current_timeout = timeout_marker.args[0] if timeout_marker.args else timeout_marker.kwargs.get("timeout")
+        try:
+            current_timeout = float(current_timeout)
+        except (TypeError, ValueError):
+            current_timeout = None
+
+    if current_timeout is not None and current_timeout >= RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS:
+        return
+
+    # Cold-cache demo weight generation can take hours, so relax the timeout only
+    # when the user explicitly asks pytest to recalculate cached weights.
+    item.add_marker(
+        _get_timeout_override_marker(item, RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS),
+        append=False,
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """
     Check if tests have requires_device marker and skip them during collection if current device doesn't match.
@@ -312,6 +386,8 @@ def pytest_collection_modifyitems(config, items):
         pytest.exit(f"Could not determine device type during collection: {e}", returncode=1)
 
     for item in items:
+        _maybe_extend_demo_timeout_for_weight_recalculation(config, item)
+
         marker = item.get_closest_marker("requires_device")
         if marker:
             # Get device_types from marker - can be single value or list
