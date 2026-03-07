@@ -1875,20 +1875,14 @@ class MLA1D(AbstractModule):
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
-        tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
-        )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=True,
+            rope_tensors["cos_matrix_prefill_shape"],
+            rope_tensors["sin_matrix_prefill_shape"],
+            rope_tensors["trans_matrix_prefill_shape"],
+            is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # 1,32,1,64 4x8 [32,64]
-        tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 
