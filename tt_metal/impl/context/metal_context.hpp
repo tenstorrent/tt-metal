@@ -51,6 +51,18 @@ class WatcherServer;
 class DispatchMemMap;
 class NOCDebugState;
 
+// Due to the number of existing MetalContext instance calls in the codebase,
+// we use a ContextId for objects to access the corresponding MetalContext instance to make the
+// migration easier.
+// TODO: Remove the ContextId in favor of directly passing around the MetalContext reference.
+using ContextId = ttsl::StrongType<int, struct ContextIdTag>;
+
+// The default context is implicitly created the first time MetalContext::instance(DEFAULT_CONTEXT_ID) is called.
+constexpr ContextId DEFAULT_CONTEXT_ID = ContextId{0};
+
+// Limit the number of context IDs so they can be stored in an array
+constexpr size_t MAX_CONTEXT_COUNT = 32;
+
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
@@ -61,11 +73,23 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance();
 
-    static void destroy_instance(bool check_device_count = true);
+    // Access the MetalContext for a given context id.
+    // The context can be created beforehand using MetalContext::create_context(). Otherwise an exception is thrown.
+    // NOTE: To maintain legacy behavior, the default context id is automatically created if not already initialized
+    static MetalContext& instance(ContextId context_id = DEFAULT_CONTEXT_ID);
 
-    static bool instance_exists();
+    // Create a MetalContext instance which will use the given MetalEnv to facilitate runtime.
+    static ContextId create_instance(MetalEnv& env_to_use);
+
+    // Destroy the MetalContext for a given context id.
+    static void destroy_instance(bool check_device_count = true, ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Destroy all MetalContext instances.
+    static void destroy_all_instances(bool check_device_count = true);
+
+    // Check if a MetalContext for a given context id exists.
+    static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
@@ -164,8 +188,19 @@ public:
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
-    MetalContext();
+
+    // Construct MetalContext to use the given MetalEnv and assign it context id. The MetalEnv must not be
+    // destroyed while its associated MetalContext instance is alive.
+    MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env);
     ~MetalContext();
+
+    // This will create a MetalContext instance and create a default MetalEnv owned by the context.
+    // Usually the MetalEnv is owned by the user, but in this case of legacy behaviour, the context will own it.
+    // Caller holds the g_instance mutex.
+    static ContextId create_default_instance_implicit_locked();
+
+    // Register handlers -- caller already holds the instance lock
+    static void register_handlers_locked();
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
@@ -203,6 +238,7 @@ private:
     // For the legacy code, we will initialize it in the MetalContext constructor.
     tt::tt_metal::MetalEnv* env_;
     bool env_owned_ = false;
+    ContextId context_id_;
 
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
