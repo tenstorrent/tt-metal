@@ -99,7 +99,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
         case UnaryOpType::LOGIT:
-        case UnaryOpType::RPOW: return true;
+        case UnaryOpType::RPOW:
+        case UnaryOpType::MISH: return true;
         default: return false;
     }
     return false;
