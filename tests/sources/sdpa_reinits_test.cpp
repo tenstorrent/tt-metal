@@ -20,9 +20,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "experimental/llk_unpack_AB_reduce_custom.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_AB_matmul.h"
-#include "llk_unpack_AB_reduce_custom.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
@@ -112,9 +112,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef LLK_TRISC_MATH
 
 #include "experimental/llk_math_matmul_custom_no_mop.h"
+#include "experimental/llk_math_reduce_custom.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
-#include "llk_math_reduce_custom.h"
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {

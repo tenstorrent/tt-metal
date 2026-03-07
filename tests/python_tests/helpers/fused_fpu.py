@@ -643,4 +643,4 @@ class ReduceBlockMaxFpu(Fpu):
         return (tensor_a, tensor_b, golden_tensor)
 
     def get_headers(self) -> List[str]:
-        return ["llk_math_reduce_custom.h"]
+        return ["experimental/llk_math_reduce_custom.h"]
