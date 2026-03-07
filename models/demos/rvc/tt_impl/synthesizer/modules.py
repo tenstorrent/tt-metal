@@ -91,7 +91,6 @@ class WN:
 
         for i in range(n_layers):
             dilation = dilation_rate**i
-            padding = int((kernel_size * dilation - dilation) / 2)
             self.in_layers.append(
                 Conv1d(
                     device=device,
@@ -99,7 +98,7 @@ class WN:
                     out_channels=2 * hidden_channels,
                     kernel_size=kernel_size,
                     dilation=dilation,
-                    padding=padding,
+                    padding="same",
                 )
             )
 
@@ -195,7 +194,7 @@ class ResBlock1:
                     kernel_size=kernel_size,
                     stride=1,
                     dilation=d_value,
-                    padding=int((kernel_size * d_value - d_value) / 2),
+                    padding="same",
                 )
             )
             self.convs2.append(
@@ -206,7 +205,7 @@ class ResBlock1:
                     kernel_size=kernel_size,
                     stride=1,
                     dilation=1,
-                    padding=int((kernel_size - 1) / 2),
+                    padding="same",
                 )
             )
 
@@ -247,7 +246,7 @@ class ResBlock2:
                     kernel_size=kernel_size,
                     stride=1,
                     dilation=d_value,
-                    padding=int((kernel_size * d_value - d_value) / 2),
+                    padding="same",
                 )
             )
 

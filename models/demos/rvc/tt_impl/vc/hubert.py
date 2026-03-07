@@ -15,6 +15,15 @@ from models.demos.rvc.tt_impl.layernorm import LayerNorm
 from models.demos.rvc.tt_impl.linear import Linear
 
 
+def pad_to_multiple(x: ttnn.Tensor, multiple: int, value: float = 0.0) -> tuple[ttnn.Tensor, int]:
+    tsz = x.shape[1]
+    m = tsz / multiple
+    remainder = math.ceil(m) * multiple - tsz
+    if m.is_integer():
+        return x, 0
+    return ttnn.pad(x, [(0, 0), (0, remainder), (0, 0)], value=value), remainder
+
+
 class MultiheadAttention:
     """TT port of huBERT MultiheadAttention used by TransformerSentenceEncoderLayer."""
 
@@ -335,7 +344,7 @@ class PositionalConvEmbedding:
             out_channels=embed_dim,
             kernel_size=kernel_size,
             stride=1,
-            padding=kernel_size // 2,
+            padding="same",
             groups=groups,
             dtype=ttnn.bfloat16,
         )
@@ -350,9 +359,9 @@ class PositionalConvEmbedding:
         output_length = input_length + 2 * (self.kernel_size // 2) - self.kernel_size + 1
         x = self.conv(x)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (batch_size, output_length, self.embed_dim))
-        if self.remove > 0:
-            x = ttnn.slice(x, (0, 0, 0), (batch_size, output_length - self.remove, self.embed_dim))
+        # x = ttnn.reshape(x, (batch_size, output_length, self.embed_dim))
+        # if self.remove > 0:
+        #     x = ttnn.slice(x, (0, 0, 0), (batch_size, output_length - self.remove, self.embed_dim))
         return ttnn.gelu(x)
 
     def deallocate(self) -> None:
@@ -451,7 +460,7 @@ class ConvolutionModule:
             out_channels=channels,
             kernel_size=depthwise_kernel_size,
             stride=1,
-            padding=(depthwise_kernel_size - 1) // 2,
+            padding="same",
             groups=channels,
             dtype=ttnn.bfloat16,
         )
@@ -639,17 +648,7 @@ class TransformerEncoder:
         if not self.layer_norm_first:
             x = self.layer_norm(x)
 
-        pad_length = (
-            self.required_seq_len_multiple - (x.shape[1] % self.required_seq_len_multiple)
-        ) % self.required_seq_len_multiple
-        if pad_length > 0:
-            pad = ttnn.zeros(
-                (x.shape[0], pad_length, x.shape[2]),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-            )
-            x = ttnn.concat([x, pad], dim=1)
+        x, pad_length = pad_to_multiple(x, self.required_seq_len_multiple, value=0.0)
 
         x = ttnn.permute(x, (1, 0, 2))
 
