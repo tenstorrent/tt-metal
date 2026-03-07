@@ -168,7 +168,6 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
-                PacketHeaderPool::reset();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
@@ -176,19 +175,12 @@ struct Broadcast {
 
                 // Reset pool so broadcast can be called across loop iterations
                 PacketHeaderPool::reset();
-
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 // Allocate separate route for secondary axis unicast (if applicable)
                 auto secondary_route_id = CTArgs::has_secondary_target ? PacketHeaderPool::allocate_header_n(1) : 0;
-
                 tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-
                 size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
-                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
-                }
-
                 uint8_t starts[] = {
                     static_cast<uint8_t>(CTArgs::start_distance_in_hops_forward),
                     static_cast<uint8_t>(CTArgs::start_distance_in_hops_backward)};
@@ -199,15 +191,8 @@ struct Broadcast {
                     starts[0] = starts[1];
                     ranges[0] = ranges[1];
                 }
-
                 // Configure fused route for payload + semaphore increment
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fused_header(0, 0, 1, true);
-                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
-                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
-                        fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
-                }
-
                 uint32_t num_total_targets =
                     CTArgs::num_targets_forward_direction + CTArgs::num_targets_backward_direction;
 
@@ -215,25 +200,24 @@ struct Broadcast {
                     safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.barrier_sem, 0);
                 uint64_t secondary_sync_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.secondary_sync_sem, 0);
-
                 if (CTArgs::is_sender) {
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     size_t l1_read_addr = get_read_ptr(CTArgs::cb0_id);
                     uint64_t dst_noc_addr =
                         get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
-
                     uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(
                         args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr, 0);
-
+                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                        fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
                     // For dual-axis mode: first unicast to secondary sender, then mcast along primary axis
                     if constexpr (CTArgs::has_secondary_target) {
                         auto& secondary_slot = fabric_connection.get(secondary_connection_idx);
                         volatile PACKET_HEADER_TYPE* secondary_header =
                             PacketHeaderPool::header_table[secondary_route_id].first;
-
                         // Set up unicast route for 2D fabric
                         fabric_set_unicast_route(fabric_connection, secondary_header, secondary_connection_idx);
-
                         // Send data + semaphore increment to secondary sender
                         fabric_unicast_noc_fused_unicast_with_atomic_inc(
                             &secondary_slot.sender,
@@ -253,14 +237,11 @@ struct Broadcast {
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                             dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
                         CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
-
                     noc_async_write(l1_read_addr, dst_noc_addr, CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
-
                     // increment locally
                     uint64_t out_ready_sem_noc_addr = safe_get_noc_addr(
                         args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr);
                     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-
                     // 3. wait for mcast output ready semaphore
                     // NOTE: We use wait_min instead of wait+reset to handle the case where broadcast
                     // is async and a fast device increments the semaphore multiple times before a slow
@@ -275,7 +256,6 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                         WATCHER_RING_BUFFER_PUSH(0xA2);
                     }
-
                     // 4. global semaphore reset
                     if (args.reset_global_semaphore) {
                         unified_kernels::semaphore_dec(
@@ -283,7 +263,6 @@ struct Broadcast {
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-
                 } else if constexpr (CTArgs::is_secondary_sender) {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender
@@ -294,13 +273,11 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                         WATCHER_RING_BUFFER_PUSH(0xB2);
                     }
-
                     // Reset semaphore after receiving data
                     if (args.reset_global_semaphore) {
                         unified_kernels::semaphore_dec(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
-
                     // broadcast the received data along the primary axis
                     uint64_t src_noc_addr =
                         get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
@@ -308,7 +285,10 @@ struct Broadcast {
                     // Mcast the data along primary axis
                     uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(
                         args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr, 0);
-
+                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                        fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
                     fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
                         UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
                         UnicastFusedAtomicIncUpdateMask::PayloadSize>(
@@ -329,7 +309,6 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                         WATCHER_RING_BUFFER_PUSH(0xC2);
                     }
-
                     // Reset global semaphore
                     if (args.reset_global_semaphore) {
                         unified_kernels::semaphore_dec(
@@ -339,7 +318,6 @@ struct Broadcast {
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
                     close_connections(fabric_connection);
                 }
-
                 noc_async_write_barrier();
             }
             DPRINT << "BCAST OP ENDED" << ENDL();
