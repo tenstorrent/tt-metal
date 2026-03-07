@@ -22,7 +22,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
 

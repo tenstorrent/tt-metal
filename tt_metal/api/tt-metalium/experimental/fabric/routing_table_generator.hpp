@@ -12,7 +12,7 @@
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 namespace tt::tt_fabric {
 using tt::tt_metal::ChipId;

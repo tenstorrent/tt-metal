@@ -9,7 +9,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>  // tt::ARCH
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

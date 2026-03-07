@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
