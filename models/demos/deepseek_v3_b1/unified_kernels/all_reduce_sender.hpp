@@ -134,6 +134,7 @@ struct AllReduceSender {
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
             size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
+
             DPRINT << " CCL SENDER FABRIC ARGS START INDEX: " << fabric_args_start_index << ENDL();
             DPRINT << " CCL SENDER OPEN CONNECTIONS" << ENDL();
 
@@ -141,18 +142,18 @@ struct AllReduceSender {
             uint32_t packet_header_addr = get_read_ptr(WriterCT::packet_header_cb_id);
             cb_push_back(WriterCT::packet_header_cb_id, 1);
 
+            cb_wait_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
+            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
             auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
             fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
             packet_header_ptr->to_chip_unicast(WriterCT::dst_num_hops);
-
-            cb_wait_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
-            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
             uint32_t packet_base_addr = get_read_ptr(WriterCT::packet_cb_id);
 
             const uint64_t dst_noc_addr =
                 get_noc_addr(WriterCT::data_noc_x, WriterCT::data_noc_y, args.receiver_base_address);
             const uint64_t receive_sem_noc_addr = get_noc_addr(
                 WriterCT::remote_receiver_noc_x, WriterCT::remote_receiver_noc_y, args.receive_semaphore_addr);
+            DPRINT << " SEMAPHORE L1 ADDR: " << args.receive_semaphore_addr << ENDL();
             DPRINT << " CCL SENDER DST NOC ADDR: " << receive_sem_noc_addr << ENDL();
 
             // Use fused packet API to send data + semaphore increment in a single packet

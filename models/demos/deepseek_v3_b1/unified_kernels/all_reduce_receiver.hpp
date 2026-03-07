@@ -143,14 +143,16 @@ struct AllReduceReceiver {
             }
 
             // Wait for remote sender to signal data has been written to intermediate tensor
-            DPRINT << " CCL SENDER SEMAPHORE ADDR: " << get_noc_addr(args.sender_semaphore_addr) << ENDL();
+            DPRINT << " RECEIVER SENDER SEMAPHORE L1 ADDR: " << args.sender_semaphore_addr << ENDL();
+            DPRINT << " CCL RECEIVER DST ADDR: " << get_noc_addr(args.sender_semaphore_addr) << ENDL();
             auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sender_semaphore_addr);
             DPRINT << " CCL RECEIVER WAIT" << ENDL();
             invalidate_l1_cache();
-            while (*local_semaphore_ptr != 1) {
+            while (*local_semaphore_ptr < 1) {
                 DPRINT << " local semaphore value: " << *local_semaphore_ptr << ENDL();
                 invalidate_l1_cache();
             }
+            DPRINT << " local semaphore value: " << *local_semaphore_ptr << ENDL();
             noc_semaphore_wait(local_semaphore_ptr, 1);
             DPRINT << " CCL RECEIVER WAIT DONE" << ENDL();
             noc_semaphore_set(local_semaphore_ptr, 0);

@@ -248,7 +248,7 @@ class DecoderBlock:
             return [(name, overrides.get(name, value)) for name, value in named_args]
 
         def _coord_str(mesh_coord):
-            return f"({getattr(mesh_coord, 'row', 0)},{getattr(mesh_coord, 'col', 0)})"
+            return f"({mesh_coord[0]},{mesh_coord[1]})"
 
         # Phase 1: Build AttentionBlock program context
         print("Building AttentionBlock program context")
@@ -372,8 +372,8 @@ class DecoderBlock:
         print("Merging per-device and executing")
         for ac in attn_ctxs:
             coord = ac["mesh_coord"]
-            row = getattr(coord, "row", 0)
-            col = getattr(coord, "col", 0)
+            row = coord[0]
+            col = coord[1]
             chip_id = row * moe_ctx.mesh_cols + col
             local_moe_fabric_node_id = moe_ctx.mesh_device.get_fabric_node_id(coord)
             reduce_root_fabric_node_id = (
@@ -629,6 +629,7 @@ class DecoderBlock:
 
                 fabric_node_id = ccl["fabric_node_id"]
                 neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
+                print("neighbor fabric node id: ", neighbor_fabric_node_id)
 
                 sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
                 sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
