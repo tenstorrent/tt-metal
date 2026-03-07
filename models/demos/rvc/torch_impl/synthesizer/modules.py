@@ -59,13 +59,12 @@ class WN(nn.Module):
 
         for i in range(n_layers):
             dilation = dilation_rate**i
-            padding = int((kernel_size * dilation - dilation) / 2)
             in_layer = torch.nn.Conv1d(
                 hidden_channels,
                 2 * hidden_channels,
                 kernel_size,
                 dilation=dilation,
-                padding=padding,
+                padding="same",
             )
             self.in_layers.append(in_layer)
 
@@ -112,20 +111,14 @@ class ResBlock1(nn.Module):
                     channels,
                     channels,
                     kernel_size,
-                    1,
                     dilation=d_value,
-                    padding=int((kernel_size * d_value - d_value) / 2),
+                    padding="same",
                 )
                 for d_value in dilation
             ]
         )
 
-        self.convs2 = nn.ModuleList(
-            [
-                Conv1d(channels, channels, kernel_size, 1, dilation=1, padding=int((kernel_size * 1 - 1) / 2))
-                for _ in dilation
-            ]
-        )
+        self.convs2 = nn.ModuleList([Conv1d(channels, channels, kernel_size, padding="same") for _ in dilation])
         self.lrelu_slope = LRELU_SLOPE
 
     def forward(self, x: torch.Tensor):
@@ -147,9 +140,8 @@ class ResBlock2(nn.Module):
                     channels,
                     channels,
                     kernel_size,
-                    1,
                     dilation=d_value,
-                    padding=int((kernel_size * d_value - d_value) / 2),
+                    padding="same",
                 )
                 for d_value in dilation
             ]
