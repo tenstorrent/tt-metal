@@ -94,7 +94,8 @@ jobs:
           sparse-checkout: |
             .github
             dockerfile
-            tt_metal
+            tt_metal/sfpi-info.sh
+            tt_metal/sfpi-version
           sparse-checkout-cone-mode: false
 
       - name: Extract workflow metadata
