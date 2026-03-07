@@ -141,6 +141,7 @@ void py_device_module_types(nb::module_& m_device) {
         .def_ro(
             "largest_contiguous_bytes_free_per_bank",
             &tt::tt_metal::detail::MemoryView::largest_contiguous_bytes_free_per_bank)
+        .def_ro("peak_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::peak_bytes_allocated_per_bank)
         .def_ro("block_table", &tt::tt_metal::detail::MemoryView::block_table);
 }
 
@@ -446,6 +447,25 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
+
+    constexpr std::string_view reset_peak_memory_doc = R"doc(
+        Reset the peak memory allocation watermark for the given buffer type.
+        After reset, peak tracking restarts from the current allocation level.
+    )doc";
+    m_device.def(
+        "ResetPeakMemoryAllocated",
+        &tt::tt_metal::detail::ResetPeakMemoryAllocated,
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        reset_peak_memory_doc.data());
+    m_device.def(
+        "ResetPeakMemoryAllocated",
+        [](MeshDevice* device, const BufferType& buffer_type) {
+            tt::tt_metal::detail::ResetPeakMemoryAllocated(device, buffer_type);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        reset_peak_memory_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
