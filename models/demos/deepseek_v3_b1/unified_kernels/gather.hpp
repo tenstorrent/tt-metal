@@ -150,6 +150,7 @@ struct Gather {
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
                 DPRINT << "      WAIT FOR SEMAPHORE 1" << ENDL();
                 DPRINT << "      RECEIVER NOC ADDR: " << get_noc_addr(args.noc0_receiver_semaphore_addr) << ENDL();
+                invalidate_l1_cache();
                 while (*(uint32_t*)(noc0_receiver_semaphore_addr_ptr) != args.noc0_num_senders) {
                     DPRINT << "      CURRENT SEMAPHORE VALUE: " << *(uint32_t*)(noc0_receiver_semaphore_addr_ptr)
                            << ENDL();

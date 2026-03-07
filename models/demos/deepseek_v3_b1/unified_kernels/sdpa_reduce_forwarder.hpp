@@ -120,7 +120,6 @@ struct SdpaReduceForwarder {
             size_t arg_idx = args.rta_offset;
             auto fabric_connection =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-            fabric_connection.open();
 
             // Interleaved R1/R2 forwarding loop
             volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_sem_addr);
@@ -132,6 +131,8 @@ struct SdpaReduceForwarder {
             uint32_t r1_sent_mask = 0;
             uint32_t r2_sent_mask = 0;
 
+            noc_semaphore_wait_min(r1_sem_ptr, 1);
+            fabric_connection.open();
             do {
                 invalidate_l1_cache();
 
