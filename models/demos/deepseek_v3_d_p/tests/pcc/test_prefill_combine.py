@@ -150,7 +150,6 @@ def test_ttnn_combine(
         f"Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} "
         f"{num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
     )
-    print("\n")
 
     # Compute configuration
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
@@ -185,7 +184,7 @@ def test_ttnn_combine(
         logger.info("Using RANDOM test data")
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -223,10 +222,6 @@ def test_ttnn_combine(
 
     # Run dispatch for each EP rank with rank-specific weights
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
-
-    logger.info("Torch dispatch outputs (OG):")
-    logger.info(f"  {dispatched_buffer.shape=}")
-    logger.info(f"  {dispatched_metadata.shape=}")
 
     # Transform logical chip IDs to linearized coords
     # metadata[..., 0] contains the destination logical chip ID
@@ -274,7 +269,6 @@ def test_ttnn_combine(
     )
 
     torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
-    logger.info(f"Torch combine output shape: {torch_output.shape}")
 
     # Step 5: Run ttnn combine
     tt_combine = TtCombineModule(
@@ -295,8 +289,6 @@ def test_ttnn_combine(
         tt_expert_token_counts,
     )
 
-    logger.info(f"TTNN combine output shape: {tt_output.shape}")
-
     # Step 6: Convert ttnn output to torch for comparison
     mesh_composer = ttnn.create_mesh_composer(
         mesh_device,
@@ -304,34 +296,21 @@ def test_ttnn_combine(
             dims=[1, 0],  # Axis 0: replicated; Axis 1: shard on tensor dim 0
         ),
     )
-    logger.warning(f"{torch_output.shape=}")
-    logger.warning(f"{tt_output.shape=}")
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=mesh_composer,
         dtype=torch.bfloat16,
     )
-    logger.warning(f"{tt_output_torch.shape=}")
 
-    # Step 7: Compute PCC and verify correctness
-    logger.info("Computing PCC between torch and ttnn combine outputs...")
-
+    # Step 7: Verify correctness
     assert_output_shape(tt_output_torch, num_dispatch_groups, dispatch_group_size, "combine output")
-
-    # Quick sanity check of first elements
-    logger.info(f"Sample torch output [0, 0, 0, :5]: {torch_output[0, 0, 0, :5]}")
-    logger.info(f"Sample ttnn output [0, 0, 0, 0, :5]:  {tt_output_torch[0, 0, 0, 0, :5]}")
-    if dispatch_group_size > 1:
-        logger.info(f"Sample torch output [1, 0, 0, :5]: {torch_output[1, 0, 0, :5]}")
-        logger.info(f"Sample ttnn output [0, 1, 0, 0, :5]:  {tt_output_torch[0, 1, 0, 0, :5]}")
 
     # Validate combine output (EP-rank aware)
     # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
     # Each EP rank's output only contains data for tokens that EP rank processed.
     # Output positions not written by local combine contain uninitialized garbage.
     # This comparison only checks the EP rank that actually processed each token.
-    logger.info("Comparing combine output slots (per EP rank that processed each token)...")
     result = validate_combine_output(
         torch_output,
         tt_output_torch,

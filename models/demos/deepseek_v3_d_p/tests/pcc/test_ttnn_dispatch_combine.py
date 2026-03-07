@@ -148,7 +148,6 @@ def test_ttnn_dispatch_combine(
         f"{seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} "
         f"{capacity_factor=} {use_predictable_data=}"
     )
-    print("\n")
 
     # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
@@ -182,7 +181,7 @@ def test_ttnn_dispatch_combine(
         )
         logger.info("Using RANDOM test data")
 
-    logger.info(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
+    logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
     # x, weights, and indices: sharded across SP axis, replicated across EP ranks
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
@@ -222,7 +221,7 @@ def test_ttnn_dispatch_combine(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -254,15 +253,8 @@ def test_ttnn_dispatch_combine(
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete!")
 
-    logger.info(f"Dispatch outputs: {expert_token_counts.shape=}")
-    logger.info(f"  {expert_token_counts=}")
-    logger.info(f"  {expert_offsets.shape=}, {expert_offsets=}")
-    logger.info(f"  {cum_sum.shape=}, {cum_sum=}")
-
     # Convert counter to TTNN tensor for combine module
     # For 2D mesh, use dims=(1, 0) to shard across both axes
-    logger.info(f"Converting counter to TTNN: {expert_token_counts.shape=}, {expert_token_counts.dtype=}")
-    logger.info(f"  Counter values: {expert_token_counts=}")
     mesh_mapper_2d = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
@@ -275,8 +267,6 @@ def test_ttnn_dispatch_combine(
         device=mesh_device,
         dtype=ttnn.int32,
     )
-    logger.info(f"  TTNN counter shape: {tt_expert_token_counts.shape}")
-    ttnn.visualize_tensor(tt_expert_token_counts)  # , header="Experts Token Counter")
 
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
@@ -296,8 +286,6 @@ def test_ttnn_dispatch_combine(
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
     logger.info("Combine complete!")
 
-    logger.info(f"Combine output shape: {tt_output.shape}")
-
     # Convert TTNN output back to torch
     mesh_composer = ttnn.create_mesh_composer(
         mesh_device,
@@ -308,21 +296,14 @@ def test_ttnn_dispatch_combine(
 
     y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
 
-    # Host-side reduction
-    # Output shape after mesh composition with dims=[1, 0]:
-    # (num_dispatch_groups, dispatch_group_size, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-    # Note: Even for 1D mesh with num_dispatch_groups=1, the first dimension is still there
-    logger.info(f"Before reduction: {y.shape=}")
-    y = y.squeeze(-4)  # Remove extra dimension (the "1") added for 2D mesh composition
-    logger.info(f"After squeeze: {y.shape=}")
-    # y shape is now: (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    # Host-side reduction: remove extra dimension added for 2D mesh composition
+    y = y.squeeze(-4)
 
     # Verify round-trip correctness
     # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
     # Each EP rank's output only contains data for tokens that EP rank processed.
     # Output positions not written by local combine contain uninitialized garbage.
     # We validate per (chip, token, topk) using the EP rank that actually processed it.
-    logger.info("Verifying round-trip correctness (per EP rank that processed each token)...")
 
     result = validate_roundtrip_output(
         x,
