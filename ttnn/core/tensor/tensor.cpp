@@ -88,8 +88,9 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
-        mesh_device_ = buffer->device();
+    if (device_storage().is_allocated()) {
+        const auto& buffer = device_storage().get_mesh_buffer();
+        mesh_device_ = buffer.device();
     }
 }
 
@@ -591,7 +592,7 @@ distributed::MeshDevice* Tensor::device() const {
     return nullptr;
 }
 
-std::shared_ptr<distributed::MeshBuffer> Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
+const distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
 
 const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
 

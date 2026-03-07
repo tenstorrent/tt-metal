@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <functional>
+#include <iterator>
+#include <unordered_set>
 #include <vector>
 
 #include "tt-metalium/mesh_coord.hpp"
@@ -24,6 +27,13 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
         distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
 }
 
+DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
+    mesh_buffer(std::move(mesh_buffer_)) {
+    auto* device = this->get_device();
+    distributed::MeshCoordinateRange coord_range(device->shape());
+    std::copy(coord_range.begin(), coord_range.end(), std::back_inserter(coords));
+}
+
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
     std::vector<distributed::MeshCoordinate> coords_,
@@ -37,7 +47,12 @@ Buffer* DeviceStorage::get_buffer() const {
     TT_THROW("Buffer is not allocated");
 }
 
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
+const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
+    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
+    return *mesh_buffer;
+}
+
+std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
     TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
     return mesh_buffer;
 }
@@ -76,6 +91,49 @@ bool DeviceStorage::is_uniform_storage() const {
         return true;
     }
     return coords.size() == mesh_buffer->device()->num_devices();
+}
+
+namespace {
+namespace CMAKE_UNQIUE_NAMESPACE {
+// Returns true if all the coordinates are unique.
+bool all_unique_coords(std::span<const distributed::MeshCoordinate> storages) {
+    std::unordered_set<distributed::MeshCoordinate> coords_set(storages.begin(), storages.end());
+    return storages.size() == coords_set.size();
+}
+}  // namespace CMAKE_UNQIUE_NAMESPACE
+}  // namespace
+
+DeviceStorage DeviceStorage::combine_to_multi_device_storage(
+    std::span<std::reference_wrapper<const DeviceStorage>> storages) {
+    TT_FATAL(!storages.empty(), "At least one storage must be provided");
+    // Check that all storages are allocated on the same mesh buffer.
+    auto prototype = storages[0].get().mesh_buffer;
+    for (const auto& storage : storages) {
+        TT_FATAL(storage.get().mesh_buffer != prototype, "Given storages must be allocated on the same mesh buffer.");
+    }
+
+    // Collect all coodinates.
+    auto total_num_coords =
+        std::accumulate(storages.begin(), storages.end(), std::size_t{0}, [](auto acc, const auto& storage) {
+            return acc + storage.get().coords.size();
+        });
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(total_num_coords);
+    for (const auto& storage : storages) {
+        for (const auto& coord : storage.get().coords) {
+            coords.push_back(coord);
+        }
+    }
+
+    // Validations:
+
+    // No duplicated coordinates
+    TT_FATAL(
+        CMAKE_UNQIUE_NAMESPACE::all_unique_coords(coords), "There are duplicate coordinates in the given storages.");
+
+    DeviceStorage result(prototype);
+    result.coords = std::move(coords);
+    return result;
 }
 
 }  // namespace tt::tt_metal

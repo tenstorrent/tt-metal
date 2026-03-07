@@ -38,24 +38,35 @@ private:
 
 struct DeviceStorage {
     std::vector<distributed::MeshCoordinate> coords;
+
+private:
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
     // Workaround for managing view MeshBuffer; expected to be refactored in #38093
     std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
 
+public:
     DeviceStorage() = default;
-    DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-        std::vector<distributed::MeshCoordinate> coords_,
-        std::shared_ptr<distributed::MeshBuffer> root_buffer_ = nullptr);
+
+    explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
+
+    // Copying a DeviceStorage will share the same underlying MeshBuffer.
+    DeviceStorage(const DeviceStorage&) = default;
+    DeviceStorage& operator=(const DeviceStorage&) = default;
 
     Buffer* get_buffer() const;
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
+    const distributed::MeshBuffer& get_mesh_buffer() const;
+    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
 
     // Begin internal functions:
     //
     // These functions allows the use of the get_mesh_buffer as a view.
     // These are considered internal functions and are not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        std::vector<distributed::MeshCoordinate> coords_,
+        std::shared_ptr<distributed::MeshBuffer> root_buffer_);
+
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
     void deallocate_root_mesh_buffer();
     void reset_root_mesh_buffer();
@@ -70,6 +81,11 @@ struct DeviceStorage {
 
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
+
+    // These are internal functions and should be treated as a public API.
+    // They are here to support distributed API.
+    static DeviceStorage combine_to_multi_device_storage(
+        std::span<std::reference_wrapper<const DeviceStorage>> storages);
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage>;
