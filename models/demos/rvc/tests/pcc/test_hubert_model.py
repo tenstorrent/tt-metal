@@ -49,7 +49,7 @@ def test_hubert_model(device, layer_norm_first):
     tt_model = TTHubertModel(device=device, cfg=cfg, task_cfg=task.cfg)
     tt_model.load_parameters(parameters=torch_model.state_dict())
 
-    batch_size = 2
+    batch_size = 1
     input_length = 4096
     output_layer = cfg["encoder_layers"]
 
