@@ -947,6 +947,7 @@ class MLA1D(AbstractModule):
             use_height_and_width_as_shard_shape=True,
         )
         kv_rope_reshard_config = kv_rope_mem_cfg
+        # kv_rope_reshard_config = ReshardConfig(memory_config=kv_rope_mem_cfg)
         kv_rope_permute_config = PermuteConfig(
             dims=(0, 2, 1, 3),
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -1781,20 +1782,28 @@ class MLA1D(AbstractModule):
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
-        tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
-        )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
+        # TODO: merge the following two once illia has his pr
+        # tt_kv_rope = ttnn.transpose(
+        #    tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
+        # )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
+        # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
+        # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=True,
+            rope_tensors["cos_matrix_transposeHC"],
+            rope_tensors["sin_matrix_transposeHC"],
+            rope_tensors["trans_matrix_for_hc"],
+            is_decode_mode=False,
+            input_transpose=ttnn.RotaryEmbeddingTranspose.NONE,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # TODO: remove the to memory config after illia's pr is merged
+        # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
-        tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # [1, 1, bsz, qk_rope_head_dim]
+        # tt_kv_rope = ttnn.transpose(
+        #    tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
+        # )  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 
