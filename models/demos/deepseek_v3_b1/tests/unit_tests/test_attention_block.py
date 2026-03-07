@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
+from models.demos.deepseek_v3_b1.utils import generate_mm_weights
 
 
 def create_fabric_router_config(max_payload_size):
@@ -284,7 +285,7 @@ def test_attention_block(
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
-    torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
+    torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
@@ -293,16 +294,18 @@ def test_attention_block(
     total_qrope_heads = num_tp * NUM_QROPE_HEADS
     total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
     total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
-    torch_matmul2_weights_full_unshuffled = torch.randn(
+    torch_matmul2_weights_full_unshuffled = generate_mm_weights(
         (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
     # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # Each TP slice of 64 heads is height-sharded on 64 cores per device.
-    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    torch_matmul3_weights = generate_mm_weights(
+        (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
+    )
 
     # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+    torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
     torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
@@ -367,9 +370,9 @@ def test_attention_block(
     )
 
     # kv_b2_proj: [K1, intermediate * num_tp] — full TP width, split along output dim per column
-    torch_kv_b2_proj_weights = torch.randn((K1, post_sdpa_intermediate * num_tp), dtype=torch.bfloat16)
+    torch_kv_b2_proj_weights = generate_mm_weights((K1, post_sdpa_intermediate * num_tp), dtype=torch.bfloat16)
     # o_proj: [K2 * num_tp, output_size] — full TP height, split along input dim per column
-    torch_o_proj_weights = torch.randn((K2 * num_tp, output_size), dtype=torch.bfloat16)
+    torch_o_proj_weights = generate_mm_weights((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
     # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
@@ -1099,7 +1102,7 @@ def test_attention_block(
     # ========================================================================
     for device_idx in range(mesh_rows * mesh_cols):
         received = output_torch[device_idx : device_idx + 1, :]
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.88)
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
