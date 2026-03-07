@@ -141,14 +141,17 @@ void __attribute__((noinline)) Application(void) {
             }
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV ||
+                launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // DISPATCH_MODE_NONE (e.g. during FW init) must also notify dispatcher and advance ring buffer,
+                // since all worker cores receive GO signals via multicast.
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
+                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
+                // messages in the ring buffer
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
-                // messages in the ring buffer
             }
 
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {

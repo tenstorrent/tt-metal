@@ -841,12 +841,21 @@ void RiscFirmwareInitializer::initialize_firmware(
     size_t launch_msg_size = launch_msg.size();
     std::vector<std::byte> init_launch_msg_data(
         dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
+    auto factory = hal_.get_dev_msgs_factory(core_type);
     auto prepare_initial_launch_msg = [&]() {
         for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
             std::copy(
                 launch_msg.data(),
                 launch_msg.data() + launch_msg_size,
                 init_launch_msg_data.data() + (i * launch_msg_size));
+        }
+        // Entries 1+: Set dispatch mode to DISPATCH_MODE_NONE as they are not needed during init.
+        // Specifying DISPATCH_MODE_DEV at this time is misleading since workers have not received
+        // a dispatch. The watcher will show "N" for these entries.
+        for (size_t i = 1; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
+            auto entry_view =
+                factory.create_view<dev_msgs::launch_msg_t>(init_launch_msg_data.data() + (i * launch_msg_size));
+            entry_view.kernel_config().mode() = dev_msgs::DISPATCH_MODE_NONE;
         }
     };
     const auto write_initial_go_launch_msg = [&]() {
