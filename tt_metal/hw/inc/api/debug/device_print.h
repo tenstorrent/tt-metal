@@ -1021,6 +1021,7 @@ void release_lock();
 // Takes lock unconditionally. Returns true if caller should proceed with printing,
 // false if caller should not print (either because server is disabled or this core should not print).
 bool acquire_lock() {
+#if defined(ARCH_WORMHOLE)
     volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
     while (true) {
@@ -1050,6 +1051,17 @@ bool acquire_lock() {
             break;  // Successfully acquired lock
         }
     }
+#else
+    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+
+    while (lock_atomic.exchange(1, std::memory_order_acquire) != 0) {
+        // Failed to acquire lock, wait and try again
+        invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+        internal_::risc_context_switch();
+#endif
+    }
+#endif
 
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
@@ -1096,18 +1108,28 @@ void update_kernel_finished() {
 }
 
 void release_lock() {
+#if defined(ARCH_WORMHOLE)
     volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Release lock by setting to 0
     asm volatile("" ::: "memory");
+#else
+    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+    lock_atomic.store(0, std::memory_order_acquire);
+#endif
 }
 
 void initialize_lock() {
+#if defined(ARCH_WORMHOLE)
     volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Ensure lock starts in free state
     asm volatile("" ::: "memory");
+#else
+    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+    lock_atomic.store(0, std::memory_order_acquire);
+#endif
 }
 
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {

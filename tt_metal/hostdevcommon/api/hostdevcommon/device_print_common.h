@@ -32,8 +32,12 @@ struct DevicePrintMemoryLayout {
         uint32_t wpos;
         uint32_t rpos;
         DevicePrintRiscCoreState risc_state[PROCESSOR_COUNT];  // Has kernel printed since starting
+#if defined(ARCH_WORMHOLE)
         uint32_t lock;  // Lock for synchronizing access to the buffer. 0 means free, other values indicate locked by
                         // that processor.
+#else
+        std::atomic<uint32_t> lock;  // Lock for synchronizing access to the buffer. 0 means free, 1 means locked.
+#endif
     } aux;
     static_assert(
         sizeof(Aux) == 4 + 4 + (PROCESSOR_COUNT * sizeof(DevicePrintRiscCoreState) + 3) / 4 * 4 + 4,
