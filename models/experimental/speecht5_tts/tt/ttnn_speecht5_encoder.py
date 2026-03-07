@@ -670,10 +670,12 @@ class TTNNSpeechT5Encoder:
         This avoids dynamic tensor creation during forward pass, which is
         required for trace support.
 
-        Pre-computes for lengths: 13 (Hello world), 20 (typical)
-        Note: Add more lengths as needed for your use case.
+        Pre-computes for the canonical padded encoder input sizes [128, 256].
+        Inputs are always padded to these sizes before the encoder, so only these shapes
+        ever run through the encoder — matching the LLM get_padded_prefill_len approach.
+        Larger sizes (384+) are computed on-the-fly if needed but may cause L1 OOM on N150.
         """
-        common_lengths = [13, 20]
+        common_lengths = [128, 256]
 
         for seq_len in common_lengths:
             # Create position sequence

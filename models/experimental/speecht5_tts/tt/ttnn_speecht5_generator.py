@@ -25,9 +25,10 @@ import torch
 import ttnn
 from loguru import logger
 
-# Supported encoder sequence lengths (padded sizes)
-# Similar to Whisper's chunked input approach
-SUPPORTED_ENCODER_SEQ_LENS = [128, 256, 384, 512, 768]
+# Supported encoder sequence lengths (padded sizes).
+# Covers typical inputs with chunk sizes up to 256 characters.
+# Note: 384 causes L1 OOM on N150 due to encoder attention memory requirements.
+SUPPORTED_ENCODER_SEQ_LENS = [128, 256]
 
 # Command queue IDs for 2CQ mode (overlapping I/O with compute)
 CQ_OPS = 0  # Model operations, trace execution
@@ -60,6 +61,8 @@ class SpeechT5Generator:
     4. First decoder iteration (non-traced) copies new K/V into pre-allocated cache
     5. Subsequent iterations (traced) use the pre-allocated cache at same addresses
     6. The trace captures only decoder layers - NO position-dependent operations
+    Supported sizes: 128, 256 (pre-allocated at init).
+    Note: 384+ causes L1 OOM on N150.
     """
 
     def __init__(
@@ -446,31 +449,22 @@ class SpeechT5Generator:
 
         return trace_output
 
-    def capture_all_traces(self, processor, batch_size: int = 1):
+    def capture_all_traces(self, batch_size: int = 1, sizes=None):
         """
-        Capture traces for ALL supported encoder sizes during warm-up.
+        Capture traces for encoder sizes during warm-up.
 
         This method creates dummy inputs for each supported encoder size,
         runs a compile pass, and captures a trace. After calling this method,
         any input length will have a matching trace ready.
 
         Args:
-            processor: SpeechT5Processor for tokenizing dummy texts
             batch_size: Batch size to use for trace capture
+            sizes: List of encoder sizes to compile. If None, compiles all SUPPORTED_ENCODER_SEQ_LENS.
         """
-        logger.info(f"Capturing traces for all supported encoder sizes: {SUPPORTED_ENCODER_SEQ_LENS}")
+        target_sizes = sizes if sizes is not None else SUPPORTED_ENCODER_SEQ_LENS
+        logger.info(f"Capturing traces for encoder sizes: {target_sizes}")
 
-        # Create dummy texts that will result in different padded sizes
-        # We need to create encoder outputs of specific lengths, then pad
-        dummy_texts = {
-            128: "Hello",  # Short text -> padded to 128
-            256: "A" * 200,  # Medium text -> padded to 256
-            384: "B" * 300,  # Longer text -> padded to 384
-            512: "C" * 450,  # Even longer -> padded to 512
-            768: "D" * 700,  # Very long -> padded to 768
-        }
-
-        for target_size in SUPPORTED_ENCODER_SEQ_LENS:
+        for target_size in target_sizes:
             if self.trace_compiled_per_size.get(target_size, False):
                 logger.info(f"  Trace for encoder_seq_len={target_size} already compiled, skipping")
                 continue
@@ -577,16 +571,25 @@ class SpeechT5Generator:
             status = "compiled" if self.trace_compiled_per_size.get(size, False) else "NOT compiled"
             logger.info(f"  encoder_seq_len={size}: {status}")
 
-    def copy_encoder_output(self, encoder_output):
+    def copy_encoder_output(self, encoder_output, real_seq_len=None):
         """
         Store encoder output for trace stability with padding.
 
-        Pads encoder output to the nearest supported size (128, 256, 384, 512, 768)
-        and switches to the appropriate pre-allocated tensors. Uses attention mask
-        to ignore padded positions during cross-attention.
+        The encoder input is pre-padded with SpeechT5's <pad> token (id=1) to the
+        nearest canonical size (128, 256) before the encoder runs. This ensures the
+        encoder always sees a fixed-shape input, enabling kernel reuse and fast TTFT.
+        Using the true <pad> token (not zero) prevents corruption of real-token
+        representations since the model was trained with this padding scheme.
+
+        This function receives the encoder output (already at the padded canonical
+        length), switches to the appropriate pre-allocated decoder buffer, copies the
+        output into it, and sets the cross-attention mask to -1e9 for the padded
+        positions so the decoder ignores them.
 
         Args:
-            encoder_output: Encoder output tensor to copy
+            encoder_output: Encoder output tensor at the padded canonical seq_len.
+            real_seq_len: The actual (unpadded) token count. Used to set the
+                          cross-attention mask — positions [real_seq_len:] get -1e9.
         """
         # Get encoder output shape
         if len(encoder_output.shape) == 3:
@@ -594,8 +597,11 @@ class SpeechT5Generator:
         else:
             batch, _, seq_len, hidden = encoder_output.shape
 
+        # Use real_seq_len for masking if provided (input was pre-padded before encoder)
+        actual_len = real_seq_len if real_seq_len is not None else seq_len
+
         # Store actual sequence length for reference
-        self.actual_encoder_seq_len = seq_len
+        self.actual_encoder_seq_len = actual_len
 
         # Get padded size (ceiling to nearest supported size)
         padded_seq_len = get_padded_encoder_seq_len(seq_len)
@@ -629,11 +635,12 @@ class SpeechT5Generator:
         ttnn.copy(encoder_padded_ttnn, self.encoder_hidden_states)
         ttnn.deallocate(encoder_padded_ttnn)
 
-        # Create attention mask: 0 for actual positions, -1e9 for padded positions
+        # Create attention mask: 0 for actual positions, -1e9 for padded positions.
+        # actual_len is the real token count; positions beyond it are zero-padding.
         # Shape: [B, 1, 1, padded_seq_len]
         mask = torch.zeros(batch, 1, 1, padded_seq_len, dtype=torch.float32)
-        if seq_len < padded_seq_len:
-            mask[:, :, :, seq_len:] = -1e9  # Mask out padded positions
+        if actual_len < padded_seq_len:
+            mask[:, :, :, actual_len:] = -1e9  # Mask out padded positions
 
         mask_ttnn = ttnn.from_torch(
             mask,
@@ -645,7 +652,7 @@ class SpeechT5Generator:
         ttnn.copy(mask_ttnn, self.encoder_attention_mask)
         ttnn.deallocate(mask_ttnn)
 
-        logger.debug(f"Stored encoder output: actual_len={seq_len}, padded_len={padded_seq_len}")
+        logger.debug(f"Stored encoder output: actual_len={actual_len}, padded_len={padded_seq_len}")
 
     def cleanup(self):
         """Release trace resources for all sizes. Call before closing device."""
