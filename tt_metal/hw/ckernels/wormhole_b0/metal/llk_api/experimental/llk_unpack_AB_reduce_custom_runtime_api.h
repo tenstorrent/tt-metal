@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,11 @@ using namespace ckernel::unpacker;
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
  *
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
+ *
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
@@ -54,6 +59,11 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(uint32_t block_ct_di
  * - Operand tile size is 32x32
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
+ *
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
  *
  * This function should NOT be used as a substitute for native llk_unpack_AB LLK.
  * Use the standard llk_unpack_AB<BroadcastType::NONE> in a loop for general-purpose operations.
@@ -84,6 +94,11 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
  * - Operand tile size is 32x32
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
+ *
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
  *
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use standard LLK cleanup procedures for general-purpose operations.

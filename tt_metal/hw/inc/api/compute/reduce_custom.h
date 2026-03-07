@@ -39,10 +39,15 @@ namespace ckernel {
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
- * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
- * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
- * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
- * unused on other architectures.
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
+ *
+ * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
+ * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
+ * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
+ * Number of semposts must math the number of calls to reduce_block_max_row.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -75,10 +80,15 @@ ALWI void reduce_block_max_row_init() {
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
- * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
- * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
- * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
- * unused on other architectures.
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
+ *
+ * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
+ * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
+ * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
+ * Number of semposts must math the number of calls to reduce_block_max_row.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -102,10 +112,15 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
  * Reprograms reduce MOP and restores only the reduce addrmods.
  *
- * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
- * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
- * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
- * unused on other architectures.
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
+ *
+ * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
+ * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
+ * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
+ * Number of semposts must math the number of calls to reduce_block_max_row.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -137,10 +152,15 @@ ALWI void reduce_block_max_row_reinit_short() {
  * This function should NOT be used as a substitute for the native reduce_uninit API.
  * Use the standard reduce_uninit() for general-purpose reduction cleanup.
  *
- * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
- * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
- * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
- * unused on other architectures.
+ * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
+ * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
+ *
+ * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
+ * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
+ * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
+ * Number of semposts must math the number of calls to reduce_block_max_row.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -163,7 +183,7 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
 }
 
-// Runtime variants - block_ct_dim is a runtime parameter
+// Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
 ALWI void reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
     MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
