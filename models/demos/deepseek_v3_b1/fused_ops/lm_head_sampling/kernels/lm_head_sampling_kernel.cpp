@@ -319,12 +319,15 @@ void kernel_main() {
             if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
                 auto next_iteration_semaphore =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
+                DPRINT << "waiting " << iteration_count << ENDL();
                 noc_semaphore_wait(next_iteration_semaphore, 1);
+                DPRINT << "done waiting " << iteration_count << ENDL();
                 noc_semaphore_set(next_iteration_semaphore, 0);
             }
 #endif
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
+                DPRINT << "Broadcasting at iteration " << iteration_count << ENDL();
                 DeviceZoneScopedN("CCL_BROADCAST");
                 bcast(bcast_args);
             }
@@ -342,21 +345,25 @@ void kernel_main() {
 
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
         {
+            DPRINT << "Running RMSNorm at iteration " << iteration_count << ENDL();
             DeviceZoneScopedN("RMSNORM");
             rmsnorm(rmsnorm_args);
         }
 
         {
+            DPRINT << "Running MCAST at iteration " << iteration_count << ENDL();
             DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
         }
 
         {
+            DPRINT << "Running MATMUL at iteration " << iteration_count << ENDL();
             DeviceZoneScopedN("MATMUL");
             matmul(matmul_args);
         }
 
         {
+            DPRINT << "Running ARGMAX at iteration " << iteration_count << ENDL();
             DeviceZoneScopedN("ARGMAX");
             sampling_op(sampling_args);
         }

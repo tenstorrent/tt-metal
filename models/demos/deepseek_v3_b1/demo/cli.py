@@ -145,6 +145,7 @@ def run_demo(
         )
 
         is_input_rank = model_pipeline.pipeline.is_input_rank
+        logger.info(f"Is input rank: {is_input_rank}")
 
         generated_tokens = model_pipeline.run_inference(
             prompt_token_ids=prompt_ids,

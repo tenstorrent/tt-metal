@@ -69,6 +69,10 @@ class ModelPipeline:
         logger.info("Setting up and running pipeline")
         self.pipeline.setup_and_run()
 
+        logger.info("Barrier")
+        self.barrier()
+        logger.info("Barrier completed")
+
         if self.pipeline.is_output_rank:
             self._d2h_output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_DATUMS, dtype=torch.int32),
@@ -105,6 +109,7 @@ class ModelPipeline:
         - Other ranks: no-op (pipeline kernels handle forwarding).
         """
         num_prefill = len(prompt_token_ids)
+        logger.info(f"Running inference with {num_prefill} prefill tokens and {max_new_tokens} new tokens")
         if self.pipeline.is_input_rank:
             return self._run_input_rank(
                 prompt_token_ids,
@@ -134,6 +139,7 @@ class ModelPipeline:
         generated: list[int] = []
 
         for i in range(num_prefill + max_new_tokens):
+            logger.debug(f"Writing token {i} at iteration {i}")
             if i < num_prefill:
                 token_id = prompt_token_ids[i]
             elif generated:
@@ -165,6 +171,7 @@ class ModelPipeline:
         eos_token_id: int | None,
     ) -> None:
         for i in range(num_prefill + max_new_tokens):
+            logger.debug(f"Waiting for output token {i} at iteration {i}")
             out_token = self.pipeline.read_and_send_output_token(self._d2h_output_tensor)
             if i >= num_prefill - 1 and eos_token_id is not None and out_token == eos_token_id:
                 break

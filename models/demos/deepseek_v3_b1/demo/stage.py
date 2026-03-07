@@ -31,7 +31,7 @@ TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 4
-PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
+PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)  # FYI: LM head was previously on (11, 0)
 
 
 @dataclass
@@ -376,6 +376,15 @@ class LMHeadStage(StageKind):
         d = self._lmhead_state
         pipeline_config = ctx.pipeline_config
         my_mesh_id = ctx.my_mesh_id
+
+        print("my mesh id", my_mesh_id)
+        print("input socket", d["lmhead_input_socket"])
+        print("output socket", d["lmhead_output_socket"])
+        print("persistent_next_iter_semaphore", d["persistent_next_iter_semaphore"])
+        print("persistent_mode", self._lm_head_persistent_mode)
+        print("sender_coord", pipeline_config[my_mesh_id].entry_node_coord)
+        print("exit_node_coord", pipeline_config[my_mesh_id].exit_node_coord)
+
         LMHeadSampling.op(
             d["input_tensor_mesh"],
             d["intermediate_tensor_mesh"],
