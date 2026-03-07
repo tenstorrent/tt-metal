@@ -245,22 +245,9 @@ void MetalContext::initialize(
     auto all_devices = cluster_->all_chip_ids();
     std::set<ChipId> device_ids(all_devices.begin(), all_devices.end());
 
-    auto get_dispatch_ignore_cores = [this](ChipId device_id) {
-        std::unordered_set<CoreCoord> out;
-        if (device_manager_ && device_manager_->is_initialized()) {
-            const auto& dc = device_manager_->get_virtual_dispatch_cores(device_id);
-            const auto& rc = device_manager_->get_virtual_dispatch_routing_cores(device_id);
-            out.insert(dc.begin(), dc.end());
-            out.insert(rc.begin(), rc.end());
-        }
-        return out;
-    };
     init_risc_fw_context_descriptor(num_hw_cqs_, worker_l1_size_);
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
-        risc_fw_context_descriptor_,
-        std::bind(&MetalContext::get_control_plane, this),
-        *dispatch_core_manager_,
-        get_dispatch_ignore_cores);
+        risc_fw_context_descriptor_, std::bind(&MetalContext::get_control_plane, this), *dispatch_core_manager_);
 
     risc_firmware_initializer_->run_async_build_phase(device_ids);
 
