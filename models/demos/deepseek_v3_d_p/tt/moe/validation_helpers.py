@@ -16,6 +16,8 @@ class ValidationResult:
     total: int
     mismatches: List[Tuple] = field(default_factory=list)
     name: str = "validation"
+    # Set of (dispatch_group, chip) pairs that were actually validated
+    validated_cells: set = field(default_factory=set)
 
     def log_summary(self):
         """Log match statistics."""
@@ -231,6 +233,32 @@ def log_per_chip_statistics(
 DispatchComparator = Callable[[torch.Tensor, torch.Tensor, int, int, int], Tuple[bool, Optional[str]]]
 
 
+def _get_valid_slots(
+    expert_dispatch_table: torch.Tensor,
+    num_dispatch_groups: int,
+    num_routed_experts: int,
+    dispatch_group_size: int,
+    experts_per_chip: int,
+) -> set:
+    """Build set of (dispatch_group, chip, local_expert) slots that should be validated.
+
+    Uses the dispatch table directly as the source of truth for which slots exist.
+    """
+    valid_slots = set()
+    experts_per_group = num_routed_experts // num_dispatch_groups
+
+    for dispatch_group in range(num_dispatch_groups):
+        for global_expert_id in range(num_routed_experts):
+            chip_id = expert_dispatch_table[dispatch_group, global_expert_id].item()
+            if chip_id != -1:
+                # Map global expert to local expert within chip
+                local_expert_in_group = global_expert_id % experts_per_group
+                local_expert_id = local_expert_in_group % experts_per_chip
+                valid_slots.add((dispatch_group, chip_id, local_expert_id))
+
+    return valid_slots
+
+
 def validate_dispatch_data(
     torch_data: torch.Tensor,
     ttnn_data: torch.Tensor,
@@ -264,23 +292,25 @@ def validate_dispatch_data(
     Returns:
         ValidationResult with match statistics
     """
+    num_routed_experts = expert_dispatch_table.shape[1]
+    valid_slots = _get_valid_slots(
+        expert_dispatch_table, num_dispatch_groups, num_routed_experts, dispatch_group_size, experts_per_chip
+    )
+
     matches = 0
     total_slots = 0
     mismatches = []
+    validated_cells = set()
 
     for r in range(num_dispatch_groups):
         for dst_chip_id in range(dispatch_group_size):
             for expert_id in range(experts_per_chip):
-                # Compute global expert ID and check if it's present in this EP rank
-                global_expert_id = dst_chip_id * experts_per_chip + expert_id
-                if expert_dispatch_table[r, global_expert_id].item() == -1:
-                    # Expert not present in this EP rank, skip comparison
-                    logger.info(
-                        f"⏭️ {r} {name} {dst_chip_id=} {expert_id=} (expert {global_expert_id} not in EP rank {r})"
-                    )
+                if (r, dst_chip_id, expert_id) not in valid_slots:
+                    # Expert not present in this dispatch group, skip comparison
                     continue
 
                 total_slots += 1
+                validated_cells.add((r, dst_chip_id))
                 count = expert_token_counts[r, dst_chip_id, expert_id].item()
 
                 torch_slot = torch_data[r, dst_chip_id, expert_id, :count]
@@ -315,6 +345,7 @@ def validate_dispatch_data(
         total=total_slots,
         mismatches=mismatches,
         name=name,
+        validated_cells=validated_cells,
     )
 
 
@@ -403,22 +434,25 @@ def validate_dispatch_metadata(
     Returns:
         ValidationResult with match statistics
     """
+    num_routed_experts = expert_dispatch_table.shape[1]
+    valid_slots = _get_valid_slots(
+        expert_dispatch_table, num_dispatch_groups, num_routed_experts, dispatch_group_size, experts_per_chip
+    )
+
     matches = 0
     total_slots = 0
     mismatches = []
+    validated_cells = set()
 
     for r in range(num_dispatch_groups):
         for dst_chip_id in range(dispatch_group_size):
             for expert_id in range(experts_per_chip):
-                # Compute global expert ID and check if it's present in this EP rank
-                global_expert_id = dst_chip_id * experts_per_chip + expert_id
-                if expert_dispatch_table[r, global_expert_id].item() == -1:
-                    logger.info(
-                        f"⏭️ {r} Metadata {dst_chip_id=} {expert_id=} (expert {global_expert_id} not in EP rank {r})"
-                    )
+                if (r, dst_chip_id, expert_id) not in valid_slots:
+                    # Expert not present in this dispatch group, skip comparison
                     continue
 
                 total_slots += 1
+                validated_cells.add((r, dst_chip_id))
                 count = expert_token_counts[r, dst_chip_id, expert_id].item()
 
                 # Compare fields 1-3 directly
@@ -481,4 +515,5 @@ def validate_dispatch_metadata(
         total=total_slots,
         mismatches=mismatches,
         name="metadata",
+        validated_cells=validated_cells,
     )

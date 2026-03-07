@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_dispatch_buffer,
     validate_dispatch_metadata,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 # =====
 # mesh 4x2
@@ -169,7 +170,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-@pytest.mark.parametrize("verbose", [True])
+@pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
     seq_len_per_chip,
@@ -266,8 +267,12 @@ def test_ttnn_dispatch(
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
-    logger.info(f"{expert_dispatch_table.shape=}")
-    logger.info(f"expert_dispatch_table:\n{expert_dispatch_table}")
+    log_expert_dispatch_table(
+        expert_dispatch_table=expert_dispatch_table,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=num_routed_experts,
+    )
 
     # Initialize torch dispatch module with num_dispatch_groups support
     torch_dispatch_module = TorchDispatchModule(
@@ -384,9 +389,13 @@ def test_ttnn_dispatch(
         verbose=verbose,
     )
 
-    # Log summaries and assert
-    buffer_result.log_summary()
-    metadata_result.log_summary()
+    # Log summaries and visualization
+    log_validation_results(
+        results=[buffer_result, metadata_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Dispatch Validation Results",
+    )
 
     assert (
         buffer_result.passed and metadata_result.passed
