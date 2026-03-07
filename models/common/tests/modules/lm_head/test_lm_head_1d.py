@@ -137,7 +137,10 @@ def _prepare_lm_head_weights(
     weight: torch.Tensor, vocab_size: int, dim: int, num_devices: int, max_columns_per_device: int
 ) -> list[torch.Tensor]:
     """Split LM head weight into chunks matching TTTv1 logic (non-TG path)."""
-    padded_vocab_size = math.ceil(vocab_size / 32) * 32
+    # Pad vocab_size to be divisible by (32 * num_devices) to ensure
+    # size_per_device is tile-aligned when sharding across devices
+    tile_size = 32
+    padded_vocab_size = math.ceil(vocab_size / (tile_size * num_devices)) * (tile_size * num_devices)
     size_per_device = padded_vocab_size // num_devices
     num_splits = math.ceil(size_per_device / max_columns_per_device)
     split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
