@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
+from loguru import logger as _module_logger
 from typing_extensions import deprecated
 
 import ttnn
@@ -150,6 +152,11 @@ class Module(ABC):
         Returns:
             `IncompatibleKeys` containing lists of missing and unexpected keys.
         """
+        _t0 = time.perf_counter()
+        _module_logger.info(
+            f"[TIMING] {type(self).__name__}.load_torch_state_dict: on_host={on_host}, num_keys={len(state_dict)}"
+        )
+
         missing_keys = []
         unexpected_keys = []
 
@@ -170,6 +177,9 @@ class Module(ABC):
             raise ValueError("; ".join(parts))
 
         self._is_loaded = True
+        _module_logger.info(
+            f"[TIMING] {type(self).__name__}.load_torch_state_dict took {time.perf_counter() - _t0:.2f}s"
+        )
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
     @deprecated("Use load_torch_state_dict instead")
@@ -177,6 +187,9 @@ class Module(ABC):
         self.load_torch_state_dict(state_dict)
 
     def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        _t0 = time.perf_counter()
+        if not prefix:
+            _module_logger.info(f"[TIMING] {type(self).__name__}.save to: {directory}")
         directory = Path(directory)
         directory.mkdir(exist_ok=True, parents=True)
 
@@ -186,21 +199,37 @@ class Module(ABC):
         for name, parameter in self.named_parameters():
             parameter.save(directory / f"{prefix}{name}.tensorbin")
 
+        if not prefix:
+            _module_logger.info(f"[TIMING] {type(self).__name__}.save total took {time.perf_counter() - _t0:.2f}s")
+
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        _t0 = time.perf_counter()
+        if not prefix:
+            _module_logger.info(f"[TIMING] {type(self).__name__}.load from cache dir: {directory}")
         directory = Path(directory)
 
         for name, child in self.named_children():
             child.load(directory, prefix=f"{prefix}{name}.")
 
+        _t_params = time.perf_counter()
+        _param_count = 0
         for name, parameter in self.named_parameters():
             path = directory / f"{prefix}{name}.tensorbin"
             try:
                 parameter.load(path)
+                _param_count += 1
             except LoadingError as err:
                 msg = f"{err} while loading '{path}'"
                 raise LoadingError(msg) from err
 
+        if _param_count > 0:
+            _module_logger.debug(
+                f"[TIMING] {type(self).__name__}.load: loaded {_param_count} params at prefix='{prefix}' in {time.perf_counter() - _t_params:.2f}s"
+            )
+
         self._is_loaded = True
+        if not prefix:
+            _module_logger.info(f"[TIMING] {type(self).__name__}.load total took {time.perf_counter() - _t0:.2f}s")
 
     def deallocate_weights(self) -> None:
         """Deallocate all parameter weights from device memory recursively."""

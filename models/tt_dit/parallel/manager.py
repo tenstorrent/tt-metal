@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import torch
+from loguru import logger as _ccl_logger
 
 import ttnn
 
@@ -24,24 +27,31 @@ class CCLManager:
         num_links=1,
         topology=None,
     ):
+        _t_init = time.perf_counter()
+        _ccl_logger.info(
+            f"[TIMING] CCLManager.__init__: mesh_shape={tuple(mesh_device.shape)}, num_links={num_links}, topology={topology}"
+        )
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
 
-        # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
 
-        # Setup semaphores
+        _t0 = time.perf_counter()
         self._init_subdevice()
+        _ccl_logger.info(f"[TIMING] CCLManager._init_subdevice took {time.perf_counter() - _t0:.2f}s")
 
-        # Initialize semaphores for reduce scatter and all gather and neighbor pad
+        _t0 = time.perf_counter()
         self._init_semaphores()
+        _ccl_logger.info(f"[TIMING] CCLManager._init_semaphores took {time.perf_counter() - _t0:.2f}s")
+
         self.rs_ping_pong_idx = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
+        _ccl_logger.info(f"[TIMING] CCLManager.__init__ total took {time.perf_counter() - _t_init:.2f}s")
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
