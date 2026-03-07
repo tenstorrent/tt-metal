@@ -102,7 +102,7 @@ class MultiHeadAttention:
                 raise ValueError("Relative embeddings are not loaded.")
 
             key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, source_length)
-            rel_logits = self._matmul_with_relative_keys(q_scaled, key_relative_embeddings)
+            rel_logits = ttnn.matmul(q_scaled, key_relative_embeddings, transpose_b=True)
             scores_local = self._relative_position_to_absolute_position(rel_logits)
             scores = scores + scores_local
 
@@ -112,7 +112,7 @@ class MultiHeadAttention:
             assert self.emb_rel_v is not None
             relative_weights = self._absolute_position_to_relative_position(p_attn)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
-            output = output + self._matmul_with_relative_values(relative_weights, value_relative_embeddings)
+            output = output + ttnn.matmul(relative_weights, value_relative_embeddings)
 
         output = ttnn.permute(output, (0, 2, 1, 3))
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
@@ -133,12 +133,6 @@ class MultiHeadAttention:
             return x_p
         x_p = ttnn.permute(x, (0, 2, 1, 3))
         return x_p
-
-    def _matmul_with_relative_values(self, x: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.matmul(x, y)
-
-    def _matmul_with_relative_keys(self, x: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.matmul(x, y, transpose_b=True)
 
     def _get_relative_embeddings(self, relative_embeddings: ttnn.Tensor, length: int) -> ttnn.Tensor:
         if self.window_size is None:
@@ -205,14 +199,14 @@ class FFN:
             in_channels=in_channels,
             out_channels=filter_channels,
             kernel_size=kernel_size,
-            padding=kernel_size // 2,
+            padding="same",
         )
         self.conv_2 = Conv1d(
             device=device,
             in_channels=filter_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
-            padding=kernel_size // 2,
+            padding="same",
         )
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
@@ -222,12 +216,8 @@ class FFN:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x0 = x
         x1 = self.conv_1(x0)
-        batch, _, length, channel = x1.shape
-        x1 = ttnn.reshape(x1, (batch, length, channel))
         x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT)
         x2 = ttnn.relu(x1)
         x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
         x3 = self.conv_2(x2)
-        batch, _, length, channel = x3.shape
-        x3 = ttnn.reshape(x3, (batch, length, channel))
         return x3
