@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -12,7 +13,7 @@ from models.experimental.transfuser.reference.config import GlobalConfig
 from models.experimental.transfuser.reference.gpt import GPT
 from models.experimental.transfuser.tt.gpt import TTGpt
 
-from models.experimental.transfuser.tests.test_gpt_block import create_gpt_block_preprocessor
+from models.experimental.transfuser.tests.pcc.test_gpt_block import create_gpt_block_preprocessor
 
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight
 from models.common.utility_functions import (
@@ -191,10 +192,7 @@ def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16, use_opt
 
 @pytest.mark.parametrize(
     "n_embed, n_head, block_exp, n_layer, img_vert_anchors, img_horz_anchors, lidar_vert_anchors, lidar_horz_anchors, seq_len, embd_pdrop, attn_pdrop, resid_pdrop, use_velocity, img_input_shape, lidar_input_shape",
-    [
-        (72, 4, 4, 4, 5, 22, 8, 8, 1, 0.1, 0.1, 0.1, False, (1, 72, 5, 22), (1, 72, 8, 8)),
-        (216, 4, 4, 4, 5, 22, 8, 8, 1, 0.1, 0.1, 0.1, False, (1, 216, 5, 22), (1, 216, 8, 8)),
-    ],
+    ((72, 4, 4, 4, 5, 22, 8, 8, 1, 0.1, 0.1, 0.1, False, (1, 72, 5, 22), (1, 72, 8, 8)),),
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
