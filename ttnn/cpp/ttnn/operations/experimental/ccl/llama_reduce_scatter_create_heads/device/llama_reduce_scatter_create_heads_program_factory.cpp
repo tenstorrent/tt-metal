@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
+#include "ttnn/execution_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
@@ -400,7 +401,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+        ttnn::execution_context::get_effective_sub_device_id(mesh_device, operation_attributes.subdevice_id));
 
     tt::tt_metal::Program program{};
 

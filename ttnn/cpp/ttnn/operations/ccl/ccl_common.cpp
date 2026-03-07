@@ -13,8 +13,9 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/execution_context.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::ccl {
 
@@ -340,9 +341,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto effective_sub_device_id = ttnn::execution_context::get_effective_sub_device_id(device, sub_device_id);
+    auto available_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sub_device_id);
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }

@@ -13,6 +13,7 @@
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.hpp"
 
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/execution_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/math.hpp"
@@ -47,7 +48,7 @@ CoreCoord choose_additional_core(
 
     // try to find any other available core
     auto available_cores = mesh_device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, ttnn::execution_context::get_current_sub_device_id(mesh_device));
     for (const auto& cr : available_cores.ranges()) {
         auto start = cr.start_coord;
         auto end = cr.end_coord;
@@ -575,7 +576,7 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensors.at(0).device();
-    auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    auto sd_id = ttnn::execution_context::get_current_sub_device_id(mesh_device);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     // 1 semaphore used for within op synchronizations

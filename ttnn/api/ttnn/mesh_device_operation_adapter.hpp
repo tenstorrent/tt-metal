@@ -12,6 +12,7 @@
 #include <concepts>
 #include <variant>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/execution_context.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
@@ -156,11 +157,13 @@ struct MeshDeviceOperationAdapter {
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        // Hash the program hash and the tensor coordinates the workload is targeting.
+        // Hash the program hash, the tensor coordinates, and the current sub-device from execution context.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             ttsl::hash::hash_combine(hash, coord);
         }
+        auto current_sub_device_id = execution_context::get_current_sub_device_id(mesh_device);
+        ttsl::hash::hash_combine(hash, current_sub_device_id);
         return hash;
     }
 
