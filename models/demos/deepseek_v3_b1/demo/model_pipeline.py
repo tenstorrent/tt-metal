@@ -144,7 +144,7 @@ class ModelPipeline:
     ) -> list[int] | None:
         generated: list[int] = []
 
-        for i in range(num_prefill + max_new_tokens):
+        for i in range(num_prefill + max_new_tokens - 1):
             if i < num_prefill:
                 token_id = prompt_token_ids[i]
             elif generated:
@@ -175,7 +175,7 @@ class ModelPipeline:
         max_new_tokens: int,
         eos_token_id: int | None,
     ) -> None:
-        for i in range(num_prefill + max_new_tokens):
+        for i in range(num_prefill + max_new_tokens - 1):
             out_token = self.pipeline.read_and_send_output_token(self._d2h_output_tensor)
             if i >= num_prefill - 1 and eos_token_id is not None and out_token == eos_token_id:
                 break
