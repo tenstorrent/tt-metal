@@ -1,16 +1,58 @@
 """
-Common utilities for MoE testing and configuration.
+Initialization and configuration helpers for MoE testing.
 
 This module provides shared helper functions used across MoE tests including:
+- Mesh configuration extraction (MeshConfig, extract_mesh_config)
 - Configuration computation (compute_constants)
 - Test input generation (initialize_test_inputs, initialize_predictable_test_inputs)
 - Fabric configuration helpers (create_fabric_router_config)
 """
 
+from dataclasses import dataclass
+
 import torch
 from loguru import logger
 
 import ttnn
+
+
+@dataclass
+class MeshConfig:
+    """Mesh configuration extracted from mesh_device."""
+
+    sp_axis: int
+    dispatch_group_size: int
+    num_dispatch_groups: int
+
+
+def extract_mesh_config(mesh_device) -> MeshConfig:
+    """
+    Extract dispatch configuration from mesh device shape.
+
+    For 2D meshes (both dimensions > 1):
+      - sp_axis = 0 (sequence parallel along rows)
+      - dispatch_group_size = number of rows
+      - num_dispatch_groups = number of columns (EP ranks)
+
+    For 1D meshes:
+      - dispatch_group_size = total number of devices
+      - num_dispatch_groups = 1
+      - sp_axis = whichever dimension has size > 1
+    """
+    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+        sp_axis = 0
+        dispatch_group_size = mesh_device.shape[sp_axis]
+        num_dispatch_groups = mesh_device.shape[1]
+    else:
+        dispatch_group_size = mesh_device.get_num_devices()
+        num_dispatch_groups = 1
+        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
+
+    return MeshConfig(
+        sp_axis=sp_axis,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
 
 
 def create_expert_dispatch_table(

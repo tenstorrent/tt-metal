@@ -11,7 +11,7 @@ from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import (
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_expert_dispatch_table,
     get_gate_outputs,
