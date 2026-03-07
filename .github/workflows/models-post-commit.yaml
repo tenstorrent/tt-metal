@@ -45,13 +45,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: model-deepseek, group: deepseek},
-          {name: model-falcon, group: falcon},
-          {name: model-resnet-unet, group: resnet_unet},
-          {name: model-mobilenet, group: mobilenet},
-          {name: model-vit, group: vit},
-          {name: model-llama, group: llama},
-          {name: model-slow-runtime, group: slow_runtime},
+          {name: model},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
@@ -93,7 +87,8 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ matrix.test-group.group }}_${{ inputs.arch }}
+          run_python_model_tests_${{ inputs.arch }}
+          run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
