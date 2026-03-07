@@ -118,6 +118,9 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
+    AccumulatorHalf ring_prev = {cb_sum_A, cb_max_A, cb_out_im_A};
+    AccumulatorHalf ring_cur = {cb_sum_B, cb_max_B, cb_out_im_B};
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -206,12 +209,8 @@ void kernel_main() {
                 global_n_mask_chunk_id,
                 local_n_mask_chunk_id,
                 joint_n_mask_chunk_id,
-                cb_out_im_A,
-                cb_out_im_B,
-                cb_max_A,
-                cb_max_B,
-                cb_sum_A,
-                cb_sum_B,
+                ring_prev,
+                ring_cur,
                 lw_mask);
         } else {
             sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
