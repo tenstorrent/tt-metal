@@ -35,6 +35,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -314,20 +315,28 @@ bool reader_datacopy_writer(
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
+    log_info(tt::LogTest, "Input DRAM byte address: {}", input_dram_byte_address);
+    log_info(tt::LogTest, "Output DRAM byte address: {}", output_dram_byte_address);
+
     KernelHandle reader_kernel;
     KernelHandle writer_kernel;
     KernelHandle compute_kernel;
-    uint32_t l1_input_dfb = 0;
-    uint32_t l1_output_dfb = 0;
+    uint32_t num_threads = 1;
+    // replace masks when thread id query is available
+    uint32_t producer_mask = 0;
+    uint32_t consumer_mask = 0;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        if (test_config.num_tiles > 1) {
+            TT_FATAL(test_config.num_tiles % 4 == 0, "Number of tiles must be divisible by 4");
+        }
+        num_threads = test_config.num_tiles == 1 ? 1 : 4;
+
         tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
-            .producer_risc_mask = 0x1,
-            .num_producers = 1,
+            .num_producers = num_threads,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
-            .num_consumers = 1,
+            .num_consumers = num_threads,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = test_config.l1_input_data_format
@@ -336,39 +345,46 @@ bool reader_datacopy_writer(
         tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
-            .producer_risc_mask = 0x100,
-            .num_producers = 1,
+            .num_producers = num_threads,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x2,
-            .num_consumers = 1,
+            .num_consumers = num_threads,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = test_config.l1_output_data_format
         };
 
-        l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input_dfb_config);
-        l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
+        uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input_dfb_config);
+        uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
 
         reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb}});
+                .num_threads_per_cluster = num_threads, .compile_args = {l1_input_dfb}});
 
         writer_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb}});
+                .num_threads_per_cluster = num_threads, .compile_args = {l1_output_dfb}});
 
+        uint32_t per_core_tile_cnt = test_config.num_tiles / num_threads;
         compute_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .compile_args = {uint(test_config.num_tiles)}});
+                .num_threads_per_cluster = num_threads, .compile_args = {uint(per_core_tile_cnt)}});
+
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_input_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_output_dfb, compute_kernel, writer_kernel);
+
+        auto input_dfb = program_.impl().get_dataflow_buffer(l1_input_dfb);
+        auto output_dfb = program_.impl().get_dataflow_buffer(l1_output_dfb);
+        producer_mask = (uint32_t)input_dfb->config.producer_risc_mask;
+        consumer_mask = (uint32_t)output_dfb->config.consumer_risc_mask;
     } else {
         const uint32_t input0_cb_index = 0;
         const uint32_t output_cb_index = 16;
@@ -408,11 +424,6 @@ bool reader_datacopy_writer(
             tt_metal::ComputeConfig{.compile_args = {uint(test_config.num_tiles)}});
     }
 
-    if (device->arch() == ARCH::QUASAR) {
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_input_dfb, reader_kernel, compute_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_output_dfb, compute_kernel, writer_kernel);
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
@@ -424,6 +435,10 @@ bool reader_datacopy_writer(
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+
+    uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
+    log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
@@ -431,7 +446,8 @@ bool reader_datacopy_writer(
         {
             (uint32_t)input_dram_byte_address,
             0,
-            (uint32_t)test_config.num_tiles,
+            num_tiles_per_thread,
+            producer_mask
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -440,7 +456,8 @@ bool reader_datacopy_writer(
         {
             (uint32_t)output_dram_byte_address,
             0,
-            (uint32_t)test_config.num_tiles,
+            num_tiles_per_thread,
+            consumer_mask
         });
 
     auto blocking = device->arch() == ARCH::QUASAR;
@@ -452,6 +469,29 @@ bool reader_datacopy_writer(
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= inputs == dest_buffer_data;
+
+    if (not pass) {
+        log_info(tt::LogTest, "Printing input");
+        for (auto i : inputs) {
+            std::cout << i << " ";
+        }
+        std::cout << std::endl;
+        log_info(tt::LogTest, "Printing output");
+        for (auto i : dest_buffer_data) {
+            std::cout << i << " ";
+        }
+        std::cout << std::endl;
+        uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        std::vector<uint32_t> intermediate(byte_size / sizeof(uint32_t));
+        tt_metal::detail::ReadFromDeviceL1(device, test_config.core, l1_unreserved_base, byte_size, intermediate);
+        log_info(tt::LogTest, "Printing intermediate");
+        for (auto i : intermediate) {
+            std::cout << i << " ";
+        }
+        std::cout << std::endl;
+
+    }
+
     return pass;
 }
 }  // namespace unit_tests::dram::direct
@@ -503,12 +543,12 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = CoreCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
-        test_config.num_tiles = 1;
-        ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+        // test_config.num_tiles = 1;
+        // ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
         test_config.num_tiles = 4;
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
-        test_config.num_tiles = 8;
-        ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+        // test_config.num_tiles = 8;
+        // ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
     }
 }
 

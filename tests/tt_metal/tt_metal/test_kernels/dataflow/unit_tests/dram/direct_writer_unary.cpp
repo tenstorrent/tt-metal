@@ -11,13 +11,20 @@
 
 void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
-    uint32_t dst_bank_id = get_arg_val<uint32_t>(1);
+    uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
+    uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
     uint32_t ublock_size_tiles = 1;
 
 #ifdef ARCH_QUASAR
+    uint32_t consumer_mask = get_arg_val<uint32_t>(3);
+    const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
+    // TODO: Replace with get_thread_idx() kernel API when available
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t consumer_idx = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
+
     experimental::DataflowBuffer dfb(cb_id);
     constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
     experimental::AllocatorBank<bank_type> dst_dram;
@@ -25,18 +32,17 @@ void kernel_main() {
 
     uint32_t ublock_size_bytes = dfb.get_entry_size();
 
-    volatile tt_l1_ptr uint32_t* debug_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(763520);
+    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * dfb.get_stride_size());
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         dfb.wait_front(ublock_size_tiles);
 
-        DPRINT << "Debug pointer value: " << *debug_ptr << ENDL();
-
-        noc.async_write(dfb, dst_dram, ublock_size_bytes, {}, {.bank_id = dst_bank_id, .addr = dst_addr});
+        DPRINT << "Writing to DRAM: " << tlocal_dst_addr << " from DFB" << ENDL();
+        noc.async_write(dfb, dst_dram, ublock_size_bytes, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
         noc.async_write_barrier();
 
         dfb.pop_front(ublock_size_tiles);
-        dst_addr += ublock_size_bytes;
+        tlocal_dst_addr += dfb.get_stride_size();
     }
 #else
     // single-tile ublocks
