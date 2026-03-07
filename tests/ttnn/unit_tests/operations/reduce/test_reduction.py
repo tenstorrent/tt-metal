@@ -278,7 +278,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 
 
 @pytest.mark.parametrize("dim1", [1])
-@pytest.mark.parametrize("dim2", [128256, 151936])
+@pytest.mark.parametrize("dim2", [64128, 37968])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])

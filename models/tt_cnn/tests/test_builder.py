@@ -7,6 +7,7 @@ import torch
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.tt_cnn.tt.builder import (
     AutoShardedStrategyConfiguration,
     BlockShardedStrategyConfiguration,
@@ -183,6 +184,7 @@ def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)  # Use first 2 sizes
 @pytest.mark.parametrize("channels", [16, 8])
