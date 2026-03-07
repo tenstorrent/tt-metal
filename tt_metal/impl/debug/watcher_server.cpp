@@ -349,7 +349,8 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     std::vector<dev_msgs::watcher_msg_t> watcher_init_val;
     watcher_init_val.reserve(NumHalProgrammableCoreTypes);
 
-    for (int programmable_core_type_index = 0; programmable_core_type_index < NumHalProgrammableCoreTypes;
+    for (uint32_t programmable_core_type_index = 0;
+         programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
         auto factory = hal.get_dev_msgs_factory(programmable_core_type);
