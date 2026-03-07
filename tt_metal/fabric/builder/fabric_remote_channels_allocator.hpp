@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <sstream>
 #include <vector>
 
 namespace tt::tt_fabric {
@@ -142,3 +143,13 @@ inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
 }
 
 }  // namespace tt::tt_fabric
+
+// fmt formatter specialization for FabricRemoteChannelsAllocator
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricRemoteChannelsAllocator> : fmt::formatter<std::string> {
+    auto format(const tt::tt_fabric::FabricRemoteChannelsAllocator& allocator, fmt::format_context& ctx) const {
+        std::ostringstream stream;
+        stream << allocator;
+        return formatter<std::string>::format(stream.str(), ctx);
+    }
+};
