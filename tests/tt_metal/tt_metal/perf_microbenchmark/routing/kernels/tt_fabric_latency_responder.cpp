@@ -17,9 +17,10 @@
 constexpr bool enable_fused_payload_with_sync = get_compile_time_arg_val(0) != 0;
 constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
 constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
+constexpr bool enable_l1_dcache = get_compile_time_arg_val(3) != 0;
 
 void kernel_main() {
-    set_l1_data_cache<false>();
+    set_l1_data_cache<enable_l1_dcache>();
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
@@ -86,7 +87,7 @@ void kernel_main() {
     }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
-        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.wait_for_empty_write_slot<enable_l1_dcache>();
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
     };
@@ -165,4 +166,8 @@ void kernel_main() {
 
     noc_semaphore_set(reinterpret_cast<volatile uint32_t*>(semaphore_address), 0);
     noc_async_full_barrier();
+    
+    if constexpr (enable_l1_dcache) {
+        set_l1_data_cache<false>();
+    }
 }

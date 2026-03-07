@@ -219,7 +219,9 @@ int main(int argc, char** argv) {
 
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-            test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
+            test_context.set_code_profiling_enabled(
+                rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd() ||
+                rtoptions.get_enable_fabric_code_profiling_speedy_path());
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
