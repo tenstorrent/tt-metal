@@ -51,6 +51,7 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(32);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(33);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(34) == 1;
+    constexpr bool use_deferred_norm = get_compile_time_arg_val(35) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -118,8 +119,11 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
-    AccumulatorHalf ring_prev = {cb_sum_A, cb_max_A, cb_out_im_A};
-    AccumulatorHalf ring_cur = {cb_sum_B, cb_max_B, cb_out_im_B};
+    RingAccumulatorState acc_state = {
+        {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
+        {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
+        true,                               // is_first
+    };
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -171,7 +175,8 @@ void kernel_main() {
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
-        if constexpr (use_streaming_compute) {
+        if constexpr (use_streaming_compute && use_deferred_norm) {
+            const bool is_last_ring_iter = (ring_iter == ring_size - 1);
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -195,6 +200,8 @@ void kernel_main() {
                 cb_prev_out,
                 cb_out,
                 uniform_dataformat,
+                true,    // deferred_norm
+                cb_out,  // cb_normalized_out — output goes directly to cb_out
                 local_n_padded_tiles,
                 joint_n_padded_tiles>(
                 global_q_start,
@@ -211,8 +218,49 @@ void kernel_main() {
                 global_n_mask_chunk_id,
                 local_n_mask_chunk_id,
                 joint_n_mask_chunk_id,
-                ring_prev,
-                ring_cur,
+                acc_state,
+                is_last_ring_iter,
+                lw_mask);
+        } else if constexpr (use_streaming_compute) {
+            sdpa_ring_v2<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                0,  // Skt — not used for ring
+                DHt,
+                DHt,  // vDHt = DHt for ring
+                scale_fp32,
+                qk_subblock_h,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_mask_in,
+                cb_scale_in,
+                cb_lse_in,
+                cb_lse_out,
+                cb_prev_out,
+                cb_out,
+                uniform_dataformat>(
+                global_q_start,
+                global_q_end,
+                num_kv_chunks,
+                ring_iter,
+                ring_id,
+                num_local_k_chunks,
+                local_padded_Nt,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                ring_iter_needs_joint_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                joint_n_mask_chunk_id,
+                acc_state,
+                false,  // is_last_ring_iter — not used in non-deferred
                 lw_mask);
         } else {
             sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
