@@ -103,6 +103,7 @@ def validate_combine_output(
     matches = 0
     total_slots = 0
     mismatches = []
+    validated_cells = set()
 
     for chip_id in range(dispatch_group_size):
         for token_id in range(seq_len_per_chip):
@@ -112,6 +113,7 @@ def validate_combine_output(
                 # Determine which EP rank processed this (chip, token, topk)
                 expert_id = indices[chip_id, token_id, topk_idx].item()
                 dispatch_group_idx = expert_id // experts_per_dispatch_group
+                validated_cells.add((dispatch_group_idx, chip_id))
 
                 torch_data = torch_output[chip_id, token_id, topk_idx]
                 ttnn_data = ttnn_output[dispatch_group_idx, chip_id, token_id, topk_idx]
@@ -129,6 +131,7 @@ def validate_combine_output(
         total=total_slots,
         mismatches=mismatches,
         name="combine output",
+        validated_cells=validated_cells,
     )
 
 
@@ -164,6 +167,7 @@ def validate_roundtrip_output(
     matches = 0
     total_slots = 0
     mismatches = []
+    validated_cells = set()
 
     for chip_id in range(dispatch_group_size):
         for token_id in range(seq_len_per_chip):
@@ -173,6 +177,7 @@ def validate_roundtrip_output(
                 # Determine which EP rank processed this (chip, token, topk)
                 expert_id = indices[chip_id, token_id, topk_idx].item()
                 dispatch_group_idx = expert_id // experts_per_dispatch_group
+                validated_cells.add((dispatch_group_idx, chip_id))
 
                 # Input token
                 x_data = input_tensor[chip_id, token_id]
@@ -192,6 +197,7 @@ def validate_roundtrip_output(
         total=total_slots,
         mismatches=mismatches,
         name="roundtrip",
+        validated_cells=validated_cells,
     )
 
 
