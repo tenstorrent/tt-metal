@@ -15,6 +15,9 @@ name: "Build all Docker images"
 #   ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
 # =============================================================================
 
+env:
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+
 on:
   workflow_call:
     inputs:
@@ -87,13 +90,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          sparse-checkout: |
-            .github
-            dockerfile
-            scripts
-            tt_metal/sfpi-info.sh
-            tt_metal/sfpi-version
-          sparse-checkout-cone-mode: false
 
       - name: Check Harbor availability
         id: harbor

@@ -91,12 +91,6 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
-          sparse-checkout: |
-            .github
-            dockerfile
-            tt_metal/sfpi-info.sh
-            tt_metal/sfpi-version
-          sparse-checkout-cone-mode: false
 
       - name: Extract workflow metadata
         id: metadata
