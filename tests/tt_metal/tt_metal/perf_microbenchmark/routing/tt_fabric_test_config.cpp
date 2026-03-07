@@ -1255,6 +1255,9 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
         // by splitting senders with patterns going to different routing directions.
         split_senders_by_direction_for_benchmark(iteration_test);
 
+        // In benchmark mode, place workers near their connected routers on the NOC.
+        optimize_worker_placement_for_benchmark(iteration_test);
+
         // Convert to resolved TestConfig
         TestConfig resolved_test = resolve_test_config(iteration_test, i);
 
@@ -2160,6 +2163,89 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
     }
 
     test.senders = std::move(new_senders);
+}
+
+void TestConfigBuilder::optimize_worker_placement_for_benchmark(ParsedTestConfig& test) {
+    if (test.performance_test_mode != PerformanceTestMode::BANDWIDTH) {
+        return;
+    }
+
+    // Build reverse map: virtual coord -> logical coord for all worker cores
+    const auto& available_cores = device_info_provider_.get_available_worker_cores();
+    std::map<std::pair<uint32_t, uint32_t>, CoreCoord> virtual_to_logical;
+    for (const auto& logical_core : available_cores) {
+        auto virtual_core = device_info_provider_.get_virtual_core_from_logical_core(logical_core);
+        virtual_to_logical[{virtual_core.x, virtual_core.y}] = logical_core;
+    }
+
+    const auto noc_grid = device_info_provider_.get_noc_grid_size();
+
+    for (auto& sender : test.senders) {
+        if (!sender.noc_id.has_value()) {
+            continue;
+        }
+
+        // Determine routing direction from patterns (post-split, all patterns go same direction)
+        FabricNodeId src_node = resolve_device_identifier(sender.device, device_info_provider_);
+        RoutingDirection dir;
+        bool found_direction = false;
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.destination.has_value() && pattern.destination->hops.has_value()) {
+                dir = route_manager_.get_forwarding_direction(pattern.destination->hops.value());
+                found_direction = true;
+                break;
+            } else if (pattern.destination.has_value() && pattern.destination->device.has_value()) {
+                FabricNodeId dst_node =
+                    resolve_device_identifier(pattern.destination->device.value(), device_info_provider_);
+                dir = route_manager_.get_forwarding_direction(src_node, dst_node);
+                found_direction = true;
+                break;
+            }
+        }
+
+        if (!found_direction) {
+            continue;
+        }
+
+        uint32_t link_idx = sender.link_id.value_or(0);
+        auto router_virtual = device_info_provider_.get_router_virtual_coord(src_node, dir, link_idx);
+
+        // noc0: place worker above router (y - 1), noc1: place worker below router (y + 1)
+        bool is_noc1 = (sender.noc_id.value() == tt::tt_metal::NOC::RISCV_1);
+        int32_t target_y =
+            static_cast<int32_t>(router_virtual.y) + (is_noc1 ? 1 : -1);
+
+        // Wraparound using NOC grid size
+        if (target_y < 0) {
+            target_y = static_cast<int32_t>(noc_grid.y) + target_y;
+        } else if (static_cast<uint32_t>(target_y) >= noc_grid.y) {
+            target_y = target_y % static_cast<int32_t>(noc_grid.y);
+        }
+
+        auto it = virtual_to_logical.find({router_virtual.x, static_cast<uint32_t>(target_y)});
+        if (it != virtual_to_logical.end()) {
+            sender.core = it->second;
+            log_debug(
+                LogTest,
+                "Benchmark mode: placed sender on device {} at logical core ({}, {}) "
+                "near router virtual ({}, {}) direction={} noc={}",
+                src_node,
+                it->second.x,
+                it->second.y,
+                router_virtual.x,
+                router_virtual.y,
+                static_cast<int>(dir),
+                is_noc1 ? 1 : 0);
+        } else {
+            log_debug(
+                LogTest,
+                "Benchmark mode: no worker core found at virtual ({}, {}) for router at ({}, {})",
+                router_virtual.x,
+                target_y,
+                router_virtual.x,
+                router_virtual.y);
+        }
+    }
 }
 
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {

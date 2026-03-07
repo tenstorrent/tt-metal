@@ -524,6 +524,11 @@ private:
     // one fabric connection. This prevents the worker from becoming the bottleneck.
     void split_senders_by_direction_for_benchmark(ParsedTestConfig& test);
 
+    // In benchmark mode, place each worker core as close as possible to its connected
+    // fabric router on the NOC. For noc0, the worker is placed one row above the router;
+    // for noc1, one row below (with wraparound).
+    void optimize_worker_placement_for_benchmark(ParsedTestConfig& test);
+
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);
