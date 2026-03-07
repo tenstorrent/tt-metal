@@ -46,7 +46,7 @@ def test_torch_dispatch_combine(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seed=42,
     )
-    # Squeeze the ep_rank dimension since this is a single-rank pure torch test
+    # Squeeze the dispatch_group dimension since this is a single-rank pure torch test
     weights = weights.squeeze(0)
 
     # Create expert dispatch table (single EP rank for this test)

@@ -31,16 +31,18 @@ class ValidationResult:
         logger.warning(f"Found {len(self.mismatches)} mismatches in {self.name}. Showing first {limit}:")
         for i, mismatch in enumerate(self.mismatches[:limit]):
             if len(mismatch) == 5:
-                # Combine-style: (ep_rank, chip_id, token_id, topk_idx, max_diff)
-                ep_rank, chip_id, token_id, topk_idx, max_diff = mismatch
+                # Combine-style: (dispatch_group_idx, chip_id, token_id, topk_idx, max_diff)
+                dispatch_group_idx, chip_id, token_id, topk_idx, max_diff = mismatch
                 logger.error(
-                    f"  [{i}] ep_rank={ep_rank}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
+                    f"  [{i}] dispatch_group_idx={dispatch_group_idx}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
                     f"max_diff={max_diff:.6f}"
                 )
             elif len(mismatch) == 4:
-                # Dispatch-style: (ep_rank, chip_id, expert_id, error_detail)
-                ep_rank, chip_id, expert_id, error_detail = mismatch
-                logger.error(f"  [{i}] ep_rank={ep_rank}, chip={chip_id}, expert={expert_id}: {error_detail}")
+                # Dispatch-style: (dispatch_group_idx, chip_id, expert_id, error_detail)
+                dispatch_group_idx, chip_id, expert_id, error_detail = mismatch
+                logger.error(
+                    f"  [{i}] dispatch_group_idx={dispatch_group_idx}, chip={chip_id}, expert={expert_id}: {error_detail}"
+                )
             else:
                 # Generic fallback
                 logger.error(f"  [{i}] {mismatch}")
@@ -94,7 +96,7 @@ def validate_combine_output(
     dispatch_group_size = torch_output.shape[0]
     seq_len_per_chip = torch_output.shape[1]
     num_experts_per_tok = torch_output.shape[2]
-    experts_per_rank = num_routed_experts // num_dispatch_groups
+    experts_per_dispatch_group = num_routed_experts // num_dispatch_groups
 
     matches = 0
     total_slots = 0
@@ -107,16 +109,16 @@ def validate_combine_output(
 
                 # Determine which EP rank processed this (chip, token, topk)
                 expert_id = indices[chip_id, token_id, topk_idx].item()
-                ep_rank = expert_id // experts_per_rank
+                dispatch_group_idx = expert_id // experts_per_dispatch_group
 
                 torch_data = torch_output[chip_id, token_id, topk_idx]
-                ttnn_data = ttnn_output[ep_rank, chip_id, token_id, topk_idx]
+                ttnn_data = ttnn_output[dispatch_group_idx, chip_id, token_id, topk_idx]
 
                 if torch.allclose(torch_data, ttnn_data, atol=atol, rtol=rtol):
                     matches += 1
                 else:
                     max_diff = torch.max(torch.abs(torch_data.float() - ttnn_data.float())).item()
-                    mismatches.append((ep_rank, chip_id, token_id, topk_idx, max_diff))
+                    mismatches.append((dispatch_group_idx, chip_id, token_id, topk_idx, max_diff))
 
     passed = len(mismatches) == 0
     return ValidationResult(
@@ -155,7 +157,7 @@ def validate_roundtrip_output(
     dispatch_group_size = input_tensor.shape[0]
     seq_len_per_chip = input_tensor.shape[1]
     num_experts_per_tok = indices.shape[2]
-    experts_per_rank = num_routed_experts // num_dispatch_groups
+    experts_per_dispatch_group = num_routed_experts // num_dispatch_groups
 
     matches = 0
     total_slots = 0
@@ -168,18 +170,18 @@ def validate_roundtrip_output(
 
                 # Determine which EP rank processed this (chip, token, topk)
                 expert_id = indices[chip_id, token_id, topk_idx].item()
-                ep_rank = expert_id // experts_per_rank
+                dispatch_group_idx = expert_id // experts_per_dispatch_group
 
                 # Input token
                 x_data = input_tensor[chip_id, token_id]
                 # Output from the EP rank that processed this token
-                y_data = output_tensor[ep_rank, chip_id, token_id, topk_idx]
+                y_data = output_tensor[dispatch_group_idx, chip_id, token_id, topk_idx]
 
                 if torch.allclose(x_data, y_data, atol=atol, rtol=rtol):
                     matches += 1
                 else:
                     max_diff = torch.max(torch.abs(x_data.float() - y_data.float())).item()
-                    mismatches.append((ep_rank, chip_id, token_id, topk_idx, max_diff))
+                    mismatches.append((dispatch_group_idx, chip_id, token_id, topk_idx, max_diff))
 
     passed = len(mismatches) == 0
     return ValidationResult(
@@ -198,11 +200,11 @@ def log_combine_mismatch_details(
     limit: int = 10,
 ):
     """Log detailed mismatch information for combine validation."""
-    for i, (ep_rank, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:limit]):
+    for i, (dispatch_group_idx, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:limit]):
         torch_sample = torch_output[chip_id, token_id, topk_idx, :5]
-        ttnn_sample = ttnn_output[ep_rank, chip_id, token_id, topk_idx, :5]
+        ttnn_sample = ttnn_output[dispatch_group_idx, chip_id, token_id, topk_idx, :5]
         logger.error(
-            f"  [{i}] Mismatch at ep_rank={ep_rank}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
+            f"  [{i}] Mismatch at dispatch_group_idx={dispatch_group_idx}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
             f"max_diff={max_diff:.6f}"
         )
         logger.error(f"      torch[:5]={torch_sample}")
@@ -244,7 +246,7 @@ def validate_dispatch_data(
     """
     Generic dispatch data validation.
 
-    Iterates over (ep_rank, chip, expert) slots, compares using compare_fn.
+    Iterates over (dispatch_group_idx, chip, expert) slots, compares using compare_fn.
     Skips experts not present in EP rank (dispatch_table == -1).
 
     Args:
@@ -255,7 +257,7 @@ def validate_dispatch_data(
         num_dispatch_groups: Number of EP ranks
         dispatch_group_size: Number of chips in dispatch group
         experts_per_chip: Number of experts per chip
-        compare_fn: Comparison function (torch_slot, ttnn_slot, ep_rank, chip_id, expert_id) -> (match, error_detail)
+        compare_fn: Comparison function (torch_slot, ttnn_slot, dispatch_group_idx, chip_id, expert_id) -> (match, error_detail)
         name: Name for logging
         verbose: Whether to log detailed mismatch info
 
