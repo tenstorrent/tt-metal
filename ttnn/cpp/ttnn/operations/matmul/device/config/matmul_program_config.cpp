@@ -306,7 +306,8 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<const CoreCoord> compute_with_storage_grid_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype,
-    const bool /*all_dram_interleaved*/) {
+    const bool /*all_dram_interleaved*/,
+    const std::optional<tt::tt_metal::ShardSpec>& user_shard_spec = std::nullopt) {
     using namespace tt;
     auto* device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
@@ -320,7 +321,17 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const auto K = utilities::get_K_dim(a_shape_padded, /*tile=*/std::nullopt);
     const auto N = utilities::get_N_dim(b_shape_padded, /*tile=*/std::nullopt);
     uint32_t per_core_M, per_core_N;
-    if (mcast_in0) {
+
+    // If user provided a shard spec (BLOCK_SHARDED on 1D grid), derive per_core values from it
+    if (user_shard_spec.has_value()) {
+        const auto& shard_shape = user_shard_spec->shape;
+        per_core_M = shard_shape[0] / in0_tile.get_height();
+        per_core_N = shard_shape[1] / in1_tile.get_width();
+        // Also use the user's grid size for compute
+        auto grid_bbox = user_shard_spec->grid.bounding_box();
+        grid_size = CoreCoord{
+            grid_bbox.end_coord.x - grid_bbox.start_coord.x + 1, grid_bbox.end_coord.y - grid_bbox.start_coord.y + 1};
+    } else if (mcast_in0) {
         per_core_M = M / in0_tile.get_height();
         per_core_N = div_up(div_up(N, grid_size.x * grid_size.y), in1_tile.get_width());
     } else {
@@ -1104,44 +1115,94 @@ MatmulProgramConfig create_simple_matmul_program_config(
 
     if (all_dram_interleaved or (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0)) {
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
-        bool use_mcast_1d_in0_config = is_wide or (core_range.y == 0 and mem_config.is_sharded() and
-                                                   mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
-        bool use_mcast_1d_in1_config = is_tall or (core_range.y == 0 and mem_config.is_sharded() and
-                                                   mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
+        // Check if BLOCK_SHARDED is on a 1D grid (equivalent to HEIGHT_SHARDED or WIDTH_SHARDED)
+        bool block_sharded_on_1d_column_grid = false;
+        bool block_sharded_on_1d_row_grid = false;
+        if (mem_config.is_sharded() && mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+            mem_config.shard_spec().has_value()) {
+            auto grid_bbox = mem_config.shard_spec()->grid.bounding_box();
+            // 1-column grid (e.g., 1x5): end_coord.x == start_coord.x means only 1 column
+            block_sharded_on_1d_column_grid = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+            // 1-row grid (e.g., 5x1): end_coord.y == start_coord.y means only 1 row
+            block_sharded_on_1d_row_grid = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+
+            // Check for unsupported configuration: BLOCK_SHARDED on 1D grid with both tensors batched
+            // This configuration requires the 2D mcast program which doesn't handle 1D grids correctly
+            const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
+            bool b_is_batched = (get_batch_size(b_shape) > 1);
+            if ((block_sharded_on_1d_column_grid || block_sharded_on_1d_row_grid) && b_is_batched) {
+                TT_FATAL(
+                    false,
+                    "BLOCK_SHARDED output on a 1D grid (single row or column of cores) is not supported when both "
+                    "input tensors are batched. Either use HEIGHT_SHARDED/WIDTH_SHARDED explicitly, use a 2D core "
+                    "grid for BLOCK_SHARDED, or ensure the second input tensor (B) has batch size 1. "
+                    "See GitHub issue #32306 for details.");
+            }
+        }
+
+        bool use_mcast_1d_in0_config =
+            is_wide or
+            (core_range.y == 0 and mem_config.is_sharded() and
+             (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
+        bool use_mcast_1d_in1_config =
+            is_tall or
+            (core_range.y == 0 and mem_config.is_sharded() and
+             (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
             all_dram_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
-                                     mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+                                     mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
+                                     not block_sharded_on_1d_column_grid and not block_sharded_on_1d_row_grid);
         if (core_range.y == 1 or use_mcast_1d_in0_config) {
+            // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
+            std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
+                (block_sharded_on_1d_row_grid && mem_config.shard_spec().has_value())
+                    ? std::make_optional(mem_config.shard_spec().value())
+                    : std::nullopt;
+            // fuse_batch can only be true when B has batch size 1
+            const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
+            bool b_is_unbatched = (get_batch_size(b_shape) == 1);
+            bool fuse_batch_for_sharding = user_shard_spec.has_value() && b_is_unbatched;
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
                 transpose_a,
                 transpose_b,
                 bias_single_tile_size,
-                false /* fuse_batch */,
+                fuse_batch_for_sharding /* fuse_batch */,
                 std::nullopt /* fused_activation */,
                 true /* mcast_in0 */,
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config,
                 output_dtype,
-                all_dram_interleaved);
+                all_dram_interleaved,
+                user_shard_spec);
         }
         if (core_range.x == 1 or use_mcast_1d_in1_config) {
+            // Pass user's shard_spec when BLOCK_SHARDED on 1D column grid
+            std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
+                (block_sharded_on_1d_column_grid && mem_config.shard_spec().has_value())
+                    ? std::make_optional(mem_config.shard_spec().value())
+                    : std::nullopt;
+            // fuse_batch can only be true when B has batch size 1
+            const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
+            bool b_is_unbatched = (get_batch_size(b_shape) == 1);
+            bool fuse_batch_for_sharding = user_shard_spec.has_value() && b_is_unbatched;
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
                 transpose_a,
                 transpose_b,
                 bias_single_tile_size,
-                false /* fuse_batch */,
+                fuse_batch_for_sharding /* fuse_batch */,
                 std::nullopt /* fused_activation */,
                 false /* mcast_in0 */,
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config,
                 output_dtype,
-                all_dram_interleaved);
+                all_dram_interleaved,
+                user_shard_spec);
         }
         if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
             bool transpose_mcast =
