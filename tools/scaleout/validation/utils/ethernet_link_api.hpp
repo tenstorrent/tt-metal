@@ -13,7 +13,6 @@
 
 namespace tt::scaleout_tools {
 
-using tt::tt_metal::ChipId;
 using tt::CoordSystem;
 using tt::CoreType;
 using tt::tt_metal::CoreCoord;
@@ -21,7 +20,7 @@ using tt::tt_metal::FWMailboxMsg;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 struct ResetLink {
-    ChipId chip_id;
+    tt::tt_metal::ChipId chip_id;
     uint32_t channel;
     std::string log_message;
 };
