@@ -45,6 +45,7 @@ TEST(OptionalReferenceTest, ImplicitConversionToConst) {
 
     // Modify original value
     value = 100;
+    EXPECT_EQ(value, 100);  // Verify original value was modified
     EXPECT_EQ(*ref, 100);  // Reference should see the change
 }
 
