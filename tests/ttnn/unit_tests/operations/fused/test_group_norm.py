@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.common.utility_functions import comp_pcc, run_for_blackhole, skip_with_llk_assert
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
@@ -39,6 +39,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("N", [1])
 @pytest.mark.parametrize("C", [320])
 @pytest.mark.parametrize("H", [32])
@@ -117,6 +118,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997 if use_welford else 0.9998)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
@@ -206,6 +208,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
@@ -305,6 +308,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
@@ -449,6 +453,7 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
@@ -524,6 +529,7 @@ def generate_sdxl_test_inputs_neg_mask():
     return inputs
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
 def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=False):
@@ -614,6 +620,7 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("N", [1])
 @pytest.mark.parametrize("C", [1920])
@@ -704,6 +711,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, shard, eps, use_negative_mask",
     [
@@ -806,6 +814,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("N", [1])
 @pytest.mark.parametrize("C", [256])

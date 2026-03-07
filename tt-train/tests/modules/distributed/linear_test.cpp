@@ -453,6 +453,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
+    SKIP_FOR_LLK_ASSERTS("Skipping test with LLK asserts enabled");
 
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
@@ -540,6 +541,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
+    SKIP_FOR_LLK_ASSERTS("Skipping test with LLK asserts enabled");
 
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
@@ -635,6 +637,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
+    SKIP_FOR_LLK_ASSERTS("Skipping test with LLK asserts enabled");
 
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;

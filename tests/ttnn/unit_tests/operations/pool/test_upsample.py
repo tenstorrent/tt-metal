@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_llk_assert
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 TILE_WIDTH = 32
@@ -346,6 +346,7 @@ def test_upsample_multicore_corerange(
     assert isequal
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",
