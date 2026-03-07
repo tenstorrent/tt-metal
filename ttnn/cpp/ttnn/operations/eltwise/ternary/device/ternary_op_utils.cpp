@@ -338,7 +338,10 @@ uint32_t pack_scalar_runtime_arg(const ScalarVariant scalar, const DataType dtyp
                 return pack_scalar_runtime_arg_float(v, dtype);
             } else {
                 static_assert(std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>);
-                return std::bit_cast<uint32_t>(v);
+                if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+                    return std::bit_cast<uint32_t>(v);
+                }
+                return std::bit_cast<uint32_t>(static_cast<float>(v));
             }
         },
         scalar);

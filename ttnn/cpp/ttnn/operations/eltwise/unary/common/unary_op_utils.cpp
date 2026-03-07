@@ -1014,10 +1014,18 @@ std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
     return std::bit_cast<std::uint32_t>(param);
 }
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType /*dtype*/) { return param; }
+std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+        return param;
+    }
+    return std::bit_cast<std::uint32_t>(static_cast<float>(param));
+}
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType /*dtype*/) {
-    return std::bit_cast<std::uint32_t>(param);
+std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+        return std::bit_cast<std::uint32_t>(param);
+    }
+    return std::bit_cast<std::uint32_t>(static_cast<float>(param));
 }
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype) {
