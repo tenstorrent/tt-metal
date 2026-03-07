@@ -152,6 +152,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG2>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG1P>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::MISH>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
@@ -396,15 +397,6 @@ Tensor Abs::invoke(
 
 Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
-}
-
-Tensor Mish::invoke(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    UnaryOpType op_type = UnaryOpType::MISH;
-
-    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor LogSigmoid::invoke(

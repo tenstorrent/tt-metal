@@ -2032,12 +2032,6 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
-        ttnn::mish,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
-        "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
-        mod,
         ttnn::hardmish,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
         "[Supported range -20 to inf]",
@@ -2265,7 +2259,8 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_with_fast_and_approximate_mode(mod, ttnn::log2, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode(
         mod, ttnn::log1p, R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
+    bind_unary_operation_with_fast_and_approximate_mode(
+        mod, ttnn::mish, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     // Unaries with float parameter
     bind_unary_composite_with_default_float(
         mod, ttnn::elu, "alpha", "The alpha parameter for the ELU function", 1.0f, R"doc(BFLOAT16, BFLOAT8_B)doc");
