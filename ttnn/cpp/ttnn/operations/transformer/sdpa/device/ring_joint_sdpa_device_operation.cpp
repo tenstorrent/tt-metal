@@ -227,7 +227,9 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const auto& joint_input = tensor_args.joint_q;
     auto lse_shape = input.logical_shape();
     lse_shape[3] = 1;
-    lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
+    // 2× size: first half stores max, second half stores sum (for deferred norm DRAM round-trip).
+    // Non-deferred path only uses the first half (for LSE). Extra space is negligible.
+    lse_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
 
     return {
         .output = TensorSpec(

@@ -52,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(33);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(34) == 1;
     constexpr bool use_deferred_norm = get_compile_time_arg_val(35) == 1;
+    constexpr uint32_t q_per_core = get_compile_time_arg_val(36);
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -102,6 +103,10 @@ void kernel_main() {
     // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
     // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
     constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;
+
+    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
+    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
+    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -202,6 +207,8 @@ void kernel_main() {
                 uniform_dataformat,
                 true,    // deferred_norm
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
+                cb_sum_out,
+                cb_sum_in,
                 local_n_padded_tiles,
                 joint_n_padded_tiles>(
                 global_q_start,
@@ -220,6 +227,7 @@ void kernel_main() {
                 joint_n_mask_chunk_id,
                 acc_state,
                 is_last_ring_iter,
+                q_per_core,
                 lw_mask);
         } else if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
@@ -261,6 +269,7 @@ void kernel_main() {
                 joint_n_mask_chunk_id,
                 acc_state,
                 false,  // is_last_ring_iter — not used in non-deferred
+                q_per_core,
                 lw_mask);
         } else {
             sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(

@@ -39,6 +39,88 @@ void read_prev_output_and_lse(
 }
 
 template <typename ReaderType, typename TensorAccessorType>
+void read_prev_accumulators(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const TensorAccessorType& lse_writer,
+    const TensorTileShape& lse_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t sum_offset,
+    const uint32_t cb_prev_out,
+    const uint32_t cb_lse_in,
+    const uint32_t cb_sum_in,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    // Read previous output
+    read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
+
+    // Read max from LSE DRAM (first half)
+    cb_reserve_back(cb_lse_in, Sq_chunk_t);
+    uint32_t max_addr = get_write_ptr(cb_lse_in);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_read_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, max_addr);
+        max_addr += lse_tile_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_lse_in, Sq_chunk_t);
+
+    // Read sum from LSE DRAM (second half, offset by sum_offset)
+    cb_reserve_back(cb_sum_in, Sq_chunk_t);
+    uint32_t sum_addr = get_write_ptr(cb_sum_in);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_read_tile(lse_tile_logical.id_of(nb, nq, sum_offset + i, 0), lse_writer, sum_addr);
+        sum_addr += lse_tile_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_sum_in, Sq_chunk_t);
+}
+
+template <typename ReaderType, typename TensorAccessorType>
+void write_accumulators(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const TensorAccessorType& lse_writer,
+    const TensorTileShape& lse_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t sum_offset,
+    const uint32_t cb_out,
+    const uint32_t cb_lse_out,
+    const uint32_t cb_sum_out,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    // Write output
+    write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+
+    // Write max to LSE DRAM (first half)
+    cb_wait_front(cb_lse_out, Sq_chunk_t);
+    uint32_t max_write_addr = get_read_ptr(cb_lse_out);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, max_write_addr);
+        max_write_addr += lse_tile_bytes;
+    }
+    cb_pop_front(cb_lse_out, Sq_chunk_t);
+
+    // Write sum to LSE DRAM (second half, offset by sum_offset)
+    cb_wait_front(cb_sum_out, Sq_chunk_t);
+    uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_write_tile(lse_tile_logical.id_of(nb, nq, sum_offset + i, 0), lse_writer, sum_write_addr);
+        sum_write_addr += lse_tile_bytes;
+    }
+    cb_pop_front(cb_sum_out, Sq_chunk_t);
+}
+
+template <typename ReaderType, typename TensorAccessorType>
 void write_output_and_lse(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const TensorAccessorType& lse_writer,
@@ -111,6 +193,8 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
+    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_in);
 
@@ -120,7 +204,8 @@ void kernel_main() {
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, DHt);
-    const auto lse_tile_logical = TensorTileShape(B, NH, local_padded_Nt + Lt, 1);
+    // LSE tensor is 2× size: first half for max/LSE, second half for sum.
+    const auto lse_tile_logical = TensorTileShape(B, NH, (local_padded_Nt + Lt) * 2, 1);
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
@@ -194,36 +279,90 @@ void kernel_main() {
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
         if constexpr (use_deferred_norm) {
-            // Deferred norm: compute kernel accumulates across ring iterations and only
-            // produces final normalized output on the last ring iteration via cb_out.
-            // No DRAM round-trips needed; write output once at the end.
+            // Deferred norm: accumulates across ring iterations with exponential rescaling.
+            // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
+            // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
             const bool is_last_ring_iter = (ring_iter == ring_size - 1);
-            if (is_last_ring_iter) {
-                for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-                    const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
-                    const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-                    const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+            const bool single_q_chunk = (global_q_end - global_q_start == 1);
 
-                    const bool is_joint_q = q_chunk >= num_local_q_chunks;
-                    Slice out_slice;
-                    uint32_t end_seq_tile;
-                    if (is_joint_q) {
-                        const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                        out_slice =
-                            Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
-                        end_seq_tile = Lt;
-                    } else {
-                        const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-                        out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-                        end_seq_tile = local_padded_Nt * (ring_id + 1);
-                    }
+            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-                    // Write final output only (no LSE needed for deferred norm)
+                const bool is_joint_q = q_chunk >= num_local_q_chunks;
+                Slice out_slice;
+                uint32_t end_seq_tile;
+                if (is_joint_q) {
+                    const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = Lt;
+                } else {
+                    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = local_padded_Nt * (ring_id + 1);
+                }
+
+                uint32_t lse_seq_start_tile;
+                uint32_t lse_seq_end_tile;
+                if (is_joint_q) {
+                    lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
+                } else {
+                    lse_seq_start_tile = q_chunk * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
+                }
+
+                constexpr uint32_t sum_offset = local_padded_Nt + Lt;
+
+                if (!single_q_chunk && ring_iter > 0) {
+                    read_prev_accumulators(
+                        is_joint_q ? joint_out_generator : out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        sum_offset,
+                        cb_prev_out,
+                        cb_lse_in,
+                        cb_sum_in,
+                        tile_bytes,
+                        lse_tile_bytes);
+                }
+
+                if (is_last_ring_iter) {
                     write_block(
                         is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+                } else if (!single_q_chunk) {
+                    write_accumulators(
+                        is_joint_q ? joint_out_generator : out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        sum_offset,
+                        cb_out,
+                        cb_lse_out,
+                        cb_sum_out,
+                        tile_bytes,
+                        lse_tile_bytes);
                 }
-                noc_async_write_barrier();
             }
+            noc_async_write_barrier();
         } else {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.

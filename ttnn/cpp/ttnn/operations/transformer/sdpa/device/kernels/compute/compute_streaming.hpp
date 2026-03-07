@@ -1254,6 +1254,8 @@ template <
     bool uniform_dataformat = false,
     bool deferred_norm = false,
     uint32_t cb_normalized_out = 0,
+    uint32_t cb_sum_out = 0,
+    uint32_t cb_sum_in = 0,
     uint32_t local_n_padded_tiles_ct = 0,
     uint32_t joint_n_padded_tiles_ct = 0>
 void sdpa_ring_v2(
@@ -1273,6 +1275,7 @@ void sdpa_ring_v2(
     const uint32_t joint_n_mask_chunk_id,
     RingAccumulatorState& acc_state,
     const bool is_last_ring_iter = false,
+    const uint32_t q_per_core = 1,
     const LightweightMaskContext& lw_mask = {}) {
     constexpr bool uniform_format = uniform_dataformat;
 
@@ -1292,9 +1295,33 @@ void sdpa_ring_v2(
     }
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
-        // Deferred norm: use persistent accumulator state from caller.
-        // Non-deferred: copy aliases, re-initialized each Q chunk.
+        // Deferred norm: use persistent accumulator state from caller (single Q-chunk)
+        // or restore from DRAM (multi Q-chunk). Non-deferred: re-init each Q chunk.
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
+
+        // Deferred norm: determine is_first for this Q chunk in this ring_iter.
+        // Single Q-chunk: global is_first tracked in acc_state (persists in L1).
+        // Multi Q-chunk: is_first = (ring_iter == 0), restored from DRAM otherwise.
+        bool q_is_first = false;
+        if constexpr (deferred_norm) {
+            if (q_per_core == 1) {
+                // Single Q-chunk: is_first tracked globally in acc_state
+                q_is_first = acc_state.is_first;
+            } else {
+                // Multi Q-chunk: first ring_iter starts fresh, others restore from DRAM
+                if (ring_iter == 0) {
+                    q_is_first = true;
+                } else {
+                    // Restore accumulators from DRAM (writer pushed to these CBs).
+                    // copy_block handles cb_wait_front + cb_reserve_back + copy + cb_push_back + cb_pop_front.
+                    copy_block(cb_prev_out, q_prev.out, out_chunk_tiles);
+                    copy_block(cb_lse_in, q_prev.max, Sq_chunk_t);
+                    copy_block(cb_sum_in, q_prev.sum, Sq_chunk_t);
+
+                    q_is_first = false;
+                }
+            }
+        }
 
         uint32_t KV_chunks_processed = 0;
 
@@ -1309,11 +1336,14 @@ void sdpa_ring_v2(
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 
-            // Deferred norm: is_first is global (across ring iters), not per ring_iter
             bool is_first;
             if constexpr (deferred_norm) {
-                is_first = acc_state.is_first;
-                acc_state.is_first = false;
+                if (q_per_core == 1) {
+                    is_first = acc_state.is_first;
+                    acc_state.is_first = false;
+                } else {
+                    is_first = q_is_first && (KV_chunks_processed == 1);
+                }
             } else {
                 is_first = (KV_chunks_processed == 1);
             }
@@ -1396,10 +1426,24 @@ void sdpa_ring_v2(
         // Pop Q — not popped inside step since ring_mode gates the early Q pop
         cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
 
-        // Write back alias state for deferred norm (persists across ring iterations)
+        // Deferred norm: persist or save accumulators for next ring iteration
         if constexpr (deferred_norm) {
-            acc_state.prev = q_prev;
-            acc_state.cur = q_cur;
+            if (q_per_core == 1) {
+                // Single Q-chunk: persist in L1 (no DRAM round-trip)
+                acc_state.prev = q_prev;
+                acc_state.cur = q_cur;
+            } else if (!is_last_ring_iter) {
+                // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
+                // q_prev holds final accumulators after the last swap.
+                if constexpr (!uniform_format) {
+                    pack_reconfig_data_format(cb_out);
+                }
+                // copy_block handles wait + reserve + copy + push + pop internally.
+                copy_block(q_prev.out, cb_out, out_chunk_tiles);
+                copy_block(q_prev.max, cb_lse_out, Sq_chunk_t);
+                copy_block(q_prev.sum, cb_sum_out, Sq_chunk_t);
+            }
+            // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
         }
 
         // ========== Ring Finalization ==========
