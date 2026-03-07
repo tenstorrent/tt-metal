@@ -8,6 +8,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/unreachable.hpp"
+#include "tt_stl/concepts.hpp"
 
 namespace ttnn::prim {
 
@@ -67,22 +68,22 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
         [](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreFactory{};
+                return matmul_detail::MultiCoreDescriptorFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory{};
+                return matmul_detail::ReuseOptimizedDescriptorFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
+                return matmul_detail::ReuseMcast2DDescriptorFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                return matmul_detail::ReuseMcast1DDescriptorFactory{};
             } else if constexpr (std::is_same_v<
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                return MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory{};
+                return matmul_detail::DRAMShardedDescriptorFactory{};
             } else if constexpr (
                 std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                return MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory{};
+                return matmul_detail::BatchedHSDRAMShardedDescriptorFactory{};
             } else {
-                TT_THROW("Unknown program config type");
+                static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported program config type");
             }
         },
         config);

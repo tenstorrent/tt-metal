@@ -12,6 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::examples {
 
@@ -63,46 +64,45 @@ struct ExampleDeviceOperation {
     // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
     // be std::vector<std::optional<Tensor>>
 
+    // =========================================================================
+    // ProgramDescriptor-based factories (RECOMMENDED for all new operations)
+    //
+    // These use `create_descriptor()` which returns a declarative ProgramDescriptor.
+    // The framework handles program construction, caching, and buffer address
+    // patching automatically. No shared_variables_t or cached_program_t needed.
+    //
+    // override_runtime_arguments(Program&, ...) is OPTIONAL — only implement it
+    // if you have truly dynamic parameters (e.g. random seeds) that change on
+    // every call. Buffer addresses are auto-patched by the framework.
+    // =========================================================================
+
     struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        // Optional: only needed if runtime args change on cache hits beyond buffer addresses.
+        // Buffer addresses are auto-patched by the framework — no need to handle them here.
+        // static void override_runtime_arguments(
+        //     tt::tt_metal::Program& program,
+        //     const operation_attributes_t& operation_attributes,
+        //     const tensor_args_t& tensor_args,
+        //     tensor_return_value_t& tensor_return_value);
     };
 
     struct MultiCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        // Optional: only needed if runtime args change on cache hits beyond buffer addresses.
+        // static void override_runtime_arguments(
+        //     tt::tt_metal::Program& program,
+        //     const operation_attributes_t& operation_attributes,
+        //     const tensor_args_t& tensor_args,
+        //     tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;
