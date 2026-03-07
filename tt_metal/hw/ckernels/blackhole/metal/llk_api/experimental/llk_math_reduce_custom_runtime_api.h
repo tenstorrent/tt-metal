@@ -67,4 +67,4 @@ inline void llk_math_reduce_block_max_row_runtime(const uint dst_index) {
  * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
  * for a certain use case and the LLK team does not guarantee any degree of generality.
  */
-inline void llk_math_reduce_block_max_row_reinit_runtime() { reduce_max_row_configure_addrmod_reinit_runtime(); }
+inline void llk_math_reduce_block_max_row_reinit_runtime() { _llk_math_reduce_block_max_row_reinit_runtime_(); }
