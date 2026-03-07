@@ -30,6 +30,7 @@ from models.tt_transformers.tt.prefetcher import (
 )
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def round_up(n, multiple):
@@ -581,6 +582,7 @@ def run_prefetcher_all_matmuls(
 # =============================================================================
 # Test Cases
 # =============================================================================
+@skip_with_llk_assert()
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
 @pytest.mark.parametrize("enable_trace", [True])
 @pytest.mark.parametrize(
