@@ -89,8 +89,9 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(20);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(21);
+    constexpr bool use_deferred_norm = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -192,44 +193,93 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-            // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
-            const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
-            const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-            const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+        if constexpr (use_deferred_norm) {
+            // Deferred norm: compute kernel accumulates across ring iterations and only
+            // produces final normalized output on the last ring iteration via cb_out.
+            // No DRAM round-trips needed; write output once at the end.
+            const bool is_last_ring_iter = (ring_iter == ring_size - 1);
+            if (is_last_ring_iter) {
+                for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+                    const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                    const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                    const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-            const bool is_joint_q = q_chunk >= num_local_q_chunks;
-            Slice out_slice;
-            uint32_t end_seq_tile;
-            if (is_joint_q) {
-                const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = Lt;
-            } else {
-                const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-                out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = local_padded_Nt * (ring_id + 1);
+                    const bool is_joint_q = q_chunk >= num_local_q_chunks;
+                    Slice out_slice;
+                    uint32_t end_seq_tile;
+                    if (is_joint_q) {
+                        const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                        out_slice =
+                            Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                        end_seq_tile = Lt;
+                    } else {
+                        const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                        out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                        end_seq_tile = local_padded_Nt * (ring_id + 1);
+                    }
+
+                    // Write final output only (no LSE needed for deferred norm)
+                    write_block(
+                        is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+                }
+                noc_async_write_barrier();
             }
+        } else {
+            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+                // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
+                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-            // If not on the first iteration, read LSE input and previous output chunk.
-            // No race condition because writer kernel writes previous output before reading it again
+                const bool is_joint_q = q_chunk >= num_local_q_chunks;
+                Slice out_slice;
+                uint32_t end_seq_tile;
+                if (is_joint_q) {
+                    const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = Lt;
+                } else {
+                    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = local_padded_Nt * (ring_id + 1);
+                }
 
-            uint32_t lse_seq_start_tile;
-            uint32_t lse_seq_end_tile;
-            if (is_joint_q) {
-                lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
-                lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
-                lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
-            } else {
-                lse_seq_start_tile = q_chunk * Sq_chunk_t;
-                lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
-                lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
-                lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
-            }
+                // If not on the first iteration, read LSE input and previous output chunk.
+                // No race condition because writer kernel writes previous output before reading it again
 
-            if (ring_iter > 0) {
-                read_prev_output_and_lse(
+                uint32_t lse_seq_start_tile;
+                uint32_t lse_seq_end_tile;
+                if (is_joint_q) {
+                    lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
+                } else {
+                    lse_seq_start_tile = q_chunk * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
+                }
+
+                if (ring_iter > 0) {
+                    read_prev_output_and_lse(
+                        is_joint_q ? joint_out_generator : out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        cb_prev_out,
+                        cb_lse_in,
+                        tile_bytes,
+                        lse_tile_bytes);
+                }
+
+                write_output_and_lse(
                     is_joint_q ? joint_out_generator : out_generator,
                     lse_writer,
                     lse_tile_logical,
@@ -240,28 +290,12 @@ void kernel_main() {
                     end_seq_tile,
                     lse_seq_start_tile,
                     lse_seq_end_tile,
-                    cb_prev_out,
-                    cb_lse_in,
+                    cb_out,
+                    cb_lse_out,
                     tile_bytes,
                     lse_tile_bytes);
             }
-
-            write_output_and_lse(
-                is_joint_q ? joint_out_generator : out_generator,
-                lse_writer,
-                lse_tile_logical,
-                nb,
-                nq,
-                Sq_chunk_t,
-                out_slice,
-                end_seq_tile,
-                lse_seq_start_tile,
-                lse_seq_end_tile,
-                cb_out,
-                cb_lse_out,
-                tile_bytes,
-                lse_tile_bytes);
+            noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
-        noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
 }

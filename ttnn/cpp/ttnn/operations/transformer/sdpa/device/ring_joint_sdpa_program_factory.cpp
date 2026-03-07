@@ -312,6 +312,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                                        Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
+    // Single-chunk deferred normalization: skip per-ring-iter finalization when each core has exactly 1 Q chunk.
+    // Accumulates across all ring iterations with exponential rescaling, finalizes once at the end.
+    const bool use_deferred_norm = use_streaming_compute && (q_per_core == 1);
+    log_debug(tt::LogOp, "use_deferred_norm: {}", use_deferred_norm);
+
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
     log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
@@ -419,6 +424,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
+        (std::uint32_t)use_deferred_norm,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -472,6 +478,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
+        (std::uint32_t)use_deferred_norm,
     };
 
     std::map<std::string, std::string> defines;
