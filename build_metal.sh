@@ -50,6 +50,7 @@ show_help() {
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
+    echo "  --enable-mobilenet-libtorch      Enable MobileNet libtorch support. Disabled by default."
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
 }
@@ -92,6 +93,7 @@ toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
+build_mobilenet_libtorch="OFF"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
 
@@ -132,6 +134,7 @@ toolchain-path:
 configure-only
 without-distributed
 without-python-bindings
+enable-mobilenet-libtorch
 enable-fake-kernels-target
 enable-lto
 "
@@ -193,6 +196,8 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
+        --enable-mobilenet-libtorch)
+            build_mobilenet_libtorch="ON";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
         --enable-lto)
@@ -283,6 +288,7 @@ echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
+echo "INFO: Build MobileNet libtorch: $build_mobilenet_libtorch"
 echo "INFO: Enable Tracy: $tracy_enabled"
 echo "INFO: Enable LTO: $enable_lto"
 
@@ -291,6 +297,8 @@ cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
+cmake_args+=("-DBUILD_MOBILENET_LIBTORCH=$build_mobilenet_libtorch")
+
 
 if [ "$cxx_compiler_path" != "" ]; then
     echo "INFO: C++ compiler: $cxx_compiler_path"
