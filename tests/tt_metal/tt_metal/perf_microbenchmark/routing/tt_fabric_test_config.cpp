@@ -2170,56 +2170,58 @@ void TestConfigBuilder::optimize_worker_placement_for_benchmark(ParsedTestConfig
         return;
     }
 
-    // Build reverse map: virtual coord -> logical coord for all worker cores
+    // Build reverse map: virtual coord -> logical coord for all worker cores,
+    // and compute the virtual Y boundaries of the worker grid.
     const auto& available_cores = device_info_provider_.get_available_worker_cores();
     std::map<std::pair<uint32_t, uint32_t>, CoreCoord> virtual_to_logical;
+    size_t min_virtual_y = std::numeric_limits<size_t>::max();
+    size_t max_virtual_y = 0;
     for (const auto& logical_core : available_cores) {
         auto virtual_core = device_info_provider_.get_virtual_core_from_logical_core(logical_core);
         virtual_to_logical[{virtual_core.x, virtual_core.y}] = logical_core;
+        min_virtual_y = std::min(min_virtual_y, virtual_core.y);
+        max_virtual_y = std::max(max_virtual_y, virtual_core.y);
     }
 
-    const auto noc_grid = device_info_provider_.get_noc_grid_size();
+    const size_t noc_grid_y = device_info_provider_.get_noc_grid_size().y;
+    const size_t worker_grid_span = max_virtual_y - min_virtual_y + 1;
 
     for (auto& sender : test.senders) {
-        if (!sender.noc_id.has_value()) {
-            continue;
-        }
+        tt::tt_metal::NOC noc_id = sender.noc_id.value_or(DEFAULT_SENDER_NOC);
 
         // Determine routing direction from patterns (post-split, all patterns go same direction)
         FabricNodeId src_node = resolve_device_identifier(sender.device, device_info_provider_);
-        RoutingDirection dir;
-        bool found_direction = false;
+        std::optional<RoutingDirection> dir;
         for (const auto& pattern : sender.patterns) {
             if (pattern.destination.has_value() && pattern.destination->hops.has_value()) {
                 dir = route_manager_.get_forwarding_direction(pattern.destination->hops.value());
-                found_direction = true;
                 break;
-            } else if (pattern.destination.has_value() && pattern.destination->device.has_value()) {
+            }
+            if (pattern.destination.has_value() && pattern.destination->device.has_value()) {
                 FabricNodeId dst_node =
                     resolve_device_identifier(pattern.destination->device.value(), device_info_provider_);
                 dir = route_manager_.get_forwarding_direction(src_node, dst_node);
-                found_direction = true;
                 break;
             }
         }
 
-        if (!found_direction) {
+        if (!dir.has_value()) {
             continue;
         }
 
         uint32_t link_idx = sender.link_id.value_or(0);
-        auto router_virtual = device_info_provider_.get_router_virtual_coord(src_node, dir, link_idx);
+        auto router_virtual = device_info_provider_.get_router_virtual_coord(src_node, dir.value(), link_idx);
 
         // noc0: place worker above router (y - 1), noc1: place worker below router (y + 1)
-        bool is_noc1 = (sender.noc_id.value() == tt::tt_metal::NOC::RISCV_1);
-        int32_t target_y =
-            static_cast<int32_t>(router_virtual.y) + (is_noc1 ? 1 : -1);
+        // Worker virtual coords may not start at 0 (e.g. WH starts at 18,18), so if the
+        // target falls outside the worker grid, wrap around within the worker grid span.
+        bool is_noc1 = (noc_id == tt::tt_metal::NOC_1);
+        int32_t offset = is_noc1 ? 1 : -1;
+        size_t target_y = (router_virtual.y + noc_grid_y + static_cast<size_t>(offset)) % noc_grid_y;
 
-        // Wraparound using NOC grid size
-        if (target_y < 0) {
-            target_y = static_cast<int32_t>(noc_grid.y) + target_y;
-        } else if (static_cast<uint32_t>(target_y) >= noc_grid.y) {
-            target_y = target_y % static_cast<int32_t>(noc_grid.y);
+        // If the target is outside the worker virtual Y range, wrap it into the worker grid
+        if (target_y < min_virtual_y || target_y > max_virtual_y) {
+            target_y = min_virtual_y + (target_y + noc_grid_y - min_virtual_y) % worker_grid_span;
         }
 
         auto it = virtual_to_logical.find({router_virtual.x, static_cast<uint32_t>(target_y)});
@@ -2234,7 +2236,7 @@ void TestConfigBuilder::optimize_worker_placement_for_benchmark(ParsedTestConfig
                 it->second.y,
                 router_virtual.x,
                 router_virtual.y,
-                static_cast<int>(dir),
+                static_cast<int>(dir.value()),
                 is_noc1 ? 1 : 0);
         } else {
             log_debug(
