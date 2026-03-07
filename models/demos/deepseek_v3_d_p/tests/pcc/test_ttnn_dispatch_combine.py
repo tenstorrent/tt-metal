@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     log_combine_mismatch_details,
     validate_roundtrip_output,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
 @pytest.mark.parametrize(
@@ -236,8 +237,12 @@ def test_ttnn_dispatch_combine(
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
-    logger.info(f"{expert_dispatch_table.shape=}")
-    logger.info(f"expert_dispatch_table:\n{expert_dispatch_table}")
+    log_expert_dispatch_table(
+        expert_dispatch_table=expert_dispatch_table,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=num_routed_experts,
+    )
 
     # Run TTNN dispatch
     logger.info("Running TTNN dispatch...")
@@ -327,7 +332,12 @@ def test_ttnn_dispatch_combine(
         num_routed_experts,
     )
 
-    result.log_summary()
+    log_validation_results(
+        results=[result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Roundtrip Validation Results",
+    )
 
     if not result.passed:
         # Create a pseudo-output tensor for mismatch logging (x repeated for each topk)

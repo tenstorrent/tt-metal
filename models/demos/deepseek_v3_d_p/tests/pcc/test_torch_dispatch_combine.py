@@ -17,6 +17,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_gate_outputs,
     initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import ValidationResult
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
 @pytest.mark.parametrize(
@@ -112,3 +114,75 @@ def test_torch_dispatch_combine(
     assert torch.allclose(
         x, y, atol=1e-6
     ), f"Expected output to match input, but got max diff {torch.max(torch.abs(x-y)).item()}"
+
+
+@pytest.mark.parametrize("dispatch_group_size,num_dispatch_groups", [(4, 2), (2, 4), (8, 4)], ids=["4x2", "2x4", "8x4"])
+def test_visualize_expert_dispatch_table(dispatch_group_size, num_dispatch_groups):
+    """Visualize expert dispatch table for different mesh configurations."""
+    num_routed_experts = 256
+    num_experts_per_tok = 8
+
+    expert_dispatch_table = create_expert_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+
+    log_expert_dispatch_table(
+        expert_dispatch_table=expert_dispatch_table,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=num_routed_experts,
+        title=f"Expert Dispatch Table ({dispatch_group_size}x{num_dispatch_groups} mesh, {num_routed_experts} experts, topk={num_experts_per_tok})",
+    )
+
+
+def test_visualize_validation_results_synthetic():
+    """Test validation visualization with synthetic pass/fail data."""
+    num_dispatch_groups = 4
+    dispatch_group_size = 2
+
+    # Create synthetic buffer result: DG0 and DG2 pass, DG1 chip0 fails, DG3 chip1 fails
+    buffer_mismatches = [
+        (1, 0, 0, "synthetic buffer failure"),  # DG1, chip0
+        (3, 1, 1, "synthetic buffer failure"),  # DG3, chip1
+    ]
+    buffer_validated = {(dg, chip) for dg in range(num_dispatch_groups) for chip in range(dispatch_group_size)}
+    buffer_result = ValidationResult(
+        passed=False,
+        matches=6,
+        total=8,
+        mismatches=buffer_mismatches,
+        name="buffer",
+        validated_cells=buffer_validated,
+    )
+
+    # Create synthetic metadata result: DG0 passes, DG1 all fail, DG2 chip1 fails, DG3 passes
+    metadata_mismatches = [
+        (1, 0, 0, "synthetic metadata failure"),  # DG1, chip0
+        (1, 1, 0, "synthetic metadata failure"),  # DG1, chip1
+        (2, 1, 0, "synthetic metadata failure"),  # DG2, chip1
+    ]
+    metadata_validated = {(dg, chip) for dg in range(num_dispatch_groups) for chip in range(dispatch_group_size)}
+    metadata_result = ValidationResult(
+        passed=False,
+        matches=5,
+        total=8,
+        mismatches=metadata_mismatches,
+        name="metadata",
+        validated_cells=metadata_validated,
+    )
+
+    logger.info("\n=== Synthetic Validation Results Test ===")
+    logger.info("Expected pattern:")
+    logger.info("  DG0: ✅✅ (both pass)")
+    logger.info("  DG1: ❌❌ chip0, ✅❌ chip1 (buffer pass chip1, metadata fail both)")
+    logger.info("  DG2: ✅✅ chip0, ✅❌ chip1 (metadata fail chip1)")
+    logger.info("  DG3: ✅✅ chip0, ❌✅ chip1 (buffer fail chip1)")
+
+    log_validation_results(
+        results=[buffer_result, metadata_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Synthetic Validation Results",
+    )

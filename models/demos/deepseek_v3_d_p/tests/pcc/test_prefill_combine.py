@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     log_per_chip_statistics,
     validate_combine_output,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
 @pytest.mark.parametrize(
@@ -199,6 +200,12 @@ def test_ttnn_combine(
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
+    log_expert_dispatch_table(
+        expert_dispatch_table=expert_dispatch_table,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=num_routed_experts,
+    )
 
     # Initialize torch dispatch module with num_dispatch_groups support
     torch_dispatch_module = TorchDispatchModule(
@@ -333,7 +340,12 @@ def test_ttnn_combine(
         num_routed_experts,
     )
 
-    result.log_summary()
+    log_validation_results(
+        results=[result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Combine Validation Results",
+    )
 
     if not result.passed:
         log_combine_mismatch_details(result.mismatches, torch_output, tt_output_torch)
