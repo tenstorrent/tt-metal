@@ -84,10 +84,13 @@ inline void piecewise_log_reduce(vFloat x, vFloat& m, vInt& e_int) {
 }
 
 inline vFloat piecewise_log_expand(vFloat poly_result, vInt e_int) {
-#ifndef LOG_EXPAND_CONSTANT
-#define LOG_EXPAND_CONSTANT 0.6931471805599453f
-#endif
+    // LOG_EXPAND_CONSTANT may be defined by the including header for non-natural-log bases
+    // (e.g., log2: 1.0, log10: log10(2)). Defaults to ln(2) for natural log.
+#ifdef LOG_EXPAND_CONSTANT
     constexpr float EXPAND_C = LOG_EXPAND_CONSTANT;
+#else
+    constexpr float EXPAND_C = 0.6931471805599453f;
+#endif
     v_if(e_int < 0) { e_int = setsgn(~e_int + 1, 1); }
     v_endif;
     return int32_to_float(e_int, 0) * EXPAND_C + poly_result;
@@ -138,8 +141,11 @@ __attribute__((always_inline)) inline void piecewise_rational_eval_numer_denom(
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
 __attribute__((always_inline)) inline void piecewise_rational_eval_parity_numer_denom(
     const float* num_coeffs, const float* den_coeffs, vFloat x, vFloat x2, vFloat& out_numer, vFloat& out_denom) {
-    constexpr int NUM_TOP = (NUM_DEGREE % 2 == 1) ? NUM_DEGREE : NUM_DEGREE - 1;
-    constexpr int DEN_TOP = (DEN_DEGREE % 2 == 0) ? DEN_DEGREE : DEN_DEGREE - 1;
+    static_assert(NUM_DEGREE % 2 == 1, "RATIONAL_NUM_PARITY_ODD requires odd NUM_DEGREE");
+    static_assert(DEN_DEGREE % 2 == 0, "RATIONAL_DEN_PARITY_EVEN requires even DEN_DEGREE");
+    static_assert(NUM_DEGREE >= 1, "NUM_DEGREE must be at least 1 for parity evaluation");
+    constexpr int NUM_TOP = NUM_DEGREE;
+    constexpr int DEN_TOP = DEN_DEGREE;
     constexpr int NUM_STEPS = (NUM_TOP - 1) / 2;
     constexpr int DEN_STEPS = DEN_TOP / 2;
 
