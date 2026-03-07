@@ -6,6 +6,7 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "pcie_noc_utils.h"
+#include "api/debug/dprint.h"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -28,7 +29,7 @@ constexpr auto embedding_args = TensorAccessorArgs<14>();
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+    while (!socket_wait_for_pages(socket, num_pages)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
             return false;
@@ -196,6 +197,8 @@ void kernel_main() {
     }
 
     while (true) {
+        invalidate_l1_cache();
+
         // Wait for pages in H2D socket
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;

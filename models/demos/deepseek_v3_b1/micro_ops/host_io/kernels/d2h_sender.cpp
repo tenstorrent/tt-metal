@@ -10,7 +10,7 @@
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+    while (!socket_wait_for_pages(socket, num_pages)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
             return false;
