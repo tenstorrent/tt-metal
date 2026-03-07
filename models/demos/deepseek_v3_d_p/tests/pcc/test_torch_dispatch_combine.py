@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor",
+    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor",
     [
         (32, 64, 16, 4, 2, 2),
         (512, 32, 256, 8, 4, 2),
@@ -28,20 +28,20 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
     ids=["xs", "small"],
 )
 def test_torch_dispatch_combine(
-    seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
+    seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
 ):
     """Test dispatch→combine round-trip using PyTorch reference implementation."""
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
     )
     print("\n")
 
     # Initialize inputs using helper function
     x, weights, indices = initialize_test_inputs(
-        num_chips=num_chips,
+        dispatch_group_size=dispatch_group_size,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
-        n_routed_experts=n_routed_experts,
+        num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seed=42,
@@ -51,18 +51,18 @@ def test_torch_dispatch_combine(
 
     # Create expert dispatch table (single EP rank for this test)
     expert_dispatch_table = create_expert_dispatch_table(
-        n_routed_experts=n_routed_experts,
-        num_chips_sp=num_chips,
-        num_chips_rep=1,
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=1,
     )
     logger.info(f"{expert_dispatch_table.shape=}")
     logger.info(f"{expert_dispatch_table=}")
 
     # Initialize dispatch and combine modules
     dispatch_module = TorchDispatchModule(
-        num_chips=num_chips,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
-        n_routed_experts=n_routed_experts,
+        num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -71,17 +71,17 @@ def test_torch_dispatch_combine(
         expert_dispatch_table=expert_dispatch_table,
     )
     combine_module = TorchCombineModule(
-        num_chips_sp=num_chips,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
     )
 
     # Compute gate outputs before dispatch
-    chip_to_n_routed_expert_offset, experts_counter, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
         indices,
-        num_chips,
-        n_routed_experts,
+        dispatch_group_size,
+        num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
@@ -91,10 +91,10 @@ def test_torch_dispatch_combine(
     logger.info(f"{x.shape=}")
     logger.info(f"{weights.shape=}")
     logger.info(f"{indices.shape=}")
-    dispatched, metadata = dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
+    dispatched, metadata = dispatch_module(x, weights, indices, expert_offsets)
 
     torch.set_printoptions(profile="full")
-    logger.info(f"{experts_counter.shape=}")
+    logger.info(f"{expert_token_counts.shape=}")
     logger.info(f"{metadata.shape=}")
     logger.info(f"{dispatched.shape=}")
     torch.set_printoptions(profile="default")
@@ -103,7 +103,7 @@ def test_torch_dispatch_combine(
     y = combine_module(
         dispatched,
         metadata,
-        experts_counter,
+        expert_token_counts,
     )
     logger.info(f"{y.shape=}")
     y /= num_experts_per_tok  # since we are summing contributions from multiple experts, we need to average them

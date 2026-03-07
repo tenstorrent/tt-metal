@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
         (512, 7168, 16, 4, 2),
     ],
@@ -118,7 +118,7 @@ def test_ttnn_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
     hidden_dim,
-    n_routed_experts,
+    num_routed_experts,
     num_experts_per_tok,
     capacity_factor,
     num_links,
@@ -132,26 +132,26 @@ def test_ttnn_dispatch_combine(
     # Compute sp_axis and chip counts for 2D mesh handling
     if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
         sp_axis = 0
-        num_chips_sp = mesh_device.shape[sp_axis]
-        num_chips_rep = mesh_device.shape[1]
+        dispatch_group_size = mesh_device.shape[sp_axis]
+        num_dispatch_groups = mesh_device.shape[1]
     else:
         sp_axis = 0 if mesh_device.shape[0] > 1 else 1
-        num_chips_sp = num_devices
-        num_chips_rep = 1
+        dispatch_group_size = num_devices
+        num_dispatch_groups = 1
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {num_chips_sp=} {num_chips_rep=}")
+    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"TTNN Dispatch+Combine {mesh_device=} {num_devices=} {num_chips_sp=} {num_chips_rep=} "
-        f"{seq_len_per_chip=} {hidden_dim=} {n_routed_experts=} {num_experts_per_tok=} "
+        f"TTNN Dispatch+Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} "
+        f"{seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} "
         f"{capacity_factor=} {use_predictable_data=}"
     )
     print("\n")
 
-    # Compute configuration constants (use num_chips_sp for dispatch/combine parallelism)
+    # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
@@ -159,25 +159,25 @@ def test_ttnn_dispatch_combine(
     # For 2D mesh, generate different weights per EP rank
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
-            num_chips=num_chips_sp,
+            dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
-            n_routed_experts=n_routed_experts,
+            num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            num_ep_ranks=num_chips_rep,
+            num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
-            num_chips=num_chips_sp,
+            dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
-            n_routed_experts=n_routed_experts,
+            num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seed=42,
-            num_ep_ranks=num_chips_rep,
+            num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using RANDOM test data")
 
@@ -207,9 +207,9 @@ def test_ttnn_dispatch_combine(
     # Initialize TTNN dispatch module
     tt_dispatch_module = TtDispatchModule(
         mesh_device=mesh_device,
-        num_chips=num_chips_sp,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
-        n_routed_experts=n_routed_experts,
+        num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -221,10 +221,10 @@ def test_ttnn_dispatch_combine(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    chip_to_n_routed_expert_offset, experts_tok_counter, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
         indices,
-        num_chips_sp,
-        n_routed_experts,
+        dispatch_group_size,
+        num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
@@ -232,54 +232,52 @@ def test_ttnn_dispatch_combine(
 
     # Create expert dispatch table
     expert_dispatch_table = create_expert_dispatch_table(
-        n_routed_experts=n_routed_experts,
-        num_chips_sp=num_chips_sp,
-        num_chips_rep=num_chips_rep,
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
     )
     logger.info(f"{expert_dispatch_table.shape=}")
     logger.info(f"expert_dispatch_table:\n{expert_dispatch_table}")
 
     # Run TTNN dispatch
     logger.info("Running TTNN dispatch...")
-    tt_chip_to_n_routed_expert_offset = TtDispatchModule.shard_offset_tensor(
-        mesh_device, chip_to_n_routed_expert_offset
-    )
+    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset, tt_expert_dispatch_table
+        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete!")
 
-    logger.info(f"Dispatch outputs: {experts_tok_counter.shape=}")
-    logger.info(f"  {experts_tok_counter=}")
-    logger.info(f"  {chip_to_n_routed_expert_offset.shape=}, {chip_to_n_routed_expert_offset=}")
+    logger.info(f"Dispatch outputs: {expert_token_counts.shape=}")
+    logger.info(f"  {expert_token_counts=}")
+    logger.info(f"  {expert_offsets.shape=}, {expert_offsets=}")
     logger.info(f"  {cum_sum.shape=}, {cum_sum=}")
 
     # Convert counter to TTNN tensor for combine module
     # For 2D mesh, use dims=(1, 0) to shard across both axes
-    logger.info(f"Converting counter to TTNN: {experts_tok_counter.shape=}, {experts_tok_counter.dtype=}")
-    logger.info(f"  Counter values: {experts_tok_counter=}")
+    logger.info(f"Converting counter to TTNN: {expert_token_counts.shape=}, {expert_token_counts.dtype=}")
+    logger.info(f"  Counter values: {expert_token_counts=}")
     mesh_mapper_2d = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
         dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
     )
-    tt_experts_tok_counter = ttnn.from_torch(
-        experts_tok_counter,
+    tt_expert_token_counts = ttnn.from_torch(
+        expert_token_counts,
         mesh_mapper=mesh_mapper_2d,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
     )
-    logger.info(f"  TTNN counter shape: {tt_experts_tok_counter.shape}")
-    ttnn.visualize_tensor(tt_experts_tok_counter)  # , header="Experts Token Counter")
+    logger.info(f"  TTNN counter shape: {tt_expert_token_counts.shape}")
+    ttnn.visualize_tensor(tt_expert_token_counts)  # , header="Experts Token Counter")
 
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
         mesh_device=mesh_device,
-        num_chips_sp=num_chips_sp,
-        num_ep_ranks=num_chips_rep,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
@@ -290,7 +288,7 @@ def test_ttnn_dispatch_combine(
 
     # Run TTNN combine
     logger.info("Running TTNN combine...")
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_experts_tok_counter)
+    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
     logger.info("Combine complete!")
 
     logger.info(f"Combine output shape: {tt_output.shape}")
@@ -307,12 +305,12 @@ def test_ttnn_dispatch_combine(
 
     # Host-side reduction
     # Output shape after mesh composition with dims=[1, 0]:
-    # (num_chips_rep, num_chips_sp, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-    # Note: Even for 1D mesh with num_chips_rep=1, the first dimension is still there
+    # (num_dispatch_groups, dispatch_group_size, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    # Note: Even for 1D mesh with num_dispatch_groups=1, the first dimension is still there
     logger.info(f"Before reduction: {y.shape=}")
     y = y.squeeze(-4)  # Remove extra dimension (the "1") added for 2D mesh composition
     logger.info(f"After squeeze: {y.shape=}")
-    # y shape is now: (num_chips_rep, num_chips_sp, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    # y shape is now: (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
 
     # Verify round-trip correctness
     # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
@@ -321,13 +319,13 @@ def test_ttnn_dispatch_combine(
     # We validate per (chip, token, topk) using the EP rank that actually processed it.
     logger.info("Verifying round-trip correctness (per EP rank that processed each token)...")
 
-    experts_per_rank = n_routed_experts // num_chips_rep
+    experts_per_rank = num_routed_experts // num_dispatch_groups
     all_match = True
     matches = 0
     total_slots = 0
     mismatches = []
 
-    for chip_id in range(num_chips_sp):
+    for chip_id in range(dispatch_group_size):
         for token_id in range(seq_len_per_chip):
             for topk_idx in range(num_experts_per_tok):
                 total_slots += 1

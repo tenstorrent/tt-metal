@@ -17,8 +17,8 @@ class TtCombineModule(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
-        num_chips_sp: int,
-        num_ep_ranks: int,
+        dispatch_group_size: int,
+        num_dispatch_groups: int,
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
@@ -31,16 +31,16 @@ class TtCombineModule(LightweightModule):
 
         Args:
             mesh_device: TTNN mesh device
-            num_chips_sp: Number of chips in the dispatch group
-            num_ep_ranks: Number of dispatch groups (EP ranks)
+            dispatch_group_size: Number of chips in each dispatch group
+            num_dispatch_groups: Number of parallel dispatch groups
             experts_per_chip: Number of experts per chip
             num_experts_per_tok: Number of experts each token is routed to
             seq_len_per_chip: Sequence length per chip
         """
         super().__init__()
         self.mesh_device = mesh_device
-        self.num_chips_sp = num_chips_sp
-        self.num_ep_ranks = num_ep_ranks  # awareness likely not needed; it's a matter of sharding ?
+        self.dispatch_group_size = dispatch_group_size
+        self.num_dispatch_groups = num_dispatch_groups
         self.experts_per_chip = experts_per_chip
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
@@ -52,24 +52,24 @@ class TtCombineModule(LightweightModule):
         self,
         dispatched_buffer: ttnn.Tensor,
         dispatched_metadata: ttnn.Tensor,
-        experts_tok_counter: ttnn.Tensor,
+        expert_token_counts: ttnn.Tensor,
     ):
         """
         Combine expert outputs back to original token positions using TTNN operation.
 
         Args:
-            dispatched_buffer: Dispatched tokens (num_chips, experts_per_chip, max_tokens, hidden_dim)
+            dispatched_buffer: Dispatched tokens (dispatch_group_size, experts_per_chip, max_tokens, hidden_dim)
             dispatched_metadata: Metadata tensor with token routing information
-            experts_tok_counter: Counter tracking tokens per expert (num_chips, experts_per_chip)
+            expert_token_counts: Counter tracking tokens per expert (dispatch_group_size, experts_per_chip)
 
         Returns:
-            output: Combined output tensor (num_chips, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+            output: Combined output tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
         """
         output = ttnn.experimental.deepseek.prefill_combine(
             dispatched_buffer,
             dispatched_metadata,
-            experts_tok_counter,
-            num_chips=self.num_chips_sp,
+            expert_token_counts,
+            dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,

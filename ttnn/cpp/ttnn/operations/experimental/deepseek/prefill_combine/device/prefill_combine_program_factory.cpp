@@ -126,7 +126,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     // Extract input tensors
     const auto& dispatched_buffer = tensor_args.dispatched_buffer;
     const auto& dispatched_metadata = tensor_args.dispatched_metadata;
-    const auto& experts_tok_counter = tensor_args.experts_tok_counter;
+    const auto& expert_token_counts = tensor_args.expert_token_counts;
     const auto& output_tensor = tensor_return_value;
 
     auto* mesh_device = dispatched_buffer.device();
@@ -207,10 +207,10 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     detail::create_tensor_cb(
         program,
         worker_core_grid,
-        experts_tok_counter,
-        /*buffering_factor=*/detail::get_num_pages(experts_tok_counter),  // Read entire counter
+        expert_token_counts,
+        /*buffering_factor=*/detail::get_num_pages(expert_token_counts),  // Read entire counter
         /*cb_id=*/tt::CBIndex::c_2,
-        "experts_tok_counter");
+        "expert_token_counts");
 
     // Create output CB (writer)
     detail::create_tensor_cb(
@@ -255,23 +255,23 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         // CB IDs (4)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_dispatched_buffer_id
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_dispatched_metadata_id
-        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_experts_tok_counter_id
+        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_expert_token_counts_id
         static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_output_id
 
         // Page counts (4)
         detail::get_num_pages(dispatched_buffer),
         detail::get_num_pages(dispatched_metadata),
-        detail::get_num_pages(experts_tok_counter),
+        detail::get_num_pages(expert_token_counts),
         detail::get_num_pages(output_tensor),
 
         // Page sizes (4)
         detail::get_page_size(dispatched_buffer),
         detail::get_page_size(dispatched_metadata),
-        detail::get_page_size(experts_tok_counter),
+        detail::get_page_size(expert_token_counts),
         detail::get_page_size(output_tensor),
 
         // Operation parameters (5)
-        operation_attributes.num_chips,
+        operation_attributes.dispatch_group_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_experts_per_tok,
         operation_attributes.seq_len_per_chip,
@@ -283,7 +283,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         // Aligned page sizes (4)
         detail::get_aligned_page_size(dispatched_buffer),
         detail::get_aligned_page_size(dispatched_metadata),
-        detail::get_aligned_page_size(experts_tok_counter),
+        detail::get_aligned_page_size(expert_token_counts),
         detail::get_aligned_page_size(output_tensor),
 
         // Mesh information (5)
@@ -303,7 +303,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     // Append TensorAccessorArgs for all tensors
     tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(experts_tok_counter.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
 
     // Create reader kernel
@@ -345,7 +345,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     std::vector<uint32_t> reader_runtime_args = {
         dispatched_buffer.buffer()->address(),
         dispatched_metadata.buffer()->address(),
-        experts_tok_counter.buffer()->address(),
+        expert_token_counts.buffer()->address(),
         output_tensor.buffer()->address(),
     };
 
@@ -414,7 +414,7 @@ void PrefillCombineDeviceOperation::PrefillCombineProgramFactory::override_runti
         std::vector<uint32_t> reader_runtime_args = {
             tensor_args.dispatched_buffer.buffer()->address(),
             tensor_args.dispatched_metadata.buffer()->address(),
-            tensor_args.experts_tok_counter.buffer()->address(),
+            tensor_args.expert_token_counts.buffer()->address(),
             tensor_return_value.buffer()->address(),
         };
 

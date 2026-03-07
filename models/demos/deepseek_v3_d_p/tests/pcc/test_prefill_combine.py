@@ -26,7 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
         (32, 7 * 1024, 16, 4, 2),
     ],
@@ -119,7 +119,7 @@ def test_ttnn_combine(
     mesh_device,
     seq_len_per_chip,
     hidden_dim,
-    n_routed_experts,
+    num_routed_experts,
     num_experts_per_tok,
     capacity_factor,
     num_links,
@@ -132,25 +132,25 @@ def test_ttnn_combine(
 
     if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
         sp_axis = 0
-        num_chips_sp = mesh_device.shape[sp_axis]
-        num_chips_rep = mesh_device.shape[1]
+        dispatch_group_size = mesh_device.shape[sp_axis]
+        num_dispatch_groups = mesh_device.shape[1]
     else:
-        num_chips_sp = mesh_device.get_num_devices()
-        num_chips_rep = 1
+        dispatch_group_size = mesh_device.get_num_devices()
+        num_dispatch_groups = 1
         sp_axis = 0 if mesh_device.shape[0] > 1 else 1
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {num_chips_sp=} {num_chips_rep=}")
+    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"Combine {mesh_device=} {num_devices=} {num_chips_sp=} {num_chips_rep=} {seq_len_per_chip=} {hidden_dim=} "
-        f"{n_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} "
+        f"{num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
     )
     print("\n")
 
     # Compute configuration
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
@@ -158,33 +158,33 @@ def test_ttnn_combine(
     # For 2D mesh, generate different weights per EP rank
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
-            num_chips_sp,
+            dispatch_group_size,
             seq_len_per_chip,
             hidden_dim,
-            n_routed_experts,
+            num_routed_experts,
             num_experts_per_tok,
             max_dispatched_tokens_per_expert,
-            num_ep_ranks=num_chips_rep,
+            num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
-            num_chips_sp,
+            dispatch_group_size,
             seq_len_per_chip,
             hidden_dim,
-            n_routed_experts,
+            num_routed_experts,
             num_experts_per_tok,
             max_dispatched_tokens_per_expert,
             seed=42,
-            num_ep_ranks=num_chips_rep,
+            num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using RANDOM test data")
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    chip_to_n_routed_expert_offset, experts_tok_counter, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
         indices,
-        num_chips_sp,
-        n_routed_experts,
+        dispatch_group_size,
+        num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
@@ -192,27 +192,27 @@ def test_ttnn_combine(
 
     # Create expert dispatch table
     expert_dispatch_table = create_expert_dispatch_table(
-        n_routed_experts=n_routed_experts,
-        num_chips_sp=num_chips_sp,
-        num_chips_rep=num_chips_rep,
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
     )
 
-    # Initialize torch dispatch module with num_ep_ranks support
+    # Initialize torch dispatch module with num_dispatch_groups support
     torch_dispatch_module = TorchDispatchModule(
-        num_chips=num_chips_sp,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
-        n_routed_experts=n_routed_experts,
+        num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
-        num_ep_ranks=num_chips_rep,
+        num_dispatch_groups=num_dispatch_groups,
         expert_dispatch_table=expert_dispatch_table,
     )
 
     # Run dispatch for each EP rank with rank-specific weights
-    dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
+    dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     logger.info("Torch dispatch outputs (OG):")
     logger.info(f"  {dispatched_buffer.shape=}")
@@ -220,9 +220,9 @@ def test_ttnn_combine(
 
     # Transform logical chip IDs to linearized coords
     # metadata[..., 0] contains the destination logical chip ID
-    for r in range(num_chips_rep):
-        # dest_linearized = dest_logical * num_chips_rep + replica_index
-        dispatched_metadata[r, :, :, :, 0] = dispatched_metadata[r, :, :, :, 0] * num_chips_rep + r
+    for r in range(num_dispatch_groups):
+        # dest_linearized = dest_logical * num_dispatch_groups + replica_index
+        dispatched_metadata[r, :, :, :, 0] = dispatched_metadata[r, :, :, :, 0] * num_dispatch_groups + r
 
     # Use different sharding: shard both dimensions
     mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -247,8 +247,8 @@ def test_ttnn_combine(
         dtype=ttnn.int32,
     )
 
-    tt_experts_tok_counter = ttnn.from_torch(
-        experts_tok_counter,
+    tt_expert_token_counts = ttnn.from_torch(
+        expert_token_counts,
         mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -256,21 +256,21 @@ def test_ttnn_combine(
     )
 
     torch_combine = TorchCombineModule(
-        num_chips_sp=num_chips_sp,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
-        num_ep_ranks=num_chips_rep,
+        num_dispatch_groups=num_dispatch_groups,
     )
 
-    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, experts_tok_counter)
+    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
     logger.info(f"Torch combine output shape: {torch_output.shape}")
 
     # Step 5: Run ttnn combine
     tt_combine = TtCombineModule(
         mesh_device=mesh_device,
-        num_chips_sp=num_chips_sp,
-        num_ep_ranks=num_chips_rep,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
@@ -282,7 +282,7 @@ def test_ttnn_combine(
     tt_output = tt_combine(
         tt_dispatched_buffer,
         tt_dispatched_metadata,
-        tt_experts_tok_counter,
+        tt_expert_token_counts,
     )
 
     logger.info(f"TTNN combine output shape: {tt_output.shape}")
@@ -308,16 +308,16 @@ def test_ttnn_combine(
     logger.info("Computing PCC between torch and ttnn combine outputs...")
 
     assert (
-        tt_output_torch.shape[0] == num_chips_rep
-    ), f"Mismatch in replicated dimension: expected {num_chips_rep}, got {tt_output_torch.shape[0]}"
+        tt_output_torch.shape[0] == num_dispatch_groups
+    ), f"Mismatch in replicated dimension: expected {num_dispatch_groups}, got {tt_output_torch.shape[0]}"
     assert (
-        tt_output_torch.shape[1] == num_chips_sp
-    ), f"Mismatch in sharded dimension: expected {num_chips_sp}, got {tt_output_torch.shape[1]}"
+        tt_output_torch.shape[1] == dispatch_group_size
+    ), f"Mismatch in sharded dimension: expected {dispatch_group_size}, got {tt_output_torch.shape[1]}"
 
     # Quick sanity check of first elements
     logger.info(f"Sample torch output [0, 0, 0, :5]: {torch_output[0, 0, 0, :5]}")
     logger.info(f"Sample ttnn output [0, 0, 0, 0, :5]:  {tt_output_torch[0, 0, 0, 0, :5]}")
-    if num_chips_sp > 1:
+    if dispatch_group_size > 1:
         logger.info(f"Sample torch output [1, 0, 0, :5]: {torch_output[1, 0, 0, :5]}")
         logger.info(f"Sample ttnn output [0, 1, 0, 0, :5]:  {tt_output_torch[0, 1, 0, 0, :5]}")
 
@@ -331,9 +331,9 @@ def test_ttnn_combine(
     matches = 0
     total_slots = 0
 
-    experts_per_rank = n_routed_experts // num_chips_rep
+    experts_per_rank = num_routed_experts // num_dispatch_groups
     logger.info("Comparing combine output slots (per EP rank that processed each token)...")
-    for chip_id in range(num_chips_sp):
+    for chip_id in range(dispatch_group_size):
         for token_id in range(seq_len_per_chip):
             for topk_idx in range(num_experts_per_tok):
                 total_slots += 1
@@ -370,7 +370,7 @@ def test_ttnn_combine(
 
         # Show per-chip statistics
         logger.info("\nPer-chip statistics:")
-        for chip_id in range(num_chips_sp):
+        for chip_id in range(dispatch_group_size):
             chip_mismatches = [m for m in mismatches if m[1] == chip_id]
             chip_total = seq_len_per_chip * num_experts_per_tok
             chip_matches = chip_total - len(chip_mismatches)

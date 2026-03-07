@@ -31,9 +31,9 @@ std::pair<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_cb_sizes(
 
 struct PrefillDispatchDeviceOperation {
     struct operation_attributes_t {
-        const uint32_t num_chips;
+        const uint32_t dispatch_group_size;
         const uint32_t experts_per_chip;
-        const uint32_t n_routed_experts;
+        const uint32_t num_routed_experts;
         const uint32_t num_experts_per_tok;
         const uint32_t metadata_len;
         const uint32_t max_dispatched_tokens_per_expert;
@@ -44,9 +44,9 @@ struct PrefillDispatchDeviceOperation {
         const CoreRangeSet worker_core_range_set;
 
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "num_chips",
+            "dispatch_group_size",
             "experts_per_chip",
-            "n_routed_experts",
+            "num_routed_experts",
             "num_experts_per_tok",
             "metadata_len",
             "max_dispatched_tokens_per_expert",
@@ -58,9 +58,9 @@ struct PrefillDispatchDeviceOperation {
 
         auto attribute_values() const {
             return std::forward_as_tuple(
-                num_chips,
+                dispatch_group_size,
                 experts_per_chip,
-                n_routed_experts,
+                num_routed_experts,
                 num_experts_per_tok,
                 metadata_len,
                 max_dispatched_tokens_per_expert,
@@ -76,7 +76,7 @@ struct PrefillDispatchDeviceOperation {
         const Tensor input_tensor;
         const Tensor weights_tensor;
         const Tensor indices_tensor;
-        const Tensor chip_to_n_routed_expert_offset_tensor;
+        const Tensor expert_offsets_tensor;
         const Tensor expert_dispatch_table_tensor;
     };
 
@@ -134,11 +134,11 @@ prefill_dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
+    const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
-    uint32_t num_chips,
+    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
-    uint32_t n_routed_experts,
+    uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatched_tokens_per_expert,

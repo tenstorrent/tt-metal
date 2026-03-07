@@ -15,8 +15,8 @@ namespace ttnn::operations::experimental::deepseek::prefill_combine {
 ttnn::Tensor ExecutePrefillCombine::invoke(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
-    const ttnn::Tensor& experts_tok_counter,
-    uint32_t num_chips,
+    const ttnn::Tensor& expert_token_counts,
+    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
@@ -53,8 +53,8 @@ ttnn::Tensor ExecutePrefillCombine::invoke(
     return ttnn::prim::prefill_combine(
         dispatched_buffer,
         dispatched_metadata,
-        experts_tok_counter,
-        num_chips,
+        expert_token_counts,
+        dispatch_group_size,
         experts_per_chip,
         num_experts_per_tok,
         seq_len_per_chip,

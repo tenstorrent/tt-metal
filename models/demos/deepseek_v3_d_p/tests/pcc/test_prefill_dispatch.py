@@ -74,7 +74,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
         (32, 7168, 16, 4, 2),
     ],
@@ -168,7 +168,7 @@ def test_ttnn_dispatch(
     mesh_device,
     seq_len_per_chip,
     hidden_dim,
-    n_routed_experts,
+    num_routed_experts,
     num_experts_per_tok,
     capacity_factor,
     num_links,
@@ -181,23 +181,23 @@ def test_ttnn_dispatch(
 
     if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
         sp_axis = 0
-        num_chips_sp = mesh_device.shape[sp_axis]
-        num_chips_rep = mesh_device.shape[1]
+        dispatch_group_size = mesh_device.shape[sp_axis]
+        num_dispatch_groups = mesh_device.shape[1]
     else:
-        num_chips_sp = mesh_device.get_num_devices()
-        num_chips_rep = 1
+        dispatch_group_size = mesh_device.get_num_devices()
+        num_dispatch_groups = 1
         sp_axis = 0 if mesh_device.shape[0] > 1 else 1
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {num_chips_sp=} {num_chips_rep=}")
+    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"Dispatch {mesh_device=} {num_devices=} {num_chips_sp=} {num_chips_rep=} {seq_len_per_chip=} {hidden_dim=} {n_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
     )
     print("\n")
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
@@ -205,25 +205,25 @@ def test_ttnn_dispatch(
     # For 2D mesh, generate different weights per EP rank
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
-            num_chips=num_chips_sp,
+            dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
-            n_routed_experts=n_routed_experts,
+            num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            num_ep_ranks=num_chips_rep,
+            num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
-            num_chips=num_chips_sp,
+            dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
-            n_routed_experts=n_routed_experts,
+            num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seed=42,
-            num_ep_ranks=num_chips_rep,
+            num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using RANDOM test data")
 
@@ -260,32 +260,32 @@ def test_ttnn_dispatch(
 
     # Create expert dispatch table
     expert_dispatch_table = create_expert_dispatch_table(
-        n_routed_experts=n_routed_experts,
-        num_chips_sp=num_chips_sp,
-        num_chips_rep=num_chips_rep,
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
     )
     logger.info(f"{expert_dispatch_table.shape=}")
     logger.info(f"expert_dispatch_table:\n{expert_dispatch_table}")
 
-    # Initialize torch dispatch module with num_ep_ranks support
+    # Initialize torch dispatch module with num_dispatch_groups support
     torch_dispatch_module = TorchDispatchModule(
-        num_chips=num_chips_sp,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
-        n_routed_experts=n_routed_experts,
+        num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
-        num_ep_ranks=num_chips_rep,
+        num_dispatch_groups=num_dispatch_groups,
         expert_dispatch_table=expert_dispatch_table,
     )
 
     tt_dispatch_module = TtDispatchModule(
         mesh_device=mesh_device,
-        num_chips=num_chips_sp,
+        dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
-        n_routed_experts=n_routed_experts,
+        num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -297,16 +297,16 @@ def test_ttnn_dispatch(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
         indices,
-        num_chips_sp,
-        n_routed_experts,
+        dispatch_group_size,
+        num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
     )
-    logger.info(f"[TORCH GATE] chip_to_n_routed_expert_offset.shape={chip_to_n_routed_expert_offset.shape}")
-    logger.info(f"[TORCH GATE] chip_to_routed_expert_tokens.shape={chip_to_routed_expert_tokens.shape}")
+    logger.info(f"[TORCH GATE] expert_offsets.shape={expert_offsets.shape}")
+    logger.info(f"[TORCH GATE] expert_token_counts.shape={expert_token_counts.shape}")
     logger.info(f"[TORCH GATE] cum_sum.shape={cum_sum.shape}")
 
     # Forward pass through TTNN dispatch
@@ -314,22 +314,20 @@ def test_ttnn_dispatch(
     logger.info(f"{weights.shape=}")
     logger.info(f"{indices.shape=}")
 
-    tt_chip_to_n_routed_expert_offset = TtDispatchModule.shard_offset_tensor(
-        mesh_device, chip_to_n_routed_expert_offset
-    )
-    logger.info(f"[TTNN GATE] tt_chip_to_n_routed_expert_offset.shape={tt_chip_to_n_routed_expert_offset.shape}")
+    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
+    logger.info(f"[TTNN GATE] tt_expert_offsets.shape={tt_expert_offsets.shape}")
 
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     logger.info(f"[TTNN] tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
 
     tt_dispatched, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset, tt_expert_dispatch_table
+        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
     logger.info(f"[TTNN OUTPUT] tt_dispatched.shape={tt_dispatched.shape}")
     logger.info(f"[TTNN OUTPUT] tt_metadata.shape={tt_metadata.shape}")
 
     # Run torch reference for all EP ranks at once
-    torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
+    torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
     logger.info(f"[TORCH OUTPUT] torch_dispatched.shape={torch_dispatched.shape}")
     logger.info(f"[TORCH OUTPUT] torch_metadata.shape={torch_metadata.shape}")
 
@@ -349,29 +347,29 @@ def test_ttnn_dispatch(
     logger.warning(f"{tt_out_dispatched.shape=} {tt_out_metadata.shape=}")
 
     assert (
-        tt_out_dispatched.shape[0] == num_chips_rep
-    ), f"Mismatch in replicated dimension: expected {num_chips_rep}, got {tt_out_dispatched.shape[0]}"
+        tt_out_dispatched.shape[0] == num_dispatch_groups
+    ), f"Mismatch in replicated dimension: expected {num_dispatch_groups}, got {tt_out_dispatched.shape[0]}"
     assert (
-        tt_out_dispatched.shape[1] == num_chips_sp
-    ), f"Mismatch in sharded dimension: expected {num_chips_sp}, got {tt_out_dispatched.shape[1]}"
+        tt_out_dispatched.shape[1] == dispatch_group_size
+    ), f"Mismatch in sharded dimension: expected {dispatch_group_size}, got {tt_out_dispatched.shape[1]}"
 
     # Quick sanity check of first elements
     logger.info(f"{tt_out_dispatched[0][0][0][0][0]=} | {tt_out_dispatched[0][1][0][0][0]=}")
     logger.info(f"{torch_dispatched[0][0][0][0][0]=} | {torch_dispatched[0][1][0][0][0]=}")
     logger.info(f"{tt_out_metadata[0][0][0][0][0:4]=} | {tt_out_metadata[0][1][0][0][0:4]=}")
     logger.info(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
-    logger.info(f"{chip_to_routed_expert_tokens.shape=}, {chip_to_routed_expert_tokens=}")
-    logger.info(f"{chip_to_n_routed_expert_offset.shape=}, {chip_to_n_routed_expert_offset=}")
+    logger.info(f"{expert_token_counts.shape=}, {expert_token_counts=}")
+    logger.info(f"{expert_offsets.shape=}, {expert_offsets=}")
     logger.info(f"{cum_sum.shape=}, {cum_sum=}")
 
     # Verify dispatched data matches reference (each EP rank against its torch reference)
     data_ok = True
     metadata_ok = True
     logger.warning("Comparing ALL dispatched buffer slots (including remote dispatch)...")
-    for r in range(num_chips_rep):
+    for r in range(num_dispatch_groups):
         dispatched = torch_dispatched[r]
         metadata = torch_metadata[r]
-        for dst_chip_id in range(num_chips_sp):
+        for dst_chip_id in range(dispatch_group_size):
             for expert_id in range(experts_per_chip):
                 # Compute global expert ID and check if it's present in this EP rank
                 global_expert_id = dst_chip_id * experts_per_chip + expert_id
@@ -382,7 +380,7 @@ def test_ttnn_dispatch(
                     )
                     continue
 
-                count = chip_to_routed_expert_tokens[r, dst_chip_id, expert_id].item()
+                count = expert_token_counts[r, dst_chip_id, expert_id].item()
                 out = tt_out_dispatched[r, dst_chip_id, expert_id, :count, :]
                 ref = dispatched[dst_chip_id, expert_id, :count, :]
                 if torch.allclose(out, ref, atol=1e-6):
@@ -402,10 +400,10 @@ def test_ttnn_dispatch(
                                 )
 
     logger.info("Comparing ALL dispatched metadata slots (including remote dispatch)...")
-    for r in range(num_chips_rep):
+    for r in range(num_dispatch_groups):
         dispatched = torch_dispatched[r]
         metadata = torch_metadata[r]
-        for dst_chip_id in range(num_chips_sp):
+        for dst_chip_id in range(dispatch_group_size):
             for expert_id in range(experts_per_chip):
                 # Compute global expert ID and check if it's present in this EP rank
                 global_expert_id = dst_chip_id * experts_per_chip + expert_id
@@ -416,14 +414,14 @@ def test_ttnn_dispatch(
                     )
                     continue
 
-                count = chip_to_routed_expert_tokens[r, dst_chip_id, expert_id].item()
+                count = expert_token_counts[r, dst_chip_id, expert_id].item()
                 out = tt_out_metadata[r, dst_chip_id, expert_id, :count, 1:4]
                 ref = metadata[dst_chip_id, expert_id, :count, 1:4]
 
                 # torch computes "logical sender chip id"
                 # while ttnn embeds real linearized mesh coord
                 out_linearized_mesh_coord = tt_out_metadata[r, dst_chip_id, expert_id, :count, 0]
-                ref_linearized_mesh_coord = r + metadata[dst_chip_id, expert_id, :count, 0] * num_chips_rep
+                ref_linearized_mesh_coord = r + metadata[dst_chip_id, expert_id, :count, 0] * num_dispatch_groups
 
                 # Compare weights (metadata[4]):
                 # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16

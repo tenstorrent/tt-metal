@@ -21,7 +21,7 @@ namespace ttnn::operations::experimental::deepseek::prefill_combine {
 
 struct PrefillCombineDeviceOperation {
     struct operation_attributes_t {
-        const uint32_t num_chips;
+        const uint32_t dispatch_group_size;
         const uint32_t experts_per_chip;
         const uint32_t num_experts_per_tok;
         const uint32_t seq_len_per_chip;
@@ -32,7 +32,7 @@ struct PrefillCombineDeviceOperation {
         const CoreRangeSet worker_core_range_set;
 
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "num_chips",
+            "dispatch_group_size",
             "experts_per_chip",
             "num_experts_per_tok",
             "seq_len_per_chip",
@@ -44,7 +44,7 @@ struct PrefillCombineDeviceOperation {
 
         auto attribute_values() const {
             return std::forward_as_tuple(
-                num_chips,
+                dispatch_group_size,
                 experts_per_chip,
                 num_experts_per_tok,
                 seq_len_per_chip,
@@ -59,7 +59,7 @@ struct PrefillCombineDeviceOperation {
     struct tensor_args_t {
         const ttnn::Tensor dispatched_buffer;
         const ttnn::Tensor dispatched_metadata;
-        const ttnn::Tensor experts_tok_counter;
+        const ttnn::Tensor expert_token_counts;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -115,8 +115,8 @@ namespace ttnn::prim {
 ttnn::Tensor prefill_combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
-    const ttnn::Tensor& experts_tok_counter,
-    uint32_t num_chips,
+    const ttnn::Tensor& expert_token_counts,
+    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
