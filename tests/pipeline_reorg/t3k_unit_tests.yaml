@@ -232,7 +232,7 @@
       timeout: 5
   owner_id: U08E1JCMAJF
   team: shield
-  model-name: deepseek_prefill
+  model-name: deepseek_prefill_dispatch_combine
 
 - name: t3k_deepseek_shared_expert_ffn_tests
   cmd: |
@@ -243,4 +243,13 @@
       timeout: 5
   owner_id: U08E1JCMAJF
   team: shield
-  model-name: deepseek_ffn
+  model-name: deepseek_prefill_ffn
+
+- name: t3k_deepseek_rmsnorm_tests
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py -vvv
+  skus:
+    wh_llmbox:
+      timeout: 5
+  owner_id: U08E1JCMAJF
+  team: shield
+  model-name: deepseek_prefill_rmsnorm
