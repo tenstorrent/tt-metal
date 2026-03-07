@@ -60,13 +60,20 @@ runs:
           fi
         fi
 
-        # Pull each image
+        # Pull each image (if not already cached on Harbor)
         for ghcr_tag in "${IMAGE_TAGS[@]}"; do
           if [ -z "$ghcr_tag" ]; then
             continue
           fi
 
           harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
+
+          # Check if image already exists on Harbor (cache is warm)
+          if docker manifest inspect "$harbor_tag" > /dev/null 2>&1; then
+            echo "Image $harbor_tag already exists on Harbor, skipping pull"
+            continue
+          fi
+
           echo "Pulling $harbor_tag (to warm Harbor cache)..."
 
           if docker pull "$harbor_tag" 2>/dev/null; then

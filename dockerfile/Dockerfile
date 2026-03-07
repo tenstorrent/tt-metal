@@ -102,8 +102,7 @@ RUN test -d "${OMPI_PREFIX}/bin" || \
     { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_TAG (${OMPI_TAG}) likely differs from Dockerfile.tools ARG OMPI_TAG." >&2; exit 1; }
 
 # Auto-detect Python version from Ubuntu version if not explicitly provided
-RUN set -e; \
-    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
     if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
     DETECTED_PYTHON_VERSION="3.12"; \
