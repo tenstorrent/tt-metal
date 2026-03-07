@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "llk_unpack_AB_matmul_custom.h"
+#include "experimental/llk_unpack_AB_matmul_custom.h"
 #include "llk_unpack_common_api.h"
 
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_reinit_after_sub(
