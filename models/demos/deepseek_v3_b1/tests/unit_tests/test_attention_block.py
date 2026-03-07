@@ -57,7 +57,6 @@ def create_fabric_router_config(max_payload_size):
         511,
         1023,
         2047,
-        4095,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
         4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
         pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
         pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)

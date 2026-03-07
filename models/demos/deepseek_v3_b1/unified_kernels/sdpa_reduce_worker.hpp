@@ -195,9 +195,6 @@ struct SdpaChunkSender {
         cb_wait_front(cfg.cb_ms, 1);
         send_ms();
         cb_wait_front(cfg.cb_l, num_l_chunks * tiles_per_l_chunk);
-        DPRINT << "Local mla: "
-               << TileSlice(cfg.cb_l, 0, SliceRange{.h0 = 0, .h1 = 8, .hs = 1, .w0 = 0, .w1 = 32, .ws = 8}, true, true)
-               << ENDL();
         for (uint32_t i = 0; i < num_l_chunks; i++) {
             send_l_chunk(i);
         }
@@ -707,14 +704,6 @@ struct SdpaReduceWorker {
                 }
 
                 cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
-                DPRINT << "l_out: "
-                       << TileSlice(
-                              CTArgs::cb_l_out,
-                              0,
-                              SliceRange{.h0 = 0, .h1 = 8, .hs = 1, .w0 = 0, .w1 = 32, .ws = 8},
-                              true,
-                              true)
-                       << ENDL();
                 uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
 
                 constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;

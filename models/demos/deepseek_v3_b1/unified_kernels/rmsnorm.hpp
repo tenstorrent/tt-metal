@@ -126,15 +126,6 @@ struct RMSNorm {
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
-                // UNPACK(
-                //     (DPRINT << " rmsnorm input: "
-                //             << TileSlice(
-                //                    CTArgs::input_cb,
-                //                    0,
-                //                    SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8},
-                //                    true,
-                //                    true)
-                //             << ENDL()));
                 tile_regs_acquire();
                 mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();

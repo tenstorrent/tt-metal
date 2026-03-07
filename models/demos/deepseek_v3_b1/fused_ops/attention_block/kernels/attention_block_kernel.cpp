@@ -73,8 +73,6 @@ struct Core {
     static constexpr uint32_t kv_cache_device_chunk_size = get_named_compile_time_arg_val("kv_cache_device_chunk_size");
     static constexpr uint32_t kv_cache_sp_device_idx = get_named_compile_time_arg_val("kv_cache_sp_device_idx");
     static constexpr uint32_t kv_cache_num_sp_devices = get_named_compile_time_arg_val("kv_cache_num_sp_devices");
-    // Tensor Parallel configs
-    static constexpr uint32_t kv_cache_tp_device_idx = get_named_compile_time_arg_val("kv_cache_tp_device_idx");
 
     // Post SDPA
     // SDPA output cores 8 cores - run SDPA reduction and scatter
@@ -1241,7 +1239,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
     uint32_t cur_pos = pos_ptr[0];
 
-    // DPRINT << "DEVICE SP: " << Core::kv_cache_sp_device_idx << " TP: " << Core::kv_cache_tp_device_idx << ENDL();
     const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
         cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 

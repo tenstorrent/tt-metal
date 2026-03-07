@@ -308,7 +308,6 @@ class AttentionBlock:
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
-        output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
 
         # Post-SDPA parameters
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
@@ -1957,7 +1956,6 @@ class AttentionBlock:
                 post_sdpa_gather3_output_tensor_device = post_sdpa_gather3_output_tensors_per_device[device_idx]
                 post_sdpa_intermediate_tensor_device = post_sdpa_intermediate_tensors_per_device[device_idx]
                 attention_block_output_tensor_device = attention_block_output_tensors_per_device[device_idx]
-                output_tensor_device = output_tensors_per_device[device_idx]
 
                 # Get worker core from per-device input tensor shard grid
                 device_local = input_tensor_device.device()
@@ -2640,25 +2638,18 @@ class AttentionBlock:
                 # Position tensor is now height-sharded - no CB needed, read directly from L1
 
                 # mla_out_o_cb/mla_interm_out_cb: output O (tiny tile)
-                # mla_cb_descriptors.append(
-                #     ttnn.CBDescriptor(
-                #         total_size=out0_t * stats_tile_size,
-                #         core_ranges=mla_core_grid,
-                #         format_descriptors=[
-                #             ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
-                #             ttnn.CBFormatDescriptor(
-                #                 mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor
-                #             ),
-                #         ],
-                #     )
-                # )
-                mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
-                mla_out_o_cb_descriptor.core_ranges = mla_core_grid
-                mla_out_o_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
-                    ttnn.CBFormatDescriptor(mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor),
-                ]
-                mla_cb_descriptors.append(mla_out_o_cb_descriptor)
+                mla_cb_descriptors.append(
+                    ttnn.CBDescriptor(
+                        total_size=out0_t * stats_tile_size,
+                        core_ranges=mla_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
+                            ttnn.CBFormatDescriptor(
+                                mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor
+                            ),
+                        ],
+                    )
+                )
 
                 # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
                 mla_cb_descriptors.append(
@@ -3242,7 +3233,6 @@ class AttentionBlock:
                     ("kv_cache_device_chunk_size", device_chunk_size),
                     ("kv_cache_sp_device_idx", row),
                     ("kv_cache_num_sp_devices", mesh_rows),
-                    ("kv_cache_tp_device_idx", col),
                 ]
 
                 ncrisc_named_compile_time_args = (
