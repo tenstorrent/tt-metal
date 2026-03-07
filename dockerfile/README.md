@@ -14,6 +14,7 @@ flowchart TB
         MainImages[Main Images<br/>ci-build, ci-test, dev]
         BasicImages[Basic Images<br/>basic-dev, basic-ttnn-runtime]
         ManylinuxImage[ManyLinux Image]
+        EvalImage[Evaluation Image]
     end
 
     subgraph Dockerfiles [Dockerfiles]
@@ -22,6 +23,7 @@ flowchart TB
         DockerfileMain[Dockerfile]
         DockerfileBasic[Dockerfile.basic-dev]
         DockerfileManylinux[Dockerfile.manylinux]
+        DockerfileEval[Dockerfile.evaluation]
     end
 
     subgraph Orchestration [Build Orchestration]
@@ -34,10 +36,12 @@ flowchart TB
     ToolImages -->|"bake contexts / COPY --from"| DockerfileMain
     ToolImages -->|"bake contexts / COPY --from"| DockerfileBasic
     ToolImages -->|"bake contexts / COPY --from"| DockerfileManylinux
+    ToolImages -->|"bake contexts / COPY --from"| DockerfileEval
     VenvImages -->|"bake contexts / COPY --from"| DockerfileMain
     DockerfileMain -->|build & push| MainImages
     DockerfileBasic -->|build & push| BasicImages
     DockerfileManylinux -->|build & push| ManylinuxImage
+    DockerfileEval -->|build & push| EvalImage
 ```
 
 - **Tool images** are built once by `Dockerfile.tools` and pushed to GHCR. They contain pre-built binaries (ccache, mold, doxygen, etc.) to avoid repeated downloads and compilations.
@@ -63,42 +67,37 @@ flowchart TD
     end
 
     subgraph AllDocker [build-all-docker-images.yaml]
-        AD[Build All Docker Images]
-    end
+        Preflight["Preflight<br/>Harbor check + compute tags"]
+        BuildTools[build-docker-tools.yaml]
+        Build2204["build-docker-artifact.yaml<br/>Ubuntu 22.04"]
+        Build2404["build-docker-artifact.yaml<br/>Ubuntu 24.04"]
+        PrewarmCache["Prewarm Harbor cache"]
 
-    subgraph Tools [build-docker-tools.yaml]
-        ToolTags[📋 tags]
-        ToolBuild[🔧 bake tools]
-        ToolTags -->|missing?| ToolBuild
-        ToolTags -->|outputs| TT[tool-tags JSON]
-    end
-
-    subgraph Venvs [build-docker-python-venvs.yaml]
-        VenvTags[📋 tags]
-        VenvBuild[🐍 bake venvs]
-        VenvTags -->|missing?| VenvBuild
+        Preflight -->|tool-data| BuildTools
+        Preflight -->|platform-data| Build2204
+        Preflight -->|platform-data| Build2404
+        BuildTools -->|tool-tags| Build2204
+        BuildTools -->|tool-tags| Build2404
+        Build2204 --> PrewarmCache
+        Build2404 --> PrewarmCache
     end
 
     subgraph DockerArtifact [build-docker-artifact.yaml]
-        DATools[🔧 tools]
+        Metadata[📋 metadata]
         DAVenvs[🐍 venvs]
-        ImgTags[📋 image-tags]
         Ubuntu[🐳 bake ubuntu]
         ML[🐳 bake manylinux]
         TagLatest[🏷️ tag-latest]
+
+        Metadata --> DAVenvs
+        Metadata --> Ubuntu
+        Metadata --> ML
+        DAVenvs --> Ubuntu
+        Ubuntu --> TagLatest
+        ML --> TagLatest
     end
 
-    MG --> AD
-    AD --> Tools
-    Tools -->|tool-tags| DATools
-    DATools -.->|calls| Tools
-    DAVenvs -.->|calls| Venvs
-    DATools -->|"context overrides"| Ubuntu
-    DATools -->|"context overrides"| ML
-    ImgTags --> Ubuntu
-    ImgTags --> ML
-    ImgTags --> TagLatest
-    DAVenvs --> Ubuntu
+    MG --> AllDocker
 ```
 
 **Job naming convention:** Short job IDs (e.g., `tags`, `ubuntu`) with descriptive `name:` fields for the GitHub UI (e.g., "📋 Compute image tags").
@@ -130,7 +129,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl \
   --set "ci-build.contexts.cmake-layer=docker-image://ghcr.io/.../tools/cmake:tag" \
   --set "ci-build.contexts.ci-build-venv-layer=docker-image://ghcr.io/.../python-venv/ci-build:tag" \
   --set "ci-build.tags=ghcr.io/.../ubuntu-22.04-ci-build-amd64:<hash>" \
-  --set "ci-build.output=type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true" \
+  --set "ci-build.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true" \
   ci-build
 ```
 
@@ -143,15 +142,15 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 **JSON bundle format:**
 ```json
 {
-  "ccache-tag": "ghcr.io/.../tools/ccache:4.10.2-abc12345",
-  "mold-tag": "ghcr.io/.../tools/mold:2.35.1-def67890",
-  "doxygen-tag": "ghcr.io/.../tools/doxygen:1.12.0-...",
-  "cba-tag": "ghcr.io/.../tools/cba:1.6.0-...",
-  "gdb-tag": "ghcr.io/.../tools/gdb:16.2-...",
-  "cmake-tag": "ghcr.io/.../tools/cmake:3.31.6-...",
-  "yq-tag": "ghcr.io/.../tools/yq:4.44.3-...",
-  "sfpi-tag": "ghcr.io/.../tools/sfpi:v2025.03.03-...",
-  "openmpi-tag": "ghcr.io/.../tools/openmpi:v5.0.7-ulfm-..."
+  "ccache-tag": "ghcr.io/.../tools/ccache:4.10.2-<hash>",
+  "mold-tag": "ghcr.io/.../tools/mold:2.40.4-<hash>",
+  "doxygen-tag": "ghcr.io/.../tools/doxygen:1.16.1-<hash>",
+  "cba-tag": "ghcr.io/.../tools/cba:1.6.0-<hash>",
+  "gdb-tag": "ghcr.io/.../tools/gdb:14.2-<hash>",
+  "cmake-tag": "ghcr.io/.../tools/cmake:4.2.3-<hash>",
+  "yq-tag": "ghcr.io/.../tools/yq:v4.44.6-<hash>",
+  "sfpi-tag": "ghcr.io/.../tools/sfpi:<version>-<hash>",
+  "openmpi-tag": "ghcr.io/.../tools/openmpi:v5.0.7-<hash>"
 }
 ```
 
@@ -213,6 +212,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 | `basic-dev` | Basic dev image |
 | `basic-ttnn-runtime` | Basic TTNN runtime image |
 | `manylinux` | ManyLinux wheel build image |
+| `evaluation` | Evaluation build image |
 | `tools` | All tool images only |
 | `venvs` | All Python venv images only |
 | `all` | Everything |
@@ -223,8 +223,8 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 |------------|---------|---------|
 | `Dockerfile` | Main CI/build/dev images | ci-build, ci-test, dev, release, release-models |
 | `Dockerfile.basic-dev` | Minimal dev environment | base, basic-ttnn-runtime |
-| `Dockerfile.evaluation` | Evaluation builds | - |
-| `Dockerfile.manylinux` | ManyLinux wheel builds | - |
+| `Dockerfile.evaluation` | Evaluation builds | evaluation |
+| `Dockerfile.manylinux` | ManyLinux wheel builds | manylinux |
 | `Dockerfile.python` | Python venv images | ci-build-venv, ci-test-venv |
 | `Dockerfile.tools` | Tool images | ccache, mold, doxygen, cba, gdb, cmake, yq, sfpi, openmpi |
 
@@ -240,10 +240,11 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 
 | Workflow | Purpose |
 |----------|---------|
-| `build-all-docker-images.yaml` | Orchestrates tool + platform builds, outputs all image tags |
+| `build-all-docker-images.yaml` | Orchestrates preflight, tool, and platform builds; outputs all image tags |
 | `build-docker-artifact.yaml` | Builds images for a single platform (Ubuntu 22.04 or 24.04) |
 | `build-docker-tools.yaml` | Builds tool images, outputs `tool-tags` JSON |
 | `build-docker-python-venvs.yaml` | Builds Python venv images |
+| `check-harbor.yaml` | Checks Harbor registry availability, outputs `harbor-prefix` |
 
 ## Adding a New Tool
 
@@ -252,7 +253,7 @@ Use this checklist when adding a new tool. All listed files must be updated to a
 | # | File | Change |
 |---|------|--------|
 | 1 | `dockerfile/Dockerfile.tools` | Add `ARG TOOL_VERSION=x.y.z` (or `ARG TOOL_TAG=...` for tag-style versions), `ARG TOOL_SHA256=...`, build stage with install script, and `FROM scratch AS <tool>` final stage |
-| 2 | `dockerfile/scripts/install-<tool>.sh` | Create install script if a ocker artifact (eg. uv) is unavailable |
+| 2 | `dockerfile/scripts/install-<tool>.sh` | Create install script if a Docker artifact (e.g. uv) is unavailable |
 | 3 | `dockerfile/docker-bake.hcl` | Add `target "<tool>"` block, add to `tools` group, add to `contexts` in `_main-common`, `_basic-common`, and/or `manylinux` as appropriate |
 | 4 | Consuming Dockerfiles (e.g. `dockerfile/Dockerfile`) | Add `FROM scratch AS <tool>-layer` stub to each Dockerfile that uses the tool |
 | 5 | `.github/scripts/compute-tool-tags.sh` | Add version extraction (from Dockerfile.tools or version file), hash computation, and `--arg` + JSON key in `jq -n` output |
