@@ -236,7 +236,7 @@ class GroupNorm1D:
         # Slicing for group partitioning. Only used for height sharded config with num_groups == num_channels (group size of 1)
         N, L, C = x.shape
         num_cores_nhw = self.grid_size.x * self.grid_size.y
-        length_block = 20480
+        length_block = 1024 * 9
         res_cat = []
         for i in range(0, L, length_block):
             x_block = ttnn.slice(x, (0, i, 0), (N, min(i + length_block, L), C))
