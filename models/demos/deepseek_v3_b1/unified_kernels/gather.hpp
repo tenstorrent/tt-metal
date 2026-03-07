@@ -154,6 +154,8 @@ struct Gather {
                 }
 
                 // Push to destination CB after data arrived
+                // DPRINT << "Gather: " << TileSlice(args.dst_cb, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1
+                // = 32, .ws = 8}, true, true) << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             }
 #elif defined(COMPILE_FOR_TRISC)

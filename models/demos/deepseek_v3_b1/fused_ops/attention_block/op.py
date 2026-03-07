@@ -74,6 +74,9 @@ class AttentionBlock:
         heads_per_row=8,
         nope_dim=512,
         rope_dim=64,
+        post_sdpa_weights1=None,
+        post_sdpa_weights2=None,
+        num_tp=1,
     ):
         """
         PyTorch reference implementation for validation.
@@ -100,12 +103,16 @@ class AttentionBlock:
             heads_per_row: heads per SDPA core row (default 8)
             nope_dim: KV NoPE dim (default 512)
             rope_dim: KV RoPE dim (default 64)
+            post_sdpa_weights1: kv_b2_proj weights [nope_dim, intermediate] per TP device (optional)
+            post_sdpa_weights2: o_proj weights [intermediate, output_size] per TP device (optional)
+            num_tp: number of TP devices (default 1)
 
         Returns:
-            Tuple of (full_q, new_kv, mla_output):
+            Tuple of (full_q, new_kv, output):
             - full_q: [1, 1, num_qnope_heads, nope_dim + rope_dim] combined Q heads
             - new_kv: [1, 1, 1, nope_dim + rope_dim] new KV entry written at position_ids[0]
-            - mla_output: [num_qnope_heads, nope_dim] FlashMLA attention output
+            - output: [1, output_size] post-SDPA output with residual if post_sdpa weights provided,
+                      otherwise [num_qnope_heads, nope_dim] FlashMLA attention output
         """
         from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
@@ -158,7 +165,21 @@ class AttentionBlock:
         new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
         full_kv[:, :, position_id, :] = new_kv
 
-        output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+        sdpa_output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+
+        if post_sdpa_weights1 is None or post_sdpa_weights2 is None:
+            return full_q, new_kv, sdpa_output
+
+        from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
+
+        heads_per_tp = num_qnope_heads // num_tp
+        post_sdpa_result = None
+        for tp in range(num_tp):
+            tp_sdpa_output = sdpa_output[tp * heads_per_tp : (tp + 1) * heads_per_tp].to(post_sdpa_weights1.dtype)
+            tp_result = PostSDPA.golden(tp_sdpa_output, post_sdpa_weights1, post_sdpa_weights2)
+            post_sdpa_result = tp_result if post_sdpa_result is None else post_sdpa_result + tp_result
+
+        output = post_sdpa_result + input_tensor
         return full_q, new_kv, output
 
     @staticmethod
@@ -3540,7 +3561,9 @@ class AttentionBlock:
                 sdpa_worker_trisc_rt_args = ttnn.RuntimeArgs()
 
                 # Get matmul4 input buffer address for scatter destination
-                scatter_dest_l1_addr = input_tensor_device.buffer_address()
+                scatter_dest_l1_addr = (
+                    sdpa_kv_cache_buffer_device.buffer_address() + matmul4_in0_cb_descriptor.address_offset
+                )
 
                 # Type A/B worker split (like original sdpa_reduce_to_all op)
                 # This distributes R1/R2 traffic across both FWD and BWD forwarder instances
