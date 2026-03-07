@@ -193,9 +193,8 @@ jobs:
 
       - name: Run Multi-Process tests
         if: ${{ matrix.test-group.model == 'multiprocess' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-multi-process-tests
-        with:
-          timeout-minutes: ${{ matrix.test-group.timeout }}
       - name: Run Llama3-70b unit tests
         if: ${{ matrix.test-group.model == 'llama3-70b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
