@@ -210,7 +210,7 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # Copy pre-built ci-test venv from tool image
 RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
-    cp -ua /venv-staging/venv $PYTHON_ENV_DIR
+    cp -ua /venv-staging/venv/. ${PYTHON_ENV_DIR}/
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
