@@ -68,6 +68,7 @@ class DeepseekMoeGateSingleCore:
         eps=1e-20,
         scaling_factor=2.5,
         enable_sigmoid=False,
+        unit_test=False,
     ):
         """
         Execute Deepseek Moe Gate operation using generic_op.
@@ -75,17 +76,21 @@ class DeepseekMoeGateSingleCore:
         Args:
             input_tensor: Input tensor with values to sort (must be sharded, shape [16, 16])
             bias_tensor: Transposed bias tensor with values to add (must be sharded, shape [16, 16])
-            output_tensor: Pre-allocated output tensor for top8 normalized scores (must be sharded, shape [16, 16])
+            output_tensor: Pre-allocated output tensor for top8 normalized scores (must be sharded, shape [32, 32])
             input_indices_tensor: Input tensor with transposed indices to sort (must be sharded, shape [16, 16])
-            output_indices_tensor: Pre-allocated output tensor for top8 indices (must be sharded, shape [16, 16])
+            output_indices_tensor: Pre-allocated output tensor for top8 indices (must be sharded, shape [32, 32])
             eps: Epsilon value for normalization
             scaling_factor: Scaling factor for normalization
             enable_sigmoid: Whether to enable sigmoid activation
+            unit_test: Whether this op is running in its own unit test
 
         Returns:
-            output_tensor with top8 normalized scores (must be sharded, shape [16, 16])
-            output_indices_tensor with top8 indices (must be sharded, shape [16, 16])
-            Note: Only the first 8 values are relevant
+            output_tensor with top8 normalized scores (shape [1, 8])
+            output_indices_tensor with top8 indices (shape [1, 8])
+
+        Note:
+            For the output_tensor and output_indices_tensor, it should be 32x32.
+            And we will just return the first 8 values from the 32x32 tensor.
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -102,8 +107,16 @@ class DeepseekMoeGateSingleCore:
         input_shard_spec = input_tensor.memory_config().shard_spec
         output_shard_spec = output_tensor.memory_config().shard_spec
         all_cores = input_shard_spec.grid
-        assert input_shard_spec == bias_tensor.memory_config().shard_spec
-        assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
+        # This check is temporarily disabled as we do not have an operator to
+        # modify the tile size.
+        # Since the per-token input size is 256, the resulting memory layout
+        # with 16x16 tiles is logically equivalent to that with 32x32 tiles.
+        # Remove this check once we have an operator to modify the tile size.
+        assert input_shape[-1] * input_shape[-2] == 256, "Input tensor must have 256 elements"
+        # Also for input indices
+        assert input_indices_shape[-1] * input_indices_shape[-2] == 256, "Input indices tensor must have 256 elements"
+        # assert input_shard_spec == bias_tensor.memory_config().shard_spec
+        # assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
         assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
         assert all_cores == output_shard_spec.grid
 
@@ -115,18 +128,18 @@ class DeepseekMoeGateSingleCore:
         output_tile = output_tensor.tile
         output_tile_height, output_tile_width = output_tile.tile_shape
         output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
-        expected_output_tile_size = (1, 16)
-        assert input_tile == bias_tensor.tile
-        assert input_tile == input_indices_tensor.tile
+        expected_output_tile_size = (32, 32)
+        # assert input_tile == bias_tensor.tile
+        # assert input_tile == input_indices_tensor.tile
         assert output_tile == output_indices_tensor.tile
-        assert input_tile_height == expected_input_tile_size[0]
-        assert input_tile_width == expected_input_tile_size[1]
-        assert output_tile_height == expected_output_tile_size[0]
-        assert output_tile_width == expected_output_tile_size[1]
-        assert input_shard_spec.shape[0] == expected_input_tile_size[0]
-        assert input_shard_spec.shape[1] == expected_input_tile_size[1]
-        assert output_shard_spec.shape[0] == expected_output_tile_size[0]
-        assert output_shard_spec.shape[1] == expected_output_tile_size[1]
+        # assert input_tile_height == expected_input_tile_size[0]
+        # assert input_tile_width == expected_input_tile_size[1]
+        # assert output_tile_height == expected_output_tile_size[0]
+        # assert output_tile_width == expected_output_tile_size[1]
+        # assert input_shard_spec.shape[0] == expected_input_tile_size[0]
+        # assert input_shard_spec.shape[1] == expected_input_tile_size[1]
+        # assert output_shard_spec.shape[0] == expected_output_tile_size[0]
+        # assert output_shard_spec.shape[1] == expected_output_tile_size[1]
 
         # Get tile info from bias tensor
         bias_tile = bias_tensor.tile
@@ -160,30 +173,31 @@ class DeepseekMoeGateSingleCore:
         input_indices_tile_descriptor = ttnn.TileDescriptor(input_indices_tile)
         output_indices_tile_descriptor = ttnn.TileDescriptor(output_indices_tile)
 
+        # Page size must divide total_size (circular_buffer_config constraint).
+        # total_size cannot exceed the L1 buffer (e.g. 2048 B). Use page_size = total_size to satisfy both.
+        def _set_page_size(desc, tile_descriptor, tile_size):
+            desc.format_descriptors[0].tile = tile_descriptor
+            desc.format_descriptors[0].page_size = tile_size if desc.total_size % tile_size == 0 else desc.total_size
+
         # CB: Input values (created from sharded tensor)
         in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor)
-        in_cb_descriptor.format_descriptors[0].tile = input_tile_descriptor
-        in_cb_descriptor.format_descriptors[0].page_size = input_tile_size
+        _set_page_size(in_cb_descriptor, input_tile_descriptor, input_tile_size)
 
         # CB: Bias values (created from sharded tensor)
         bias_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor)
-        bias_cb_descriptor.format_descriptors[0].tile = bias_tile_descriptor
-        bias_cb_descriptor.format_descriptors[0].page_size = bias_tile_size
+        _set_page_size(bias_cb_descriptor, bias_tile_descriptor, bias_tile_size)
 
         # CB: Output values (created from sharded tensor)
         out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
-        out_cb_descriptor.format_descriptors[0].tile = output_tile_descriptor
-        out_cb_descriptor.format_descriptors[0].page_size = output_tile_size
+        _set_page_size(out_cb_descriptor, output_tile_descriptor, output_tile_size)
 
         # CB: Input indices (created from sharded tensor)
         in_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_indices_cb, input_indices_tensor)
-        in_indices_cb_descriptor.format_descriptors[0].tile = input_indices_tile_descriptor
-        in_indices_cb_descriptor.format_descriptors[0].page_size = input_indices_tile_size
+        _set_page_size(in_indices_cb_descriptor, input_indices_tile_descriptor, input_indices_tile_size)
 
         # CB: Output indices (created from sharded tensor)
         out_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_indices_cb, output_indices_tensor)
-        out_indices_cb_descriptor.format_descriptors[0].tile = output_indices_tile_descriptor
-        out_indices_cb_descriptor.format_descriptors[0].page_size = output_indices_tile_size
+        _set_page_size(out_indices_cb_descriptor, output_indices_tile_descriptor, output_indices_tile_size)
 
         # ========== UNIFIED KERNEL DESCRIPTOR ==========
         # Core logic is in unified_kernels/deepseek_moe_gate.hpp
@@ -255,4 +269,16 @@ class DeepseekMoeGateSingleCore:
         io_tensors = [input_tensor, bias_tensor, input_indices_tensor, output_tensor, output_indices_tensor]
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
+        if unit_test:
+            return output_tensor, output_indices_tensor
+
+        # here we only take the 1x8  out of 32x32
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_indices_tensor = ttnn.to_layout(output_indices_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = output_tensor[:, 0, :8]
+        output_tensor = ttnn.reshape(output_tensor, (1, 1, output_tensor.shape[-2], output_tensor.shape[-1]))
+        output_indices_tensor = output_indices_tensor[:, 0, :8]
+        output_indices_tensor = ttnn.reshape(
+            output_indices_tensor, (1, 1, output_indices_tensor.shape[-2], output_indices_tensor.shape[-1])
+        )
         return output_tensor, output_indices_tensor

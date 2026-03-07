@@ -134,6 +134,7 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         eps,
         scaling_factor,
         enable_sigmoid,
+        unit_test=True,
     )
 
     # Convert back to torch for verification
