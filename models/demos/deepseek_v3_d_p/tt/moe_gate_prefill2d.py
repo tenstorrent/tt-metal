@@ -95,9 +95,8 @@ class MoEGatePrefill:
             topology=ttnn.Topology.Linear,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
-        reshaped = ttnn.reshape(gathered, (self.mesh_device.shape[1], self.n_routed_experts))
-        cumsum_result = ttnn.cumsum(reshaped, dim=0)
+        cumsum_result = ttnn.cumsum(gathered, dim=0)
+        ttnn.deallocate(gathered)
         cumsum_result = ttnn.to_layout(cumsum_result, ttnn.ROW_MAJOR_LAYOUT)
         cumsum_result = ttnn.pad(cumsum_result, padding=[(1, 0), (0, 0)], value=0)  # add zeros at the beginning
         cumsum_result = cumsum_result * self.experts_in_dispatch_row
