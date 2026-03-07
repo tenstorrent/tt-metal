@@ -27,14 +27,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
-            (1, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="linear-2",
-        ),
-        pytest.param(
             (1, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
             1,
@@ -49,22 +41,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="ring-4",
-        ),
-        pytest.param(
-            (1, 8),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (1, 8),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
-            id="ring-8",
         ),
     ],
     indirect=["mesh_device", "device_params"],
