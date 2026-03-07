@@ -59,6 +59,6 @@ struct FabricTelemetrySample {
  * @throws std::exception if chip_id or channel is invalid, or device access fails.
  */
 [[nodiscard]] tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
-    tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::tt_metal::ChipId chip_id, tt::tt_fabric::chan_id_t channel);
+    tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::tt_fabric::chan_id_t channel);
 
 }  // namespace tt::tt_fabric

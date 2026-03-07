@@ -64,7 +64,7 @@ struct FabricStatus {
     // Additional status info
     uint32_t num_active_ethernet_channels = 0;
     std::vector<std::string> active_hosts;
-    std::vector<tt::tt_metal::ChipId> active_chips;
+    std::vector<tt::ChipId> active_chips;
 };
 
 FabricStatus get_fabric_status();

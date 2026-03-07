@@ -59,8 +59,8 @@ enum class LineDirection : uint8_t {
 // Configuration structure for a device, containing its receiver and sender device ids.
 struct SenderReceiverConfig {
     uint32_t device_index = 0;
-    std::optional<tt::tt_metal::ChipId> sender_device_id;
-    std::optional<tt::tt_metal::ChipId> receiver_device_id;
+    std::optional<tt::ChipId> sender_device_id;
+    std::optional<tt::ChipId> receiver_device_id;
 };
 
 // Returns `SenderReceiverConfig` for a given device, given topology.

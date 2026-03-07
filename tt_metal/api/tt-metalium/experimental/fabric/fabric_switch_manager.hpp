@@ -70,7 +70,7 @@ private:
     ~FabricSwitchManager() = default;
 
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
-    std::map<tt::tt_metal::ChipId, tt::tt_metal::IDevice*> switch_devices_;
+    std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
 };
 
 }  // namespace tt::tt_fabric
