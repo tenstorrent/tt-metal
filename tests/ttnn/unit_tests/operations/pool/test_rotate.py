@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_llk_assert
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -42,6 +42,7 @@ def get_rotate_tolerances(input_shape, angle, interpolation_mode):
 # ============================================================================
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
 def test_identity_rotation(device, interpolation_mode):
     """Test that 0-degree rotation preserves the input."""
@@ -64,6 +65,7 @@ def test_identity_rotation(device, interpolation_mode):
         assert max_diff < 0.01, f"Bilinear identity rotation differs too much: {max_diff}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "angle",
     [0, 15, 30, 45, 60, 90, 135, 180, 270, -30, -90, 360],
@@ -96,6 +98,7 @@ def test_various_angles(device, angle, interpolation_mode):
         assert comparison_passed, f"Test failed (mode={interpolation_mode}, angle={angle}°, atol={atol}, rtol={rtol})"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "center",
     [
@@ -129,6 +132,7 @@ def test_custom_center(device, center, interpolation_mode):
     assert comparison_passed, f"Custom center rotation failed for center {center}, mode={interpolation_mode}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("fill", [0.0, 1.0, -1.0, 0.5])
 @pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
 def test_custom_fill_values(device, fill, interpolation_mode):
@@ -151,6 +155,7 @@ def test_custom_fill_values(device, fill, interpolation_mode):
     assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "angle",
     [90, 180, 270, -90, -180],
@@ -185,6 +190,7 @@ def test_exact_multiples_of_90(device, angle, interpolation_mode):
 # ============================================================================
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -216,6 +222,7 @@ def test_various_tensor_sizes(device, input_shape, interpolation_mode):
     assert comparison_passed, f"Tensor size test failed for shape {input_shape}, mode={interpolation_mode}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("channels", [16, 32, 48, 64, 96, 128])
 def test_channel_alignment(device, channels):
     """Test different channel sizes that meet alignment requirements."""
@@ -242,6 +249,7 @@ def test_channel_alignment(device, channels):
 # ============================================================================
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_memory_configs(device, memory_config):
     """Test different memory configurations."""
@@ -265,6 +273,7 @@ def test_memory_configs(device, memory_config):
     assert comparison_passed, f"Memory config test failed for {memory_config}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @skip_for_blackhole("Incorrect result on BH github issue #36263")
 @pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
 def test_height_sharded_memory(device, interpolation_mode):
@@ -307,6 +316,7 @@ def test_height_sharded_memory(device, interpolation_mode):
 # ============================================================================
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_data_types(device, dtype):
     """Test different data types."""
@@ -335,6 +345,7 @@ def test_data_types(device, dtype):
 # ============================================================================
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
 def test_full_rotation(device, interpolation_mode):
     """Test 360-degree rotation should be equivalent to 0-degree."""
@@ -355,6 +366,7 @@ def test_full_rotation(device, interpolation_mode):
     ), f"360° rotation should be equivalent to 0° for {interpolation_mode}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("angle", [-45, -90, -180, -270])
 def test_negative_angles(device, angle):
     """Test negative rotation angles."""
@@ -378,6 +390,7 @@ def test_negative_angles(device, angle):
         assert comparison_passed, f"Negative angle test failed for {angle}°"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("angle", [405.0, 720.0, -450.0])
 def test_large_angles(device, angle):
     """Test angles greater than 360 degrees."""
@@ -398,6 +411,7 @@ def test_large_angles(device, angle):
     assert comparison_passed, f"Large angle test failed for {angle}°"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 def test_small_tensor(device):
     """Test minimal tensor size."""
     torch.manual_seed(0)
@@ -418,6 +432,7 @@ def test_small_tensor(device):
     assert comparison_passed, "Small tensor test failed"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "angle_pair",
     [
@@ -449,6 +464,7 @@ def test_opposite_angles(device, angle_pair, interpolation_mode):
 # ============================================================================
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -486,6 +502,7 @@ def test_batch_consistency(device, input_shape, interpolation_mode):
             assert max_diff < 1e-5, f"Bilinear batch {b} differs from single rotation: {max_diff}"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape",
     [
