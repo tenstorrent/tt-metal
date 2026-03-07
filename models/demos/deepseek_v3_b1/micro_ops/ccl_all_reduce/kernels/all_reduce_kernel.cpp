@@ -45,10 +45,9 @@ void kernel_main() {
 
         Sender::RTArgs args{};
         args.tensor_address = get_common_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 0;
 
         Sender::Op<ReaderCTArgs, WriterCTArgs> op;
-        op(args, fabric_arg_idx);
+        op(args);
     } else {
         using Receiver = deepseek_b1_ops::AllReduceReceiver;
 
@@ -68,10 +67,9 @@ void kernel_main() {
 
         Receiver::RTArgs args{};
         args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 0;
 
         Receiver::Op<ReaderCTArgs, ComputeCTArgs> op;
-        op(args, fabric_arg_idx);
+        op(args);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -101,10 +99,9 @@ void kernel_main() {
         Sender::RTArgs args{};
         args.receiver_base_address = get_common_arg_val<uint32_t>(0);
         args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
-        size_t fabric_arg_idx = 0;
 
         Sender::Op<ReaderCTArgs, WriterCTArgs> op;
-        op(args, fabric_arg_idx);
+        op(args);
     }
     // else: receiver BRISC is no-op
 
@@ -127,11 +124,12 @@ void kernel_main() {
             get_named_compile_time_arg_val("has_residual"),
             get_named_compile_time_arg_val("num_tiles")>;
 
+        deepseek_compute_kernel_init();
+
         Receiver::RTArgs args{};
-        size_t fabric_arg_idx = 0;
 
         Receiver::Op<ReaderCTArgs, ComputeCTArgs> op;
-        op(args, fabric_arg_idx);
+        op(args);
     }
     // else: sender TRISC is no-op
 #endif

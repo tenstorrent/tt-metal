@@ -26,15 +26,16 @@ void kernel_main() {
     constexpr uint32_t in0_block_h = get_compile_time_arg_val(4);
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t last_ktile_w = get_compile_time_arg_val(6);
+    constexpr uint32_t last_ktile_h = get_compile_time_arg_val(7);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
     // batch args
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(8);
-    constexpr uint32_t MtKt = get_compile_time_arg_val(9);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(9);
+    constexpr uint32_t MtKt = get_compile_time_arg_val(10);
 
-    constexpr auto in0_args = TensorAccessorArgs<10>();
+    constexpr auto in0_args = TensorAccessorArgs<11>();
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t one_tile = 1;
 #ifdef IN0_SHARDED
     const uint32_t in0_num_tiles = batch * num_blocks * in0_block_h * in0_block_w;
@@ -55,7 +56,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifdef INTERMEDIATE_CB_READ
-            constexpr uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+            constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
             cb_reserve_back(in0_intermediate_cb_index, one_tile);
             uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ
@@ -83,6 +84,13 @@ void kernel_main() {
                             noc_async_read_barrier();
                             constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
                             pad_last_ktile<in0_data_format, last_ktile_w>(l1_write_addr_in0);
+                        }
+                    }
+                    if constexpr (last_ktile_h > 0) {
+                        if ((block == num_blocks - 1) && (w == in0_block_w - 1)) {
+                            noc_async_read_barrier();
+                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                            pad_last_transposed_ktile<in0_data_format, last_ktile_h>(l1_write_addr_in0);
                         }
                     }
 

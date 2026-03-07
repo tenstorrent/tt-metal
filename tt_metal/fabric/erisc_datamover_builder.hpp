@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -22,9 +22,12 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
 namespace tt::tt_fabric {
@@ -203,6 +206,23 @@ struct StreamRegAssignments {
     }
 };
 
+/**
+ * Unified view of all diagnostic/instrumentation buffer locations in router L1.
+ * Produced from FabricEriscDatamoverConfig; queryable via FabricBuilderContext.
+ */
+struct FabricRouterDiagnosticBufferMap {
+    struct BufferRegion {
+        size_t l1_address = 0;
+        size_t size_bytes = 0;
+
+        bool is_enabled() const { return l1_address != 0; }
+    };
+
+    BufferRegion perf_telemetry;
+    BufferRegion code_profiling;
+    BufferRegion channel_trimming_capture;
+};
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -264,8 +284,6 @@ struct FabricEriscDatamoverConfig {
     // ----------- Receiver Channels
     // persistent mode field
     std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
@@ -280,6 +298,12 @@ struct FabricEriscDatamoverConfig {
     // ----------- Local Tensix Relay Connection (UDM mode only)
     // Connection buffer index for the local tensix relay interface
     size_t tensix_relay_connection_buffer_index_id = 0;
+
+    size_t datapath_usage_l1_address = 0;
+    size_t datapath_usage_buffer_size = 0;
+
+    /** Returns a consolidated view of all diagnostic buffer locations in this config's L1 layout. */
+    FabricRouterDiagnosticBufferMap get_telemetry_and_metadata_buffer_map() const;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
@@ -468,7 +492,8 @@ public:
         bool build_in_worker_connection_mode = false,
         bool has_tensix_extension = false,
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -482,7 +507,8 @@ public:
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false,
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -496,7 +522,8 @@ public:
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false,
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
@@ -506,16 +533,24 @@ public:
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
+    struct CompileTimeArgs {
+        std::vector<uint32_t> positional;
+        std::unordered_map<std::string, uint32_t> named;
+    };
+    [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
 
     // Helper for `get_compile_time_args`
-    void get_telemetry_compile_time_args(uint32_t risc_id, std::vector<uint32_t>& ct_args) const;
+    void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
     void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
 
     size_t get_configured_risc_count() const;
+
+    // Returns the resolved kernel build optimization level for this router.
+    // This opt-level is per-builder/router, and should not be shared across builders.
+    [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
 
     void dump_to_log() const {
         // TODO
@@ -597,6 +632,13 @@ private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
     std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
     std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+
+    // Apply channel trimming overrides: disables unused sender/receiver channels
+    // and stores overrides for compile-time arg generation (RX forwarding disable flags).
+    void apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides);
+
+    // Channel trimming overrides (from imported profile)
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides_;
 
     // first level acks are acknowledgement credits sent from receiver to sender channels on receipt of packets
     // and can be used to know when the sender is able to recover a buffer slot in the channel, for new data from

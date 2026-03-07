@@ -10,7 +10,7 @@
 // where the watcher thread can log the result.  The device then soft-hangs in
 // a spin loop.
 //
-// All functionaly gated behind defined WATCHER_ENABLED
+// All functionality gated behind defined WATCHER_ENABLED
 //
 #pragma once
 
@@ -24,6 +24,7 @@
     defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
+#include "internal/hw_thread.h"
 
 #include "internal/dataflow/dataflow_cmd_bufs.h"
 #include "hostdev/dev_msgs.h"
@@ -31,6 +32,9 @@
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "eth_l1_address_map.h"
+#if !defined(WATCHER_DISABLE_CB_SANITIZE)
+#include "internal/circular_buffer_interface.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -224,6 +228,36 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     return DebugSanitizeOK;
 }
 
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+// Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
+// circular buffer stays within that buffer's allocated region.  Only runs on
+// BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
+// Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
+inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
+    for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        LocalCBInterface& cb = get_local_cb_interface(i);
+        if (cb.fifo_size == 0) {
+            continue;  // unused CB
+        }
+
+        uint32_t cb_start = cb.fifo_limit - cb.fifo_size;
+        uint32_t cb_end = cb.fifo_limit;
+
+        // Check if l1_addr falls inside this CB's region
+        if (l1_addr >= cb_start && l1_addr < cb_end) {
+            // Address is in this CB – verify the full transfer fits
+            // Use 64-bit arithmetic to avoid overflow on the end address.
+            if (static_cast<uint64_t>(l1_addr) + len > cb_end) {
+                return DebugSanitizeCBOutOfBounds;
+            }
+            return DebugSanitizeOK;
+        }
+    }
+    // Address is not inside any known CB; other checks will validate it.
+    return DebugSanitizeOK;
+}
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
+
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index
@@ -246,7 +280,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
-        v[noc_id].which_risc = PROCESSOR_INDEX;
+        v[noc_id].which_risc = internal_::get_hw_thread_idx();
         v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
         v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
@@ -328,28 +362,58 @@ uint32_t debug_sanitize_noc_addr(
         bool is_virtual_coord_end = false;
         AddressableCoreType end_core_type = get_core_type(noc_id, x_end, y_end, is_virtual_coord_end);
         uint16_t return_code = DebugSanitizeOK;
-        if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX) {
+        bool both_cores_tensix =
+            (core_type == AddressableCoreType::TENSIX && end_core_type == AddressableCoreType::TENSIX);
+
+        if (!both_cores_tensix) {
             return_code = DebugSanitizeNocMulticastNonWorker;
         }
         if (is_virtual_coord != is_virtual_coord_end) {
             return_code = DebugSanitizeNocMixedVirtualandPhysical;
         }
-        if (is_virtual_coord && is_virtual_coord_end) {
-            // If coordinates are in virtual space, start can be greater than end, when using NOC1.
-            // This is because NOC0 and NOC1 endpoints are identical in virtual space, but order of
-            // start and end coords is still flipped between NOC0 and NOC1.
-            if (noc_id == 0) {
+
+        // Only check wrap-around for Tensix-to-Tensix multicasts
+        if (both_cores_tensix) {
+            if (is_virtual_coord && is_virtual_coord_end) {
+                // Virtual coordinates: noc0 and noc1 endpoints are identical in virtual space,
+                // but coordinate ordering differs between noc0 and noc1.
+                //
+                // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
+                // Non-torus architectures (Quasar) require start <= end.
+#ifdef ARCH_QUASAR
+                if (noc_id == 0) {
+                    if (x > x_end || y > y_end) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                } else {
+                    if (x_end > x || y_end > y) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                }
+#endif
+            } else {
+#ifdef ARCH_QUASAR
                 if (x > x_end || y > y_end) {
                     return_code = DebugSanitizeNocMulticastInvalidRange;
                 }
-            } else {
-                if (x_end > x || y_end > y) {
-                    return_code = DebugSanitizeNocMulticastInvalidRange;
-                }
+#endif
             }
         } else {
-            if (x > x_end || y > y_end) {
-                return_code = DebugSanitizeNocMulticastInvalidRange;
+            // For non-Tensix multicasts, enforce start <= end on all architectures
+            if (is_virtual_coord && is_virtual_coord_end) {
+                if (noc_id == 0) {
+                    if (x > x_end || y > y_end) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                } else {
+                    if (x_end > x || y_end > y) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                }
+            } else {
+                if (x > x_end || y > y_end) {
+                    return_code = DebugSanitizeNocMulticastInvalidRange;
+                }
             }
         }
         debug_sanitize_post_addr_and_hang(
@@ -366,7 +430,7 @@ uint32_t debug_sanitize_noc_addr(
     // Reads and writes may have different alignment requirements, see noc_parameters.h for details.
     uint32_t alignment_mask =
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) -
-        1;  // Default alignment, only override in ceratin cases.
+        1;  // Default alignment, only override in certain cases.
     if (core_type == AddressableCoreType::PCIE) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
@@ -465,6 +529,19 @@ void debug_sanitize_noc_and_worker_addr(
                 DebugSanitizeNocAlignment);
         }
     }
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+    // Check local L1 address against CB bounds (both read and write directions).
+    debug_sanitize_post_addr_and_hang(
+        noc_id,
+        noc_addr,
+        worker_addr,
+        len,
+        multicast,
+        dir,
+        DEBUG_SANITIZE_NOC_LOCAL,
+        debug_valid_cb_addr(worker_addr, len));
+#endif
 }
 
 void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
@@ -641,9 +718,15 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
     bool delay = false;
     switch (transaction_type) {
-        case TransactionRead: delay = (v[0].read_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
-        case TransactionWrite: delay = (v[0].write_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
-        case TransactionAtomic: delay = (v[0].atomic_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionRead:
+            delay = (v[0].read_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
+        case TransactionWrite:
+            delay = (v[0].write_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
+        case TransactionAtomic:
+            delay = (v[0].atomic_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
         default: break;
     }
     if (delay) {

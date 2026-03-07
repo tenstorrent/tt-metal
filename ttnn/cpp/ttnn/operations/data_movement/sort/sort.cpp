@@ -50,7 +50,7 @@ Tensor pre_sort_transform_tensor(
     // If dim is not last dimension transpose it
     const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
 
-    // If input is not rank 4 transorm it to 4D
+    // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Fill implicit tile padding with the appropriate value
@@ -163,14 +163,13 @@ std::vector<Tensor> ExecuteSort::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
-    auto rank = input_tensor.padded_shape().rank();
+    const auto rank = input_tensor.logical_shape().rank();
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
         if (CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors).tensor_attributes->get_storage() =
-                input_tensor.tensor_attributes->get_storage();
+            std::get<0>(*optional_output_tensors) = input_tensor;
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         }
         return {input_tensor, ttnn::zeros_like(input_tensor)};

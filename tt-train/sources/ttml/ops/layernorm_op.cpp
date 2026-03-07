@@ -4,7 +4,6 @@
 
 #include "layernorm_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <optional>
 
@@ -15,6 +14,13 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm.hpp"
+#include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward.hpp"
+#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttml::ops {
 
@@ -154,7 +160,7 @@ autograd::TensorPtr composite_layernorm(
 
         auto dgamma = ttnn::moreh_sum(
             ttnn::multiply(dout, normalized_tensor),
-            /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
+            /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
             /* keep_dim */ true,
             /* output */ std::nullopt,
             /* output_mem_config */ std::nullopt,
@@ -200,7 +206,7 @@ autograd::TensorPtr composite_layernorm(
         if (beta_opt.has_value()) {
             auto dbeta = ttnn::moreh_sum(
                 dout,
-                /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
+                /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
                 /* keep_dim */ true,
                 /* output */ std::nullopt,
                 /* output_mem_config */ std::nullopt,

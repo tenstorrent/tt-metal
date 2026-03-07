@@ -238,6 +238,13 @@ class TriageScript:
             return result
         except TimeoutDeviceRegisterError:
             raise
+        except ValueError as e:
+            if log_error:
+                self.failed = True
+                self.failure_message = f"{e}"
+                return None
+            else:
+                raise
         except Exception as e:
             if log_error:
                 self.failed = True
@@ -396,7 +403,7 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
+    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
     progress_disabled = bool(args["--disable-progress"])
 
@@ -475,12 +482,21 @@ def parse_arguments(
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
+    # Deduplicate options if some scripts define the same option
+    seen_options: set[str | None] = set()
+    unique_options: list[Option] = []
+    for opt in combined_options:
+        key = opt.long or opt.short
+        if key not in seen_options:
+            seen_options.add(key)
+            unique_options.append(opt)
+
     if argv is None:
         argv = sys.argv[1:]
-    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(unique_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
-        ao.children = list(set(combined_options) - pattern_options)
+        ao.children = list(set(unique_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if only_triage_script_args or (matched and left == []):
         arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
@@ -533,7 +549,7 @@ def log_check_device(device: Device, success: bool, message: str) -> None:
 
 def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
     device = location.device
-    block_type = device.get_block_type(location)
+    block_type = location.noc_block.block_type
     location_str = location.to_user_str()
     formatted_message = f"{block_type} [{location_str}]: {message}"
     log_check_device(device, success, formatted_message)
@@ -582,9 +598,8 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"  Script help:\n{docstring_indented}")
         else:
             utils.INFO("  pass")
-            if len(warnings) > 0:
-                for warning in warnings:
-                    utils.WARN(f"  {warning}")
+            for warning in warnings:
+                utils.WARN(f"    {warning}")
         return
 
     for failure in failures:

@@ -204,6 +204,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         B,
         NQH,
         NKH,
+        NKH,
         Sqt,
         Skt,
         valid_Sqt * 2 * ring_size,
@@ -223,12 +224,16 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         (uint32_t)is_chunked,  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0  // use_attention_sink
+        0,                 // use_attention_sink
+        0,                 // use_mla
+        0,                 // mla_kv_overlap
+        qk_out_subblock_h  // qk_subblock_h
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 23-25)
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 27-30)
     reader_compile_time_args.push_back(0);  // sender_semaphore_id
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
+    reader_compile_time_args.push_back(0);  // mcast_enabled
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -261,6 +266,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
+        0,      // arg 20: lightweight mask (unused in ring distributed)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -294,8 +300,10 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_union.u,
-        0,  //(uint32_t)sliding_window_size,
-        0,  //(std::uint32_t)use_attention_sink,
+        0,          //(uint32_t)sliding_window_size,
+        0,          //(std::uint32_t)use_attention_sink,
+        0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
+        valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 

@@ -35,17 +35,17 @@
 
 /* Default transaction ID for both command buffers */
 constexpr uint32_t CMDBUF_DEF_TRID = 0;
-/* Static(starting) transcation ID for command buffer 0 */
+/* Static(starting) transaction ID for command buffer 0 */
 constexpr uint32_t CMDBUF_0_TRID_STATIC = 1;
-/* Start transcation ID for command buffer 0 when using TID wrapping */
+/* Start transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_0_TRID_START = 2;
-/* End transcation ID for command buffer 0 when using TID wrapping */
+/* End transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_0_TRID_END = 6;
-/* Static(starting) transcation ID for command buffer 0 */
+/* Static(starting) transaction ID for command buffer 0 */
 constexpr uint32_t CMDBUF_1_TRID_STATIC = 7;
-/* Start transcation ID for command buffer 0 when using TID wrapping */
+/* Start transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_1_TRID_START = 8;
-/* End transcation ID for command buffer 0 when using TID wrapping */
+/* End transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_1_TRID_END = 12;
 
 /* Read request virtual channel - used by both command buffers */
@@ -67,7 +67,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def reset_cmdbuf_0()                                                                                           \
      * @def reset_cmdbuf_1()                                                                                           \
      *                                                                                                                 \
-     * @brief Defines an inline reset functions for reseting command buffers state                                     \
+     * @brief Defines an inline reset functions for resetting command buffers state                                    \
      * Should be called before any other command buffer setup functions.                                               \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
@@ -120,7 +120,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param wr Indicates if the operation is a write (true) or read (false).                                         \
      * @param apply_scatter_to_dest Indicates if scatter list should be applied to the destination address.            \
      * @param mcast Enables multicast if true; default is false.                                                       \
-     * @param linked Enables linked transcation                                                                        \
+     * @param linked Enables linked transaction                                                                        \
      * @param mcast_exclude A `TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u` structure specifying which cores to exclude        \
      *                      from multicast. Defaults to no exclusions.                                                 \
      * @param scatter_list_contains_size Specifies if the scatter list includes size information.                      \
@@ -240,11 +240,11 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def setup_ongoing_cmdbuf_1                                                                                     \
      *                                                                                                                 \
      * @brief Function for configuring incrementing logic for command buffer                                           \
-     * Addresses, vcs and transcation ids can be configure to be self incrementing after each transactions             \
+     * Addresses, vcs and transaction ids can be configure to be self incrementing after each transactions             \
      *                                                                                                                 \
      * @param src_addr_inc_en If enabled source address will increment after issue                                     \
      * @param dest_addr_inc_en If enabled destination address will increment after issue                               \
-     * @param trid_inc_en If enabled transcation ID will increment after issue                                         \
+     * @param trid_inc_en If enabled transaction ID will increment after issue                                         \
      * @param req_vc_inc_en If enabled request VC will increment after issue                                           \
      * @param resp_vc_inc_en If enabled response VC will increment after issue                                         \
      * @param req_vc_inc_on_entire_trans Request VC increment on entire transaction                                    \
@@ -339,11 +339,11 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def setup_trids_static_cmdbuf_0                                                                                \
      * @def setup_trids_static_cmdbuf_1                                                                                \
      *                                                                                                                 \
-     * @brief Function for configuring transcation ID based on macros defined in this file                             \
-     * If wrapping feature for transaction ID is enabled, specifed ID is used as offset                                \
+     * @brief Function for configuring transaction ID based on macros defined in this file                             \
+     * If wrapping feature for transaction ID is enabled, specified ID is used as offset                               \
      *                                                                                                                 \
-     * @param trid_offset Transaction ID, if wrapping is enabled this serves as transcation ID offset                  \
-     * @param wrapping Enables wrapping feature for transcation IDs                                                    \
+     * @param trid_offset Transaction ID, if wrapping is enabled this serves as transaction ID offset                  \
+     * @param wrapping Enables wrapping feature for transaction IDs                                                    \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
@@ -432,7 +432,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      *                                                                                                                 \
      * @brief Function for configuring snoop and flush bit of transaction                                              \
      *                                                                                                                 \
-     * @param snoop_bit Enables destination NIU for cache snoop mechanims                                              \
+     * @param snoop_bit Enables destination NIU for cache snoop mechanisms                                             \
      * @param flush_bit Enables destination NIU to commit all parts of the flit before committing the next packet      \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
@@ -1470,7 +1470,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @brief Checks if transaction with argument trid is completed                                                    \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
-     * @return True if all transcation is complected                                                                   \
+     * @return True if all transaction is complected                                                                   \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
@@ -1516,7 +1516,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def noc_writes_sent_cmdbuf_0                                                                                   \
      * @def noc_writes_sent_cmdbuf_1                                                                                   \
      *                                                                                                                 \
-     * @brief Checks if write with provided transcation ID is completed                                                \
+     * @brief Checks if write with provided transaction ID is completed                                                \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
      * @return True if write is complected                                                                             \
@@ -1624,7 +1624,7 @@ DEFINE_CMD_BUFS(cmdbuf_1, CMDBUF_1)
 
 //////////////////////
 /// Simple CMD Buf ///
-// Bellow are all the functions for simple command buffer. This third command buffer,
+// Below are all the functions for simple command buffer. This third command buffer,
 //
 //////////////////////
 

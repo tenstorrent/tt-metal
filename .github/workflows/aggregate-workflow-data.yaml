@@ -1,4 +1,4 @@
-name: Aggregate Workflow Data
+name: (triage) Aggregate Workflow Data
 on:
   push:
     branches:
@@ -51,7 +51,7 @@ jobs:
             [
               ".github/workflows/all-post-commit-workflows.yaml",
               ".github/workflows/blackhole-post-commit.yaml",
-              ".github/workflows/blackhole-nightly-tests.yaml",
+              ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
@@ -138,9 +138,8 @@ jobs:
     needs: fetch-data
     runs-on: ubuntu-latest
     outputs:
-      failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
-      regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
-      alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
+      has_failed_workflows: ${{ steps.analyze.outputs.has_failed_workflows }}
+      has_regressions: ${{ steps.analyze.outputs.has_regressions }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -246,37 +245,64 @@ jobs:
           name: workflow-status-changes
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
+      - name: Upload regression notification inputs artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-regression-notification-inputs
+          path: |
+            ${{ steps.analyze.outputs.failed_workflows_path }}
+            ${{ steps.analyze.outputs.regressed_workflows_path }}
+            ${{ steps.analyze.outputs.alert_all_message_path }}
+          retention-days: 1
 
 
   handle-failures:
     needs: analyze-data
-    if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
+    if: ${{ needs.analyze-data.outputs.has_failed_workflows == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
+      slack_notification_status: ${{ steps.slack-status.outputs.status }}
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
+      - name: Download regression notification inputs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-regression-notification-inputs
+          path: ${{ github.workspace }}/regression-notification-inputs
       - name: Handle failed workflows
         run: |
           echo "The following workflows have failed:"
-          echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
+          jq -r '.[]' "${GITHUB_WORKSPACE}/regression-notification-inputs/failed-workflows.json"
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
         id: slack-report
+        continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
           channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
-          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
-          alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
+          regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
+          alert_all_message_path: ${{ github.workspace }}/regression-notification-inputs/alert-all-message.txt
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      - name: Record Slack notification status
+        if: ${{ always() }}
+        id: slack-status
+        shell: bash
+        run: |
+          slack_ts="${{ steps.slack-report.outputs.slack_ts }}"
+          if [ -n "$slack_ts" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
 
   trigger-auto-triage:
     needs: [analyze-data, handle-failures]
-    if: ${{ always() && needs.analyze-data.result == 'success' && fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
+    if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -289,10 +315,15 @@ jobs:
       - name: Install dependencies
         working-directory: .github/actions/trigger-auto-triage-for-regressions
         run: npm install
+      - name: Download regression notification inputs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-regression-notification-inputs
+          path: ${{ github.workspace }}/regression-notification-inputs
       - name: Trigger auto-triage for regressed jobs
         uses: ./.github/actions/trigger-auto-triage-for-regressions
         with:
-          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
+          regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
           slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}

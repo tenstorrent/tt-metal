@@ -18,6 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
+#include "tt_metal/api/tt-metalium/cluster.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -562,7 +563,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     };
 
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w};
+    uint32_t last_ktile_h = 0;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w, last_ktile_h};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
@@ -619,6 +621,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
+        .named_compile_time_args = {{"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
@@ -647,10 +650,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         num_output_tiles_per_core_group_2  // Nt
     };
     log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}, {"cb_out", output_cb_index}};
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
         .compile_time_args = compute_ct_args_group_1,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -660,6 +666,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_2,
         .compile_time_args = compute_ct_args_group_2,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -1033,6 +1040,11 @@ protected:
 };
 
 TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
+    // Skipped on T3K: kernel compilation failure in minimal_default_writer. See
+    // https://github.com/tenstorrent/tt-metal/issues/39242
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Disabled on T3K. See https://github.com/tenstorrent/tt-metal/issues/39242";
+    }
     // This test replicates AllGatherReturnedTensor test in test_multi_tensor_ccl.cpp but with the generic op.
     // Hardcoded for 1x4 linear topology with 1 worker per direction and 1 link.
     log_info(tt::LogTest, "Running {}: all_gather via generic_op with MUX", __func__);

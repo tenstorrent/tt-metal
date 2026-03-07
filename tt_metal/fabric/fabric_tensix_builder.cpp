@@ -44,6 +44,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
     auto device_id = all_active_devices.front()->id();
     const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
@@ -75,8 +76,8 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
         std::vector<chan_id_t> non_dispatch_active_channels;
         std::set<routing_plane_id_t> non_dispatch_routing_planes;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
-            dispatch_link_idx_ =
-                tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+            dispatch_link_idx_ = tt_metal::RelayMux::get_dispatch_link_index(
+                control_plane, is_galaxy_cluster, fabric_node_id, remote_fabric_node_id, device);
 
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
                 auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
@@ -178,7 +179,7 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
 }
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    // Initialize channel mappings and configurations, skipping the rest initialization if there are no ethernet found
     if (!initialize_channel_mappings()) {
         return;
     }
@@ -492,6 +493,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& hal = tt_metal::MetalContext::instance().hal();
     const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
+
+    // Guard against division by zero
+    TT_FATAL(
+        num_used_riscs_per_tensix_ > 0,
+        "num_used_riscs_per_tensix_ must be greater than 0, but got {}",
+        num_used_riscs_per_tensix_);
 
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =

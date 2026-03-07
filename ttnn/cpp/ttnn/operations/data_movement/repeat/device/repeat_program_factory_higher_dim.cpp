@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -79,7 +78,7 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
-    // Determine runtime argumens
+    // Determine runtime arguments
     bool divide_on_higher = number_of_higher_pages > number_of_lower_pages;
 
     uint32_t responsibility_chunk =

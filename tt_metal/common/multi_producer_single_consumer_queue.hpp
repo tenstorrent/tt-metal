@@ -7,7 +7,6 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
 template <typename T>

@@ -118,7 +118,7 @@ class NanoGPT(AbstractModuleBase):
         self.tok_emb = Embedding(vocab_size_divisible_by_32, config.n_embd)
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.get_weight()
+            self.tok_emb.weight = self.fc.weight.tensor
 
         if config.positional_embedding_type == "trainable":
             self.pos_emb = TrainablePositionalEmbedding(
@@ -192,8 +192,12 @@ class NanoGPT(AbstractModuleBase):
         for block in self.blocks:
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
                 out = memory_efficient_runner(block, out, mask)
-            else:
+            elif self.config.runner_type == ttml.models.RunnerType.Default:
                 out = block(out, mask)
+            else:
+                raise ValueError(
+                    "Unknown runner type. Supported runner types ['default', 'memory_efficient']"
+                )
 
         if self.config.experimental.use_composite_layernorm:
             layernorm_op = ttml.ops.layernorm.composite_layernorm

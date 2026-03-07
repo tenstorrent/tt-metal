@@ -44,19 +44,6 @@ namespace deepseek_b1_ops {
 //   Receiver: waits on noc0/noc1 sender counts, then resets both semaphores to 0
 // ============================================================================
 
-#if defined(COMPILE_FOR_TRISC)
-// Helper functions to manipulate CB read pointer (from bmm_large_block_zm_fused_bias_activation_gathered.cpp)
-FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    return local_cb.fifo_rd_ptr;
-}
-
-FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    local_cb.fifo_rd_ptr = val;
-}
-#endif
-
 struct GatherReduce {
     // ========================================================================
     // Runtime args structs - different layout per RISC
@@ -65,8 +52,8 @@ struct GatherReduce {
     struct ReceiverArgs {
         uint32_t noc0_num_senders;
         uint32_t noc1_num_senders;
-        uint32_t noc0_receiver_semaphore_id;
-        uint32_t noc1_receiver_semaphore_id;
+        uint32_t noc0_receiver_semaphore_addr;
+        uint32_t noc1_receiver_semaphore_addr;
         uint32_t half0_dst_cb;
         uint32_t half1_dst_cb;
         uint32_t dst_num_tiles;
@@ -76,7 +63,7 @@ struct GatherReduce {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
         uint32_t data_size_bytes;
-        uint32_t receiver_semaphore_id;
+        uint32_t receiver_semaphore_addr;
         uint32_t src_cb;
         uint32_t src_num_pages;
         uint32_t gather_reduce_grid_start_x;
@@ -100,12 +87,14 @@ struct GatherReduce {
 #if defined(COMPILE_FOR_TRISC)
     // in0_cb += in1_cb over num_tiles tiles, in place
     static inline void add_tiles_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+        reconfig_data_format<false, true>(in0_cb, in1_cb);
+        pack_reconfig_data_format<true>(in0_cb);
         add_tiles_init(in0_cb, in1_cb);
         cb_wait_front(in0_cb, num_tiles);
         cb_wait_front(in1_cb, num_tiles);
 
         uint32_t in0_cb_base_rd_ptr = 0;
-        UNPACK(({ in0_cb_base_rd_ptr = get_local_cb_rd_ptr(in0_cb); }));
+        UNPACK(({ in0_cb_base_rd_ptr = unified_kernels::get_local_cb_rd_ptr(in0_cb); }));
 
         // Process tiles - element-wise add
         tile_regs_acquire();
@@ -121,7 +110,7 @@ struct GatherReduce {
 
         // restore in0_cb read pointer to the beginning of the block so that the reduced tiles can be popped by the
         // caller
-        UNPACK(({ update_local_cb_rd_ptr(in0_cb, in0_cb_base_rd_ptr); }));
+        UNPACK(({ unified_kernels::update_local_cb_rd_ptr(in0_cb, in0_cb_base_rd_ptr); }));
 
         // pop cb1 after reduction since it's no longer needed
         cb_pop_front(in1_cb, num_tiles);
@@ -158,10 +147,9 @@ struct GatherReduce {
                 uint32_t dst_base_addr = get_write_ptr(dst_cb_id);
                 uint32_t dst_offset = half_info.half_local_idx * args.data_size_bytes;
 
-                uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(dst_base_addr + dst_offset);
-                uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)receiver_semaphore_addr;
+                uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
@@ -185,21 +173,22 @@ struct GatherReduce {
             // BRISC (Receiver) - DataMovementProcessor.RISCV_0
             // ================================================================
             if constexpr (IsReceiverCore) {
-                uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
-                uint32_t noc1_receiver_semaphore_addr = get_semaphore(args.noc1_receiver_semaphore_id);
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)noc0_receiver_semaphore_addr;
-                volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
+                    (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
                 // Reserve space in destination CBs
                 cb_reserve_back(args.half0_dst_cb, args.dst_num_tiles);
                 cb_reserve_back(args.half1_dst_cb, args.dst_num_tiles);
 
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
-                noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
-                noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
+
+                if (args.noc1_num_senders > 0) {
+                    volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
+                        (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
+                    noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
+                    noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
+                }
 
                 // Push to destination CBs after data arrived
                 cb_push_back(args.half0_dst_cb, args.dst_num_tiles);

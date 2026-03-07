@@ -30,13 +30,13 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
+#define MPWI_TILES_PER_REDUCTION 1
+
 void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
-
-    constexpr uint32_t split_reader = get_compile_time_arg_val(2);
 
     constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
     constexpr uint32_t in_c = get_compile_time_arg_val(4);
@@ -44,36 +44,34 @@ void kernel_main() {
     constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(11);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(16);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(18);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(22);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(23);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(24);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(25);
-    constexpr uint32_t in_h_padded = get_compile_time_arg_val(26);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(27);
-    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
-    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(30);
-    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(31);
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(32);
-    constexpr uint32_t compute_tmp_idx_cb_id = get_compile_time_arg_val(33);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
+    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
+    // MPWI-specific args start here
+    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(23);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(24);
+    constexpr uint32_t in_h_padded = get_compile_time_arg_val(25);
+    constexpr uint32_t in_w_padded = get_compile_time_arg_val(26);
+    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(27);
+    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(28);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(29);
+    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(30);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(31);
+    constexpr uint32_t compute_tmp_idx_cb_id = get_compile_time_arg_val(32);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(33);
     constexpr uint32_t kernel_h = get_compile_time_arg_val(34);
     constexpr uint32_t kernel_w = get_compile_time_arg_val(35);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(36);
-    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(37);
+    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(36);
 
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 
@@ -93,18 +91,14 @@ void kernel_main() {
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
+    // MPWI requires 1 tile at a time for max reduction with indices
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 1;
     constexpr uint32_t max_tiles_per_iter =
-        in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
+        in_ntiles_c < MPWI_TILES_PER_REDUCTION ? in_ntiles_c : MPWI_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
-        in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+        in_ntiles_c % MPWI_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MPWI_TILES_PER_REDUCTION;
 
-    static_assert(REDUCE_OP == PoolType::MAX, "Only supports REDUCE_OP = MAX");
-    constexpr bool neginf_srca_maxpool = true;
-    constexpr bool zero_srca_avgpool = false;
+    static_assert(REDUCE_OP == PoolType::MAX, "MPWI only supports REDUCE_OP = MAX");
 
     constexpr uint32_t w_chunks = kernel_w % max_sticks_for_reduction == 0 ? kernel_w / max_sticks_for_reduction
                                                                            : kernel_w / max_sticks_for_reduction + 1;

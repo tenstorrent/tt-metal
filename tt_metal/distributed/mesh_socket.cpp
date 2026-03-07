@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
@@ -274,6 +275,21 @@ const SocketConfig& MeshSocket::get_config() const { return config_; }
 
 tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const {
     return fabric_node_id_map_[static_cast<std::underlying_type_t<SocketEndpoint>>(endpoint)].at(coord);
+}
+
+std::vector<MeshCoreCoord> MeshSocket::get_active_cores() const {
+    std::vector<MeshCoreCoord> active_cores;
+    active_cores.reserve(config_.socket_connection_config.size());
+    if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
+        for (const auto& connection : config_.socket_connection_config) {
+            active_cores.push_back(connection.sender_core);
+        }
+    } else {
+        for (const auto& connection : config_.socket_connection_config) {
+            active_cores.push_back(connection.receiver_core);
+        }
+    }
+    return active_cores;
 }
 
 }  // namespace tt::tt_metal::distributed

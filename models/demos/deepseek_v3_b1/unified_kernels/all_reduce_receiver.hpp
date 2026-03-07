@@ -110,15 +110,10 @@ struct AllReduceReceiver {
     template <typename ReaderCT, typename ComputeCT>
     class Op {
     public:
-        void operator()(const RTArgs& args) {
-            size_t unused = 0;
-            impl(args, unused);
-        }
-
-        void operator()(const RTArgs& args, size_t& fabric_arg_idx) { impl(args, fabric_arg_idx); }
+        void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] size_t& fabric_arg_idx) {
+        void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Reader) - waits for remote data, pushes to compute
@@ -165,7 +160,8 @@ struct AllReduceReceiver {
             // ================================================================
             // TRISC (Compute) - performs reduction: local + remote → output
             // ================================================================
-            binary_op_init_common(ComputeCT::cb_in0, ComputeCT::cb_in1, ComputeCT::cb_out0);
+            reconfig_data_format<false, true>(ComputeCT::cb_in0, ComputeCT::cb_in1);
+            pack_reconfig_data_format<true>(ComputeCT::cb_out0);
             add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1);
 
             constexpr uint32_t max_dst_tiles = 4;

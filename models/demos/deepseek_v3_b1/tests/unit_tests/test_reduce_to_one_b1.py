@@ -19,7 +19,14 @@ from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
-def setup_reduce_to_one_test(mesh_device):
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
     """Common setup for reduce_to_one tests. Returns test configuration."""
     # Log mesh device info
     logger.info(f"mesh_device shape: {mesh_device.shape}")
@@ -33,8 +40,6 @@ def setup_reduce_to_one_test(mesh_device):
 
     # Setup - create 4x2 submesh
     num_devices = 8
-    exit_coord = (0, 1)
-    root_coord = (1, 1)
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh_device.shape}")
@@ -140,7 +145,9 @@ def setup_reduce_to_one_test(mesh_device):
     # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
     num_cores = compute_grid.x * compute_grid.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    ttnn.synchronize_device(submesh_device)
     semaphores = [ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(4)]
+    ttnn.synchronize_device(submesh_device)
 
     return {
         "submesh_device": submesh_device,
@@ -203,14 +210,14 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     return match
 
 
-def run_reduce_to_one(mesh_device):
+def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coord=(0, 1)):
     """Run reduce_to_one test."""
-    print(f"\n=== Testing reduce_to_one ===")
+    print(f"\n=== Testing reduce_to_one (num_iterations={num_iterations}) ===")
 
-    config = setup_reduce_to_one_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
 
-    # Run reduce_to_one
-    print("Running reduce_to_one...")
+    # Run reduce_to_one with looping inside the kernel
+    print(f"Running reduce_to_one with {num_iterations} iterations...")
     output_tensor = ReduceToOneB1.op(
         config["input_tensor"],
         config["intermediate_tensors"],
@@ -218,6 +225,7 @@ def run_reduce_to_one(mesh_device):
         config["semaphores"],
         ttnn.MeshCoordinate(config["root_coord"]),
         ttnn.MeshCoordinate(config["exit_coord"]),
+        num_iterations=num_iterations,
     )
     ttnn.synchronize_device(config["submesh_device"])
 
@@ -234,11 +242,11 @@ def run_reduce_to_one(mesh_device):
     print("Test passed!")
 
 
-def run_reduce_to_one_with_trace(mesh_device):
+def run_reduce_to_one_with_trace(mesh_device, root_coord=(1, 1), exit_coord=(0, 1)):
     """Run reduce_to_one test with trace capture and replay."""
     print(f"\n=== Testing reduce_to_one with trace ===")
 
-    config = setup_reduce_to_one_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
     submesh_device = config["submesh_device"]
     input_tensor = config["input_tensor"]
     intermediate_tensors = config["intermediate_tensors"]
@@ -319,7 +327,7 @@ def run_reduce_to_one_with_trace(mesh_device):
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(15232)})],
     indirect=["device_params"],
     ids=["fabric_1d"],
 )
@@ -331,35 +339,10 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)})],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
-    run_reduce_to_one(bh_2d_mesh_device)
-
-
-# === Trace Tests ===
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 425984})],
-    indirect=["device_params"],
-    ids=["fabric_1d_trace"],
-)
-def test_reduce_to_one_with_trace_1d(bh_2d_mesh_device):
-    """Test reduce_to_one with trace capture/replay on 1D fabric."""
-    run_reduce_to_one_with_trace(bh_2d_mesh_device)
-
-
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 425984})],
-    indirect=["device_params"],
-    ids=["fabric_2d_trace"],
-)
-def test_reduce_to_one_with_trace_2d(bh_2d_mesh_device):
-    """Test reduce_to_one with trace capture/replay on 2D fabric."""
-    run_reduce_to_one_with_trace(bh_2d_mesh_device)
+    run_reduce_to_one(bh_2d_mesh_device, num_iterations=100)

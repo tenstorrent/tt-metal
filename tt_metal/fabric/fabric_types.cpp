@@ -49,6 +49,11 @@ bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs
 
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs < rhs); }
 
+std::ostream& operator<<(std::ostream& os, const MeshId& mesh_id) {
+    os << *mesh_id;
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     using ::operator<<;  // Enable ADL for StrongType operator<<
     os << "M" << fabric_node_id.mesh_id << "D" << fabric_node_id.chip_id;
@@ -59,7 +64,7 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
 
 namespace std {
 size_t hash<tt::tt_fabric::FabricNodeId>::operator()(const tt::tt_fabric::FabricNodeId& fabric_node_id) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+    return ttsl::hash::hash_objects_with_default_seed(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 }
 }  // namespace std
 

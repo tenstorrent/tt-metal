@@ -26,6 +26,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
 namespace tt::tt_fabric {
@@ -217,8 +218,6 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
-    bool skip_deleting_built_cache = false;
-
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
@@ -269,6 +268,15 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    // Enable channel trimming resource usage capture
+    bool enable_channel_trimming_capture = false;
+
+    // Path to channel trimming profile YAML for import-driven router construction
+    std::string fabric_trimming_profile_path;
+
+    // Path to channel trimming global override YAML
+    std::string fabric_trimming_override_path;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -300,6 +308,10 @@ class RunTimeOptions {
     // Fabric router sync timeout configuration (in milliseconds)
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+
+    // User override for fabric kernel compiler optimization level
+    // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
+    std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
 
     // Disable XIP dump
     bool disable_xip_dump = false;
@@ -336,8 +348,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
-    // Return a hash of which watcher features are enabled
-    uint32_t get_watcher_hash() const;
+    // Return a hash string of which watcher features are enabled
+    std::string get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
@@ -378,7 +390,9 @@ public:
     bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+    bool watcher_eth_disabled() const { return watcher_feature_disabled(watcher_eth_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
+    bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
@@ -579,8 +593,6 @@ public:
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
-
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
@@ -637,7 +649,11 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
-    void set_enable_all_telemetry() { enable_fabric_telemetry = true; fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask; fabric_telemetry_settings.enabled = true; }
+    void set_enable_all_telemetry() {
+        enable_fabric_telemetry = true;
+        fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask;
+        fabric_telemetry_settings.enabled = true;
+    }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
@@ -645,6 +661,20 @@ public:
     void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
         fabric_profiling_settings.enable_rx_ch_fwd = enable;
     }
+
+    // If true, enables channel trimming resource usage capture on fabric routers
+    bool get_enable_channel_trimming_capture() const { return enable_channel_trimming_capture; }
+    void set_enable_channel_trimming_capture(bool enable) { enable_channel_trimming_capture = enable; }
+
+    // Channel trimming profile import path
+    bool has_fabric_trimming_profile() const { return !fabric_trimming_profile_path.empty(); }
+    const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
+    void set_fabric_trimming_profile_path(const std::string& path) { fabric_trimming_profile_path = path; }
+
+    // Channel trimming global override path
+    bool has_fabric_trimming_override() const { return !fabric_trimming_override_path.empty(); }
+    const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
+    void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
@@ -690,6 +720,11 @@ public:
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
+    std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
+    void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
+        fabric_kernel_opt_level = opt_level;
+    }
+
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
@@ -708,7 +743,7 @@ public:
     void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
 
 private:
-    // Helper functions to parse feature-specific environment vaiables.
+    // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     bool ParseFeatureChipIds(
@@ -735,9 +770,11 @@ private:
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
+    const std::string watcher_eth_str = "ETH";
     const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
     const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
     const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
+    const std::string watcher_cb_sanitize_str = "CB_SANITIZE";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };

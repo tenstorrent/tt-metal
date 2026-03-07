@@ -113,9 +113,6 @@ create_program_dram_sharded(
         log_debug(tt::LogOp, "all_worker_cores_ordered: {}", core);
     }
 
-    uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
-    uint32_t per_core_N_in1_sender = per_core_N_compute;
-
     // Remove cores assigned to padding-only DRAM banks from the workers category
     uint32_t in1_shard_width_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
     uint32_t in1_tensor_padded_width_tiles = in1_shard_width_tiles * num_dram_banks;
@@ -143,8 +140,8 @@ create_program_dram_sharded(
         num_dram_banks = all_worker_cores_ordered.size();
     }
 
-    per_core_N_compute = div_up(N, num_dram_banks);
-    per_core_N_in1_sender = per_core_N_compute;
+    uint32_t per_core_N_compute = div_up(N, num_dram_banks);
+    uint32_t per_core_N_in1_sender = per_core_N_compute;
 
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
         per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
@@ -205,7 +202,7 @@ create_program_dram_sharded(
     uint32_t in1_block_tiles = per_core_N_in1_sender * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles = in1_CB_tiles * 3;  // tripple buffer
+        in1_CB_tiles = in1_CB_tiles * 3;  // triple buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -314,6 +311,7 @@ create_program_dram_sharded(
         (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
         (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
         (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
+        (std::uint32_t)0,                                           // in0_last_ktile_h (transpose not supported)
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -400,7 +398,11 @@ create_program_dram_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_define});
+            .defines = mm_kernel_in0_sender_define,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in0_sharded", tt::CBIndex::c_2},
+            }});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -410,7 +412,13 @@ create_program_dram_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_out_reshard", tt::CBIndex::c_6},
+            }});
 
     // Compute kernel compile time args
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -455,7 +463,17 @@ create_program_dram_sharded(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
 
@@ -535,7 +553,7 @@ create_program_dram_sharded(
             interm0_CB_size / interm0_single_tile_size,
             interm0_CB_size);
     } else {
-        log_debug(tt::LogOp, "inplace interm and outout cb");
+        log_debug(tt::LogOp, "inplace interm and output cb");
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};

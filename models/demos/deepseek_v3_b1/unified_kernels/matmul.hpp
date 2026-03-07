@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -75,12 +76,13 @@ struct Matmul {
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
 
-    // Compute args (TRISC): [in0, in1, out, num_tiles]
+    // Compute args (TRISC): [in0, in1, out, num_tiles, in1_address_override]
     struct ComputeArgs {
         uint32_t in0;
         uint32_t in1;
         uint32_t out;
         uint32_t k_num_tiles;
+        uint32_t in1_address_override = 0;  // byte address; overrides in1 read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -115,15 +117,22 @@ struct Matmul {
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
 
+            reconfig_data_format<false, true>(args.in1, args.in0);
+            pack_reconfig_data_format<true>(args.out);
+
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);
-            cb_wait_front(args.in1, args.k_num_tiles * out_w);
+            if (args.in1_address_override > 0) {
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.in1, args.in1_address_override); }));
+            } else {
+                cb_wait_front(args.in1, args.k_num_tiles * out_w);
+            }
 
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            custom_mm_block_init<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
 
             if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
                 // Initialize activation on PACK thread

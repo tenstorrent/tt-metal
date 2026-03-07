@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <stdexcept>
 #include <fstream>
 #include <sstream>
@@ -177,6 +178,42 @@ proto::Architecture MeshGraphDescriptor::get_arch() const {
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
+}
+
+uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
+    const auto& instance = get_instance(mesh_instance_id);
+    return get_chip_count(instance);
+}
+
+uint32_t MeshGraphDescriptor::get_chip_count(const InstanceData& mesh_instance) const {
+    TT_FATAL(is_mesh(mesh_instance), "get_chip_count() can only be called on mesh instances");
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", mesh_instance.global_id);
+
+    uint32_t chip_count = 1;
+    for (const auto& dim : mesh_desc->device_topology().dims()) {
+        chip_count *= dim;
+    }
+
+    return chip_count;
+}
+
+std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_by_type(
+    const std::vector<std::string>& types) const {
+    std::unordered_map<std::string, uint32_t> counts;
+
+    for (const auto& type : types) {
+        // Check if this type exists in instances_by_type_
+        auto it = instances_by_type_.find(type);
+        if (it != instances_by_type_.end()) {
+            counts[type] = static_cast<uint32_t>(it->second.size());
+        } else {
+            counts[type] = 0;
+        }
+    }
+
+    return counts;
 }
 
 FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
@@ -687,6 +724,36 @@ void MeshGraphDescriptor::validate_legacy_requirements(
                 error_messages.push_back(fmt::format(
                     "MGD 1.0 Compatibility requirement: Connections must have exactly 2 nodes (Graph: {})",
                     graph.name()));
+            }
+        }
+    }
+
+    // Check that connections in the same graph don't mix STRICT and RELAXED policies
+    for (const auto& graph : proto.graph_descriptors()) {
+        if (graph.connections_size() == 0) {
+            continue;
+        }
+
+        // Determine the policy of the first connection (default to STRICT if not specified)
+        proto::Policy first_policy = proto::Policy::STRICT;
+        if (graph.connections(0).has_channels() && graph.connections(0).channels().has_policy()) {
+            first_policy = graph.connections(0).channels().policy();
+        }
+
+        // Check all other connections have the same policy
+        for (int i = 1; i < graph.connections_size(); ++i) {
+            const auto& connection = graph.connections(i);
+            proto::Policy connection_policy = proto::Policy::STRICT;
+            if (connection.has_channels() && connection.channels().has_policy()) {
+                connection_policy = connection.channels().policy();
+            }
+
+            if (connection_policy != first_policy) {
+                error_messages.push_back(fmt::format(
+                    "MGD 1.0 Compatibility requirement: Cannot mix STRICT and RELAXED policies in the same graph. "
+                    "All connections in a graph must use the same policy (Graph: {})",
+                    graph.name()));
+                break;  // Only report once per graph
             }
         }
     }

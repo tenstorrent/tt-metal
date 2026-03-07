@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -338,17 +339,19 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
         TT_FATAL(
             a_dim == b_dim || a_dim == 1 || b_dim == 1,
-            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+            "Broadcasting rule violation at dimension index {} (output rank {}), dim a: {}, dim b: {}",
             i,
+            larger_rank,
             a_dim,
             b_dim);
 
         if (i <= -6) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: {}, "
-                "dim b: {}",
+                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
                 i,
+                larger_rank,
                 a_dim,
                 b_dim);
         }
@@ -440,11 +443,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
 }
 
-BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ProgramFactory{};
-}
-
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_tensor = tensor_args.output_tensor;
@@ -461,16 +459,10 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
+        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));

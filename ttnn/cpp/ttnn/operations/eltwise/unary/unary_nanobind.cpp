@@ -1108,6 +1108,63 @@ void bind_softplus(nb::module_& mod) {
 }
 
 template <typename unary_operation_t>
+void bind_xielu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies xIELU (Expanded Integral of the Exponential Linear Unit) to :attr:`input_tensor` element-wise.
+        This is a custom piecewise trainable activation function derived from "Deriving Activation Functions Using Integration" paper:
+        https://arxiv.org/abs/2411.13010
+
+        With beta = 0.5 and eps = -1e-6:
+            x > 0 :  alpha_p * x^2 + beta * x
+            x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
+            alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+        )doc");
+
+    bind_registered_operation(
+        mod,
+        ttnn::xielu,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input,
+               const float alpha_p,
+               const float alpha_n,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input, alpha_p, alpha_n, memory_config, output_tensor);
+            },
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("alpha_p") = 0.8f,
+            nb::arg("alpha_n") = 0.8f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
+}
+
+template <typename unary_operation_t>
 void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -1164,6 +1221,8 @@ template <typename unary_operation_t>
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
+        Deprecated in favor of ttnn.sigmoid.
+
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -1214,7 +1273,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
 }
 
 template <typename unary_operation_t>
-void bind_sigmoid_mode_appx(nb::module_& mod) {
+void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1227,7 +1286,7 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
 
         Keyword Args:
             vector_mode (int, optional): Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            mode (ttnn.SigmoidMode, optional): Select sigmoid mode to use. Defaults to `SigmoidMode.Accurate`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1248,6 +1307,15 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
         ttnn::sigmoid.base_name(),
         ttnn::sigmoid.python_fully_qualified_name());
 
+    mod.attr("SigmoidMode") =
+        nb::enum_<Sigmoid::SigmoidMode>(mod, "SigmoidMode")
+            .value("Accurate", Sigmoid::SigmoidMode::ACCURATE, "Most accurate, but least performant.")
+            .value(
+                "AccurateWithFastExp",
+                Sigmoid::SigmoidMode::ACCURATE_FAST_EXP,
+                "Similar to accurate, but uses fast and approximate exp")
+            .value("FastApproximate", Sigmoid::SigmoidMode::FAST_APPROXIMATE, "Fastest, but least accurate.");
+
     bind_registered_operation(
         mod,
         ttnn::sigmoid,
@@ -1256,15 +1324,15 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
                const int vector_mode,
-               const bool parameter,
+               const Sigmoid::SigmoidMode sigmoid_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
+                return self(input_tensor, vector_mode, sigmoid_mode, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("vector_mode") = 4,
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("mode") = Sigmoid::SigmoidMode::ACCURATE,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()});
 }
@@ -2042,7 +2110,7 @@ void py_module(nb::module_& mod) {
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
     bind_unary_operation_subcoregrids(
         mod,
         ttnn::ltz,
@@ -2310,10 +2378,11 @@ void py_module(nb::module_& mod) {
 
     // Other unaries (unary chain operations)
     bind_softplus<decltype(ttnn::softplus)>(mod);
+    bind_xielu<decltype(ttnn::xielu)>(mod);
     bind_tanh_like(mod, ttnn::tanh);
     bind_tanh_like(mod, ttnn::tanhshrink);
     bind_sigmoid_accurate<decltype(ttnn::sigmoid_accurate)>(mod);
-    bind_sigmoid_mode_appx<decltype(ttnn::sigmoid)>(mod);
+    bind_sigmoid<decltype(ttnn::sigmoid)>(mod);
 
     bind_unary_chain<decltype(ttnn::unary_chain)>(mod);
     bind_identity<decltype(ttnn::identity)>(mod);
@@ -2371,7 +2440,7 @@ void py_module(nb::module_& mod) {
         ttnn::logical_not_,
         R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
     bind_unary_composite(
         mod,
         ttnn::normalize_global,

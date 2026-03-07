@@ -16,26 +16,27 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(4);
+    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(5);
 
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(5);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(6);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(6);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(8);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t num_x = get_compile_time_arg_val(12);
-    constexpr uint32_t num_y = get_compile_time_arg_val(13);
-    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(14);
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(16);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(18);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(11);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(12);
+    constexpr uint32_t num_x = get_compile_time_arg_val(13);
+    constexpr uint32_t num_y = get_compile_time_arg_val(14);
+    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(15);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(16);
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(18);
+    constexpr uint32_t in0_block_h = get_compile_time_arg_val(19);
 
-    constexpr uint32_t batch = get_compile_time_arg_val(19);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(20);
+    constexpr uint32_t batch = get_compile_time_arg_val(20);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(21);
 
     uint32_t rt_args_idx = 0;
     const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -46,8 +47,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_x)));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
@@ -70,7 +71,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CBIndex::c_6;
+    constexpr uint32_t cb_l1_array = get_named_compile_time_arg_val("cb_l1_array");
     uint32_t in0_mcast_sender_semaphore_valid_addr = get_write_ptr(cb_l1_array);
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_valid_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_valid_addr);
@@ -176,6 +177,12 @@ void kernel_main() {
                                     pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
                                 }
                             }
+                            if constexpr (in0_last_ktile_h > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    auto in0_last_ktile_h_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
+                                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_h_ptr);
+                                }
+                            }
                         } else {
                             in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
                             in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
@@ -185,6 +192,13 @@ void kernel_main() {
                                     auto in0_last_ktile_w_ptr =
                                         in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
                                     pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                }
+                            }
+                            if constexpr (in0_last_ktile_h > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    auto in0_last_ktile_h_ptr =
+                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_h_ptr);
                                 }
                             }
                         }
