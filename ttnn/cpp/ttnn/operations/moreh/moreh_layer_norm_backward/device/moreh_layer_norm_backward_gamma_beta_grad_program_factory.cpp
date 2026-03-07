@@ -299,7 +299,7 @@ void MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::override_runt
             if (gamma_grad_buffer != nullptr) {
                 runtime_args[0] = gamma_grad_buffer->address();
             }
-            if (gamma_grad_buffer != nullptr) {
+            if (beta_grad_buffer != nullptr) {
                 runtime_args[1] = beta_grad_buffer->address();
             }
         }
