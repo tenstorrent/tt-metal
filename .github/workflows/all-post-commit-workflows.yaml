@@ -182,15 +182,19 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
+    needs: check-harbor
     if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -265,11 +269,12 @@ jobs:
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [check-harbor, resolve-artifacts, tests-to-run]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
@@ -281,7 +286,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [check-harbor, resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -292,6 +297,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
@@ -303,7 +309,7 @@ jobs:
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [check-harbor, resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -314,6 +320,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
@@ -349,10 +356,11 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [check-harbor, resolve-artifacts, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
@@ -362,7 +370,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [check-harbor, resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -375,6 +383,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}

@@ -20,12 +20,26 @@ from pathlib import Path
 import subprocess
 import sys
 import shutil
+import tempfile
 
 NOTEBOOKS_DIR = Path("ttnn/tutorials")
 OUTPUT_DIR = Path("ttnn/tutorials/basic_python")
 TEMPLATE_DIR = Path("scripts/nbconvert_template")
 TEMPLATE_NAME = "ttnn_examples_convert"
 EXCLUDED_TUTORIALS = ["ttnn/tutorials/ttnn_intro.ipynb"]
+
+
+def get_repo_root() -> Path:
+    """
+    Returns the git repository root as a resolved absolute path.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return Path(result.stdout.strip()).resolve()
 
 
 def get_staged_notebooks() -> list[Path]:
@@ -46,9 +60,10 @@ def get_staged_notebooks() -> list[Path]:
     ]
 
 
-def convert_with_nbconvert(notebook: Path, output_tmp: Path) -> None:
+def convert_with_nbconvert(notebook: Path, output_dir: Path, output_stem: str, template_dir: Path) -> None:
     """
     Converts a Jupyter notebook to a Python script using nbconvert with a custom template.
+    Writes to output_dir / (output_stem + ".py"). All paths should be absolute.
     """
     subprocess.run(
         [
@@ -57,10 +72,10 @@ def convert_with_nbconvert(notebook: Path, output_tmp: Path) -> None:
             "--to",
             "python",
             f"--template={TEMPLATE_NAME}",
-            f"--TemplateExporter.extra_template_basedirs={TEMPLATE_DIR}",
+            f"--TemplateExporter.extra_template_basedirs={template_dir}",
             "--TemplateExporter.exclude_markdown=True",
-            f"--output={output_tmp.name}",
-            f"--output-dir={output_tmp.parent}",
+            f"--output={output_stem}",
+            f"--output-dir={output_dir}",
             str(notebook),
         ],
         check=True,
@@ -105,49 +120,59 @@ def filter_modified_files(files: list[Path]) -> list[Path]:
 
 
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    root = get_repo_root()
+    output_dir = root / "ttnn/tutorials/basic_python"
+    template_dir = root / "scripts/nbconvert_template"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     staged_notebooks = get_staged_notebooks()
     if not staged_notebooks:
         print("✅ No staged notebooks to process.")
         return
 
-    # Get all currently staged .py files (under OUTPUT_DIR)
+    # Get all currently staged .py files (under output_dir), as absolute paths
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
         stdout=subprocess.PIPE,
         text=True,
     )
     staged_files = set(Path(f) for f in result.stdout.splitlines())
-    staged_py_files = {f for f in staged_files if f.suffix == ".py" and f.is_relative_to(OUTPUT_DIR)}
+    staged_py_files = {root / f for f in staged_files if f.suffix == ".py" and f.is_relative_to(OUTPUT_DIR)}
 
     new_files = []
     updated_files = []
 
     for notebook in staged_notebooks:
-        output_file = OUTPUT_DIR / f"{notebook.stem}.py"
+        notebook_abs = root / notebook
+        output_file = output_dir / f"{notebook.stem}.py"
+        tmp_stem = f".tmp_{notebook.stem}"
 
         # If the .py file is already staged, skip processing
         if output_file in staged_py_files:
             print(f"⏭ Skipping {notebook} — {output_file.name} already staged.")
             continue
 
-        tmp_file = OUTPUT_DIR / f".tmp_{notebook.stem}.py"
+        tmpdir = tempfile.mkdtemp()
         try:
-            convert_with_nbconvert(notebook, tmp_file)
+            convert_with_nbconvert(notebook_abs, Path(tmpdir), tmp_stem, template_dir)
+            tmp_file = Path(tmpdir) / f"{tmp_stem}.py"
+            if not tmp_file.exists():
+                raise FileNotFoundError(
+                    f"Temp file not found after nbconvert: {tmp_file}. "
+                    f"Repo root may be wrong or nbconvert wrote elsewhere (repo_root={root}, cwd={Path.cwd()})."
+                )
+            if not output_file.exists():
+                shutil.move(str(tmp_file), str(output_file))
+                new_files.append(output_file)
+            else:
+                if output_file.read_text() != tmp_file.read_text():
+                    shutil.copy2(str(tmp_file), str(output_file))
+                    updated_files.append(output_file)
         except subprocess.CalledProcessError:
             print(f"⚠️ Failed to convert {notebook}, continuing.")
-            continue
-
-        if not output_file.exists():
-            shutil.move(str(tmp_file), str(output_file))
-            new_files.append(output_file)
-        else:
-            if output_file.read_text() != tmp_file.read_text():
-                shutil.move(str(tmp_file), str(output_file))
-                updated_files.append(output_file)
-            else:
-                tmp_file.unlink()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     # Stage new or changed files
     files_to_add = new_files + updated_files

@@ -1,0 +1,176 @@
+name: "Manual Docker Bake"
+description: "Run docker buildx bake via CLI with shared options"
+
+inputs:
+  bake-file:
+    description: "Path to docker-bake.hcl file"
+    required: false
+    default: "dockerfile/docker-bake.hcl"
+  targets:
+    description: "Bake targets to build (comma-separated)"
+    required: true
+  set-lines:
+    description: "Newline-delimited bake --set overrides"
+    required: false
+    default: ""
+  ubuntu-version:
+    description: "Optional UBUNTU_VERSION env for bake args"
+    required: false
+    default: ""
+  python-version:
+    description: "Optional PYTHON_VERSION env for bake args"
+    required: false
+    default: ""
+  retries:
+    description: "Number of attempts before failing"
+    required: false
+    default: "3"
+  retry-delay-seconds:
+    description: "Delay between retries"
+    required: false
+    default: "5"
+  use-default-builder:
+    description: "Select buildx default builder before invoking bake"
+    required: false
+    default: "true"
+  validate-images:
+    description: "Validate that built images can be inspected after build"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run docker buildx bake
+      shell: bash
+      env:
+        INPUT_BAKE_FILE: ${{ inputs.bake-file }}
+        INPUT_TARGETS: ${{ inputs.targets }}
+        INPUT_SET_LINES: ${{ inputs.set-lines }}
+        INPUT_UBUNTU_VERSION: ${{ inputs.ubuntu-version }}
+        INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        INPUT_RETRIES: ${{ inputs.retries }}
+        INPUT_RETRY_DELAY_SECONDS: ${{ inputs.retry-delay-seconds }}
+        INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
+        INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
+      run: |
+        set -euo pipefail
+
+        if [ "${INPUT_USE_DEFAULT_BUILDER}" = "true" ]; then
+          docker buildx use default || true
+        fi
+
+        if [ -n "${INPUT_UBUNTU_VERSION}" ]; then
+          export UBUNTU_VERSION="${INPUT_UBUNTU_VERSION}"
+        fi
+        if [ -n "${INPUT_PYTHON_VERSION}" ]; then
+          export PYTHON_VERSION="${INPUT_PYTHON_VERSION}"
+        fi
+
+        mapfile -t SET_LINES < <(printf '%s\n' "${INPUT_SET_LINES}")
+
+        BAKE_SETS=()
+        for s in "${SET_LINES[@]}"; do
+          [ -n "$s" ] && BAKE_SETS+=(--set "$s")
+        done
+
+        IFS=',' read -r -a TARGETS <<< "${INPUT_TARGETS}"
+        CLEAN_TARGETS=()
+        for t in "${TARGETS[@]}"; do
+          trimmed="${t#"${t%%[![:space:]]*}"}"
+          trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+          [ -n "$trimmed" ] && CLEAN_TARGETS+=("$trimmed")
+        done
+        if [ "${#CLEAN_TARGETS[@]}" -eq 0 ]; then
+          echo "No bake targets provided."
+          exit 1
+        fi
+
+        retries="${INPUT_RETRIES}"
+        delay="${INPUT_RETRY_DELAY_SECONDS}"
+        attempt=1
+        bake_success=false
+        last_bake_exit=0
+        until [ "$attempt" -gt "$retries" ]; do
+          echo "docker buildx bake targets=${CLEAN_TARGETS[*]} attempt ${attempt}/${retries}"
+          if docker buildx bake -f "${INPUT_BAKE_FILE}" "${BAKE_SETS[@]}" "${CLEAN_TARGETS[@]}"; then
+            bake_success=true
+            break
+          else
+            last_bake_exit=$?
+          fi
+          if [ "$attempt" -lt "$retries" ]; then
+            echo "Bake failed, retrying in ${delay}s..."
+            sleep "$delay"
+          fi
+          attempt=$((attempt + 1))
+        done
+
+        if [ "$bake_success" != "true" ]; then
+          echo "ERROR: Bake failed after ${retries} attempts (last exit code: ${last_bake_exit})."
+          exit 1
+        fi
+
+        # Validate that images were actually built and are inspectable
+        validation_failed=false
+        if [ "${INPUT_VALIDATE_IMAGES}" = "true" ]; then
+          echo ""
+          echo "Validating built images..."
+          for target in "${CLEAN_TARGETS[@]}"; do
+            # Check if there's a tag override in the set-lines for this target
+            target_tag=""
+            target_output=""
+            for s in "${SET_LINES[@]}"; do
+              # Extract tag override: target.tags=xxx
+              if [[ "$s" =~ ^${target}\.tags=(.+)$ ]]; then
+                target_tag="${BASH_REMATCH[1]}"
+              fi
+              # Extract output override: target.output=xxx
+              if [[ "$s" =~ ^${target}\.output=(.+)$ ]]; then
+                target_output="${BASH_REMATCH[1]}"
+              fi
+            done
+
+            # Determine how to validate based on output configuration
+            # If output contains 'push=true' without 'type=docker', image is registry-only
+            if [[ "$target_output" =~ push=true ]] && [[ ! "$target_output" =~ type=docker ]]; then
+              # Registry-only image - validate by checking manifest
+              if [ -n "$target_tag" ]; then
+                echo "Checking registry image for target '$target' (tag: $target_tag)..."
+                if ! docker manifest inspect "$target_tag" > /dev/null 2>&1; then
+                  echo "ERROR: Registry image validation failed for target '$target' (tag: $target_tag)"
+                  echo "The build reported success but the image is not available in the registry."
+                  validation_failed=true
+                else
+                  echo "  Registry image validated: $target_tag"
+                fi
+              else
+                echo "  Skipping validation for target '$target' (no tag specified for registry check)"
+              fi
+            else
+              # Local image validation
+              local_tag="$target_tag"
+              if [ -z "$local_tag" ]; then
+                # Get the default image name from the bake file
+                local_tag=$(docker buildx bake -f "${INPUT_BAKE_FILE}" --print "$target" 2>/dev/null | jq -r '.target["'$target'"].tags[0]' 2>/dev/null || echo "")
+                if [ -z "$local_tag" ] || [ "$local_tag" = "null" ]; then
+                  local_tag="tt-metalium-${target}:local"
+                fi
+              fi
+              echo "Checking local image for target '$target' (tag: $local_tag)..."
+              if ! docker image inspect "$local_tag" > /dev/null 2>&1; then
+                echo "ERROR: Image validation failed for target '$target' (tag: $local_tag)"
+                echo "The build reported success but the image is not inspectable."
+                validation_failed=true
+              else
+                echo "  Local image validated: $local_tag"
+              fi
+            fi
+          done
+
+          if [ "$validation_failed" = "true" ]; then
+            echo "ERROR: One or more image validations failed."
+            exit 1
+          fi
+          echo "All images validated successfully."
+        fi

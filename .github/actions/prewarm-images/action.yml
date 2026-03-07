@@ -1,0 +1,89 @@
+name: "Prewarm Images"
+description: "Pull images through Harbor to warm the cache, with fallback to direct GHCR"
+
+inputs:
+  harbor-prefix:
+    description: "Harbor prefix (empty if not using Harbor)"
+    required: false
+    default: ""
+  images:
+    description: |
+      Images to prewarm. Can be either:
+      1. JSON object with tag fields (e.g., tool-tags output)
+      2. JSON array of image tag strings
+    required: true
+  title:
+    description: "Description for logging purposes"
+    required: false
+    default: "Images"
+  json-keys:
+    description: |
+      If images is a JSON object, list of keys to extract (space-separated).
+      Defaults to empty (treat images as array of tags).
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Prewarm images
+      shell: bash
+      env:
+        HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+        IMAGES_INPUT: ${{ inputs.images }}
+        TITLE: ${{ inputs.title }}
+        JSON_KEYS: ${{ inputs.json-keys }}
+      run: |
+        set -euo pipefail
+
+        echo "Prewarming ${TITLE} from GHCR via HARBOR..."
+
+        # Build list of image tags to prewarm
+        declare -a IMAGE_TAGS=()
+
+        if [ -n "$JSON_KEYS" ]; then
+          # Extract tags from JSON object using specified keys
+          for key in $JSON_KEYS; do
+            tag=$(echo "$IMAGES_INPUT" | jq -r ".\"${key}\"" 2>/dev/null || echo "")
+            if [ -n "$tag" ] && [ "$tag" != "null" ]; then
+              IMAGE_TAGS+=("$tag")
+            fi
+          done
+        else
+          # Parse as JSON array or newline-separated list
+          if echo "$IMAGES_INPUT" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            # It's a JSON array
+            mapfile -t IMAGE_TAGS < <(echo "$IMAGES_INPUT" | jq -r '.[]')
+          else
+            # Assume it's a single image tag or newline-separated list
+            IMAGE_TAGS+=("$IMAGES_INPUT")
+          fi
+        fi
+
+        # Pull each image (if not already cached on Harbor)
+        for ghcr_tag in "${IMAGE_TAGS[@]}"; do
+          if [ -z "$ghcr_tag" ]; then
+            continue
+          fi
+
+          harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
+
+          # Check if image already exists on Harbor (cache is warm)
+          if docker manifest inspect "$harbor_tag" > /dev/null 2>&1; then
+            echo "Image $harbor_tag already exists on Harbor, skipping pull"
+            continue
+          fi
+
+          echo "Pulling $harbor_tag (to warm Harbor cache)..."
+
+          if docker pull "$harbor_tag" 2>/dev/null; then
+            echo "  Successfully pulled through Harbor"
+          else
+            echo "  Harbor pull failed, trying direct GHCR: $ghcr_tag"
+            if docker pull "$ghcr_tag" 2>/dev/null; then
+              echo "  Successfully pulled from GHCR"
+            else
+              echo "  Failed to pull (may not exist yet)"
+            fi
+          fi
+        done

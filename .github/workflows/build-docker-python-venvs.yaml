@@ -1,0 +1,119 @@
+name: "[internal] Build Docker Python venv images"
+
+# Reusable workflow that builds missing Python venv images (ci-build-venv, ci-test-venv).
+# Venv images are pushed to GHCR.
+#
+# Expects platform-data JSON from preflight containing venv tags, exists flags, and version.
+# Uses manual docker buildx bake (dockerfile/docker-bake.hcl) for builds.
+permissions:
+  packages: write
+
+env:
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+
+on:
+  workflow_call:
+    inputs:
+      platform-data:
+        required: true
+        type: string
+        description: "JSON from preflight containing ci_build_venv_tag, ci_test_venv_tag, *_exists, version"
+    outputs:
+      ci-build-venv-tag:
+        description: "Docker tag for ci-build venv image"
+        value: ${{ jobs.metadata.outputs.ci_build_venv_tag }}
+      ci-test-venv-tag:
+        description: "Docker tag for ci-test venv image"
+        value: ${{ jobs.metadata.outputs.ci_test_venv_tag }}
+
+jobs:
+  metadata:
+    name: "Venv metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
+      ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
+    steps:
+      - name: Extract venv tags
+        id: metadata
+        env:
+          PLATFORM_DATA: ${{ inputs.platform-data }}
+        run: |
+          set -euo pipefail
+          echo "$PLATFORM_DATA" | jq -e 'type == "object"' > /dev/null
+          echo "ci_build_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: "🐍 Build missing venvs"
+    if: |
+      fromJson(inputs.platform-data).ci_build_venv_exists != true ||
+      fromJson(inputs.platform-data).ci_test_venv_exists != true
+    timeout-minutes: 45
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare bake overrides
+        id: bake
+        env:
+          PLATFORM_DATA: ${{ inputs.platform-data }}
+        run: |
+          set -euo pipefail
+
+          CI_BUILD_VENV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_exists')
+          CI_TEST_VENV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_exists')
+          CI_BUILD_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')
+          CI_TEST_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')
+          UBUNTU_VERSION=$(echo "$PLATFORM_DATA" | jq -r '.version')
+
+          if [ "$UBUNTU_VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+
+          TARGETS=""
+          SET=""
+
+          if [ "$CI_BUILD_VENV_EXISTS" != "true" ]; then
+            TARGETS+="ci-build-venv,"
+            SET+="ci-build-venv.tags=${CI_BUILD_VENV_TAG}"$'\n'
+            SET+="ci-build-venv.output=${BAKE_OUTPUT}"$'\n'
+          fi
+
+          if [ "$CI_TEST_VENV_EXISTS" != "true" ]; then
+            TARGETS+="ci-test-venv,"
+            SET+="ci-test-venv.tags=${CI_TEST_VENV_TAG}"$'\n'
+            SET+="ci-test-venv.output=${BAKE_OUTPUT}"$'\n'
+          fi
+
+          TARGETS="${TARGETS%,}"
+
+          echo "targets=$TARGETS" >> $GITHUB_OUTPUT
+          echo "ubuntu-version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
+          echo "python-version=$PYTHON_VERSION" >> $GITHUB_OUTPUT
+          {
+            echo "set<<EOF"
+            echo "$SET"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Build and push missing venv images
+        if: steps.bake.outputs.targets != ''
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: ${{ steps.bake.outputs.targets }}
+          set-lines: ${{ steps.bake.outputs.set }}
+          ubuntu-version: ${{ steps.bake.outputs.ubuntu-version }}
+          python-version: ${{ steps.bake.outputs.python-version }}
