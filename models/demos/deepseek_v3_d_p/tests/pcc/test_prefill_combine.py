@@ -14,15 +14,22 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import (
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_expert_dispatch_table,
     create_fabric_router_config,
+    extract_mesh_config,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    assert_output_shape,
+    log_combine_mismatch_details,
+    log_per_chip_statistics,
+    validate_combine_output,
+)
 
 
 @pytest.mark.parametrize(
@@ -130,14 +137,10 @@ def test_ttnn_combine(
 
     num_devices = mesh_device.get_num_devices()
 
-    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
-        sp_axis = 0
-        dispatch_group_size = mesh_device.shape[sp_axis]
-        num_dispatch_groups = mesh_device.shape[1]
-    else:
-        dispatch_group_size = mesh_device.get_num_devices()
-        num_dispatch_groups = 1
-        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
+    mesh_config = extract_mesh_config(mesh_device)
+    sp_axis = mesh_config.sp_axis
+    dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
 
     logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -307,12 +310,7 @@ def test_ttnn_combine(
     # Step 7: Compute PCC and verify correctness
     logger.info("Computing PCC between torch and ttnn combine outputs...")
 
-    assert (
-        tt_output_torch.shape[0] == num_dispatch_groups
-    ), f"Mismatch in replicated dimension: expected {num_dispatch_groups}, got {tt_output_torch.shape[0]}"
-    assert (
-        tt_output_torch.shape[1] == dispatch_group_size
-    ), f"Mismatch in sharded dimension: expected {dispatch_group_size}, got {tt_output_torch.shape[1]}"
+    assert_output_shape(tt_output_torch, num_dispatch_groups, dispatch_group_size, "combine output")
 
     # Quick sanity check of first elements
     logger.info(f"Sample torch output [0, 0, 0, :5]: {torch_output[0, 0, 0, :5]}")
@@ -321,64 +319,26 @@ def test_ttnn_combine(
         logger.info(f"Sample torch output [1, 0, 0, :5]: {torch_output[1, 0, 0, :5]}")
         logger.info(f"Sample ttnn output [0, 1, 0, 0, :5]:  {tt_output_torch[0, 1, 0, 0, :5]}")
 
-    # Detailed per-chip, per-token, per-expert comparison
+    # Validate combine output (EP-rank aware)
     # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
     # Each EP rank's output only contains data for tokens that EP rank processed.
     # Output positions not written by local combine contain uninitialized garbage.
     # This comparison only checks the EP rank that actually processed each token.
-    data_ok = True
-    mismatches = []
-    matches = 0
-    total_slots = 0
-
-    experts_per_rank = num_routed_experts // num_dispatch_groups
     logger.info("Comparing combine output slots (per EP rank that processed each token)...")
-    for chip_id in range(dispatch_group_size):
-        for token_id in range(seq_len_per_chip):
-            for topk_idx in range(num_experts_per_tok):
-                total_slots += 1
+    result = validate_combine_output(
+        torch_output,
+        tt_output_torch,
+        indices,
+        num_dispatch_groups,
+        num_routed_experts,
+    )
 
-                # Determine which EP rank processed this (chip, token, topk)
-                expert_id = indices[chip_id, token_id, topk_idx].item()
-                ep_rank = expert_id // experts_per_rank
+    result.log_summary()
 
-                torch_data = torch_output[chip_id, token_id, topk_idx]
-                ttnn_data = tt_output_torch[ep_rank, chip_id, token_id, topk_idx]
+    if not result.passed:
+        log_combine_mismatch_details(result.mismatches, torch_output, tt_output_torch)
+        log_per_chip_statistics(result.mismatches, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
-                if torch.allclose(torch_data, ttnn_data, atol=1e-2, rtol=1e-2):
-                    matches += 1
-                else:
-                    data_ok = False
-                    max_diff = torch.max(torch.abs(torch_data.float() - ttnn_data.float())).item()
-                    mismatches.append((ep_rank, chip_id, token_id, topk_idx, max_diff))
-
-    # Report statistics
-    logger.info(f"Matches: {matches}/{total_slots} ({100.0*matches/total_slots:.2f}%)")
-
-    if not data_ok:
-        # Show first 10 mismatches in detail
-        logger.warning(f"Found {len(mismatches)} mismatches. Showing first 10:")
-        for i, (ep_rank, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:10]):
-            torch_sample = torch_output[chip_id, token_id, topk_idx, :5]
-            ttnn_sample = tt_output_torch[ep_rank, chip_id, token_id, topk_idx, :5]
-            logger.error(
-                f"  [{i}] Mismatch at ep_rank={ep_rank}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
-                f"max_diff={max_diff:.6f}"
-            )
-            logger.error(f"      torch[:5]={torch_sample}")
-            logger.error(f"      ttnn[:5]={ttnn_sample}")
-
-        # Show per-chip statistics
-        logger.info("\nPer-chip statistics:")
-        for chip_id in range(dispatch_group_size):
-            chip_mismatches = [m for m in mismatches if m[1] == chip_id]
-            chip_total = seq_len_per_chip * num_experts_per_tok
-            chip_matches = chip_total - len(chip_mismatches)
-            logger.info(
-                f"  Chip {chip_id}: {chip_matches}/{chip_total} matches " f"({100.0*chip_matches/chip_total:.2f}%)"
-            )
-
-    # Assert all data matches
-    assert data_ok, f"Combine data mismatch! {matches}/{total_slots} slots matched. Check logs for details."
+    result.assert_passed("Combine data mismatch")
 
     logger.info("✅ TTNN combine operation matches torch reference!")

@@ -12,15 +12,21 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import (
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_expert_dispatch_table,
     create_fabric_router_config,
+    extract_mesh_config,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    assert_output_shape,
+    validate_dispatch_buffer,
+    validate_dispatch_metadata,
+)
 
 # =====
 # mesh 4x2
@@ -179,14 +185,10 @@ def test_ttnn_dispatch(
     """Test TTNN dispatch operation against PyTorch reference."""
     num_devices = mesh_device.get_num_devices()
 
-    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
-        sp_axis = 0
-        dispatch_group_size = mesh_device.shape[sp_axis]
-        num_dispatch_groups = mesh_device.shape[1]
-    else:
-        dispatch_group_size = mesh_device.get_num_devices()
-        num_dispatch_groups = 1
-        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
+    mesh_config = extract_mesh_config(mesh_device)
+    sp_axis = mesh_config.sp_axis
+    dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
 
     logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -346,12 +348,7 @@ def test_ttnn_dispatch(
     logger.info(f"[TTNN->TORCH] tt_out_metadata.shape={tt_out_metadata.shape}")
     logger.warning(f"{tt_out_dispatched.shape=} {tt_out_metadata.shape=}")
 
-    assert (
-        tt_out_dispatched.shape[0] == num_dispatch_groups
-    ), f"Mismatch in replicated dimension: expected {num_dispatch_groups}, got {tt_out_dispatched.shape[0]}"
-    assert (
-        tt_out_dispatched.shape[1] == dispatch_group_size
-    ), f"Mismatch in sharded dimension: expected {dispatch_group_size}, got {tt_out_dispatched.shape[1]}"
+    assert_output_shape(tt_out_dispatched, num_dispatch_groups, dispatch_group_size, "dispatched buffer")
 
     # Quick sanity check of first elements
     logger.info(f"{tt_out_dispatched[0][0][0][0][0]=} | {tt_out_dispatched[0][1][0][0][0]=}")
@@ -363,99 +360,35 @@ def test_ttnn_dispatch(
     logger.info(f"{cum_sum.shape=}, {cum_sum=}")
 
     # Verify dispatched data matches reference (each EP rank against its torch reference)
-    data_ok = True
-    metadata_ok = True
     logger.warning("Comparing ALL dispatched buffer slots (including remote dispatch)...")
-    for r in range(num_dispatch_groups):
-        dispatched = torch_dispatched[r]
-        metadata = torch_metadata[r]
-        for dst_chip_id in range(dispatch_group_size):
-            for expert_id in range(experts_per_chip):
-                # Compute global expert ID and check if it's present in this EP rank
-                global_expert_id = dst_chip_id * experts_per_chip + expert_id
-                if expert_dispatch_table[r, global_expert_id].item() == -1:
-                    # Expert not present in this EP rank, skip comparison
-                    logger.info(
-                        f"⏭️ {r} Data {dst_chip_id=} {expert_id=} (expert {global_expert_id} not in EP rank {r})"
-                    )
-                    continue
-
-                count = expert_token_counts[r, dst_chip_id, expert_id].item()
-                out = tt_out_dispatched[r, dst_chip_id, expert_id, :count, :]
-                ref = dispatched[dst_chip_id, expert_id, :count, :]
-                if torch.allclose(out, ref, atol=1e-6):
-                    logger.info(f"✅ {r} Data {dst_chip_id=} {expert_id=} {count=}")
-                else:
-                    logger.error(f"❌ {r} Data {dst_chip_id=} {expert_id=} {count=}")
-                    data_ok = False
-                    if verbose:
-                        for slot in range(count):
-                            torch_data = dispatched[dst_chip_id, expert_id, slot]
-                            kernel_data = tt_out_dispatched[r, dst_chip_id, expert_id, slot]
-                            data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
-                            if not data_match:
-                                logger.error(
-                                    f"    Slot {slot}: Data mismatch at chip={dst_chip_id}, expert={expert_id}, slot={slot}: "
-                                    f"{torch_data=}, {kernel_data=}"
-                                )
+    buffer_result = validate_dispatch_buffer(
+        torch_dispatched,
+        tt_out_dispatched,
+        expert_token_counts,
+        expert_dispatch_table,
+        num_dispatch_groups,
+        dispatch_group_size,
+        experts_per_chip,
+        verbose=verbose,
+    )
 
     logger.info("Comparing ALL dispatched metadata slots (including remote dispatch)...")
-    for r in range(num_dispatch_groups):
-        dispatched = torch_dispatched[r]
-        metadata = torch_metadata[r]
-        for dst_chip_id in range(dispatch_group_size):
-            for expert_id in range(experts_per_chip):
-                # Compute global expert ID and check if it's present in this EP rank
-                global_expert_id = dst_chip_id * experts_per_chip + expert_id
-                if expert_dispatch_table[r, global_expert_id].item() == -1:
-                    # Expert not present in this EP rank, skip comparison
-                    logger.info(
-                        f"⏭️ {r} Metadata {dst_chip_id=} {expert_id=} (expert {global_expert_id} not in EP rank {r})"
-                    )
-                    continue
+    metadata_result = validate_dispatch_metadata(
+        torch_metadata,
+        tt_out_metadata,
+        expert_token_counts,
+        expert_dispatch_table,
+        num_dispatch_groups,
+        dispatch_group_size,
+        experts_per_chip,
+        verbose=verbose,
+    )
 
-                count = expert_token_counts[r, dst_chip_id, expert_id].item()
-                out = tt_out_metadata[r, dst_chip_id, expert_id, :count, 1:4]
-                ref = metadata[dst_chip_id, expert_id, :count, 1:4]
+    # Log summaries and assert
+    buffer_result.log_summary()
+    metadata_result.log_summary()
 
-                # torch computes "logical sender chip id"
-                # while ttnn embeds real linearized mesh coord
-                out_linearized_mesh_coord = tt_out_metadata[r, dst_chip_id, expert_id, :count, 0]
-                ref_linearized_mesh_coord = r + metadata[dst_chip_id, expert_id, :count, 0] * num_dispatch_groups
-
-                # Compare weights (metadata[4]):
-                # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
-                out_weight_bf16 = (
-                    tt_out_metadata[r, dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
-                )
-                # Torch stores bfloat16 value directly
-                ref_weight_bf16 = metadata[dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
-
-                metadata_match = torch.allclose(out, ref, atol=1e-6)
-                coord_match = torch.allclose(out_linearized_mesh_coord, ref_linearized_mesh_coord, atol=1e-6)
-                weight_match = torch.allclose(out_weight_bf16, ref_weight_bf16, atol=1e-3)
-
-                if metadata_match and coord_match and weight_match:
-                    logger.info(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
-                else:
-                    logger.error(
-                        f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({metadata_match=}, {coord_match=}, {weight_match=})"
-                    )
-                    metadata_ok = False
-                    if verbose:
-                        for slot in range(count):
-                            torch_data = metadata[dst_chip_id, expert_id, slot, :4]
-                            kernel_data = tt_out_metadata[r, dst_chip_id, expert_id, slot, :4]
-                            data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
-                            if not data_match:
-                                logger.error(
-                                    f"    Slot {slot}: Metadata mismatch at chip={dst_chip_id}, expert={expert_id}, slot={slot}: "
-                                    f"{ref_linearized_mesh_coord[slot].item()}, {out_linearized_mesh_coord[slot].item()}, "
-                                    f"{torch_data=}, {kernel_data=}"
-                                )
-                            if not weight_match:
-                                logger.error(
-                                    f"    Slot {slot}: Weight mismatch: ref={ref_weight_bf16[slot].item()}, out={out_weight_bf16[slot].item()}"
-                                )
-    assert data_ok and metadata_ok, f"Some slots did not match! {data_ok=} {metadata_ok=} Check logs for details."
+    assert (
+        buffer_result.passed and metadata_result.passed
+    ), f"Some slots did not match! buffer={buffer_result.passed} metadata={metadata_result.passed} Check logs for details."
     logger.info("✅ TTNN dispatch operation matches torch reference!")

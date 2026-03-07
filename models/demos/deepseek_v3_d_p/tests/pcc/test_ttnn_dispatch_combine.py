@@ -12,16 +12,21 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.common import (
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_expert_dispatch_table,
     create_fabric_router_config,
+    extract_mesh_config,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    log_combine_mismatch_details,
+    validate_roundtrip_output,
+)
 
 
 @pytest.mark.parametrize(
@@ -129,15 +134,10 @@ def test_ttnn_dispatch_combine(
 
     num_devices = mesh_device.get_num_devices()
 
-    # Compute sp_axis and chip counts for 2D mesh handling
-    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
-        sp_axis = 0
-        dispatch_group_size = mesh_device.shape[sp_axis]
-        num_dispatch_groups = mesh_device.shape[1]
-    else:
-        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
-        dispatch_group_size = num_devices
-        num_dispatch_groups = 1
+    mesh_config = extract_mesh_config(mesh_device)
+    sp_axis = mesh_config.sp_axis
+    dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
 
     logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -319,47 +319,22 @@ def test_ttnn_dispatch_combine(
     # We validate per (chip, token, topk) using the EP rank that actually processed it.
     logger.info("Verifying round-trip correctness (per EP rank that processed each token)...")
 
-    experts_per_rank = num_routed_experts // num_dispatch_groups
-    all_match = True
-    matches = 0
-    total_slots = 0
-    mismatches = []
+    result = validate_roundtrip_output(
+        x,
+        y,
+        indices,
+        num_dispatch_groups,
+        num_routed_experts,
+    )
 
-    for chip_id in range(dispatch_group_size):
-        for token_id in range(seq_len_per_chip):
-            for topk_idx in range(num_experts_per_tok):
-                total_slots += 1
+    result.log_summary()
 
-                # Determine which EP rank processed this (chip, token, topk)
-                expert_id = indices[chip_id, token_id, topk_idx].item()
-                ep_rank = expert_id // experts_per_rank
+    if not result.passed:
+        # Create a pseudo-output tensor for mismatch logging (x repeated for each topk)
+        # We need to expand x to match the shape expected by log_combine_mismatch_details
+        x_expanded = x.unsqueeze(2).expand(-1, -1, num_experts_per_tok, -1)
+        log_combine_mismatch_details(result.mismatches, x_expanded, y)
 
-                # Input token
-                x_data = x[chip_id, token_id]
-                # Output from the EP rank that processed this token
-                y_data = y[ep_rank, chip_id, token_id, topk_idx]
-
-                if torch.allclose(x_data, y_data, atol=1e-2, rtol=1e-2):
-                    matches += 1
-                else:
-                    all_match = False
-                    max_diff = torch.max(torch.abs(x_data.float() - y_data.float())).item()
-                    mismatches.append((ep_rank, chip_id, token_id, topk_idx, max_diff))
-
-    logger.info(f"Matches: {matches}/{total_slots} ({100.0*matches/total_slots:.2f}%)")
-
-    if not all_match:
-        logger.warning(f"Found {len(mismatches)} mismatches. Showing first 10:")
-        for i, (ep_rank, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:10]):
-            x_sample = x[chip_id, token_id, :5]
-            y_sample = y[ep_rank, chip_id, token_id, topk_idx, :5]
-            logger.error(
-                f"  [{i}] Mismatch at ep_rank={ep_rank}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
-                f"max_diff={max_diff:.6f}"
-            )
-            logger.error(f"      x[:5]={x_sample}")
-            logger.error(f"      y[:5]={y_sample}")
-
-    assert all_match, f"Round-trip mismatch! {matches}/{total_slots} slots matched. Check logs for details."
+    result.assert_passed("Round-trip mismatch")
 
     logger.info("✅ TTNN dispatch→combine round-trip matches input!")
