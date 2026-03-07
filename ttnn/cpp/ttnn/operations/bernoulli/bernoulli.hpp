@@ -10,7 +10,7 @@ namespace ttnn::operations::bernoulli {
 struct Bernoulli {
     static Tensor invoke(
         const Tensor& input,
-        uint32_t seed,
+        const std::optional<uint32_t> seed,
         const std::optional<Tensor>& output,
         const std::optional<DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,

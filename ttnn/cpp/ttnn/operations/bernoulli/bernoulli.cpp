@@ -10,7 +10,7 @@
 namespace ttnn::operations::bernoulli {
 Tensor Bernoulli::invoke(
     const Tensor& input,
-    const uint32_t seed,
+    const std::optional<uint32_t> seed,
     const std::optional<Tensor>& output,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
