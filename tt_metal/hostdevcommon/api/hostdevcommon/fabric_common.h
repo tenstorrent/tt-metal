@@ -533,9 +533,12 @@ struct fabric_connection_info_t {
     uint8_t edm_noc_y;
     uint8_t num_buffers_per_channel;
     uint16_t worker_free_slots_stream_id;
+    uint8_t is_worker_router_pairing;  // true when worker connects directly to router (no mux/relay intermediary)
+    uint8_t padding_0;  // alignment padding
+    uint16_t padding_1;  // additional padding for 4-byte alignment
 } __attribute__((packed));
 
-static_assert(sizeof(fabric_connection_info_t) == 24, "Struct size mismatch!");
+static_assert(sizeof(fabric_connection_info_t) == 28, "Struct size mismatch!");
 // NOTE: This assertion can be removed once "non device-init fabric"
 //       is completely removed
 static_assert(sizeof(fabric_connection_info_t) % 4 == 0, "Struct size must be 4-byte aligned");

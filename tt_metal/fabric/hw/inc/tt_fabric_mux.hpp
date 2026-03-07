@@ -20,9 +20,9 @@ namespace tt::tt_fabric {
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
 using FabricMuxChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
 
-template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS, typename ConnectionLiveSemaphorePtrType>
 using FabricMuxStaticSizedChannelWorkerInterface =
-    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
+    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_MUX_CHANNEL_NUM_BUFFERS, ConnectionLiveSemaphorePtrType>;
 
 using FabricMuxChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 

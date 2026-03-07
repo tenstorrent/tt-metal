@@ -2609,15 +2609,18 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
+
+    using MemoryType = ChannelMemoryType<I>;
+
     auto connection_live_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
+        reinterpret_cast<MemoryType>(local_sender_connection_live_semaphore_addresses[I]);
     auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
         local_sender_connection_info_addresses[I]);
     new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
-        StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
+        StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I], MemoryType>(
             connection_worker_info_ptr,
             0,  // Not used for credits.
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+            reinterpret_cast<MemoryType>(connection_live_semaphore_ptr),
             sender_channel_ack_cmd_buf_ids[I],
             get_credits_init_val<I>(),
             notify_worker_of_read_counter_update_src_address);
@@ -2931,6 +2934,7 @@ void kernel_main() {
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
+
     // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
@@ -3034,8 +3038,9 @@ void kernel_main() {
     [&]<size_t... Is>(std::index_sequence<Is...>) {
         (([&]<size_t I>() {
              if constexpr (is_sender_channel_serviced[I]) {
-                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_semaphore_addrs[I]) = 0;
-                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]) = 0;
+                using MemoryType = ChannelMemoryType<I>;
+                *reinterpret_cast<MemoryType>(local_sender_channel_connection_semaphore_addrs[I]) = 0;
+                *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]) = 0;
              }
          }.template operator()<Is>()),
          ...);

@@ -186,7 +186,6 @@ struct WorkerToFabricEdmSenderImpl {
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
                 : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
-        ASSERT(is_l1_address(edm_connection_handshake_l1_addr));  // must be a L1 address
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         ASSERT(is_l1_address(edm_worker_location_info_addr));  // must be a L1 address
         this->edm_copy_of_wr_counter_addr =
@@ -394,7 +393,7 @@ struct WorkerToFabricEdmSenderImpl {
             this->buffer_slot_index = BufferIndex(0);
         }
 
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(
+        noc_inline_dw_write<InlineWriteDst::REG, posted>(
             edm_connection_handshake_noc_addr,
             tt::tt_fabric::connection_interface::open_connection_value,
             0xf,
@@ -437,7 +436,7 @@ struct WorkerToFabricEdmSenderImpl {
             noc_inline_dw_write<InlineWriteDst::L1>(remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, noc);
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write<InlineWriteDst::L1>(
+        noc_inline_dw_write<InlineWriteDst::REG>(
             dest_edm_connection_state_addr,
             tt::tt_fabric::connection_interface::close_connection_request_value,
             0xF,
