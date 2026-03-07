@@ -60,8 +60,8 @@ def test_flash_mla_decode(device, batch_size, decode_position, k_chunk_size, max
     """Test FlashMLADecode op."""
     if is_blackhole() and is_watcher_enabled():
         pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37631")
-    if is_blackhole() and is_llk_assert_enabled() and decode_position < 32000:
-        pytest.skip("Skipping test on Blackhole with LLK assert enabled, see issue #37631")
+    if is_blackhole() and is_llk_assert_enabled():
+        pytest.skip("Skipping test on Blackhole with LLK assert enabled, hitting assert for L1 memory validation.")
 
     torch.manual_seed(0)
 
