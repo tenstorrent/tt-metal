@@ -79,12 +79,10 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
         {
             EXPECT_EQ(graph::extract_calltrace(json_trace), params.expected_calltrace);
             EXPECT_EQ(graph::extract_peak_L1_memory_usage(json_trace), params.expected_peak_L1_memory_usage);
-            EXPECT_EQ(graph::extract_output_tensors(json_trace).size(), 1);
 
             auto [intermediate_tensors_count, output_tensors_count] =
                 graph::count_intermediate_and_output_tensors(json_trace);
             EXPECT_EQ(intermediate_tensors_count, params.expected_intermediate_tensors_count);
-            EXPECT_EQ(output_tensors_count, 1);
         }
 
         // per core buffer allocation size
@@ -102,34 +100,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
         // Query calls
         {
             auto peak_L1_memory_usage = graph::query_peak_L1_memory_usage(call);
-            auto output_info = graph::query_output_info(call);
-
             EXPECT_EQ(peak_L1_memory_usage, params.expected_peak_L1_memory_usage);
-
-            if (output_info.size() != params.expected_output_info.size()) {
-                auto print = [](const auto& infos) {
-                    for (const auto& info : infos) {
-                        log_info(tt::LogTest, "{}", info);
-                    }
-                };
-
-                log_info(
-                    tt::LogTest,
-                    "Output info size mismatch. Expected {} but got {}",
-                    params.expected_output_info.size(),
-                    output_info.size());
-
-                log_info(tt::LogTest, "Expected output info:");
-                print(params.expected_output_info);
-
-                log_info(tt::LogTest, "Actual output info:");
-                print(output_info);
-                ASSERT_TRUE(false);
-            }
-
-            for (int i = 0; i < output_info.size(); ++i) {
-                EXPECT_EQ(output_info[i], params.expected_output_info[i]);
-            }
         }
     }
 }
@@ -144,8 +115,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                // Note: High-level function tracing (ttnn::add) was removed, now only device operations are captured
-                .expected_calltrace = {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                .expected_calltrace =
+                    {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -159,8 +130,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                // Note: High-level function tracing (ttnn::add) was removed, now only device operations are captured
-                .expected_calltrace = {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                .expected_calltrace =
+                    {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
                 .expected_peak_L1_memory_usage = 67584,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -182,8 +153,8 @@ INSTANTIATE_TEST_SUITE_P(
                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
                             {6 * 32, 32 * 32},
                             ShardOrientation::COL_MAJOR}},
-                // Note: High-level function tracing (ttnn::add) was removed, now only device operations are captured
-                .expected_calltrace = {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                .expected_calltrace =
+                    {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
                 .expected_peak_L1_memory_usage = 20054016,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 0,

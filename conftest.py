@@ -1137,6 +1137,56 @@ def reset_tensix(tt_open_devices=None):
         logger.info("tt-smi reset completed successfully")
 
 
+@pytest.fixture(autouse=True)
+def ttnn_graph_report():
+    """
+    Automatically generate graph reports when config enables it.
+
+    Only activates when enable_logging, enable_graph_report, and report_path
+    are all set. Skipped when a graph capture is already active (e.g. a test
+    that manages its own capture).
+    """
+    import ttnn
+
+    if not getattr(ttnn.CONFIG, "enable_logging", False):
+        yield
+        return
+    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
+        yield
+        return
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
+    report_path = Path(report_path)
+    ttnn.graph.enable_buffer_pages()
+    try:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            yield
+        finally:
+            if not ttnn.graph.is_graph_capture_active():
+                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+            else:
+                report_path.mkdir(parents=True, exist_ok=True)
+                json_path = report_path / "graph_capture.json"
+                ttnn.graph.end_graph_capture_to_file(str(json_path))
+                if json_path.exists():
+                    from ttnn.graph_report import import_report
+
+                    import_report(json_path, report_path)
+
+                config_path = report_path / "config.json"
+                ttnn.save_config_to_json_file(config_path)
+    finally:
+        ttnn.graph.disable_buffer_pages()
+
+
 @pytest.fixture(scope="function", autouse=True)
 def record_test_timestamp(record_property):
     start_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
