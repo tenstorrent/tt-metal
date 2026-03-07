@@ -2164,7 +2164,7 @@ class PreSDPA:
 
                     # Secondary axis connection (for sender to secondary sender)
                     if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1)
+                        secondary_coord = ttnn.MeshCoordinate(row, 1 - col)
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
                     num_connections = len(dst_nodes)
