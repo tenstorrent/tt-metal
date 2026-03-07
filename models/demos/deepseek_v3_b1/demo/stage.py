@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
+    DeepSeekV3MTPWeights,
 )
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
@@ -32,6 +33,13 @@ ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 4
 PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
+
+# MTP constants
+embedding_dim = 7168
+mtp_output_dim = 7168
+num_dram_banks = 8
+mtp_n_per_core = mtp_output_dim // num_dram_banks
+mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
 
 @dataclass
@@ -170,18 +178,20 @@ class LMHeadStage(StageKind):
     OUT_TILE = ttnn.Tile([1, 32])
     ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 0)
     LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
-    """LMHead+Sampling stage: receive activation, run op, send token downstream."""
 
     def __init__(
         self,
         weights: DeepSeekV3LMHeadWeights,
         *,
-        lm_head_fp32_dest_acc_en: bool = True,
-        lm_head_persistent_mode: bool = True,
+        fp32_dest_acc_en: bool = True,
+        persistent_mode: bool = True,
+        mtp_weights: DeepSeekV3MTPWeights | None = None,
     ) -> None:
         self._weights = weights
-        self._lm_head_fp32_dest_acc_en = lm_head_fp32_dest_acc_en
-        self._lm_head_persistent_mode = lm_head_persistent_mode
+        self._fp32_dest_acc_en = fp32_dest_acc_en
+        self._persistent_mode = persistent_mode
+        self._mtp_weights = mtp_weights
+        self._enable_mtp = mtp_weights is not None
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -312,7 +322,7 @@ class LMHeadStage(StageKind):
         winner_page_bytes = 16
         scratch_shape_per_device = (
             1,
-            ((mesh_rows + mesh_cols) * winner_page_bytes) // 4,
+            ((mesh_rows + mesh_cols) * winner_page_bytes + (256 + 8 if self._enable_mtp else 0)) // 4,
         )
         scratch_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -331,6 +341,29 @@ class LMHeadStage(StageKind):
             memory_config=scratch_mem_config,
             mesh_mapper=mesh_mapper,
         )
+
+        # MTP output tensor allocation
+        ttnn_mtp_output = None
+        if self._enable_mtp:
+            compute_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+            compute_core_grid = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
+            )
+            mtp_output_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(compute_core_grid, (LMHeadStage.M, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            ttnn_mtp_output = ttnn.from_torch(
+                torch.zeros((num_devices, LMHeadStage.M, mtp_padded_dim), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=mtp_output_mem_config,
+                tile=LMHeadStage.OUT_TILE,
+                mesh_mapper=mesh_mapper,
+            )
+
         lmhead_input_socket = pipeline_block.get_downstream_socket()
         lmhead_output_socket = pipeline_block.get_upstream_socket()
 
@@ -366,7 +399,13 @@ class LMHeadStage(StageKind):
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
         }
-        if self._lm_head_persistent_mode:
+        if self._enable_mtp:
+            self._lmhead_state["ttnn_mtp_output"] = ttnn_mtp_output
+            self._lmhead_state["ttnn_embedding"] = self._mtp_weights.embedding
+            self._lmhead_state["ttnn_h_gamma"] = self._mtp_weights.h_gamma
+            self._lmhead_state["ttnn_e_gamma"] = self._mtp_weights.e_gamma
+            self._lmhead_state["ttnn_eh_proj"] = self._mtp_weights.eh_projection
+        if self._persistent_mode:
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
             self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
 
@@ -381,6 +420,11 @@ class LMHeadStage(StageKind):
             d["ttnn_b"],
             d["ttnn_scores"],
             sender_coord=pipeline_config[my_mesh_id].entry_node_coord,
+            output_mtp_tensor=d.get("ttnn_mtp_output"),
+            embedding_tensor=d.get("ttnn_embedding"),
+            h_gamma_tensor=d.get("ttnn_h_gamma"),
+            e_gamma_tensor=d.get("ttnn_e_gamma"),
+            eh_projection_tensor=d.get("ttnn_eh_proj"),
             indices_tensor=d["ttnn_indices"],
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=LMHeadStage.ARGMAX_FINAL_CORE,
@@ -393,10 +437,11 @@ class LMHeadStage(StageKind):
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
             fabric_scratch_tensor=d["scratch_buffer"],
-            fp32_dest_acc_en=self._lm_head_fp32_dest_acc_en,
+            fp32_dest_acc_en=self._fp32_dest_acc_en,
             skip_ccl=False,
             socket_input=d["lmhead_input_socket"],
             socket_output=d["lmhead_output_socket"],
-            persistent_mode=self._lm_head_persistent_mode,
+            persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+            enable_mtp=self._enable_mtp,
         )
