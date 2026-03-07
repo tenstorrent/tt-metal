@@ -66,6 +66,8 @@ class AttentionBlock:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         scale,
+        post_sdpa_weights1,
+        post_sdpa_weights2,
         epsilon=1e-6,
         num_qnope_heads=64,
         num_qrope_heads=64,
@@ -92,6 +94,8 @@ class AttentionBlock:
             dkv_rmsnorm_gamma_tensor: kv_norm gamma [1, nope_dim]
             kv_cache_tensor: KV cache [1, 1, seq_len, nope_dim + rope_dim]
             scale: attention scale factor
+            post_sdpa_weights1: kv_b2_proj weights [num_qnope_heads, nope_dim]
+            post_sdpa_weights2: o_proj weights [intermediate, output_size]
             epsilon: RMSNorm epsilon (default 1e-6)
             num_qnope_heads: number of Q NoPE heads (default 64)
             num_qrope_heads: number of Q RoPE heads (default 64)
@@ -102,10 +106,10 @@ class AttentionBlock:
             rope_dim: KV RoPE dim (default 64)
 
         Returns:
-            Tuple of (full_q, new_kv, mla_output):
+            Tuple of (full_q, new_kv, output):
             - full_q: [1, 1, num_qnope_heads, nope_dim + rope_dim] combined Q heads
             - new_kv: [1, 1, 1, nope_dim + rope_dim] new KV entry written at position_ids[0]
-            - mla_output: [num_qnope_heads, nope_dim] FlashMLA attention output
+            - output: [1, output_size] post-SDPA output with residual added
         """
         from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
@@ -158,7 +162,17 @@ class AttentionBlock:
         new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
         full_kv[:, :, position_id, :] = new_kv
 
-        output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+        sdpa_output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+
+        from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
+
+        post_sdpa_result = PostSDPA.golden(
+            sdpa_output.to(post_sdpa_weights1.dtype),
+            post_sdpa_weights1,
+            post_sdpa_weights2,
+        )
+
+        output = post_sdpa_result + input_tensor
         return full_q, new_kv, output
 
     @staticmethod
@@ -289,6 +303,8 @@ class AttentionBlock:
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
         post_sdpa_weights2_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights2_tensor.fused_tensor)
 
+        # Uncomment to debug local FlashMLA output
+        # output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
 
         assert (
@@ -1907,6 +1923,8 @@ class AttentionBlock:
                 post_sdpa_weights1_fused_tensor_device = post_sdpa_weights1_fused_tensors_per_device[device_idx]
                 post_sdpa_weights2_fused_tensor_device = post_sdpa_weights2_fused_tensors_per_device[device_idx]
                 attention_block_output_tensor_device = attention_block_output_tensors_per_device[device_idx]
+                # Uncomment to debug local FlashMLA output
+                # output_tensor_device = output_tensors_per_device[device_idx]
 
                 # Get worker core from per-device input tensor shard grid
                 device_local = input_tensor_device.device()
@@ -2601,6 +2619,14 @@ class AttentionBlock:
                         ],
                     )
                 )
+                # Uncomment to debug local FlashMLA output
+                # mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
+                # mla_out_o_cb_descriptor.core_ranges = mla_core_grid
+                # mla_out_o_cb_descriptor.format_descriptors = [
+                #     ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
+                #     ttnn.CBFormatDescriptor(mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor),
+                # ]
+                # mla_cb_descriptors.append(mla_out_o_cb_descriptor)
 
                 # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
                 mla_cb_descriptors.append(
@@ -3530,7 +3556,9 @@ class AttentionBlock:
                 sdpa_worker_trisc_rt_args = ttnn.RuntimeArgs()
 
                 # Get matmul4 input buffer address for scatter destination
-                scatter_dest_l1_addr = input_tensor_device.buffer_address()
+                scatter_dest_l1_addr = (
+                    sdpa_kv_cache_buffer_device.buffer_address() + matmul4_in0_cb_descriptor.address_offset
+                )
 
                 # Type A/B worker split (like original sdpa_reduce_to_all op)
                 # This distributes R1/R2 traffic across both FWD and BWD forwarder instances
