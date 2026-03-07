@@ -32,7 +32,6 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 namespace tt::tt_fabric {
 
-using tt::ChipId;
 using tt::tt_metal::distributed::MeshContainer;
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshCoordinateRange;

@@ -27,7 +27,6 @@ class MeshShape;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_fabric {
-using tt::ChipId;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
