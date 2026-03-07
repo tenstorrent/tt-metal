@@ -217,29 +217,50 @@ class RotarySetup:
             A list containing the cos matrix, sin matrix, and transformation matrix.
             If return_rot_idxs is True, it will also return the rotary positional embedding indices.
         """
+        # print("[get_rot_mats] CALLED", flush=True)
+        # print(f"[get_rot_mats] return_rot_idxs={return_rot_idxs}", flush=True)
+        # print(f"[get_rot_mats] self.batch_size_per_row={self.batch_size_per_row}, self.dim={self.dim}", flush=True)
+        # _nc = getattr(self.core_grid, "num_cores", None)
+        # if _nc is None and hasattr(self.core_grid, "x") and hasattr(self.core_grid, "y"):
+        #     _nc = self.core_grid.x * self.core_grid.y
+        # print(f"[get_rot_mats] self.device.shape={self.device.shape}, self.core_grid={self.core_grid!r}, core_grid.num_cores={_nc}", flush=True)
+
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it
         if isinstance(position_idxs, torch.Tensor):
+            # print(f"[get_rot_mats] position_idxs is torch.Tensor, shape={position_idxs.shape}, dtype={position_idxs.dtype}", flush=True)
             rot_idxs = self.get_rot_idxs(position_idxs)
+            # print(f"[get_rot_mats] after get_rot_idxs: rot_idxs.shape={rot_idxs.shape}", flush=True)
         else:
+            # print(f"[get_rot_mats] position_idxs is not torch.Tensor, type={type(position_idxs)}, using as rot_idxs", flush=True)
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+            # print(f"[get_rot_mats] rot_idxs.shape={rot_idxs.shape}", flush=True)
 
         # Send the idxs to device
         if rot_idxs.device != device:
+            # print(f"[get_rot_mats] moving rot_idxs to device (rot_idxs.device != device)", flush=True)
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # print(f"[get_rot_mats] rot_idxs.shape before embedding={rot_idxs.shape}", flush=True)
 
         embedding_layout = ttnn.TILE_LAYOUT
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, dim]
         sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, dim]
 
+        # print(f"[get_rot_mats] after embedding: cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
+
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
 
+        # print(f"[get_rot_mats] after unsqueeze_to_4D: cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
+
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
+            # print(f"[get_rot_mats] trim branch taken (batch_size_per_row % TILE_SIZE != 0), trimming to batch_size_per_row={self.batch_size_per_row}", flush=True)
             cos = cos[:, :, : self.batch_size_per_row, :]
             sin = sin[:, :, : self.batch_size_per_row, :]
+        # else:
+        # print(f"[get_rot_mats] trim branch NOT taken (batch_size_per_row % TILE_SIZE == 0)", flush=True)
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.dim),
@@ -249,6 +270,9 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
+        # print(f"[get_rot_mats] mem_config: strategy={getattr(mem_config, 'strategy', 'N/A')}, orientation={getattr(mem_config, 'orientation', 'N/A')}, shard_shape={getattr(mem_config, 'shard_spec', None) or 'N/A'}, type={type(mem_config).__name__}", flush=True)
+        # print(f"[get_rot_mats] self.batch_grid type={type(self.batch_grid)}, repr={repr(self.batch_grid)[:200]}", flush=True)
+
         # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
         cos_matrix_transposeHC = ttnn.to_memory_config(
             cos, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -257,11 +281,21 @@ class RotarySetup:
             sin, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
+        # print(f"[get_rot_mats] cos_matrix_transposeHC.shape={cos_matrix_transposeHC.shape}, sin_matrix_transposeHC.shape={sin_matrix_transposeHC.shape}", flush=True)
+        # try:
+        # _mc = cos_matrix_transposeHC.memory_config()
+        # print(f"[get_rot_mats] cos_matrix_transposeHC memory_layout={getattr(_mc, 'memory_layout', 'N/A')}", flush=True)
+        # except Exception as e:
+        # print(f"[get_rot_mats] cos_matrix_transposeHC memory_config access: {e!r}", flush=True)
+
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)
+        # print(f"[get_rot_mats] after transpose(1,2): cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
         cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
         sin = ttnn.interleaved_to_sharded(sin, mem_config)
+        # print(f"[get_rot_mats] after interleaved_to_sharded: cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
 
+        # print(f"[get_rot_mats] returning dict with cos_matrix, sin_matrix, cos_matrix_transposeHC, sin_matrix_transposeHC, trans_matrix, trans_matrix_for_hc; return_rot_idxs={return_rot_idxs}", flush=True)
         if return_rot_idxs:
             return {
                 "cos_matrix": cos,
@@ -295,20 +329,36 @@ class RotarySetup:
         Returns:
             Dictionary containing cos_matrix, sin_matrix, and trans_matrix
         """
+        # print("[get_rot_mats_from_rot_idxs] CALLED", flush=True)
+        # print(f"[get_rot_mats_from_rot_idxs] return_rot_idxs={return_rot_idxs}", flush=True)
+        # print(f"[get_rot_mats_from_rot_idxs] self.batch_size_per_row={self.batch_size_per_row}, self.dim={self.dim}", flush=True)
+        # _nc = getattr(self.core_grid, "num_cores", None)
+        # if _nc is None and hasattr(self.core_grid, "x") and hasattr(self.core_grid, "y"):
+        #     _nc = self.core_grid.x * self.core_grid.y
+        # print(f"[get_rot_mats_from_rot_idxs] self.device.shape={self.device.shape}, self.core_grid={self.core_grid!r}, core_grid.num_cores={_nc}", flush=True)
+
         assert isinstance(rot_idxs, ttnn.Tensor), "rot_idxs must be a TTNN tensor"
         assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+        # print(f"[get_rot_mats_from_rot_idxs] rot_idxs.shape={rot_idxs.shape}", flush=True)
 
         # All operations below are pure ttnn ops (no from_torch/as_tensor)
         embedding_layout = ttnn.TILE_LAYOUT
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, dim]
         sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, dim]
 
+        # print(f"[get_rot_mats_from_rot_idxs] after embedding: cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
+
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
 
+        # print(f"[get_rot_mats_from_rot_idxs] after unsqueeze_to_4D: cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
+
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
+            # print(f"[get_rot_mats_from_rot_idxs] trim branch taken (batch_size_per_row % TILE_SIZE != 0), trimming to batch_size_per_row={self.batch_size_per_row}", flush=True)
             cos = cos[:, :, : self.batch_size_per_row, :]
             sin = sin[:, :, : self.batch_size_per_row, :]
+        # else:
+        # print(f"[get_rot_mats_from_rot_idxs] trim branch NOT taken (batch_size_per_row % TILE_SIZE == 0)", flush=True)
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.dim),
@@ -318,6 +368,9 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
+        # print(f"[get_rot_mats_from_rot_idxs] mem_config: strategy={getattr(mem_config, 'strategy', 'N/A')}, orientation={getattr(mem_config, 'orientation', 'N/A')}, shard_shape={getattr(mem_config, 'shard_spec', None) or 'N/A'}, type={type(mem_config).__name__}", flush=True)
+        # print(f"[get_rot_mats_from_rot_idxs] self.batch_grid type={type(self.batch_grid)}, repr={repr(self.batch_grid)[:200]}", flush=True)
+
         # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
         cos_matrix_transposeHC = ttnn.to_memory_config(
             cos, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -326,11 +379,21 @@ class RotarySetup:
             sin, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
+        # print(f"[get_rot_mats_from_rot_idxs] cos_matrix_transposeHC.shape={cos_matrix_transposeHC.shape}, sin_matrix_transposeHC.shape={sin_matrix_transposeHC.shape}", flush=True)
+        # try:
+        #     _mc = cos_matrix_transposeHC.memory_config()
+        #     print(f"[get_rot_mats_from_rot_idxs] cos_matrix_transposeHC memory_layout={getattr(_mc, 'memory_layout', 'N/A')}", flush=True)
+        # except Exception as e:
+
+        #     print(f"[get_rot_mats_from_rot_idxs] cos_matrix_transposeHC memory_config access: {e!r}", flush=True)
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)
+        # print(f"[get_rot_mats_from_rot_idxs] after transpose(1,2): cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
         cos = ttnn.interleaved_to_sharded(cos, mem_config)
         sin = ttnn.interleaved_to_sharded(sin, mem_config)
+        # print(f"[get_rot_mats_from_rot_idxs] after interleaved_to_sharded: cos.shape={cos.shape}, sin.shape={sin.shape}", flush=True)
 
+        # print(f"[get_rot_mats_from_rot_idxs] returning dict with cos_matrix, sin_matrix, cos_matrix_transposeHC, sin_matrix_transposeHC, trans_matrix, trans_matrix_for_hc; return_rot_idxs={return_rot_idxs}", flush=True)
         if return_rot_idxs:
             return {
                 "cos_matrix": cos,
