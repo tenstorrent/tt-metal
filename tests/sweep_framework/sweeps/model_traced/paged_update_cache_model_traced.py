@@ -11,16 +11,23 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-TIMEOUT = 120
+TIMEOUT = 300
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("experimental::paged_update_cache", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::paged_update_cache")
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 64)],
+        "input_a_shape": [(1, 1, 32, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -42,8 +49,29 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0)
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -57,6 +85,7 @@ def run(
     input_d_layout=None,
     input_d_memory_config=None,
     output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -64,61 +93,64 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle dict input_shape from traced configurations (multi-input)
-    if isinstance(input_shape, dict):
-        # Traced configuration with multiple inputs
-        shape_a = input_shape.get("input_a", input_shape.get("self"))
-        shape_b = input_shape.get("input_b", input_shape.get("other"))
-        shape_c = input_shape.get("input_c")
-        shape_d = input_shape.get("input_d")
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"batch_offset"}, output_memory_config=output_memory_config)
+
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
+    # V2 vectors provide named tensors: update_idxs_tensor_* → input_c, page_table_* → input_d
+    update_idxs_tensor_kwargs = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
+    page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")
+    if input_c_dtype is None and update_idxs_tensor_kwargs is not None:
+        input_c_dtype = update_idxs_tensor_kwargs["dtype"]
+        input_c_layout = update_idxs_tensor_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
+        input_c_memory_config = update_idxs_tensor_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+    if input_d_dtype is None and page_table_kwargs is not None:
+        input_d_dtype = page_table_kwargs["dtype"]
+        input_d_layout = page_table_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
+        input_d_memory_config = page_table_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+
+    if isinstance(input_a_shape, dict):
+        shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
+        shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
+        shape_c = input_a_shape.get("input_c")
+        shape_d = input_a_shape.get("input_d")
         if shape_c is None:
             shape_c = shape_b
         if shape_d is None:
             shape_d = shape_c
     else:
-        # Fallback for sample configurations
-        if isinstance(input_shape, (tuple, list)):
-            shape = tuple(input_shape)
+        if isinstance(input_a_shape, (tuple, list)):
+            shape = tuple(input_a_shape)
         else:
-            shape = input_shape
-        shape_a = shape_b = shape_c = shape_d = shape
+            shape = input_a_shape
+        shape_a = shape
+        input_b_shape_raw = kwargs.get("input_b_shape", None)
+        if input_b_shape_raw is not None:
+            shape_b = tuple(input_b_shape_raw) if isinstance(input_b_shape_raw, (tuple, list)) else input_b_shape_raw
+        else:
+            shape_b = shape
+        shape_c = (
+            update_idxs_tensor_kwargs["shape"]
+            if update_idxs_tensor_kwargs
+            else kwargs.get("update_idxs_tensor_shape", shape)
+        )
+        shape_d = page_table_kwargs["shape"] if page_table_kwargs else kwargs.get("page_table_shape", shape)
 
-    # Check if we have 3 or 4 tensors (4th tensor is optional)
     has_input_d = input_d_dtype is not None and input_d_layout is not None and input_d_memory_config is not None
 
-    # Use provided dtypes - fail if not provided (no fallbacks for required tensors)
     dtype_a = input_a_dtype
-    if input_b_dtype is None:
-        raise ValueError("input_b_dtype is None - required parameter missing")
-    if input_c_dtype is None:
-        raise ValueError("input_c_dtype is None - required parameter missing")
     dtype_b = input_b_dtype
     dtype_c = input_c_dtype
     dtype_d = input_d_dtype if has_input_d else None
-
-    # Use provided layouts - fail if not provided (no fallbacks for required tensors)
     layout_a = input_a_layout
-    if input_b_layout is None:
-        raise ValueError("input_b_layout is None - required parameter missing")
-    if input_c_layout is None:
-        raise ValueError("input_c_layout is None - required parameter missing")
     layout_b = input_b_layout
-    # layout_c validated but overridden later (must be ROW_MAJOR for page_table)
-
-    # Use provided memory configs - fail if not provided (no fallbacks for required tensors)
     mem_config_a = input_a_memory_config
-    if input_b_memory_config is None:
-        raise ValueError("input_b_memory_config is None - required parameter missing")
-    if input_c_memory_config is None:
-        raise ValueError("input_c_memory_config is None - required parameter missing")
-    # Fall back to input_a_memory_config if output_memory_config is not provided
-    if output_memory_config is None:
-        output_memory_config = input_a_memory_config
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
     mem_config_d = input_d_memory_config if has_input_d else None
-    output_mem_config = output_memory_config
-
     # Create input tensors
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(
         shape_a
@@ -140,53 +172,84 @@ def run(
     torch_output_tensor = torch_input_tensor_a.clone()
 
     # Convert to TTNN tensors
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": dtype_a,
-        "layout": layout_a,
-    }
-
-    # Only add device and memory_config if not HOST storage
     if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = mem_config_a
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                dtype_a,
+                layout_a,
+                mem_config_a,
+                input_a_tensor_placement,
+            )
+            input_tensor_b = create_tensor_on_mesh(
+                torch_input_tensor_b,
+                device,
+                dtype_b,
+                layout_b,
+                mem_config_b,
+                kwargs.get("input_b_tensor_placement", input_a_tensor_placement),
+            )
+            input_tensor_c = create_tensor_on_mesh(
+                torch_input_tensor_c,
+                device,
+                dtype_c,
+                ttnn.ROW_MAJOR_LAYOUT,
+                mem_config_c,
+                kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=dtype_a,
+                layout=layout_a,
+                device=device,
+                memory_config=mem_config_a,
+            )
+            input_tensor_b = ttnn.from_torch(
+                torch_input_tensor_b,
+                dtype=dtype_b,
+                layout=layout_b,
+                device=device,
+                memory_config=mem_config_b,
+            )
+            input_tensor_c = ttnn.from_torch(
+                torch_input_tensor_c,
+                dtype=dtype_c,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=mem_config_c,
+            )
+    else:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=dtype_a, layout=layout_a)
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=layout_b)
+        input_tensor_c = ttnn.from_torch(torch_input_tensor_c, dtype=dtype_c, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": dtype_b,
-        "layout": layout_b,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = mem_config_b
-
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
-    input_tensor_c = ttnn.from_torch(
-        torch_input_tensor_c,
-        dtype=dtype_c,
-        layout=ttnn.ROW_MAJOR_LAYOUT,  # update_idxs_tensor must be ROW_MAJOR
-        device=device,
-        memory_config=mem_config_c,
-    )
     # Only create 4th TTNN tensor if provided
     input_tensor_d = None
     if has_input_d:
-        input_tensor_d = ttnn.from_torch(
-            torch_input_tensor_d,
-            dtype=dtype_d,
-            layout=ttnn.ROW_MAJOR_LAYOUT,  # page_table must be ROW_MAJOR
-            device=device,
-            memory_config=mem_config_d,
-        )
+        if not is_host:
+            if is_mesh_device and input_a_tensor_placement:
+                input_tensor_d = create_tensor_on_mesh(
+                    torch_input_tensor_d,
+                    device,
+                    dtype_d,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    mem_config_d,
+                    kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
+                )
+            else:
+                input_tensor_d = ttnn.from_torch(
+                    torch_input_tensor_d,
+                    dtype=dtype_d,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=mem_config_d,
+                )
+        else:
+            input_tensor_d = ttnn.from_torch(torch_input_tensor_d, dtype=dtype_d, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     start_time = start_measuring_time()
     # paged_update_cache signature: (cache_tensor, input_tensor, *, update_idxs=[], update_idxs_tensor=None, share_cache=None, page_table=None, ...)
@@ -202,6 +265,7 @@ def run(
             else None,  # update_idxs_tensor (optional keyword)
             page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
             batch_offset=0,  # Use default batch_offset
+            **op_kwargs,
         )
     except TypeError:
         # If that fails, try with memory_config
@@ -213,11 +277,11 @@ def run(
             else None,  # update_idxs_tensor (optional keyword)
             page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
             batch_offset=0,
-            memory_config=output_mem_config,
+            **op_kwargs,
         )
     # paged_update_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)

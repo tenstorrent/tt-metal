@@ -2,38 +2,49 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Import V2 master config loader and standalone helpers for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import (
+    MasterConfigLoader,
+    dict_to_memory_config,
+    parse_dtype,
+    parse_layout,
+)
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 120
+TIMEOUT = 300
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("concat", all_cases=False)
+model_traced_params = loader.get_suite_parameters("concat")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [{"input_a": (1, 1, 32, 16), "input_b": (1, 1, 32, 8)}],  # Two tensors to concatenate
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "input_b_dtype": [ttnn.bfloat16],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "arg0": [
+            [
+                {"shape": (1, 1, 32, 16), "dtype": "ttnn.bfloat16", "layout": "ttnn.TILE_LAYOUT"},
+                {"shape": (1, 1, 32, 8), "dtype": "ttnn.bfloat16", "layout": "ttnn.TILE_LAYOUT"},
+            ]
+        ],
+        "dim": [3],
+        "memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -42,101 +53,123 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture.
+    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    """
+    mesh_shape = get_mesh_shape()
+
+    if mesh_shape:
+        # Create mesh device based on env var
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        # Single device (default)
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    dim,
-    output_memory_config,
-    input_shape=None,
-    input_a_dtype=None,
-    input_a_layout=None,
-    input_a_memory_config=None,
-    input_b_dtype=None,
-    input_b_layout=None,
-    input_b_memory_config=None,
+    arg0,  # List of tensor specs: [{"shape": ..., "dtype": ..., "layout": ..., "tensor_placement": ...}, ...]
+    arg1=None,  # dim value (positional in JSON)
+    output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
+    dim=None,  # dim as kwarg (fallback)
     *,
     device,
-    **kwargs,
+    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle default values if not provided (for model_traced suite)
-    if input_shape is None:
-        raise ValueError("input_shape is None - required parameter missing")
-    if input_a_dtype is None:
-        raise ValueError("input_a_dtype is None - required parameter missing")
-    if input_a_layout is None:
-        raise ValueError("input_a_layout is None - required parameter missing")
-    if input_a_memory_config is None:
-        raise ValueError("input_a_memory_config is None - required parameter missing")
-    if input_b_dtype is None:
-        raise ValueError("input_b_dtype is None - required parameter missing")
-    if input_b_layout is None:
-        raise ValueError("input_b_layout is None - required parameter missing")
-    if input_b_memory_config is None:
-        raise ValueError("input_b_memory_config is None - required parameter missing")
+    # Handle dim parameter - can be arg1 (positional) or dim (kwarg)
+    dim_value = arg1 if arg1 is not None else dim
+    if dim_value is None:
+        dim_value = -1  # Default concat dimension
 
-    # Handle input_shape - can be dict (from model_traced) or tuple/list (from sample)
-    if isinstance(input_shape, dict):
-        # Extract shapes from dict (input_a, input_b, etc.)
-        shape_a = tuple(input_shape.get("input_a", input_shape.get("input_0", [])))
-        shape_b = tuple(input_shape.get("input_b", input_shape.get("input_1", [])))
-    elif isinstance(input_shape, (tuple, list)):
-        # Legacy format: single shape, create second tensor with modified dim
-        shape_a = tuple(input_shape)
-        shape_b = list(shape_a)
-        # Normalize dim to positive index
-        dim_idx = dim if dim >= 0 else len(shape_a) + dim
-        shape_b[dim_idx] = shape_a[dim_idx] // 2  # Second tensor has half the size along concat dim
-        shape_b = tuple(shape_b)
-    else:
-        raise ValueError(f"input_shape must be dict or tuple/list, got {type(input_shape)}")
+    # Handle memory_config - prefer output_memory_config, fallback to memory_config
+    mem_config = output_memory_config if output_memory_config is not None else memory_config
+    mem_config = dict_to_memory_config(mem_config)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape_a)
+    # Check if device is a mesh device (from fixture)
+    is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(shape_b)
-
-    # Concatenate along specified dimension
-    torch_output_tensor = torch.cat([torch_input_tensor_a, torch_input_tensor_b], dim=dim)
-
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
+    # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
+    # Process arg0 - it's a list of tensor specifications
+    if not isinstance(arg0, list):
+        raise ValueError(f"arg0 must be a list of tensor specs, got {type(arg0)}")
 
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
+    torch_tensors = []
+    ttnn_tensors = []
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+    for i, tensor_spec in enumerate(arg0):
+        # Extract tensor spec - prefer original_shape/original_dtype from traced data
+        shape = tensor_spec.get("original_shape", tensor_spec.get("shape"))
+        dtype_str = tensor_spec.get("original_dtype", tensor_spec.get("dtype", "ttnn.bfloat16"))
+        layout_str = tensor_spec.get("layout", "ttnn.TILE_LAYOUT")
+        tensor_placement = tensor_spec.get("tensor_placement", None)
+        # Use per-tensor memory_config if available, otherwise fall back to output mem_config
+        tensor_mem_config = tensor_spec.get("memory_config", mem_config)
+        tensor_mem_config = dict_to_memory_config(tensor_mem_config)
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
+        dtype = parse_dtype(dtype_str)
+        layout = parse_layout(layout_str)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_b_dtype,
-        "layout": input_b_layout,
-    }
+        # Generate torch tensor
+        torch_tensor = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(
+            tuple(shape) if isinstance(shape, list) else shape
+        )
+        torch_tensors.append(torch_tensor)
 
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_b_memory_config
+        # Create ttnn tensor
+        if not is_host:
+            if is_mesh_device and tensor_placement:
+                # Use mesh with placement
+                ttnn_tensor = create_tensor_on_mesh(
+                    torch_tensor,
+                    device,
+                    dtype,
+                    layout,
+                    tensor_mem_config,
+                    tensor_placement,
+                )
+            else:
+                # Regular single-device tensor
+                ttnn_tensor = ttnn.from_torch(
+                    torch_tensor,
+                    dtype=dtype,
+                    layout=layout,
+                    device=device,
+                    memory_config=tensor_mem_config,
+                )
+        else:
+            # Host storage
+            ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
 
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+        ttnn_tensors.append(ttnn_tensor)
+
+    # Compute expected output with torch
+    torch_output_tensor = torch.cat(torch_tensors, dim=dim_value)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, memory_config=mem_config, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

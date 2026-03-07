@@ -59,22 +59,29 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.rope import compute_gather_cos_sin
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("experimental::rotary_embedding_llama", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::rotary_embedding_llama")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     # Shape format for prefill: [batch, n_heads, seq_len, head_dim]
     "model_traced_sample": {
-        "input_shape": [(1, 8, 128, 64)],  # batch=1, n_heads=8, seq_len=128, head_dim=64
+        "input_a_shape": [(1, 8, 128, 64)],  # batch=1, n_heads=8, seq_len=128, head_dim=64
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -100,6 +107,27 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0)
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
 
 
 def invalidate_vector(test_vector) -> tuple:
@@ -274,10 +302,11 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
 
 
 def run(
-    input_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    input_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
@@ -320,6 +349,22 @@ def run(
     """
     torch.manual_seed(0)
 
+    is_mesh_device = hasattr(device, "get_num_devices")
+    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
+
+    # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
+    if input_shape is None and input_a_shape is not None:
+        input_shape = input_a_shape
+    elif input_shape is not None and input_a_shape is None:
+        input_a_shape = input_shape
+    if input_a_dtype is None:
+        input_a_dtype = ttnn.bfloat16
+    if input_a_layout is None:
+        input_a_layout = ttnn.TILE_LAYOUT
+    if input_a_memory_config is None:
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     # Extract RoPE parameters from traced source or explicit parameters
     rope_params = extract_rope_parameters(traced_source)
 
@@ -342,14 +387,11 @@ def run(
         shape_b = input_shape["input_b"]  # cos_cache: [1, n_heads_or_1, cache_size, head_dim]
         shape_c = input_shape["input_c"]  # sin_cache: [1, n_heads_or_1, cache_size, head_dim]
     else:
-        # Sample configuration - derive shapes from input_shape
-        # input_shape format: [batch, n_heads, seq_len, head_dim]
         shape_a = list(input_shape)
         batch, n_heads, seq_len, head_dim = shape_a
-        # Generate cos/sin cache shapes (cache can be larger than seq_len)
-        cache_size = max(seq_len, 1024)  # Use at least 1024 for cache
-        shape_b = [1, 1, cache_size, head_dim]  # cos cache
-        shape_c = [1, 1, cache_size, head_dim]  # sin cache
+        # Use explicit shapes from V2 vectors if available, otherwise derive
+        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(seq_len, 1024), head_dim]))
+        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(seq_len, 1024), head_dim]))
 
     # Detect decode mode from memory config
     # Decode mode uses HEIGHT_SHARDED memory layout
@@ -473,26 +515,6 @@ def run(
         ).to(torch.bfloat16)
 
     # --- Create TTNN Tensors ---
-    # Use defaults for non-traced parameters
-    if input_b_dtype is None:
-        input_b_dtype = ttnn.bfloat16
-    if input_b_layout is None:
-        input_b_layout = ttnn.TILE_LAYOUT
-    if input_b_memory_config is None:
-        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_c_dtype is None:
-        input_c_dtype = ttnn.bfloat16
-    if input_c_layout is None:
-        input_c_layout = ttnn.TILE_LAYOUT
-    if input_c_memory_config is None:
-        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_d_dtype is None:
-        input_d_dtype = ttnn.bfloat16
-    if input_d_layout is None:
-        input_d_layout = ttnn.TILE_LAYOUT
-    if input_d_memory_config is None:
-        input_d_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
     if is_decode_mode:
         # --- Decode Mode: Create sharded tensors ---
         # Get core grid for sharding
@@ -558,64 +580,70 @@ def run(
 
     else:
         # --- Prefill Mode: Use interleaved memory ---
-        # Convert input tensor to TTNN
-        input_tensor_a = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
-
-        # Convert cos cache to TTNN
-        cos_cache_tt = ttnn.from_torch(
-            torch_cos_cache,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=input_b_memory_config,
-        )
-
-        # Convert sin cache to TTNN
-        sin_cache_tt = ttnn.from_torch(
-            torch_sin_cache,
-            dtype=input_c_dtype,
-            layout=input_c_layout,
-            device=device,
-            memory_config=input_c_memory_config,
-        )
-
-        # Convert transformation matrix to TTNN
-        trans_mat_tt = ttnn.from_torch(
-            torch_trans_mat,
-            dtype=input_d_dtype,
-            layout=input_d_layout,
-            device=device,
-            memory_config=input_d_memory_config,
-        )
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+            cos_cache_tt = create_tensor_on_mesh(
+                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+            )
+            sin_cache_tt = create_tensor_on_mesh(
+                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+            )
+            trans_mat_tt = create_tensor_on_mesh(
+                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+            cos_cache_tt = ttnn.from_torch(
+                torch_cos_cache,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=input_b_memory_config,
+            )
+            sin_cache_tt = ttnn.from_torch(
+                torch_sin_cache,
+                dtype=input_c_dtype,
+                layout=input_c_layout,
+                device=device,
+                memory_config=input_c_memory_config,
+            )
+            trans_mat_tt = ttnn.from_torch(
+                torch_trans_mat,
+                dtype=input_d_dtype,
+                layout=input_d_layout,
+                device=device,
+                memory_config=input_d_memory_config,
+            )
 
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
 
+    rope_call_kwargs = {"is_decode_mode": is_decode_mode}
     if output_memory_config is not None:
-        output_tensor = ttnn.experimental.rotary_embedding_llama(
-            input_tensor_a,
-            cos_cache_tt,
-            sin_cache_tt,
-            trans_mat_tt,
-            is_decode_mode=is_decode_mode,
-            memory_config=output_memory_config,
-        )
-    else:
-        output_tensor = ttnn.experimental.rotary_embedding_llama(
-            input_tensor_a,
-            cos_cache_tt,
-            sin_cache_tt,
-            trans_mat_tt,
-            is_decode_mode=is_decode_mode,
-        )
+        rope_call_kwargs["memory_config"] = output_memory_config
+    rope_call_kwargs.update(op_kwargs)
+    output_tensor = ttnn.experimental.rotary_embedding_llama(
+        input_tensor_a,
+        cos_cache_tt,
+        sin_cache_tt,
+        trans_mat_tt,
+        **rope_call_kwargs,
+    )
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # --- Check Results ---

@@ -124,7 +124,53 @@ def prepare_program_cache_for_comparison(device) -> None:
     logger.info(f"Program cache cleared (entries after: {num_entries_after})")
 
 
+def _normalize_tensor_keys(test_vector: dict) -> dict:
+    """Normalize alternative tensor naming conventions to standard input_a/b/c format.
+
+    The V2 loader may use 'input_tensor_shape' instead of 'input_a_shape' for single-input
+    ops, or 'input_tensor_q_shape' / 'input_tensor_k_shape' for named inputs. Normalize
+    these so sweep test run() functions receive consistent parameter names.
+    """
+    suffixes = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement")
+    # Map alternative prefixes to standard prefixes
+    renames = {
+        "input_tensor": "input_a",
+        "input_tensor_a": "input_a",
+        "input_tensor_b": "input_b",
+        "input_tensor_c": "input_c",
+        "input_tensor_d": "input_d",
+        "input_tensor_q": "input_a",
+        "input_tensor_k": "input_b",
+        "input_tensor_v": "input_c",
+        "page_table_tensor": "input_d",
+    }
+    normalized = {}
+    for key, value in test_vector.items():
+        renamed = False
+        for alt_prefix, std_prefix in renames.items():
+            for suffix in suffixes:
+                alt_key = alt_prefix + suffix
+                if key == alt_key:
+                    std_key = std_prefix + suffix
+                    if std_key not in test_vector:
+                        normalized[std_key] = value
+                    renamed = True
+                    break
+            if renamed:
+                break
+        # Always keep the original key too
+        normalized[key] = value
+    return normalized
+
+
 def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
+    # Filter 'device' from test_vector to avoid conflict with explicit device param
+    if "device" in test_vector:
+        test_vector = {k: v for k, v in test_vector.items() if k != "device"}
+    # Convert "__ABSENT__" sentinel values to None (missing columns in multi-config suites)
+    test_vector = {k: (None if v == "__ABSENT__" else v) for k, v in test_vector.items()}
+    # Normalize alternative tensor naming conventions
+    test_vector = _normalize_tensor_keys(test_vector)
     results = test_module.run(**test_vector, device=device)
     if isinstance(results, list):
         status, message = results[0]

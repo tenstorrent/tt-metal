@@ -18,23 +18,29 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 # Import helper functions for proper cos/sin generation and transformation matrix
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.rope import compute_gather_cos_sin
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("experimental::rotary_embedding_llama_fused_qk", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::rotary_embedding_llama_fused_qk")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 8, 128, 64)],  # batch, n_heads, seq_len, head_dim
+        "input_a_shape": [(1, 8, 128, 64)],  # batch, n_heads, seq_len, head_dim
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -91,8 +97,30 @@ def apply_rotary_emb_golden(x: torch.Tensor, cos_cache: torch.Tensor, sin_cache:
     return out
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -105,6 +133,9 @@ def run(
     input_d_dtype=None,
     input_d_layout=None,
     input_d_memory_config=None,
+    input_e_dtype=None,
+    input_e_layout=None,
+    input_e_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
@@ -113,20 +144,28 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle dict input_shape from traced configurations (multi-input)
-    if isinstance(input_shape, dict):
-        shape_a = input_shape.get("input_a", input_shape.get("q_input_tensor"))  # Q tensor
-        shape_b = input_shape.get("input_b", input_shape.get("k_input_tensor"))  # K tensor
-        shape_c = input_shape.get("input_c", input_shape.get("cos_cache"))  # cos cache
-        shape_d = input_shape.get("input_d", input_shape.get("sin_cache"))  # sin cache
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
+    input_e_tensor_placement = kwargs.get("input_e_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Handle dict input_a_shape from traced configurations (multi-input)
+    if isinstance(input_a_shape, dict):
+        shape_a = input_a_shape.get("input_a", input_a_shape.get("q_input_tensor"))  # Q tensor
+        shape_b = input_a_shape.get("input_b", input_a_shape.get("k_input_tensor"))  # K tensor
+        shape_c = input_a_shape.get("input_c", input_a_shape.get("cos_cache"))  # cos cache
+        shape_d = input_a_shape.get("input_d", input_a_shape.get("sin_cache"))  # sin cache
         # Need to get the 5th input - trans_mat
-        shape_e = input_shape.get("input_e", input_shape.get("trans_mat"))
+        shape_e = input_a_shape.get("input_e", input_a_shape.get("trans_mat"))
     else:
         # Fallback for sample configurations
-        if isinstance(input_shape, (tuple, list)):
-            shape = tuple(input_shape)
+        if isinstance(input_a_shape, (tuple, list)):
+            shape = tuple(input_a_shape)
         else:
-            shape = input_shape
+            shape = input_a_shape
         # For sample, assume standard shapes
         batch, n_heads, seq_len, head_dim = shape
         shape_a = shape  # Q input
@@ -136,12 +175,7 @@ def run(
         shape_e = (1, 1, head_dim, head_dim)  # transformation matrix
 
     # Check which inputs are provided
-    has_input_e = kwargs.get("input_e_dtype") is not None or (
-        isinstance(input_shape, dict) and "input_e" in input_shape
-    )
-    input_e_dtype = kwargs.get("input_e_dtype")
-    input_e_layout = kwargs.get("input_e_layout")
-    input_e_memory_config = kwargs.get("input_e_memory_config")
+    has_input_e = input_e_dtype is not None or (isinstance(input_a_shape, dict) and "input_e" in input_a_shape)
 
     # Extract dimensions
     batch, n_heads_q, seq_len, head_dim = shape_a
@@ -174,8 +208,6 @@ def run(
     )
 
     # Compute golden reference outputs for both Q and K
-    # For fused_qk, the cos/sin have dim[1] = n_heads_q + n_heads_k
-    # We need to split them for Q and K separately
     cos_q = torch_input_c[:, :n_heads_q, :, :]
     sin_q = torch_input_d[:, :n_heads_q, :, :]
     cos_k = torch_input_c[:, n_heads_q:, :, :]
@@ -193,78 +225,84 @@ def run(
         sin_k.float(),
     ).to(torch.bfloat16)
 
-    # Check if storage_type is HOST
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Use defaults for non-traced parameters
-    if input_b_dtype is None:
-        input_b_dtype = input_a_dtype
-    if input_b_layout is None:
-        input_b_layout = input_a_layout
-    if input_b_memory_config is None:
-        input_b_memory_config = input_a_memory_config
-    if input_c_dtype is None:
-        input_c_dtype = ttnn.bfloat16
-    if input_c_layout is None:
-        input_c_layout = ttnn.TILE_LAYOUT
-    if input_c_memory_config is None:
-        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if input_d_dtype is None:
-        input_d_dtype = ttnn.bfloat16
-    if input_d_layout is None:
-        input_d_layout = ttnn.TILE_LAYOUT
-    if input_d_memory_config is None:
-        input_d_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
-    # Convert to ttnn tensors
-    input_tensor_a = ttnn.from_torch(
-        torch_input_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
-
-    input_tensor_b = ttnn.from_torch(
-        torch_input_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
-    input_tensor_c = ttnn.from_torch(
-        torch_input_c,
-        dtype=input_c_dtype,
-        layout=input_c_layout,
-        device=device,
-        memory_config=input_c_memory_config,
-    )
-
-    input_tensor_d = ttnn.from_torch(
-        torch_input_d,
-        dtype=input_d_dtype,
-        layout=input_d_layout,
-        device=device,
-        memory_config=input_d_memory_config,
-    )
+    # Convert to ttnn tensors with mesh support
+    if is_mesh_device and input_a_tensor_placement:
+        input_tensor_a = create_tensor_on_mesh(
+            torch_input_a, device, input_a_dtype, input_a_layout, input_a_memory_config, input_a_tensor_placement
+        )
+        input_tensor_b = create_tensor_on_mesh(
+            torch_input_b,
+            device,
+            input_b_dtype,
+            input_b_layout,
+            input_b_memory_config,
+            input_b_tensor_placement,
+        )
+        input_tensor_c = create_tensor_on_mesh(
+            torch_input_c,
+            device,
+            input_c_dtype,
+            input_c_layout,
+            input_c_memory_config,
+            input_c_tensor_placement,
+        )
+        input_tensor_d = create_tensor_on_mesh(
+            torch_input_d,
+            device,
+            input_d_dtype,
+            input_d_layout,
+            input_d_memory_config,
+            input_d_tensor_placement,
+        )
+    else:
+        input_tensor_a = ttnn.from_torch(
+            torch_input_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+        input_tensor_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+        input_tensor_c = ttnn.from_torch(
+            torch_input_c,
+            dtype=input_c_dtype,
+            layout=input_c_layout,
+            device=device,
+            memory_config=input_c_memory_config,
+        )
+        input_tensor_d = ttnn.from_torch(
+            torch_input_d,
+            dtype=input_d_dtype,
+            layout=input_d_layout,
+            device=device,
+            memory_config=input_d_memory_config,
+        )
 
     # Convert transformation matrix
     if torch_input_e is not None:
-        if input_e_dtype is None:
-            input_e_dtype = ttnn.bfloat16
-        if input_e_layout is None:
-            input_e_layout = ttnn.TILE_LAYOUT
-        if input_e_memory_config is None:
-            input_e_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
-        input_tensor_e = ttnn.from_torch(
-            torch_input_e,
-            dtype=input_e_dtype,
-            layout=input_e_layout,
-            device=device,
-            memory_config=input_e_memory_config,
-        )
+        if is_mesh_device and input_e_tensor_placement:
+            input_tensor_e = create_tensor_on_mesh(
+                torch_input_e,
+                device,
+                input_e_dtype,
+                input_e_layout,
+                input_e_memory_config,
+                input_e_tensor_placement,
+            )
+        else:
+            input_tensor_e = ttnn.from_torch(
+                torch_input_e,
+                dtype=input_e_dtype,
+                layout=input_e_layout,
+                device=device,
+                memory_config=input_e_memory_config,
+            )
     else:
         # If no trans_mat, create a default one
         torch_input_e = get_rot_transformation_mat(dhead=head_dim).to(torch.bfloat16)
@@ -286,12 +324,13 @@ def run(
         input_tensor_c,  # cos_cache
         input_tensor_d,  # sin_cache
         input_tensor_e,  # trans_mat
+        **op_kwargs,
     )
 
     # The operation returns a tuple of (Q_rotated, K_rotated)
     if isinstance(result, (list, tuple)) and len(result) == 2:
-        output_tensor_q = ttnn.to_torch(result[0])
-        output_tensor_k = ttnn.to_torch(result[1])
+        output_tensor_q = mesh_tensor_to_torch(result[0], device if is_mesh_device else None)
+        output_tensor_k = mesh_tensor_to_torch(result[1], device if is_mesh_device else None)
     else:
         e2e_perf = stop_measuring_time(start_time)
         return [(False, f"Expected tuple of 2 tensors, got {type(result)}"), e2e_perf]
