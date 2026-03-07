@@ -566,6 +566,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
+        case UnaryOpType::MISH:
+            return {};// MISH uses dedicated mish_kernel.cpp;
         case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
@@ -763,7 +765,6 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::LGAMMA:
-        case UnaryOpType::MISH:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
@@ -890,7 +891,10 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
     }
     if (name == "mish") {
-        return UnaryWithParam(UnaryOpType::MISH);
+        return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(false));
+    }
+    if (name == "mish_approx") {
+        return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(true));
     }
     TT_THROW("Unknown unary op: {}", name);
 }
