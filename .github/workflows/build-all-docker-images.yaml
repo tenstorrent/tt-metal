@@ -75,7 +75,7 @@ jobs:
   # Preflight: Harbor check + compute tool and platform data on a single runner
   # Outputs raw JSON blobs that downstream workflows parse with fromJson()
   preflight:
-    name: "Check Harbor + Calculate Tags)"
+    name: "Check Harbor + Calculate Tags"
     runs-on: tt-ubuntu-2204-small-stable
     outputs:
       harbor-prefix: ${{ steps.harbor.outputs.harbor-prefix }}
