@@ -32,6 +32,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
+#include <cstring>
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -428,7 +429,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_ht,
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
-    std::optional<uint32_t> chunk_width_in_mm_blocks) {
+    std::optional<uint32_t> chunk_width_in_mm_blocks,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<const Tensor>& addcmul_input_tensor1,
+    const std::optional<const Tensor>& addcmul_input_tensor2) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -591,12 +595,39 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
+    // Addcmul fused CBs (only created when fused_ternary_scalar is provided).
+    // c_in4 = addcmul_temp (acc result before ternary ops), c_in5 = residual a, c_in6 = gate b.
+    const bool fuse_rs_addcmul =
+        fused_ternary_scalar.has_value() && addcmul_input_tensor1.has_value() && addcmul_input_tensor2.has_value();
+    uint32_t addcmul_temp_cb_index = tt::CB::c_in4;
+    uint32_t addcmul_a_cb_index = tt::CB::c_in5;
+    uint32_t addcmul_b_cb_index = tt::CB::c_in6;
+    if (fuse_rs_addcmul) {
+        // Temp CB needs double capacity for the in-place mul-then-repack pattern.
+        tt::tt_metal::CircularBufferConfig cb_addcmul_temp_config =
+            tt::tt_metal::CircularBufferConfig(
+                2 * cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_temp_cb_index, df}})
+                .set_page_size(addcmul_temp_cb_index, l1_scratch_cb_page_size_bytes);
+        CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_temp_config);
+
+        tt::tt_metal::CircularBufferConfig cb_addcmul_a_config =
+            tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_a_cb_index, df}})
+                .set_page_size(addcmul_a_cb_index, l1_scratch_cb_page_size_bytes);
+        CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_a_config);
+
+        tt::tt_metal::CircularBufferConfig cb_addcmul_b_config =
+            tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_b_cb_index, df}})
+                .set_page_size(addcmul_b_cb_index, l1_scratch_cb_page_size_bytes);
+        CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_b_config);
+    }
+
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
+    std::map<std::string, std::string> reduce_compute_defines;
 
     if (input_is_sharded) {
         reader_compute_defines["INPUT_IS_SHARDED"] = "1";
@@ -607,6 +638,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     }
     if (output_is_sharded) {
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
+    }
+    if (fuse_rs_addcmul) {
+        reader_compute_defines["FUSE_RS_ADDCMUL"] = "1";
+        reduce_compute_defines["FUSE_RS_ADDCMUL"] = "1";
     }
 
     // KERNEL CREATION
@@ -682,6 +717,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
+    }
+    // Addcmul tensor accessor CT args (a then b) — appended after intermediate.
+    if (fuse_rs_addcmul) {
+        sender_reader_compile_args.push_back(addcmul_a_cb_index);
+        sender_reader_compile_args.push_back(addcmul_b_cb_index);
+        tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor1->buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor2->buffer()).append_to(sender_reader_compile_args);
     }
 
     std::string sender_reader_kernel_path =
@@ -777,6 +819,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_Ht_per_core,
             slice_Ht,
             ring_index);
+    // Append addcmul CB indices for the compute kernel.
+    if (fuse_rs_addcmul) {
+        sender_reduce_kernel_config.compile_args.push_back(addcmul_temp_cb_index);  // [16]
+        sender_reduce_kernel_config.compile_args.push_back(addcmul_a_cb_index);     // [17]
+        sender_reduce_kernel_config.compile_args.push_back(addcmul_b_cb_index);     // [18]
+    }
+    sender_reduce_kernel_config.defines = reduce_compute_defines;
 
     std::string sender_reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
@@ -784,6 +833,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 
     auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
         program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
+
+    // Captured from the first worker iteration; the same for all workers.
+    uint32_t captured_reader_addcmul_rt_arg_offset = 0;
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     auto mux_core_iter = mux_core_range_set.ranges().cbegin();
@@ -837,6 +889,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 if (fuse_mm_op) {
                     mm_fused_op_signaler->push_strided_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
+                // Addcmul tensor addresses (a then b) — must be last so override_runtime_arguments
+                // can locate them via reader_addcmul_rt_arg_offset.
+                if (fuse_rs_addcmul) {
+                    captured_reader_addcmul_rt_arg_offset = static_cast<uint32_t>(reader_rt_args.size());
+                    reader_rt_args.push_back(addcmul_input_tensor1->buffer()->address());
+                    reader_rt_args.push_back(addcmul_input_tensor2->buffer()->address());
+                }
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
@@ -882,6 +941,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     dir,           // direction
                     worker_id,     // worker_id
                     num_workers};  // num_workers
+                if (fuse_rs_addcmul) {
+                    float scalar_f = fused_ternary_scalar.value();
+                    uint32_t scalar_u32;
+                    std::memcpy(&scalar_u32, &scalar_f, sizeof(uint32_t));
+                    reduce_rt_args.push_back(scalar_u32);
+                }
                 tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
@@ -894,7 +959,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         num_directions_per_link,
         num_workers_per_direction,
         num_mux_cores_per_direction_per_link,
-        num_cores_per_link};
+        num_cores_per_link,
+        captured_reader_addcmul_rt_arg_offset};
 }
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -911,7 +977,10 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output) {
+    const Tensor& output,
+    uint32_t reader_addcmul_rt_arg_offset,
+    const std::optional<const Tensor>& addcmul_a,
+    const std::optional<const Tensor>& addcmul_b) {
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -929,6 +998,11 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
                 worker_reader_sender_runtime_args[2] = semaphore.at(dir).address();
+                if (reader_addcmul_rt_arg_offset > 0 && addcmul_a.has_value() && addcmul_b.has_value()) {
+                    worker_reader_sender_runtime_args[reader_addcmul_rt_arg_offset] = addcmul_a->buffer()->address();
+                    worker_reader_sender_runtime_args[reader_addcmul_rt_arg_offset + 1] =
+                        addcmul_b->buffer()->address();
+                }
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
@@ -1017,7 +1091,10 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.mm_block_ht,
         operation_attributes.mm_block_wt,
         operation_attributes.mm_N_full_block_wt,
-        operation_attributes.chunk_width_in_mm_blocks);
+        operation_attributes.chunk_width_in_mm_blocks,
+        std::nullopt,   // fused_ternary_scalar
+        std::nullopt,   // addcmul_input_tensor1
+        std::nullopt);  // addcmul_input_tensor2
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -1048,7 +1125,10 @@ void RingStridedReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             operation_attributes.semaphore,
             input,
             intermediate,
-            output);
+            output,
+            shared_vars.reader_addcmul_rt_arg_offset,
+            std::nullopt,   // addcmul_a
+            std::nullopt);  // addcmul_b
     }
 }
 

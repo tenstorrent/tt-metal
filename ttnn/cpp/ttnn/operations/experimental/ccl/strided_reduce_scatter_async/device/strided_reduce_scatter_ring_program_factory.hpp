@@ -67,7 +67,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_ht,
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
-    std::optional<uint32_t> chunk_width_in_mm_blocks);
+    std::optional<uint32_t> chunk_width_in_mm_blocks,
+    // Optional fused addcmul at the final RS write step.
+    // output = addcmul_a + fused_ternary_scalar * rs_result * addcmul_b
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,   // residual a [M, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);  // gate b [1, D/tp]
 
 // Override runtime arguments helper for ring topology
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -84,6 +89,9 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output);
+    const Tensor& output,
+    uint32_t reader_addcmul_rt_arg_offset = 0,
+    const std::optional<const Tensor>& addcmul_a = std::nullopt,
+    const std::optional<const Tensor>& addcmul_b = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail

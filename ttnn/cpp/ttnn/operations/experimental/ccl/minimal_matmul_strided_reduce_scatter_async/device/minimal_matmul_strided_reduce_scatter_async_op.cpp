@@ -153,7 +153,10 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     const std::optional<Tensor>& optional_rs_intermediate_tensor,
-    const std::optional<Tensor>& optional_rs_output_tensor) {
+    const std::optional<Tensor>& optional_rs_output_tensor,
+    const std::optional<float> fused_ternary_scalar,
+    const std::optional<const Tensor>& addcmul_input_tensor1,
+    const std::optional<const Tensor>& addcmul_input_tensor2) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
@@ -174,6 +177,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
 
     auto operation_attributes = OperationType::operation_attributes_t{
         /* matmul_struct */ matmul_struct,
+        /* fused_ternary_scalar */ fused_ternary_scalar,
         /* dim */ dim,
         /* num_links */ num_links,
         /* ring_size */ num_devices,
@@ -193,7 +197,13 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* devices */ devices};
 
     auto tensor_args = OperationType::tensor_args_t{
-        input_tensor, weight_tensor, optional_rs_intermediate_tensor, optional_rs_output_tensor, bias};
+        input_tensor,
+        weight_tensor,
+        optional_rs_intermediate_tensor,
+        optional_rs_output_tensor,
+        bias,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -55,7 +55,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> chunk_width_in_mm_blocks,
                const std::optional<Tensor>& optional_rs_intermediate_tensor,
-               const std::optional<Tensor>& optional_rs_output_tensor) -> std::vector<ttnn::Tensor> {
+               const std::optional<Tensor>& optional_rs_output_tensor,
+               std::optional<float> fused_ternary_scalar,
+               const std::optional<const Tensor>& addcmul_input_tensor1,
+               const std::optional<const Tensor>& addcmul_input_tensor2) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -80,7 +83,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                     num_buffers_per_channel,
                     chunk_width_in_mm_blocks,
                     optional_rs_intermediate_tensor,
-                    optional_rs_output_tensor);
+                    optional_rs_output_tensor,
+                    fused_ternary_scalar,
+                    addcmul_input_tensor1,
+                    addcmul_input_tensor2);
             },
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
@@ -106,7 +112,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("chunk_width_in_mm_blocks") = nb::none(),
             nb::arg("optional_rs_intermediate_tensor") = nb::none(),
-            nb::arg("optional_rs_output_tensor") = nb::none()});
+            nb::arg("optional_rs_output_tensor") = nb::none(),
+            nb::arg("fused_ternary_scalar") = nb::none(),
+            nb::arg("addcmul_input_tensor1") = nb::none(),
+            nb::arg("addcmul_input_tensor2") = nb::none()});
 }
 
 }  // namespace
