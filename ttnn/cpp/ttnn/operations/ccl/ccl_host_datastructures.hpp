@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -128,7 +129,7 @@ private:
     uint32_t num_senders{0};
     uint32_t num_receivers{0};
     std::size_t num_buffers_per_channel;
-    tt::ChipId chip_id;
+    tt::tt_metal::ChipId chip_id;
 
     bool enable_sender{false};
     bool enable_receiver{false};
@@ -148,7 +149,7 @@ public:
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
         ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
         std::size_t num_buffers_per_channel = 1,
-        tt::ChipId chip_id = -1) :
+        tt::tt_metal::ChipId chip_id = -1) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
