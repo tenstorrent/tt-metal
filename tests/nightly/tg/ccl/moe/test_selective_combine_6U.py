@@ -5,10 +5,25 @@
 
 from loguru import logger
 import math
+import os
 
 import pytest
 import torch
 import ttnn
+
+# Mesh graph descriptor paths for different mesh configurations
+MESH_GRAPH_DESC_1x16 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_1x8 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
+)
+
+
+def is_mesh_graph_descriptor_set(expected_path):
+    """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
+    return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
+
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     get_batch_cluster_idxr,
@@ -635,13 +650,36 @@ def _run_test(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape",
+    [
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
+    ],
+    indirect=["mesh_device"],
+)
 @pytest.mark.parametrize("batch", [512, 128, 64])
-@pytest.mark.parametrize("experts", [32])
 @pytest.mark.parametrize("select_experts_k", [1, 2, 8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
 @pytest.mark.parametrize("token_parallel_core_dim", [4])
 @pytest.mark.parametrize("data_parallel_core_dim", [4])
@@ -651,12 +689,13 @@ def _run_test(
 @pytest.mark.parametrize("num_inner_iters", [1])
 def test_decode(
     mesh_device,
+    mesh_shape,
     batch,
-    experts,
     select_experts_k,
     hidden_size,
     seq,
     cluster_axis,
+    experts_per_device,
     worker_core_range,
     token_parallel_core_dim,
     data_parallel_core_dim,
@@ -665,6 +704,7 @@ def test_decode(
     num_test_iters,
     num_inner_iters,
 ):
+    experts = experts_per_device * mesh_shape[cluster_axis]
     mesh_device.disable_and_clear_program_cache()
 
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
