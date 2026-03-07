@@ -619,6 +619,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
 
             // Find node descriptor and build node
             resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
+            resolved->children_order.emplace_back(child_name, true);
 
         } else if (child_def.has_graph_ref()) {
             // Non-leaf node - recursively build subgraph
@@ -629,6 +630,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
 
             resolved->subgraphs[child_name] = build_graph_instance_impl(
                 child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
+            resolved->children_order.emplace_back(child_name, false);
         }
     }
 
@@ -754,8 +756,7 @@ void CablingGenerator::initialize_cluster(
 
     // Populate the host_id_to_node_ map
     populate_host_id_to_node();
-
-    // Generate all logical chip connections
+    reassign_host_ids_dfs();
     generate_logical_chip_connections();
 }
 
@@ -1089,188 +1090,57 @@ void CablingGenerator::merge(
     // Create CablingGenerator for the new file
     CablingGenerator other(new_file_path, deployment_arg);
 
-    // Merge the sets of explicit node_descriptors from both sources
-    for (const auto& descriptor_name : other.explicit_node_descriptors_) {
-        explicit_node_descriptors_.insert(descriptor_name);
-    }
-
-    // Validate and merge node_templates_ (must match exactly, except inter_board_connections can differ)
-    validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
-
-    // Build target node name -> host_id so we can collapse same hostname to same host
-    auto collect_name_to_host_id = [](auto& self, const ResolvedGraphInstance& graph,
-                                      std::map<std::string, HostId>& out) -> void {
-        for (const auto& [name, node] : graph.nodes) {
-            out[name] = node.host_id;
-        }
-        for (const auto& [name, subgraph] : graph.subgraphs) {
-            self(self, *subgraph, out);
-        }
-    };
-    std::map<std::string, HostId> target_name_to_host_id;
-    if (root_instance_) {
-        collect_name_to_host_id(collect_name_to_host_id, *root_instance_, target_name_to_host_id);
-    }
-
-    HostId max_host_id = HostId(0);
-    for (const auto& [host_id, node] : host_id_to_node_) {
-        if (*host_id > *max_host_id) {
-            max_host_id = host_id;
-        }
-    }
-    HostId next_host_id = HostId(*max_host_id + 1);
-    std::map<HostId, HostId> host_id_mapping;
-
-    // Build mapping: same hostname -> same host_id (collapse); new hostname -> new host_id
-    auto build_host_id_mapping = [&](auto& self, ResolvedGraphInstance& graph) -> void {
-        for (auto& [name, node] : graph.nodes) {
-            HostId old_host_id = node.host_id;
-            if (!host_id_mapping.contains(old_host_id)) {
-                auto it = target_name_to_host_id.find(name);
-                if (it != target_name_to_host_id.end()) {
-                    host_id_mapping[old_host_id] = it->second;  // same hostname -> same host
-                } else {
-                    host_id_mapping[old_host_id] = next_host_id;
-                    next_host_id = HostId(*next_host_id + 1);
-                }
-            }
-            node.host_id = host_id_mapping[old_host_id];
-        }
-        for (auto& [name, subgraph] : graph.subgraphs) {
-            self(self, *subgraph);
-        }
-    };
-
-    // Validate both root instances exist before processing
     if (!root_instance_ || !other.root_instance_) {
         throw std::runtime_error("Cannot merge: both CablingGenerators must have root_instance_");
     }
 
-    build_host_id_mapping(build_host_id_mapping, *other.root_instance_);
+    for (const auto& name : other.explicit_node_descriptors_) {
+        explicit_node_descriptors_.insert(name);
+    }
+    validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
 
-    // Also renumber host_ids in internal_connections (they reference HostIds in PortEndpoints)
-    auto renumber_connection_host_ids = [&](auto& self, ResolvedGraphInstance& graph) -> void {
-        for (auto& [port_type, connections] : graph.internal_connections) {
-            for (auto& conn : connections) {
-                // conn is pair<PortEndpoint, PortEndpoint> where PortEndpoint is tuple<HostId, TrayId, PortId>
-                auto& [host_a, tray_a, port_a] = conn.first;
-                auto& [host_b, tray_b, port_b] = conn.second;
-
-                if (host_id_mapping.contains(host_a)) {
-                    host_a = host_id_mapping[host_a];
-                }
-                if (host_id_mapping.contains(host_b)) {
-                    host_b = host_id_mapping[host_b];
-                }
-            }
+    // Assign temp host_ids to avoid conflicts during merge
+    HostId next_id = HostId(host_id_to_node_.size());
+    auto assign_temp_ids = [&](auto& self, ResolvedGraphInstance& graph) -> void {
+        for (auto& [name, node] : graph.nodes) {
+            node.host_id = next_id;
+            next_id = HostId(*next_id + 1);
         }
-
-        // Update lookup structures with renumbered connections
-        graph.endpoint_to_dest.clear();
-        graph.connection_pairs.clear();
-        for (const auto& [port_type, connections] : graph.internal_connections) {
-            for (const auto& conn : connections) {
-                graph.endpoint_to_dest[conn.first] = conn.second;
-                graph.endpoint_to_dest[conn.second] = conn.first;
-                auto normalized = normalize_graph_connection(conn);
-                graph.connection_pairs.insert(normalized);
-            }
-        }
-
         for (auto& [name, subgraph] : graph.subgraphs) {
             self(self, *subgraph);
         }
     };
+    assign_temp_ids(assign_temp_ids, *other.root_instance_);
 
-    renumber_connection_host_ids(renumber_connection_host_ids, *other.root_instance_);
-
-    log_info(
-        tt::LogDistributed,
-        "Renumbered host_ids for nodes from {}, starting from host_id {}",
-        new_file_path,
-        *max_host_id + 1);
-
-    // Merge root_instance_ trees (validated above that both exist)
     merge_resolved_graph_instances(
         *root_instance_, *other.root_instance_, existing_sources, new_file_path, node_templates_);
 
-    // Rebuild host_id_to_node_ from merged root_instance
-    populate_host_id_to_node();
-
-    // Re-validate host_id uniqueness
-    validate_host_id_uniqueness();
-
-    // Before processing connections, recreate all nodes from templates to reset port availability
-    // This is needed because nodes from individual files may have ports marked as used from
-    // graph-level connections, but we need fresh nodes with only inter-board connection ports marked as used.
-    recreate_nodes_from_templates(*root_instance_);
-
-    // Regenerate chip_connections_ from merged root_instance (this will mark ports as used)
-    generate_logical_chip_connections();
-
-    // Merge deployment_hosts_ - rebuild ordered by host_id; same hostname = one entry (no duplicates)
-    std::unordered_map<std::string, Host> hostname_to_host;
+    std::unordered_map<std::string, Host> all_hosts;
     for (const auto& host : deployment_hosts_) {
-        hostname_to_host[host.hostname] = host;
+        all_hosts[host.hostname] = host;
     }
-
-    // Build hostname -> Host map from other's deployment (don't assume index == host_id)
-    std::unordered_map<std::string, Host> other_hostname_to_host;
     for (const auto& host : other.deployment_hosts_) {
-        other_hostname_to_host[host.hostname] = host;
+        all_hosts[host.hostname] = host;
     }
 
-    // Walk other's graph nodes (already remapped) and add hosts for nodes that got new host_ids
-    auto add_new_hosts = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
-        for (const auto& [name, node] : graph.nodes) {
-            // node.host_id has already been remapped; check if it's a new host_id (not collapsed)
-            if (*node.host_id > *max_host_id) {
-                auto it = other_hostname_to_host.find(name);
-                if (it != other_hostname_to_host.end()) {
-                    hostname_to_host[name] = it->second;
+    recreate_nodes_from_templates(*root_instance_);
+    reassign_host_ids_dfs();
+
+    deployment_hosts_.clear();
+    auto collect_hosts = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+        for (const auto& [name, is_node] : graph.children_order) {
+            if (is_node && all_hosts.contains(name)) {
+                deployment_hosts_.push_back(all_hosts[name]);
+            } else if (!is_node) {
+                if (auto it = graph.subgraphs.find(name); it != graph.subgraphs.end()) {
+                    self(self, *it->second);
                 }
             }
         }
-        for (const auto& [name, subgraph] : graph.subgraphs) {
-            self(self, *subgraph);
-        }
     };
-    add_new_hosts(add_new_hosts, *other.root_instance_);
+    collect_hosts(collect_hosts, *root_instance_);
 
-    // Helper to get node name from root_instance given its host_id
-    auto find_node_name_by_host_id = [](auto& self, const ResolvedGraphInstance& graph,
-                                        HostId target_host_id) -> std::optional<std::string> {
-        for (const auto& [name, node] : graph.nodes) {
-            if (node.host_id == target_host_id) {
-                return name;
-            }
-        }
-        for (const auto& [name, subgraph] : graph.subgraphs) {
-            auto result = self(self, *subgraph, target_host_id);
-            if (result.has_value()) {
-                return result;
-            }
-        }
-        return std::nullopt;
-    };
-
-    // Rebuild deployment_hosts_ vector ordered by host_id
-    deployment_hosts_.clear();
-    for (size_t i = 0; i < hostname_to_host.size(); ++i) {
-        HostId host_id = HostId(i);
-        auto node_name = find_node_name_by_host_id(find_node_name_by_host_id, *root_instance_, host_id);
-        if (!node_name.has_value()) {
-            throw std::runtime_error(fmt::format("No node found with host_id {}", *host_id));
-        }
-
-        auto host_it = hostname_to_host.find(*node_name);
-        if (host_it == hostname_to_host.end()) {
-            throw std::runtime_error(
-                fmt::format("Node '{}' with host_id {} not found in deployment descriptor", *node_name, *host_id));
-        }
-
-        deployment_hosts_.push_back(host_it->second);
-    }
+    generate_logical_chip_connections();
 }
 
 // Getters for all data
@@ -1970,6 +1840,61 @@ void CablingGenerator::recreate_nodes_from_templates(ResolvedGraphInstance& grap
     for (auto& [subgraph_name, subgraph] : graph.subgraphs) {
         recreate_nodes_from_templates(*subgraph);
     }
+}
+
+void CablingGenerator::reassign_host_ids_dfs() {
+    if (!root_instance_) {
+        return;
+    }
+
+    std::map<HostId, HostId> id_remap;
+    HostId next_id = HostId(0);
+
+    // Assign host_ids in DFS order following template children order
+    auto assign_ids = [&](auto& self, ResolvedGraphInstance& graph) -> void {
+        for (const auto& [name, is_node] : graph.children_order) {
+            if (is_node) {
+                auto it = graph.nodes.find(name);
+                if (it != graph.nodes.end()) {
+                    id_remap[it->second.host_id] = next_id;
+                    it->second.host_id = next_id;
+                    next_id = HostId(*next_id + 1);
+                }
+            } else if (auto it = graph.subgraphs.find(name); it != graph.subgraphs.end()) {
+                self(self, *it->second);
+            }
+        }
+    };
+    assign_ids(assign_ids, *root_instance_);
+
+    // Remap host_ids in connections
+    auto remap_connections = [&](auto& self, ResolvedGraphInstance& graph) -> void {
+        for (auto& [port_type, connections] : graph.internal_connections) {
+            for (auto& conn : connections) {
+                auto& [host_a, tray_a, port_a] = conn.first;
+                auto& [host_b, tray_b, port_b] = conn.second;
+                if (id_remap.contains(host_a)) host_a = id_remap[host_a];
+                if (id_remap.contains(host_b)) host_b = id_remap[host_b];
+            }
+        }
+
+        graph.endpoint_to_dest.clear();
+        graph.connection_pairs.clear();
+        for (const auto& [port_type, connections] : graph.internal_connections) {
+            for (const auto& conn : connections) {
+                graph.endpoint_to_dest[conn.first] = conn.second;
+                graph.endpoint_to_dest[conn.second] = conn.first;
+                graph.connection_pairs.insert(normalize_graph_connection(conn));
+            }
+        }
+
+        for (auto& [name, subgraph] : graph.subgraphs) {
+            self(self, *subgraph);
+        }
+    };
+    remap_connections(remap_connections, *root_instance_);
+
+    populate_host_id_to_node();
 }
 
 void CablingGenerator::get_all_connections_of_type(
