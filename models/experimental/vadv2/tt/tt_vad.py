@@ -136,6 +136,7 @@ class TtVAD:
                 B, N, C, H, W = img.shape
                 img = ttnn.reshape(img, (B * N, C, H, W))
             img = ttnn.permute(img, (0, 2, 3, 1))
+
             N, H, W, C = img.shape
             batch_size = img.shape[0]
             img = ttnn.reshape(img, (1, 1, N * H * W, C))
@@ -206,6 +207,7 @@ class TtVAD:
         else:
             img_metas[0][0][0]["can_bus"][-1] = 0
             img_metas[0][0][0]["can_bus"][:3] = 0
+
         img = ttnn.unsqueeze(img[0][0], 0)
         new_prev_bev, bbox_results = self.simple_test(
             img_metas=img_metas[0][0],
