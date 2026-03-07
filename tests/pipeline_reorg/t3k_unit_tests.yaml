@@ -233,3 +233,14 @@
   owner_id: U08E1JCMAJF
   team: shield
   model-name: deepseek_prefill
+
+- name: t3k_deepseek_shared_expert_ffn_tests
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv
+  skus:
+    wh_llmbox:
+      timeout: 5
+  owner_id: U08E1JCMAJF
+  team: shield
+  model-name: deepseek_ffn

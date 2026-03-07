@@ -110,6 +110,13 @@ jobs:
             timeout: 30
             test-type: loudbox
             owner_id: U08E1JCMAJF
+          - name: deepseek shared expert/ffn tests
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv
+            timeout: 10
+            test-type: loudbox
+            owner_id: U08E1JCMAJF
           YAML_EOF
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
