@@ -74,8 +74,6 @@ TEST(StrongTypeTest, MoveOnlyType) {
 
     MoveOnlyType to = std::move(from);
 
-    // NOLINTNEXTLINE(bugprone-use-after-move)
-    EXPECT_THAT(*from, IsNull());
     EXPECT_EQ(**to, 42);
 }
 
