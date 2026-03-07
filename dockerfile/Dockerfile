@@ -96,6 +96,19 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=cmake-layer /install/ /usr/local/
 COPY --from=openmpi-layer /install/ /opt/
 
+# Auto-detect Python version from Ubuntu version if not explicitly provided
+RUN set -e; \
+    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
+    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"
+
 # Install runtime deps (SFPI already copied from tool image above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
