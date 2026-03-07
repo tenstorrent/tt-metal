@@ -167,6 +167,32 @@ run_trace_only_resnet() {
     fi
 }
 
+run_multi_host_tracy_smoke() {
+    echo "Multi-host tracy smoke test (2 ranks via tt-run)"
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    tt-run --bare \
+        --mpi-args "--allow-run-as-root" \
+        --rank-binding tests/ttnn/distributed/config/t3k_tracy_smoke_rank_bindings.yaml \
+        --tracy "-r" \
+        python3 tests/ttnn/distributed/test_tracy_multi_host_smoke.py | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+
+    if grep -q "Skipping: T3K required" $PROFILER_ARTIFACTS_DIR/test_out.log; then
+        echo "No verification as test was skipped (not a T3K)"
+    else
+        echo "Verifying multi-host tracy results"
+        for rank_dir in $PROFILER_ARTIFACTS_DIR/ttrun/rank*; do
+            rank=$(basename $rank_dir)
+            if [ ! -f "$rank_dir/.logs/tracy_ops_times.csv" ]; then
+                echo "ERROR: Missing tracy_ops_times.csv for $rank"
+                exit 1
+            fi
+            echo "✓ $rank: tracy host reports present"
+        done
+    fi
+}
+
 run_profiling_test() {
     run_async_test
 
@@ -179,6 +205,8 @@ run_profiling_test() {
     run_mid_run_data_dump
 
     run_trace_only_resnet
+
+    run_multi_host_tracy_smoke
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
