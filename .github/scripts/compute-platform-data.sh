@@ -76,13 +76,28 @@ BASIC_TTNN_NAME="${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}"
 EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/Dockerfile.tools"
 BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
 MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
+VENV_EXTRA_FILES="dockerfile/docker-bake.hcl .github/workflows/build-docker-python-venvs.yaml"
 
 # Compute hashes
 HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
 BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
 BASIC_TTNN_HASH="$BASIC_DEV_HASH"
 MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
-VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
+
+# Compute separate hashes for the two venv images so ci-build-venv is reusable
+# across ci-test-only dependency changes. Both hashes still include the shared
+# venv build inputs from docker-bake.hcl and the venv workflow.
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+CI_BUILD_VENV_DOCKERFILE="$TMP_DIR/Dockerfile.python.ci-build"
+awk '
+    /^FROM python-base AS ci-test-venv-builder$/ { exit }
+    { print }
+' dockerfile/Dockerfile.python > "$CI_BUILD_VENV_DOCKERFILE"
+
+CI_BUILD_VENV_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_VENV_DOCKERFILE" $VENV_EXTRA_FILES)
+CI_TEST_VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python $VENV_EXTRA_FILES)
 
 # Build tags
 CI_BUILD_TAG="ghcr.io/${REPO}/tt-metalium/${CI_BUILD_NAME}:${HASH}"
@@ -93,8 +108,8 @@ BASIC_TTNN_TAG="ghcr.io/${REPO}/tt-metalium/${BASIC_TTNN_NAME}:${BASIC_TTNN_HASH
 MANYLINUX_TAG="ghcr.io/${REPO}/tt-metalium/manylinux-${ARCH}:${MANYLINUX_HASH}"
 
 BASE_VENV="ghcr.io/${REPO}/tt-metalium/python-venv"
-CI_BUILD_VENV_TAG="${BASE_VENV}/ci-build:${VERSION_NODOT}-${VENV_HASH}"
-CI_TEST_VENV_TAG="${BASE_VENV}/ci-test:${VERSION_NODOT}-${VENV_HASH}"
+CI_BUILD_VENV_TAG="${BASE_VENV}/ci-build:${VERSION_NODOT}-${CI_BUILD_VENV_HASH}"
+CI_TEST_VENV_TAG="${BASE_VENV}/ci-test:${VERSION_NODOT}-${CI_TEST_VENV_HASH}"
 
 # Check existence (or set all to false if force-rebuild)
 if [ "$FORCE_REBUILD" = "true" ]; then
