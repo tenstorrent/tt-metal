@@ -9,6 +9,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
@@ -204,6 +205,7 @@ extern "C" uint32_t _start1() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        DEVICE_PRINT_INITIALIZE_LOCK();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();
@@ -429,6 +431,7 @@ extern "C" uint32_t _start1() {
 
         record_stack_usage(stack_free);
         WAYPOINT("D1");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }

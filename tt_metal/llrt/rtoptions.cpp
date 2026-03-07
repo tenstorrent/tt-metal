@@ -176,6 +176,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_FILE,                      // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
+    TT_METAL_DEVICE_PRINT,                     // Use new DEVICE_PRINT instead of legacy DPRINT
 
     // ========================================
     // LIGHTWEIGHT KERNEL DEBUGGING
@@ -1344,6 +1345,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_BACKEND_DUMP_RUN_CMD=1
         case EnvVarID::TT_METAL_BACKEND_DUMP_RUN_CMD: this->dump_build_commands = is_env_enabled(value); break;
+
+        // TT_METAL_DEVICE_PRINT
+        // Use new DEVICE_PRINT system instead of legacy DPRINT.
+        // Default: false (legacy DPRINT is used)
+        // Usage: export TT_METAL_DEVICE_PRINT=1
+        case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
     }
 }
 
