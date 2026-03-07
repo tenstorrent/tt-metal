@@ -6,21 +6,24 @@
 
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::experimental::inspector {
 
 // Inspector feature flag
 bool IsEnabled();
 
-// Inspector-only annotation for correlating higher-level execution with MeshWorkload runs.
-void EmitMeshWorkloadAnnotation(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    std::string_view operation_name,
-    std::string_view operation_parameters);
+// Whether tensor spec capture is enabled on op dispatch (checks rtoptions).
+bool CaptureTensorSpecs();
 
-// Inspector-only runtime id for correlating workload enqueues/runs across tools.
-void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload, uint64_t runtime_id);
+// Emit a debug entry for a mesh workload execution, capturing the operation name and tensor specs.
+void EmitMeshWorkloadDebugEntry(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    uint64_t runtime_id,
+    std::string_view operation_name,
+    std::vector<TensorSpec> tensor_specs);
 
 }  // namespace tt::tt_metal::experimental::inspector

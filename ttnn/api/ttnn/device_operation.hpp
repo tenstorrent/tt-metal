@@ -185,15 +185,37 @@ inline void log_operation(
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
-    [[maybe_unused]] const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload) {
-    mesh_device_operation_utils::set_runtime_id(workload);
+    // Generate runtime_id (always, for dispatcher)
+    auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+
+    // Inspector: emit debug entry with tensor parameters
+    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
+        auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+
+        std::vector<TensorSpec> spec_copies;
+        if (tt::tt_metal::experimental::inspector::CaptureTensorSpecs()) {
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&](const Tensor& t) { spec_copies.push_back(t.tensor_spec()); }, tensor_args);
+        }
+
+        tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
+            workload, runtime_id, operation_name, std::move(spec_copies));
+    }
+
+    // Set runtime_id on all programs (for dispatcher, always)
+    for (auto& [_, program] : workload.get_programs()) {
+        program.set_runtime_id(runtime_id);
+    }
+
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
+
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
@@ -249,23 +271,6 @@ void handle_mesh_adapter_cache_hit(
         });
 }
 
-// Helper for logging operation info to inspector.
-// Extracts tensors from the templated tensor_args and delegates to the non-template implementation
-// in device_operation_detail.cpp to reduce per-operation template instantiation cost.
-template <DeviceOperationConcept mesh_device_operation_t>
-void emit_mesh_workload_annotation(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    const typename mesh_device_operation_t::tensor_args_t& tensor_args) {
-    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
-        auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-        std::vector<std::reference_wrapper<const Tensor>> tensors;
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
-        emit_mesh_workload_annotation_impl(workload, operation_name, tensors);
-    }
-}
-
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
@@ -302,9 +307,6 @@ void create_and_cache_mesh_workload(
             }
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-
-            emit_mesh_workload_annotation<mesh_device_operation_t>(
-                cached_workload.workload, operation_attributes, tensor_args);
 
             // Don't cache programs during NO_DISPATCH graph capture mode because
             // buffer addresses are invalid (address=0). Caching such programs would
