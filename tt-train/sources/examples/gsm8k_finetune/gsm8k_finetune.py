@@ -363,12 +363,7 @@ def train():
     Main training loop for fine-tuning on GSM8K dataset.
     """
 
-    print("Loading tokenizer and config...")
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
-    tokenizer = AutoTokenizer.from_pretrained(
-        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
-    )
+    print("Loading and config...")
 
     yaml_config = load_config(
         CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
@@ -388,13 +383,19 @@ def train():
         override_config = load_config(override_config_path)
 
         yaml_config = yaml_deep_update(yaml_config, override_config)
-        model_config = yaml_deep_update(model_config, override_config)
+        model_config = yaml_deep_update(
+            load_config(yaml_config["training_config"]["model_config"]), override_config
+        )
 
         # pretty output of yaml config
         import yaml
 
         print("Loaded YAML config:")
         print(yaml.dump(yaml_config, sort_keys=False, default_flow_style=False))
+        print("*********************************\n\n")
+
+        print("Loaded model config:")
+        print(yaml.dump(model_config, sort_keys=False, default_flow_style=False))
         print("*********************************\n\n")
 
     training_config = TrainingConfig(yaml_config)
@@ -415,10 +416,22 @@ def train():
         )
     )
 
+    model_type = model_config["transformer_config"]["model_type"]
+
+    if model_type == "gpt2":
+        repo_id = "gpt2"
+    else:
+        repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+
+    print("Loading tokenizer...")
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
+    tokenizer = AutoTokenizer.from_pretrained(repo_id)
+
     # Download safetensors
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
-        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+        repo_id=repo_id,
         filename="model.safetensors",
     )
 

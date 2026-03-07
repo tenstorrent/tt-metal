@@ -376,6 +376,10 @@ class JobManager:
             "eval_every": config.get("eval_every", 20),
         }
 
+        # Add model_config if specified
+        if config.get("model_config"):
+            training_config["model_config"] = config["model_config"]
+
         scheduler_config = {
             "warmup_steps": config.get("warmup_steps", 20),
             "hold_steps": config.get("hold_steps", 40),

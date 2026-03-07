@@ -766,15 +766,14 @@ def main():
             job_name = None
 
         st.subheader("Model Settings")
-        model_options = [
-            "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
-            "meta-llama/Llama-2-7b-hf",
-            "gpt2",
-            "gpt2-medium",
-            "gpt2-large",
-            "microsoft/phi-2",
-        ]
-        selected_model = st.selectbox("Base Model", model_options, index=0)
+        # Map display names to model_config paths
+        model_config_mapping = {
+            "TinyLlama 1.1B": '"model_configs/tinyllama.yaml"',
+            "GPT-2": '"model_configs/gpt2s.yaml"',
+        }
+        model_options = list(model_config_mapping.keys())
+        selected_model_display = st.selectbox("Base Model", model_options, index=0)
+        selected_model_config = model_config_mapping[selected_model_display]
 
         st.subheader("Dataset Settings")
         dataset_options = ["gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"]
@@ -875,7 +874,8 @@ def main():
             "max_seq_length": max_seq_length,
             "enable_ddp": mesh_shape != [1, 1],
             "mesh_shape": mesh_shape,
-            "model": selected_model,
+            "model": selected_model_display,
+            "model_config": selected_model_config,
             "dataset": selected_dataset,
         }
 
