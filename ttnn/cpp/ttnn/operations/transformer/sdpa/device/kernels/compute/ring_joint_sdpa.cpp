@@ -104,6 +104,9 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
+    // Wait once for identity scale; streaming v2 removes per-call waits inside reduce_c_row_group.
+    cb_wait_front(cb_identity_scale_in, 1);
+
     // Wait for all lightweight mask tiles once before the ring loop.
     // Writer generates them once and they stay permanently fronted.
     if constexpr (needs_lightweight_mask) {
@@ -188,7 +191,9 @@ void kernel_main() {
                 cb_lse_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat>(
+                uniform_dataformat,
+                local_n_padded_tiles,
+                joint_n_padded_tiles>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
