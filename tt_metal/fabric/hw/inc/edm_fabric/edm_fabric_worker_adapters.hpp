@@ -24,6 +24,10 @@
 
 namespace tt::tt_fabric {
 
+namespace fabric_tests {
+    struct SenderKernelTrafficConfig;
+}
+
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -251,10 +255,21 @@ struct WorkerToFabricEdmSenderImpl {
             sync_noc_cmd_buf);
     }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED = true>
+    FORCE_INLINE void worker_invalidate_l1_cache() const {
+        if constexpr (RISC_CPU_DATA_CACHE_ENABLED) {
+            invalidate_l1_cache();
+        }
+    }
+
     // templatized num_slots to let callers implement bubble flow control without runtime overheads.
-    template <size_t num_slots = 1>
+    // template enable_l1_dcache to conditionally invalidate l1 cache without runtime overhead 
+    // Usually BRSIC does not use data cache, but default `enable_l1_dcache` to true so its opt-in for non-l1 invalidation optimization and its not a correctness bug 
+    template <size_t num_slots = 1, bool enable_l1_dcache = true>
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        invalidate_l1_cache();
+        // Workers (BRISC) don't have dcache enabled by default fence is usually unnecessary
+        worker_invalidate_l1_cache<enable_l1_dcache>();
+
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
             if constexpr (num_slots == 1) {
@@ -267,9 +282,10 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
+    template <bool enable_l1_dcache = true>
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet<1>());
+        while (!this->edm_has_space_for_packet<1, enable_l1_dcache>());
         WAYPOINT("FWSD");
     }
 
@@ -499,7 +515,6 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
 
-private:
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (stateful_api) {
@@ -510,7 +525,7 @@ private:
                     this->sync_noc_cmd_buf,
                     noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
+                noc_inline_dw_write_with_state<false, false, false, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
                     this->sync_noc_cmd_buf,
@@ -571,6 +586,21 @@ private:
         this->advance_buffer_slot_write_index();
     }
 
+    friend struct fabric_tests::SenderKernelTrafficConfig;
+
+protected:
+    // One-time setup for stateful NOC credit updates.
+    // Call this once before using update_edm_buffer_free_slots<true>.
+    FORCE_INLINE void setup_credit_update_noc_state(uint8_t noc = get_fabric_worker_noc()) const {
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        const uint64_t noc_sem_addr =
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
+        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
+            noc_sem_addr, packed_val, 0xf, this->sync_noc_cmd_buf, noc);
+    }
+
+private:
+
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
@@ -597,6 +627,8 @@ private:
         post_send_payload_increment_pointers();
     }
 };
+
+
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 

@@ -17,6 +17,7 @@ constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(5);
 constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+constexpr bool enable_l1_dcache = get_compile_time_arg_val(9);
 
 using SenderKernelConfigType =
     SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
@@ -31,6 +32,8 @@ static_assert(
     NUM_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
+    set_l1_data_cache<enable_l1_dcache>();
+
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;  // Initialize local args index
 
@@ -66,40 +69,52 @@ void kernel_main() {
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
+                                                         //
 
-    while (packets_left_to_send) {
-        packets_left_to_send = false;
+    if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE){
+        
+        auto* traffic_config = sender_config->traffic_config_ptrs[0];
+        auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_); 
+        const uint32_t num_packets = traffic_config->metadata.num_packets; 
+        const uint32_t num_warmup = conn->num_buffers_per_channel;
 
-        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto* traffic_config = sender_config->traffic_config_ptrs[i];
-            if (!traffic_config->has_packets_to_send()) {
-                continue;
-            }
+        traffic_config->template send_packets_stateful<BENCHMARK_MODE>(traffic_config, conn, num_packets, num_warmup);
 
-            // Send one packet (credit management is automatic, inside send_one_packet)
-            bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE>();
+    } else {
+        while (packets_left_to_send) {
+            packets_left_to_send = false;
 
-            if (!sent) {
-                // Packet blocked (no credits) - keep trying
-                packets_left_to_send = true;
-                continue;
-            }
-
-            // Check if more packets remain
-            packets_left_to_send |= traffic_config->has_packets_to_send();
-        }
-
-        loop_count++;
-
-        // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
-        if constexpr (!BENCHMARK_MODE) {
-            if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
-                // Calculate total packets sent across all traffic configs
-                uint64_t progress_packets_sent = 0;
-                for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-                    progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+            for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                auto* traffic_config = sender_config->traffic_config_ptrs[i];
+                if (!traffic_config->has_packets_to_send()) {
+                    continue;
                 }
-                write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
+
+                // Send one packet (credit management is automatic, inside send_one_packet)
+                bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE, false, false>();
+
+                if (!sent) {
+                    // Packet blocked (no credits) - keep trying
+                    packets_left_to_send = true;
+                    continue;
+                }
+
+                // Check if more packets remain
+                packets_left_to_send |= traffic_config->has_packets_to_send();
+            }
+
+            loop_count++;
+
+            // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
+            if constexpr (!BENCHMARK_MODE) {
+                if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
+                    // Calculate total packets sent across all traffic configs
+                    uint64_t progress_packets_sent = 0;
+                    for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                        progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                    }
+                    write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
+                }
             }
         }
     }
@@ -130,4 +145,8 @@ void kernel_main() {
     write_test_status(sender_config->get_result_buffer_address(), TT_FABRIC_STATUS_PASS);
 
     noc_async_full_barrier();
+    
+    if constexpr (enable_l1_dcache){
+        set_l1_data_cache<false>();
+    }
 }
