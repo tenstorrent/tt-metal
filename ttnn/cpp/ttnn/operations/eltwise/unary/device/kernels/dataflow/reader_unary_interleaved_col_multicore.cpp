@@ -20,6 +20,9 @@ void kernel_main() {
     const uint32_t number_blocks_per_core = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
+    constexpr uint32_t onetile = 1;
+
+    experimental::Noc noc;
     experimental::CircularBuffer cb(cb_id_in0);
 
 #ifdef OUT_SHARDED
@@ -27,12 +30,9 @@ void kernel_main() {
 #else
 
     // single-tile ublocks
-    constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
-
-    experimental::Noc noc;
 
 #ifdef BACKWARDS
     uint32_t end_id = -num_tiles_per_2d;

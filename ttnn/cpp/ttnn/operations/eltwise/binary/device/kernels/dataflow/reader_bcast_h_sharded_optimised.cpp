@@ -42,10 +42,8 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch_b; b++) {
         for (uint32_t wt = 0; wt < Wt; wt += w_blk) {
             cb1.reserve_back(w_blk);
-            uint32_t l1_write_addr_in1 = cb1.get_write_ptr();
             for (uint32_t r = 0; r < w_blk; r++) {
-                noc_async_read_tile(offset + wt + r, s1, l1_write_addr_in1);
-                l1_write_addr_in1 += tile_bytes;
+                noc.async_read(s1, cb1, tile_bytes, {.page_id = offset + wt + r}, {.offset_bytes = r * tile_bytes});
             }
             noc.async_read_barrier();
             cb1.push_back(w_blk);
