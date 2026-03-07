@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 class ProfilerOptionalMetadata {
     using RuntimeID = uint32_t;

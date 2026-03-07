@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 namespace tt::tt_metal {
 

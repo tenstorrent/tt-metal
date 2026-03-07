@@ -23,7 +23,7 @@
 
 // UMD: re-exports tt::ARCH
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/chip_types.hpp>
+#include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in IDevice::virtual_core_from_logical_core parameter).
 #include <umd/device/types/core_coordinates.hpp>
 

@@ -9,10 +9,9 @@
 namespace tt {
 namespace tt_metal {
 
-// ChipId identifies a physical Tenstorrent device. Defined locally to avoid
-// leaking UMD headers (umd/device/types/cluster_descriptor_types.hpp) into
-// the tt-metalium public API.
-using ChipId = uint32_t;
+// ChipId identifies a physical Tenstorrent device in a cluster (e.g., chip 0, chip 1).
+// Defined locally to avoid leaking UMD headers into the tt-metalium public API.
+using ChipId = int;
 
 }  // namespace tt_metal
 }  // namespace tt
