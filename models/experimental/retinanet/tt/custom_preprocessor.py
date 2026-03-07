@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -6,17 +6,49 @@ import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
 
-def conv_bn_to_params(conv, bn, mesh_mapper):
-    if bn is None:
+def conv_bn_gn_to_params(conv, bn, gn, mesh_mapper):
+    if bn is None and gn is None:
         weight = conv.weight.detach().clone().contiguous()
         bias = conv.bias.detach().clone().contiguous() if conv.bias is not None else torch.zeros(conv.out_channels)
-    else:
-        weight, bias = fold_batch_norm2d_into_conv2d(conv, bn)
 
-    return {
-        "weight": ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
-        "bias": ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
-    }
+        return {
+            "weight": ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+            "bias": ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+        }
+    elif bn is not None:
+        weight, bias = fold_batch_norm2d_into_conv2d(conv, bn)
+        return {
+            "weight": ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+            "bias": ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+        }
+
+    elif gn is not None:
+        weight = conv.weight.detach().clone().contiguous()
+        bias = conv.bias.detach().clone().contiguous() if conv.bias is not None else torch.zeros(conv.out_channels)
+        norm_weight = gn.weight.detach()
+        norm_bias = gn.bias.detach()
+        grid_size = ttnn.CoreGrid(y=8, x=8)
+        formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
+            norm_weight, num_channels=256, num_cores_x=grid_size.y
+        )
+        formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
+            norm_bias, num_channels=256, num_cores_x=grid_size.y
+        )
+
+        return {
+            "weight": ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+            "bias": ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+            "norm_weight": ttnn.from_torch(
+                formatted_norm_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            "norm_bias": ttnn.from_torch(
+                formatted_norm_bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+        }
 
 
 def create_custom_mesh_preprocessor(mesh_mapper):
@@ -37,13 +69,16 @@ def create_custom_mesh_preprocessor(mesh_mapper):
                 # Detect Conv + BN pair
                 if isinstance(child, torch.nn.Conv2d):
                     next_bn = None
+                    next_gn = None
                     if i + 1 < len(children):
                         next_name, next_child = children[i + 1]
                         if isinstance(next_child, torch.nn.BatchNorm2d):
                             next_bn = next_child
                             i += 1  # skip BN
+                        if isinstance(next_child, torch.nn.GroupNorm):
+                            next_gn = next_child
 
-                    params = conv_bn_to_params(child, next_bn, mesh_mapper)
+                    params = conv_bn_gn_to_params(child, next_bn, next_gn, mesh_mapper)
                     parameters[child_name] = params
 
                 else:
@@ -62,276 +97,3 @@ def create_custom_mesh_preprocessor(mesh_mapper):
         return parameters
 
     return custom_preprocessor
-
-
-def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model_config):
-    """Convert PyTorch regression head weights to TTNN format."""
-    parameters = {}
-
-    grid_size = ttnn.CoreGrid(y=8, x=8)
-    layout = (
-        ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
-    )
-    parameters["conv"] = []
-    for i in range(4):
-        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
-        bias = torch.zeros(conv_weight.shape[0]).to(torch.bfloat16)
-
-        norm_weight = torch_head.conv[i][1].weight.detach()
-        norm_bias = torch_head.conv[i][1].bias.detach()
-
-        formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=grid_size.y
-        )
-        formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=grid_size.y
-        )
-        prepared_weight = ttnn.prepare_conv_weights(
-            weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            weights_format="OIHW",
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            has_bias=True,
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-        )
-
-        prepared_bias = ttnn.prepare_conv_bias(
-            bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-            conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-        )
-        conv_params = {
-            "weight": prepared_weight,
-            "bias": prepared_bias,
-            "norm_weight": ttnn.from_torch(
-                formatted_norm_weight,
-                dtype=model_config["WEIGHTS_DTYPE"],
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            ),
-            "norm_bias": ttnn.from_torch(
-                formatted_norm_bias,
-                dtype=model_config["WEIGHTS_DTYPE"],
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            ),
-        }
-
-        parameters["conv"].append(conv_params)
-
-    bbox_weight = torch_head.bbox_reg.weight.detach().to(torch.bfloat16)
-    bbox_bias = torch_head.bbox_reg.bias.detach().to(torch.bfloat16)
-    bbox_weight_ttnn = ttnn.from_torch(bbox_weight, dtype=model_config["WEIGHTS_DTYPE"])
-    bbox_bias_ttnn = ttnn.from_torch(bbox_bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
-    prepared_bbox_weight = ttnn.prepare_conv_weights(
-        weight_tensor=bbox_weight_ttnn,
-        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
-        weights_format="OIHW",
-        in_channels=256,
-        out_channels=bbox_weight.shape[0],
-        batch_size=1,
-        input_height=64,
-        input_width=64,
-        kernel_size=[3, 3],
-        stride=[1, 1],
-        padding=[1, 1],
-        dilation=[1, 1],
-        has_bias=True,
-        groups=1,
-        device=device,
-        input_dtype=ttnn.bfloat16,
-        output_dtype=model_config["WEIGHTS_DTYPE"],
-        conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-        compute_config=None,
-    )
-    prepared_bbox_bias = ttnn.prepare_conv_bias(
-        bias_tensor=bbox_bias_ttnn,
-        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
-        in_channels=256,
-        out_channels=bbox_weight.shape[0],
-        batch_size=1,
-        input_height=64,
-        input_width=64,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(1, 1),
-        dilation=(1, 1),
-        groups=1,
-        device=device,
-        input_dtype=ttnn.bfloat16,
-        conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-    )
-    parameters["bbox_reg"] = {
-        "weight": prepared_bbox_weight,
-        "bias": prepared_bbox_bias,
-    }
-
-    return parameters
-
-
-def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, model_config):
-    """Convert PyTorch classification head weights to TTNN format."""
-    parameters = {}
-
-    grid_size = ttnn.CoreGrid(y=8, x=8)
-    layout = (
-        ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
-    )
-
-    parameters["conv"] = []
-    for i in range(4):
-        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
-        bias = torch.zeros(conv_weight.shape[0])
-
-        norm_weight = torch_head.conv[i][1].weight.detach()
-        norm_bias = torch_head.conv[i][1].bias.detach()
-
-        formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=grid_size.y
-        )
-        formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=grid_size.y
-        )
-        prepared_weight = ttnn.prepare_conv_weights(
-            weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            weights_format="OIHW",
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            has_bias=True,
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-        )
-
-        prepared_bias = ttnn.prepare_conv_bias(
-            bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-            conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-        )
-        conv_params = {
-            "weight": prepared_weight,
-            "bias": prepared_bias,
-            "norm_weight": ttnn.from_torch(
-                formatted_norm_weight,
-                dtype=model_config["WEIGHTS_DTYPE"],
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            ),
-            "norm_bias": ttnn.from_torch(
-                formatted_norm_bias,
-                dtype=model_config["WEIGHTS_DTYPE"],
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            ),
-        }
-
-        parameters["conv"].append(conv_params)
-
-    cls_logits_weight = torch_head.cls_logits.weight.detach().to(torch.bfloat16)
-    cls_logits_bias = torch_head.cls_logits.bias.detach().to(torch.bfloat16)
-    cls_logits_weight_ttnn = ttnn.from_torch(cls_logits_weight, dtype=ttnn.bfloat16)
-
-    prepared_cls_logits_weight = ttnn.prepare_conv_weights(
-        weight_tensor=cls_logits_weight_ttnn,
-        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
-        weights_format="OIHW",
-        in_channels=cls_logits_weight.shape[1],
-        out_channels=cls_logits_weight.shape[0],
-        batch_size=1,
-        input_height=64,
-        input_width=64,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(1, 1),
-        dilation=(1, 1),
-        has_bias=True,
-        groups=1,
-        device=device,
-        input_dtype=ttnn.bfloat16,
-        conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-    )
-
-    cls_logits_bias_ttnn = ttnn.from_torch(cls_logits_bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16)
-
-    prepared_cls_logits_bias = ttnn.prepare_conv_bias(
-        bias_tensor=cls_logits_bias_ttnn,
-        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
-        in_channels=cls_logits_weight.shape[1],
-        out_channels=cls_logits_weight.shape[0],
-        batch_size=1,
-        input_height=64,
-        input_width=64,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(1, 1),
-        dilation=(1, 1),
-        groups=1,
-        device=device,
-        input_dtype=ttnn.bfloat16,
-        conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-    )
-
-    parameters["cls_logits"] = {
-        "weight": prepared_cls_logits_weight,
-        "bias": prepared_cls_logits_bias,
-    }
-
-    return parameters
