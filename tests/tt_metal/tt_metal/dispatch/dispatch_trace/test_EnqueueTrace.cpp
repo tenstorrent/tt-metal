@@ -635,6 +635,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
 }  // end namespace basic_tests
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -654,6 +655,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
                      << " does not have any active ethernet cores";
@@ -678,6 +680,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
                      << " does not have any active ethernet cores";
@@ -711,6 +714,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -730,6 +734,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
                      << " does not have any active ethernet cores";
@@ -759,6 +764,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
                      << " does not have any active ethernet cores";
@@ -801,6 +807,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndSmallProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -828,6 +835,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndS
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -855,6 +863,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowed
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgramsTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -882,6 +891,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     std::vector<distributed::MeshTraceId> trace_ids;
@@ -925,6 +935,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
                      << " does not have any active ethernet cores";
@@ -980,6 +991,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
+    SKIP_FOR_LLK_ASSERT("Skipping test with LLK asserts enabled");
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
                      << " does not have any active ethernet cores";

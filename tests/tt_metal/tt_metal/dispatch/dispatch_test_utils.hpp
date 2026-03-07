@@ -51,6 +51,11 @@ inline bool does_device_have_idle_eth_cores(const IDevice* device) {
     return !(device->get_inactive_ethernet_cores().empty());
 }
 
+inline bool is_llk_assert_enabled() {
+    const char* llk_assert = std::getenv("TT_METAL_LLK_ASSERTS");
+    return llk_assert != nullptr && std::string(llk_assert) == "1";
+}
+
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const uint32_t num_unique_rt_args,
     const uint32_t num_common_rt_args,
@@ -144,5 +149,12 @@ inline void verify_kernel_coordinates(
         }
     }
 }
+
+#define SKIP_FOR_LLK_ASSERT(reason)               \
+    do {                                          \
+        if (is_llk_assert_enabled()) {            \
+            GTEST_SKIP() << reason;               \
+        }                                         \
+    } while (0)
 
 }  // namespace tt::tt_metal
