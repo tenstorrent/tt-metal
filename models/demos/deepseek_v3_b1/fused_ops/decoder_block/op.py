@@ -619,6 +619,13 @@ class DecoderBlock:
                     gather_core.x
                 ][gather_core.y]
                 ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
+                print(
+                    coord,
+                    "ccl brisc common rt args: ",
+                    ccl["sender_brisc_common_rt_args"],
+                    "ccl receiver ncrisc common rt args: ",
+                    ccl["receiver_ncrisc_common_rt_args"],
+                )
 
                 fabric_node_id = ccl["fabric_node_id"]
                 neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
@@ -648,6 +655,16 @@ class DecoderBlock:
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
         print("Executing generic op")
+        for ac in attn_ctxs:
+            if ac.get("ccl"):
+                print(
+                    ac["mesh_coord"],
+                    "ccl brisc common rt args: ",
+                    ac["ccl"]["sender_brisc_common_rt_args"],
+                    "ccl receiver ncrisc common rt args: ",
+                    ac["ccl"]["receiver_ncrisc_common_rt_args"],
+                )
+
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         if moe_ctx.enable_reduce_to_one:

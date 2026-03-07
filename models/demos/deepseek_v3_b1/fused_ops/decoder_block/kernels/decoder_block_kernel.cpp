@@ -2179,11 +2179,13 @@ void kernel_main() {
         }
 
         {
+            DPRINT << " MATMUL5" << ENDL();
             DeviceZoneScopedN("MATMUL5");
             deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
         }
         {
+            DPRINT << " GATHER3" << ENDL();
             DeviceZoneScopedN("GATHER3");
             deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
             gather3(gather3_args);
@@ -2207,6 +2209,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_ccl_sender_core) {
+            DPRINT << " CCL SENDER READ" << ENDL();
             DeviceZoneScopedN("CCL_SENDER_READ");
 
             constexpr uint32_t gather3_completion_semaphore_id =
@@ -2218,6 +2221,7 @@ void kernel_main() {
 
             deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
             ccl_sender_reader(ccl_sender_args);
+            DPRINT << " DONE CCL SENDER READ" << ENDL();
         }
 
         if constexpr (Core::is_ccl_receiver_core) {
@@ -2229,7 +2233,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_ccl_sender_core) {
             DeviceZoneScopedN("CCL_SENDER_SEND");
-
+            DPRINT << " Per core RTA arg idx: " << per_core_rta_arg_idx << ENDL();
             deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
             ccl_sender_writer(ccl_sender_args);
         }
@@ -2237,6 +2241,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_ccl_receiver_core) {
+            DPRINT << " CCL RECEIVER COMPUTE" << ENDL();
             DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
 
             deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;

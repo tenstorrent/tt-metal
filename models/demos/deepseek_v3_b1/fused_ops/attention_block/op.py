@@ -3957,6 +3957,7 @@ class AttentionBlock:
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
                 ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
+
                 ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
                     gather_core.x
                 ][gather_core.y]

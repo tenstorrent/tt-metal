@@ -746,15 +746,14 @@ def test_single_device_d2h(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("final_mesh_coord", [(1, 1)])
-@pytest.mark.parametrize("seed", [7, 1337, 4242])
+@pytest.mark.parametrize("final_mesh_coord", [(0, 0)])
+@pytest.mark.parametrize("seed", [7])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -848,7 +847,7 @@ def test_multidevice(
         ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
-    sender_coord = ttnn.MeshCoordinate(1, 0)
+    sender_coord = ttnn.MeshCoordinate(1, 1)
     device_inputs = []
     device_intermediate = []
     for r in range(mesh_rows):

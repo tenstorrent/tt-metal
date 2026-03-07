@@ -134,7 +134,8 @@ struct AllReduceSender {
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
             size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
-            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
+            DPRINT << " CCL SENDER FABRIC ARGS START INDEX: " << fabric_args_start_index << ENDL();
+            DPRINT << " CCL SENDER OPEN CONNECTIONS" << ENDL();
 
             cb_reserve_back(WriterCT::packet_header_cb_id, 1);
             uint32_t packet_header_addr = get_read_ptr(WriterCT::packet_header_cb_id);
@@ -145,18 +146,21 @@ struct AllReduceSender {
             packet_header_ptr->to_chip_unicast(WriterCT::dst_num_hops);
 
             cb_wait_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
+            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
             uint32_t packet_base_addr = get_read_ptr(WriterCT::packet_cb_id);
 
             const uint64_t dst_noc_addr =
                 get_noc_addr(WriterCT::data_noc_x, WriterCT::data_noc_y, args.receiver_base_address);
             const uint64_t receive_sem_noc_addr = get_noc_addr(
                 WriterCT::remote_receiver_noc_x, WriterCT::remote_receiver_noc_y, args.receive_semaphore_addr);
+            DPRINT << " CCL SENDER DST NOC ADDR: " << receive_sem_noc_addr << ENDL();
 
             // Use fused packet API to send data + semaphore increment in a single packet
             packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
                 align(WriterCT::payload_size_bytes, WriterCT::l1_alignment));
 
+            DPRINT << " CCL SENDER SEND PAYLOAD" << ENDL();
             auto& connection = fabric_connection.get(0).sender;
             connection.wait_for_empty_write_slot();
             connection.send_payload_without_header_non_blocking_from_address(
@@ -167,6 +171,7 @@ struct AllReduceSender {
             cb_pop_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
 
             close_connections(fabric_connection);
+            DPRINT << " CCL SENDER CLOSE CONNECTIONS" << ENDL();
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

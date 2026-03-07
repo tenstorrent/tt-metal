@@ -143,8 +143,16 @@ struct AllReduceReceiver {
             }
 
             // Wait for remote sender to signal data has been written to intermediate tensor
+            DPRINT << " CCL SENDER SEMAPHORE ADDR: " << get_noc_addr(args.sender_semaphore_addr) << ENDL();
             auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sender_semaphore_addr);
+            DPRINT << " CCL RECEIVER WAIT" << ENDL();
+            invalidate_l1_cache();
+            while (*local_semaphore_ptr != 1) {
+                DPRINT << " local semaphore value: " << *local_semaphore_ptr << ENDL();
+                invalidate_l1_cache();
+            }
             noc_semaphore_wait(local_semaphore_ptr, 1);
+            DPRINT << " CCL RECEIVER WAIT DONE" << ENDL();
             noc_semaphore_set(local_semaphore_ptr, 0);
 
             // Remote data is now ready, push to compute
@@ -167,11 +175,13 @@ struct AllReduceReceiver {
             constexpr uint32_t max_dst_tiles = 4;
             constexpr uint32_t num_batches = (ComputeCT::num_tiles + max_dst_tiles - 1) / max_dst_tiles;
 
+            DPRINT << " CCL RECEIVER COMPUTE" << ENDL();
             if constexpr (ComputeCT::has_residual) {
                 // Fused residual add: (local + residual) + remote → output
                 cb_wait_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_wait_front(ComputeCT::cb_residual, ComputeCT::num_tiles);
                 cb_reserve_back(ComputeCT::cb_temp, ComputeCT::num_tiles);
+                DPRINT << " CCL RECEIVER COMPUTE RESIDUAL" << ENDL();
 
                 // First add: local + residual → temp
                 for (uint32_t batch = 0; batch < num_batches; ++batch) {
@@ -192,11 +202,13 @@ struct AllReduceReceiver {
                     }
                     tile_regs_release();
                 }
+                DPRINT << " CCL RECEIVER COMPUTE RESIDUAL DONE" << ENDL();
                 cb_pop_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_residual, ComputeCT::num_tiles);
                 cb_push_back(ComputeCT::cb_temp, ComputeCT::num_tiles);
 
                 // Second add: (local+residual) + remote → output
+                DPRINT << " CCL RECEIVER COMPUTE SECOND ADD" << ENDL();
                 cb_wait_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_wait_front(ComputeCT::cb_temp, ComputeCT::num_tiles);
                 cb_reserve_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
@@ -222,12 +234,13 @@ struct AllReduceReceiver {
                 cb_pop_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_temp, ComputeCT::num_tiles);
                 cb_push_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
+                DPRINT << " CCL RECEIVER COMPUTE SECOND ADD DONE" << ENDL();
             } else {
                 // Simple all-reduce: local + remote → output
                 cb_wait_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_wait_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_reserve_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-
+                DPRINT << " CCL RECEIVER COMPUTE SIMPLE ALL-REDUCE" << ENDL();
                 for (uint32_t batch = 0; batch < num_batches; ++batch) {
                     uint32_t start_tile = batch * max_dst_tiles;
                     uint32_t batch_size = (start_tile + max_dst_tiles <= ComputeCT::num_tiles)
@@ -249,6 +262,7 @@ struct AllReduceReceiver {
                 cb_pop_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_push_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
+                DPRINT << " CCL RECEIVER COMPUTE SIMPLE ALL-REDUCE DONE" << ENDL();
             }
 #endif
         }
