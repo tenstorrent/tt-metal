@@ -341,7 +341,6 @@ def test_attention_block(
     # Create mesh tensors for input and intermediate (CCL broadcast destination)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     device_tensors = []
-    intermediate_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if skip_ccl:
@@ -353,23 +352,11 @@ def test_attention_block(
             else:
                 # All other devices start with zeros
                 device_tensors.append(torch.zeros_like(torch_input))  # (1, 7168)
-            intermediate_tensors.append(torch.zeros_like(torch_input))
 
     mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
 
     input_tensor_mesh = ttnn.from_torch(
         mesh_tensor_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
-    )
-
-    intermediate_tensor_mesh = ttnn.from_torch(
-        intermediate_mesh_tensor_torch,
         device=submesh,
         layout=ttnn.TILE_LAYOUT,
         tile=tile,
@@ -730,84 +717,13 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create gather output tensors
-    # ========================================================================
-
-    single_device = ttnn.get_device_tensors(input_tensor_mesh)[0].device()
-    gather1_output_shard_shape = (M, post_sdpa_intermediate)
-    gather1_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, gather1_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    gather1_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather1_output_shard_spec
-    )
-    ttnn_gather1_output = ttnn.from_torch(
-        torch.zeros((M, post_sdpa_intermediate), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=single_device,
-        memory_config=gather1_output_mem_config,
-        tile=a_tile,
-    )
-
-    gather2_output_shard_shape = (M, output_size)
-    gather2_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, gather2_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    gather2_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather2_output_shard_spec
-    )
-    mesh_gather2_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
-    ttnn_gather2_output = ttnn.from_torch(
-        mesh_gather2_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=gather2_output_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ========================================================================
     # Create CCL tensors and semaphores
     # ========================================================================
-    ccl_intermediate_shape = [M, output_size]
-    ccl_intermediate_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, tuple(ccl_intermediate_shape), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    ccl_intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ccl_intermediate_shard_spec
-    )
-    mesh_ccl_intermediate_torch = torch.cat(
-        [torch.zeros(ccl_intermediate_shape, dtype=torch.bfloat16)] * num_devices, dim=0
-    )
-    ttnn_ccl_intermediate = ttnn.from_torch(
-        mesh_ccl_intermediate_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=ccl_intermediate_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
     ttnn_attention_block_output = ttnn.from_torch(
         mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # torch residual tensor is the same as the input tensor
-    mesh_residual_torch = torch.cat([torch_input] * num_devices, dim=0)
-    ttnn_residual = ttnn.from_torch(
-        mesh_residual_torch,
         device=submesh,
         layout=ttnn.TILE_LAYOUT,
         tile=a_tile,
@@ -936,7 +852,6 @@ def test_attention_block(
     for i in range(num_iters):
         ttnn_output_result = AttentionBlock.op(
             input_tensor_mesh,
-            intermediate_tensor_mesh,
             gamma_overlapped,
             matmul_weights_overlapped,
             rmsnorm2_gamma_overlapped,
@@ -960,9 +875,6 @@ def test_attention_block(
             # Post-SDPA parameters
             kv_b2_overlapped,
             o_proj_overlapped,
-            ttnn_gather1_output,
-            ttnn_gather2_output,
-            ttnn_ccl_intermediate,
             #            ttnn_residual,
             ttnn_sdpa_input_l,
             ttnn_sdpa_input_ms,
