@@ -310,9 +310,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
-    // Single-chunk deferred normalization: skip per-ring-iter finalization when each core has exactly 1 Q chunk.
-    // Accumulates across all ring iterations with exponential rescaling, finalizes once at the end.
-    const bool use_deferred_norm = use_streaming_compute && (q_per_core == 1);
+    // Deferred normalization: skip per-ring-iter sigmoid merge. Accumulates across all ring iterations
+    // with exponential rescaling, finalizes once at the end. For single Q-chunk, accumulators persist
+    // in L1 (no DRAM round-trip). For multi Q-chunk, raw accumulators round-trip through DRAM.
+    const bool use_deferred_norm = use_streaming_compute;
     log_debug(tt::LogOp, "use_deferred_norm: {}", use_deferred_norm);
 
     // log all values
@@ -477,6 +478,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
         (std::uint32_t)use_deferred_norm,
+        q_per_core,
     };
 
     std::map<std::string, std::string> defines;
@@ -645,6 +647,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
                                           .set_page_size(tt::CBIndex::c_9, im_tile_size);
         CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+    }
+
+    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
+    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
+    // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
+    if (use_deferred_norm) {
+        auto c_sum_out_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
+                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_sum_out_config);
+
+        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
+                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_sum_in_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
