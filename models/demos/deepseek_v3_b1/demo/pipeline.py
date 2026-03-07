@@ -248,6 +248,14 @@ class Pipeline:
     def is_output_rank(self) -> bool:
         return self._my_mesh_id == self._output_rank
 
+    @property
+    def input_rank(self) -> int:
+        return self._input_rank
+
+    @property
+    def output_rank(self) -> int:
+        return self._output_rank
+
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)

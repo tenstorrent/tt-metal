@@ -144,11 +144,11 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
         )
 
-        is_input_rank = model_pipeline.pipeline.is_input_rank
+        is_input_rank = model_pipeline.is_input_rank
 
         generated_tokens = model_pipeline.run_inference(
-            prompt_token_ids=prompt_ids,
-            max_new_tokens=max_new_tokens,
+            prompt_token_ids=prompt_ids if is_input_rank else None,
+            max_new_tokens=max_new_tokens if is_input_rank else None,
             eos_token_id=tokenizer.eos_token_id,
             return_generated_tokens=is_input_rank,
         )
