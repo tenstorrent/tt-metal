@@ -123,6 +123,18 @@ const std::string& MPIDistributedException::error_string() const noexcept { retu
 
 /* -------------------------- MPIRequest ---------------------------------- */
 
+MPIRequest::~MPIRequest() {
+    if (done_ || was_mpi_finalized()) {
+        return;
+    }
+    // Cancel and free the incomplete request
+    // Not using MPI_CHECK here to avoid throwing in destructor
+    // Errors are ignored because we cannot throw from a destructor
+    // and the request will be freed regardless
+    [[maybe_unused]] int cancel_err = MPI_Cancel(&req_);
+    [[maybe_unused]] int free_err = MPI_Request_free(&req_);
+}
+
 Status MPIRequest::wait() {
     MPI_Status status{};
     MPI_CHECK(MPI_Wait(&req_, &status));
