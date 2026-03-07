@@ -276,6 +276,49 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
+def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw):
+    """Determine a valid core grid for DRAM interleaved (non-sharded) group norm.
+
+    In the DRAM path the core grid defines a virtual grid where:
+        num_virtual_cols  = largest nvc <= min(grid_x, num_groups) such that
+                            (num_channels // nvc) % TILE_SIZE == 0  and  num_groups % nvc == 0
+        num_virtual_rows  = (grid_x // num_virtual_cols) * grid_y
+
+    The constraint is  num_virtual_rows <= Ht  where Ht = ceil(input_nhw / TILE_SIZE).
+    Violating it causes per_core_Mt == 0 and division-by-zero in the kernels.
+
+    This function finds the largest grid (x then y) within the device compute grid
+    that satisfies this constraint.
+
+    Returns: CoreGrid
+    """
+    assert num_channels % num_groups == 0
+    assert num_channels % ttnn.TILE_SIZE == 0
+    compute_grid = device.compute_with_storage_grid_size()
+    max_x, max_y = compute_grid.x, compute_grid.y
+    Ht = math.ceil(input_nhw / ttnn.TILE_SIZE)
+
+    for gx in range(max_x, 0, -1):
+        nvc = min(gx, num_groups)
+        while nvc > 0 and ((num_channels // nvc) % ttnn.TILE_SIZE != 0 or num_groups % nvc != 0):
+            nvc -= 1
+        if nvc == 0:
+            continue
+        rows_per_y = gx // nvc
+        if rows_per_y == 0:
+            continue
+        gy = min(Ht // rows_per_y, max_y)
+        if gy == 0:
+            continue
+        return ttnn.CoreGrid(y=gy, x=gx)
+
+    raise ValueError(
+        f"determine_expected_group_norm_dram_grid_size: Cannot find a valid grid for "
+        f"num_channels={num_channels}, num_groups={num_groups}, input_nhw={input_nhw}, "
+        f"device grid=({max_x}, {max_y})"
+    )
+
+
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
     """Prepares a gamma/beta tensor in a padded [1,1,-1,32] format.
 
@@ -300,11 +343,19 @@ def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
 def dram_group_norm_virtual_columns(core_grid, num_channels, num_groups):
     """Choose number of virtual columns for DRAM params/mask generation.
 
-    Tries to find the largest number of virtual columns that will evenly divide the number of channels into tiles.
+    Finds the largest num_virtual_cols (<= min(grid_x, num_groups)) such that
+    channels divide evenly into tiles and groups divide evenly across cores:
+        (num_channels / nvc) % TILE_SIZE == 0  and  num_groups % nvc == 0
     """
     num_virtual_cols = min(core_grid.x, num_groups)
-    while (num_channels / num_virtual_cols) % ttnn.TILE_SIZE != 0:
+    while num_virtual_cols > 0 and (
+        (num_channels // num_virtual_cols) % ttnn.TILE_SIZE != 0 or num_groups % num_virtual_cols != 0
+    ):
         num_virtual_cols -= 1
+    assert num_virtual_cols > 0, (
+        f"dram_group_norm_virtual_columns: could not find a valid num_virtual_cols for "
+        f"grid_x={core_grid.x}, num_channels={num_channels}, num_groups={num_groups}"
+    )
     return num_virtual_cols
 
 

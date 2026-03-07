@@ -33,8 +33,10 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 This implementation is slightly different, in that it forms the groups using the tensor's last dimension.
                 Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], where C is the dimension along which the groups are formed.
 
-                TTNN provides utility functions to help prepare this op's inputs.
+                TTNN provides utility functions to help prepare this op's inputs for different types of input tensors:
                     - When using sharded input tensors, :func:`ttnn.determine_expected_group_norm_sharded_config_and_grid_size` can provide the appropriate memory configuration and grid size.
+                    - When using interleaved (DRAM) input tensors, :func:`ttnn.determine_expected_group_norm_dram_grid_size` can provide the appropriate grid size.
+                    - :func:`ttnn.dram_group_norm_params_from_torch` is a convenience function that prepares the weight, bias, and input mask from PyTorch tensors for interleaved inputs.
                     - :func:`ttnn.create_group_norm_input_mask` creates the appropriate input mask for a given tensor dimension and group size.
                     - :func:`ttnn.create_group_norm_weight_bias_rm` converts the weight and bias tensors into appropriately padded and tiled inputs
 
@@ -47,14 +49,14 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 num_groups (int): Number of groups to split the tensor's channels into.
                 epsilon (float): Defaults to 1e-12.
                 input_mask (ttnn.Tensor, optional): Defaults to `None`. When processing the inputs, the mask is used to only look at the elements of the current group.
-                weight (ttnn.Tensor, optional): Defaults to `None`.
-                bias (ttnn.Tensor, optional): Defaults to `None`.
+                weight (ttnn.Tensor, optional): Must be provided (see limitations). Defaults to `None`.
+                bias (ttnn.Tensor, optional): Must be provided (see limitations). Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (ttnn.DataType, optional): Defaults to `None`.
-                core_grid (CoreGrid, optional): Defaults to `None`.
+                core_grid (CoreGrid, optional): Must be provided (see limitations). Defaults to `None`.
                 inplace (bool, optional): Defaults to `True`.
                 output_layout (ttnn.Layout, optional): Defaults to `None`.
-                num_out_blocks (int, optional): Defaults to `None`.
+                num_out_blocks (int, optional): Allows the output to be processed in multiple smaller chunks, to reduce the amount of L1 required at a time. Should only be used if needed to relieve L1 pressure, as this negatively impacts performance. Defaults to `None`.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
                 negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
                 use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance.
@@ -100,7 +102,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
               - For the :attr:`input_tensor`, H*W must be a multiple of the tile size (32) and C must be a multiple of the tile size and divide evenly into :attr:`num_groups`.
               - For the :attr:`input_mask`, C must match the number of groups, H must match a tile's height, and W must be a multiple of a tile's width.
-              - :attr:`gamma` and :attr:`beta` must be provided
+              - :attr:core_grid`, :attr:`gamma`, and :attr:`beta` must be provided
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.

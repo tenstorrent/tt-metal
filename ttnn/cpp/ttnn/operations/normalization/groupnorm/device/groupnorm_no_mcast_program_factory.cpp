@@ -112,11 +112,15 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
 
     TT_FATAL(
-        H >= num_virtual_rows,
-        "Total size of a slice across channel dimension:({}) must be greater than or equal to num_virtual_rows: ({}). "
-        "Reduce grid_size as needed",
-        H,
-        num_virtual_rows);
+        Ht >= num_virtual_rows,
+        "Height in tiles (Ht={}) must be >= num_virtual_rows ({}). "
+        "The core grid (x={}, y={}) is too large for the input spatial dimensions (H={}). "
+        "Use a smaller core_grid or increase the input spatial size.",
+        Ht,
+        num_virtual_rows,
+        grid_size.x,
+        grid_size.y,
+        H);
 
     uint32_t per_core_Mt_group_1 = Ht / num_virtual_rows;
     uint32_t per_core_M_group_1 = per_core_Mt_group_1 * TILE_HEIGHT;
@@ -196,12 +200,57 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         block_ht_group_2 = per_batch_tiles;
     }
 
+    TT_FATAL(
+        block_ht_group_1 > 0,
+        "block_h (tile height per core per batch) for group 1 is 0. The core grid is too large for the input spatial "
+        "dimensions. per_core_Mt={}, num_batches_per_core={}, grid=({},{}), Ht={}.",
+        per_core_Mt_group_1,
+        num_batches_per_core_group_1,
+        grid_size.x,
+        grid_size.y,
+        Ht);
+    if (!equal_batches_per_core) {
+        TT_FATAL(
+            block_ht_group_2 > 0,
+            "block_h (tile height per core per batch) for group 2 is 0. The core grid is too large for the input "
+            "spatial dimensions. per_core_Mt={}, num_batches_per_core={}, grid=({},{}), Ht={}.",
+            per_core_Mt_group_2,
+            num_batches_per_core_group_2,
+            grid_size.x,
+            grid_size.y,
+            Ht);
+    }
+    TT_FATAL(
+        num_out_blocks > 0 && num_out_blocks <= block_ht_group_1,
+        "num_out_blocks ({}) must be in [1, block_h ({})]. "
+        "Reduce num_out_blocks or increase input spatial dimensions.",
+        num_out_blocks,
+        block_ht_group_1);
+    if (!equal_batches_per_core && block_ht_group_2 > 0) {
+        TT_FATAL(
+            num_out_blocks <= block_ht_group_2,
+            "num_out_blocks ({}) must be <= block_h_group_2 ({}).",
+            num_out_blocks,
+            block_ht_group_2);
+    }
+
     // shard shape per core
     uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    TT_FATAL(num_channels_per_group > 0, "num_channels_per_group must be > 0 (W={}, num_groups={})", W, num_groups);
+    TT_FATAL(
+        num_rows_per_batch_per_core_group_1 > 0,
+        "num_rows_per_batch_per_core_group_1 must be > 0 (per_core_M={}, num_batches_per_core={})",
+        per_core_M_group_1,
+        num_batches_per_core_group_1);
+    TT_FATAL(
+        num_cores_per_batch > 0 && num_cores_per_group > 0,
+        "num_cores_per_batch ({}) and num_cores_per_group ({}) must both be > 0",
+        num_cores_per_batch,
+        num_cores_per_group);
     TT_FATAL(
         per_core_N % num_channels_per_group == 0,
         "per_core_N ({}) must be divisible by num_channels_per_group ({})",

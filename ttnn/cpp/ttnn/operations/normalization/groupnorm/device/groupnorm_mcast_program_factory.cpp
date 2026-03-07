@@ -106,10 +106,15 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
 
     TT_FATAL(
-        H >= num_virtual_rows,
-        "Total size of a slice across channel dimension:({}) must be >= num_virtual_rows: ({})",
-        H,
-        num_virtual_rows);
+        Ht >= num_virtual_rows,
+        "Height in tiles (Ht={}) must be >= num_virtual_rows ({}). "
+        "The core grid (x={}, y={}) is too large for the input spatial dimensions (H={}). "
+        "Use a smaller core_grid or increase the input spatial size.",
+        Ht,
+        num_virtual_rows,
+        grid_size.x,
+        grid_size.y,
+        H);
 
     uint32_t per_core_Mt_group_1 = Ht / num_virtual_rows;
     uint32_t per_core_M_group_1 = per_core_Mt_group_1 * TILE_HEIGHT;
@@ -142,12 +147,31 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         }
     }
 
+    TT_FATAL(
+        num_batches_per_core_group_1 > 0,
+        "num_batches_per_core_group_1 must be > 0 (got 0). This indicates an internal grid sizing error.");
     uint32_t num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
     auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, num_channels_per_group);
     uint32_t block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
     bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+
+    TT_FATAL(
+        block_ht_group_1 > 0,
+        "block_h (tile height per core per batch) is 0. The core grid is too large for the input spatial dimensions. "
+        "per_core_Mt={}, num_batches_per_core={}, grid=({},{}), Ht={}.",
+        per_core_Mt_group_1,
+        num_batches_per_core_group_1,
+        grid_size.x,
+        grid_size.y,
+        Ht);
+    TT_FATAL(
+        num_out_blocks > 0 && num_out_blocks <= block_ht_group_1,
+        "num_out_blocks ({}) must be in [1, block_h ({})]. "
+        "Reduce num_out_blocks or increase input spatial dimensions.",
+        num_out_blocks,
+        block_ht_group_1);
 
     bool equal_batches_per_core = true;
     uint32_t last_row_with_extra_batch = 0;
@@ -164,6 +188,17 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    TT_FATAL(num_channels_per_group > 0, "num_channels_per_group must be > 0 (W={}, num_groups={})", W, num_groups);
+    TT_FATAL(
+        num_rows_per_batch_per_core_group_1 > 0,
+        "num_rows_per_batch_per_core_group_1 must be > 0 (per_core_M={}, num_batches_per_core={})",
+        per_core_M_group_1,
+        num_batches_per_core_group_1);
+    TT_FATAL(
+        num_cores_per_batch > 0 && num_cores_per_group > 0,
+        "num_cores_per_batch ({}) and num_cores_per_group ({}) must both be > 0",
+        num_cores_per_batch,
+        num_cores_per_group);
     TT_FATAL(
         per_core_N % num_channels_per_group == 0,
         "per_core_N ({}) must be divisible by num_channels_per_group ({})",
