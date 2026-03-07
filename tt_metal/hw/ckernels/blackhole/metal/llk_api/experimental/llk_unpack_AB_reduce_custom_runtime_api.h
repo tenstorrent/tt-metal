@@ -40,8 +40,8 @@ using namespace ckernel::unpacker;
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_AB_reduce_block_max_row_init_runtime(uint32_t block_ct_dim) {
-    _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
+inline void llk_unpack_AB_reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
+    _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger);
 }
 
 /**
@@ -59,7 +59,10 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(uint32_t block_ct_di
  * Use the standard llk_unpack_AB<BroadcastType::NONE> in a loop for general-purpose operations.
  */
 inline void llk_unpack_AB_reduce_block_max_row_runtime(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t row_start_index,
+    bool respect_trigger = false) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -67,7 +70,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_AB_reduce_block_max_row_(address_a, base_address_b);
+    _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger);
 }
 
 /**
@@ -85,6 +88,6 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use standard LLK cleanup procedures for general-purpose operations.
  */
-inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime() {
-    _llk_unpack_AB_reduce_block_max_row_uninit_(FACE_R_DIM, FACE_R_DIM);
+inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(bool respect_trigger = false) {
+    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(FACE_R_DIM, FACE_R_DIM, respect_trigger);
 }
