@@ -297,7 +297,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast_1d;
-    using ttnn::operations::ccl::common::get_intra_cluster_id;
+    using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
@@ -309,7 +309,8 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already sent to this device for this token (avoid duplicate sends)
-        uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
+        uint16_t intra_cluster_target_device =
+            get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
         if (send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] ==
             0) {
             send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] =
@@ -394,7 +395,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d;
-    using ttnn::operations::ccl::common::get_intra_cluster_id;
+    using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
@@ -409,7 +410,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already processed this device for this token
-        uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
+        uint16_t intra_cluster_target_device =
+            get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
         if (send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] ==
             0) {
             send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] =
@@ -503,7 +505,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
-    using ttnn::operations::ccl::common::get_intra_cluster_id;
+    using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
     using ttnn::operations::ccl::common::is_configured_target;
     using ttnn::operations::ccl::common::Polarity;
 
@@ -531,8 +533,10 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             // pos_distance: going EAST/SOUTH (ascending, with wrap)
             // neg_distance: going WEST/NORTH (descending, with wrap)
 
-            uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
-            uint16_t intra_cluster_src_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
+            uint16_t intra_cluster_target_device =
+                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
+            uint16_t intra_cluster_src_device =
+                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
 
             uint32_t pos_distance =
                 (intra_cluster_target_device - intra_cluster_src_device + DispatchDevices) % DispatchDevices;
@@ -654,7 +658,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
     ttnn::operations::ccl::common::Polarity first_half_polarity,
     uint32_t alignment) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
-    using ttnn::operations::ccl::common::get_intra_cluster_id;
+    using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
     using ttnn::operations::ccl::common::is_configured_target;
     using ttnn::operations::ccl::common::Polarity;
 
@@ -689,8 +693,10 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
             // Remote device on our axis - add to BOTH masks (same dest, different directions)
             // OR handles dedup: if bit already set, setting again is harmless
 
-            uint16_t intra_cluster_target_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(target_device);
-            uint16_t intra_cluster_src_device = get_intra_cluster_id<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
+            uint16_t intra_cluster_target_device =
+                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
+            uint16_t intra_cluster_src_device =
+                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
 
             uint32_t pos_distance =
                 (intra_cluster_target_device - intra_cluster_src_device + DispatchDevices) % DispatchDevices;
