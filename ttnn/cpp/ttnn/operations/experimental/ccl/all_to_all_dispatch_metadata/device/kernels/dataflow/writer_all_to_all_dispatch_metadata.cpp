@@ -309,12 +309,12 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already sent to this device for this token (avoid duplicate sends)
-        uint16_t intra_cluster_target_device =
+        uint16_t intra_cluster_target_device_id =
             get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-        if (send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] ==
-            0) {
-            send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] =
-                1;
+        if (send_preparation_buffer
+                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] == 0) {
+            send_preparation_buffer
+                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, we dispatch the input token to it
@@ -410,12 +410,12 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already processed this device for this token
-        uint16_t intra_cluster_target_device =
+        uint16_t intra_cluster_target_device_id =
             get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-        if (send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] ==
-            0) {
-            send_preparation_buffer[(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device] =
-                1;
+        if (send_preparation_buffer
+                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] == 0) {
+            send_preparation_buffer
+                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, dispatch locally
@@ -517,6 +517,9 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
     uint16_t neg_hop_mask = 0;  // WEST (negative direction)
     bool sent_local = false;
 
+    uint32_t intra_cluster_src_device_id =
+        get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
+
     for (uint32_t k = 0; k < SelectedExpertsK; k++) {
         uint16_t expert_chosen = token_indices[k];
         uint16_t target_device = expert_mapping[expert_chosen];
@@ -533,15 +536,13 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             // pos_distance: going EAST/SOUTH (ascending, with wrap)
             // neg_distance: going WEST/NORTH (descending, with wrap)
 
-            uint16_t intra_cluster_target_device =
+            uint32_t intra_cluster_target_device_id =
                 get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-            uint16_t intra_cluster_src_device =
-                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
 
             uint32_t pos_distance =
-                (intra_cluster_target_device - intra_cluster_src_device + DispatchDevices) % DispatchDevices;
+                (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
             uint32_t neg_distance =
-                (intra_cluster_src_device - intra_cluster_target_device + DispatchDevices) % DispatchDevices;
+                (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
             // Determine shortest path direction
             if (pos_distance < neg_distance) {
                 // Shorter via positive direction (EAST/SOUTH)
@@ -678,6 +679,9 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
     uint16_t neg_hop_mask = 0;
     bool sent_local = false;
 
+    uint32_t intra_cluster_src_device_id =
+        get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
+
     for (uint32_t k = 0; k < SelectedExpertsK; k++) {
         uint16_t expert_chosen = token_indices[k];
         uint16_t target_device = expert_mapping[expert_chosen];
@@ -693,15 +697,13 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
             // Remote device on our axis - add to BOTH masks (same dest, different directions)
             // OR handles dedup: if bit already set, setting again is harmless
 
-            uint16_t intra_cluster_target_device =
+            uint32_t intra_cluster_target_device_id =
                 get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-            uint16_t intra_cluster_src_device =
-                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
 
             uint32_t pos_distance =
-                (intra_cluster_target_device - intra_cluster_src_device + DispatchDevices) % DispatchDevices;
+                (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
             uint32_t neg_distance =
-                (intra_cluster_src_device - intra_cluster_target_device + DispatchDevices) % DispatchDevices;
+                (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
 
             // Add to both masks - each destination reachable from both directions
             pos_hop_mask |= (1 << (pos_distance - 1));
