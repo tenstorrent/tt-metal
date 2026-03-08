@@ -38,6 +38,7 @@ on:
 
 jobs:
   define-demo-tests:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       demo-tests: ${{ steps.compute-tests.outputs.demo-tests }}
@@ -147,6 +148,7 @@ jobs:
 
   single-card-demo-tests:
     needs: define-demo-tests
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -289,6 +291,7 @@ jobs:
   aggregate-ops-recording:
     needs: single-card-demo-tests
     if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
