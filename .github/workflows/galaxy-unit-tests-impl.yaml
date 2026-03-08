@@ -82,6 +82,7 @@ jobs:
        if: always()
 
   generate-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -125,6 +126,7 @@ jobs:
 
   galaxy-unit-tests:
     needs: generate-matrix
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
