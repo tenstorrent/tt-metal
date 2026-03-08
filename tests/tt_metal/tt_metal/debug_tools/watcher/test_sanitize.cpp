@@ -313,8 +313,16 @@ void RunTestOnCore(
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
     // TODO: replace ierisc and erisc with hal.get_processor_class_name() after
     // unifying all tests + watcher_device_reader::get_riscv_name() with same method
-    std::string risc_name = (is_eth_core) ? is_idle_eth_core ? "ierisc" : "erisc"
-                                          : hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, dm_id, false);
+    std::string risc_name;
+    if (is_eth_core) {
+        risc_name = is_idle_eth_core ? "ierisc" : "erisc";
+    } else {
+        risc_name = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, dm_id, false);
+    }
+    const char* core_name = "worker";
+    if (is_eth_core) {
+        core_name = is_idle_eth_core ? "idleth" : "acteth";
+    }
     switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
@@ -322,7 +330,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
-                (is_eth_core) ? is_idle_eth_core ? "idleth" : "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -340,7 +348,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -359,7 +367,7 @@ void RunTestOnCore(
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -377,7 +385,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -395,7 +403,7 @@ void RunTestOnCore(
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -413,7 +421,7 @@ void RunTestOnCore(
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
                 "support DRAM destination addresses).",
                 device->id(),
-                (is_eth_core) ? is_idle_eth_core ? "idleth" : "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -429,7 +437,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (submitting a "
                 "non-mcast transaction when there's a linked transaction).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -446,7 +454,7 @@ void RunTestOnCore(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
                 "of length {} (read or write past the end of local memory).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -485,7 +493,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
                 "DRAM[addr=0x{:08x}] (multicast invalid range).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
