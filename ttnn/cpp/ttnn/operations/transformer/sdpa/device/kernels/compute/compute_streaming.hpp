@@ -118,7 +118,16 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
  */
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t ROW_STRIDE = cols>
 void reduce_c_row_group(
-    uint32_t in0_cb, uint32_t out_cb, uint32_t prev_cb, uint32_t row_group_index, bool do_eltwise_max, uint32_t SBH) {
+    uint32_t in0_cb,
+    uint32_t out_cb,
+    uint32_t prev_cb,
+    uint32_t row_group_index,
+    bool do_eltwise_max,
+    uint32_t SBH,
+    uint32_t reduce_cols = 0) {
+    if (reduce_cols == 0) {
+        reduce_cols = cols;
+    }
     const uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
@@ -144,12 +153,12 @@ void reduce_c_row_group(
     // with in0_cb data arrival.
     cb_wait_front(in0_cb, cumulative_input_tiles);
 
-    reduce_block_max_row_init<cols>();
+    reduce_block_max_row_init_runtime(reduce_cols);
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i);
     }
-    reduce_block_max_row_uninit(in0_cb);
+    reduce_block_max_row_uninit_runtime(in0_cb);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -764,17 +773,20 @@ static void sdpa_inner_loop_step(
             reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
         }
 
-        // Ring mask: L1-accumulate lightweight mask tiles onto cb_qkt_im for this row group.
+        // Ring mask: L1-accumulate partial-tile mask onto cb_qkt_im for this row group.
+        // Full-tile padding masking is no longer needed: reduce is narrowed to active_Sk,
+        // sub_exp only processes active_Sk tiles, and V matmul is narrowed to v_matmul_dim.
+        // Only partial tiles (where some columns within a tile are padding) still need masking.
         if constexpr (use_ring_mask) {
-            if (apply_mask && (lw_partial_tile_idx > 0 || lw_num_padded > 0)) {
+            if (apply_mask && lw_partial_tile_idx > 0) {
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 apply_lightweight_mask_streaming<KT_stride>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
-                    lw_num_padded,
-                    lw_partial_tile_idx > 0,
+                    0,  // no full-tile padding needed
+                    true,
                     lw_partial_tile_idx,
                     sbh);
                 PACK((llk_pack_reconfig_l1_acc(0)));
@@ -792,7 +804,7 @@ static void sdpa_inner_loop_step(
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
 #endif
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, KT_stride>(
-                cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/, sbh);
+                cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/, sbh, active_Sk);
             cb_push_back(cur_max, sbh);
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
