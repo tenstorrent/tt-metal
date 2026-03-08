@@ -84,8 +84,6 @@ def gen_tensors_for_metadata_op(
         batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
     )
 
-    # Convert old format expert mapping to new format: [devices, experts] with device IDs
-    # This ensures the new format matches the scheme (random vs sequential)
     expert_mapping_new = gen_expert_mapping(
         devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
     )
