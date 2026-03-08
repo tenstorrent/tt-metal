@@ -1186,10 +1186,6 @@ def test_optimized_moe_decode_block(
             cluster_axis=cluster_axis,
         )
 
-        # TODO: (GR)
-        # slice off the -1 terminator
-        tt_compute_output_dense_expert_activation = tt_compute_output_dense_expert_activation[:, 0:4096]
-
         logger.info("IIIII")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("JJJJJ")
