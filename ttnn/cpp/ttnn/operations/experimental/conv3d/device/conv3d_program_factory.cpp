@@ -76,6 +76,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
                           operation_attributes.kernel_size[2] * C_in_block;
+    uint32_t padded_patch_size = tt::round_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
@@ -88,27 +89,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_num_blocks,
         C_out_block);
 
-    // Both the reader (vol2col row layout) and writer (weight tile offsets) assume patch_size
-    // is tile-aligned. The reader writes patches contiguously but tilize_block expects rows at
-    // page_size stride; the writer indexes weight tiles at c_in_block * matmul_K_t assuming
-    // blocks don't share tile rows. Both break when patch_size % TILE_WIDTH != 0.
-    TT_FATAL(
-        patch_size % tt::constants::TILE_WIDTH == 0,
-        "patch_size (kD*kH*kW*C_in_block = {}*{}*{}*{} = {}) must be a multiple of TILE_WIDTH ({})",
-        operation_attributes.kernel_size[0],
-        operation_attributes.kernel_size[1],
-        operation_attributes.kernel_size[2],
-        C_in_block,
-        patch_size,
-        tt::constants::TILE_WIDTH);
-
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
-    uint32_t patch_size_bytes = patch_size * dtype_bytes;    // bytes per patch row (tile-aligned by assert above)
+    uint32_t patch_size_bytes = patch_size * dtype_bytes;                // bytes of actual data per patch row
+    uint32_t padded_patch_size_bytes = padded_patch_size * dtype_bytes;  // bytes per CB page (tile-aligned)
+    uint32_t patch_pad_bytes = padded_patch_size_bytes - patch_size_bytes;
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
 
@@ -133,7 +122,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // that many patches. The reader pushes in matching chunks.
     uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, vol2col_rm_pages, data_format);
+    tt::tt_metal::create_cb(
+        cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
@@ -177,7 +167,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
-    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, vol2col_rm_pages);
+    log_debug(
+        tt::LogOp,
+        "CB vol2col_rm: page_size={} bytes (padded from {}), num_pages={}",
+        padded_patch_size_bytes,
+        patch_size_bytes,
+        vol2col_rm_pages);
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
@@ -195,11 +190,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
     const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
-    uint32_t other_cbs_bytes = (patch_size_bytes * vol2col_rm_pages) +  // vol2col_rm
-                               (tile_size * matmul_M_t * matmul_K_t) +  // vol2col_tiled
-                               (tile_size * matmul_K_t * matmul_N_t) +  // weight_tiled
-                               (tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm
-                               (tile_size * matmul_M_t * matmul_N_t);   // matmul_result_rm
+    uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +  // vol2col_rm
+                               (tile_size * matmul_M_t * matmul_K_t) +         // vol2col_tiled
+                               (tile_size * matmul_K_t * matmul_N_t) +         // weight_tiled
+                               (tile_size * matmul_M_t * matmul_N_t) +         // matmul_interm
+                               (tile_size * matmul_M_t * matmul_N_t);          // matmul_result_rm
     if (C_in_num_blocks > 1) {
         other_cbs_bytes += tile_size * matmul_M_t * matmul_N_t;  // reduction
         other_cbs_bytes += tile_size;                            // worker_ack
@@ -336,7 +331,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         cb_input_shard_id,
         T_shard_max,
         H_shard_max,
-        W_shard_max};
+        W_shard_max,
+        patch_pad_bytes};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
@@ -720,26 +716,25 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         // Get is_reducer value from the stored arguments
         [[maybe_unused]] bool is_reducer = (writer_args[13] == 1);
 
-        // Add reducer core coordinates
-        if (reducer_core_ids[reduction_group_id] != UINT32_MAX) {
-            writer_args.push_back(reducer_core_physical_xs[reduction_group_id]);
-            writer_args.push_back(reducer_core_physical_ys[reduction_group_id]);
-        }
-
-        // Add worker cores count
+        // Add worker cores count first so the kernel can use it to conditionally read reduction args
         uint32_t num_workers = worker_core_ids[reduction_group_id].size();
         compute_args.push_back(num_workers);
         writer_args.push_back(num_workers);
 
-        // Add all worker core coordinates to runtime args
-        writer_args.insert(
-            writer_args.end(),
-            worker_core_physical_xs[reduction_group_id].begin(),
-            worker_core_physical_xs[reduction_group_id].end());
-        writer_args.insert(
-            writer_args.end(),
-            worker_core_physical_ys[reduction_group_id].begin(),
-            worker_core_physical_ys[reduction_group_id].end());
+        // Add reducer core coordinates and worker core coordinates only when there are workers
+        if (num_workers > 0) {
+            writer_args.push_back(reducer_core_physical_xs[reduction_group_id]);
+            writer_args.push_back(reducer_core_physical_ys[reduction_group_id]);
+
+            writer_args.insert(
+                writer_args.end(),
+                worker_core_physical_xs[reduction_group_id].begin(),
+                worker_core_physical_xs[reduction_group_id].end());
+            writer_args.insert(
+                writer_args.end(),
+                worker_core_physical_ys[reduction_group_id].begin(),
+                worker_core_physical_ys[reduction_group_id].end());
+        }
 
         // Prepare worker cores string for logging
         std::string worker_cores_str;

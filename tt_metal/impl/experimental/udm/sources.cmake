@@ -1,0 +1,9 @@
+set(UDM_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_tensor_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_utils.cpp
+)

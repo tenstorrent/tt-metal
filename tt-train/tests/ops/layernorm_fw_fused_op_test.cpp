@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 #include <tuple>
 
 #include "autograd/auto_context.hpp"
