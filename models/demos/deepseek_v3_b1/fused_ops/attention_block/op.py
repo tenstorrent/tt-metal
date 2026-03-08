@@ -311,10 +311,6 @@ class AttentionBlock:
         _debug_checkpoint("collected post-SDPA weights1 per-device tensors")
         post_sdpa_weights2_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights2_tensor.fused_tensor)
         _debug_checkpoint("collected post-SDPA weights2 per-device tensors")
-        post_sdpa_gather3_output_tensors_per_device = ttnn.get_device_tensors(post_sdpa_gather3_output_tensor)
-        _debug_checkpoint("collected post-SDPA gather3 output per-device tensors")
-        post_sdpa_intermediate_tensors_per_device = ttnn.get_device_tensors(post_sdpa_intermediate_tensor)
-        _debug_checkpoint("collected post-SDPA per-device tensors")
 
         attention_block_output_is_overlapped = isinstance(attention_block_output_tensor, OverlappedTensor)
         if attention_block_output_is_overlapped:
@@ -1948,8 +1944,6 @@ class AttentionBlock:
 
                 post_sdpa_weights1_fused_tensor_device = post_sdpa_weights1_fused_tensors_per_device[device_idx]
                 post_sdpa_weights2_fused_tensor_device = post_sdpa_weights2_fused_tensors_per_device[device_idx]
-                post_sdpa_gather3_output_tensor_device = post_sdpa_gather3_output_tensors_per_device[device_idx]
-                post_sdpa_intermediate_tensor_device = post_sdpa_intermediate_tensors_per_device[device_idx]
                 if attention_block_output_is_overlapped:
                     attention_block_output_fused_device = attention_block_output_fused_per_device[device_idx]
                 else:
