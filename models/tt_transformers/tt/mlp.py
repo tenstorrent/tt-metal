@@ -11,6 +11,17 @@ from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
+class ModeWeight:
+    """Weight tensor accessor that returns decode (ring-padded) or prefill (unpadded) versions."""
+
+    def __init__(self, decode, prefill=None):
+        self.decode = decode
+        self.prefill = prefill if prefill is not None else decode
+
+    def __call__(self, mode):
+        return self.decode if mode == Mode.DECODE else self.prefill
+
+
 class MLP(LightweightModule):
     def __init__(
         self,
@@ -38,80 +49,83 @@ class MLP(LightweightModule):
         self.prefetcher = prefetcher
 
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
-        pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
-        # If padding was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
-        hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
-
-        if args.dummy_weights:
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
-
-        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
-
-        # TODO Clean up this code. With sharding, we load the normal weights and then shard them
-        # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
-        # This is required for the dram_prefetcher to correctly interpret all weights
-        def as_sharded_tensor(name, type, dims):
-            # First get the raw weight and transpose it
-            raw_weight = torch_weight(name[:2])  # This is 2D: [H, W]
-            # Pad if needed
-            padded_weight = pad_hidden_dim(raw_weight, dims[0] if args.is_galaxy else dims[-1])
-            # Make 4D: [1, 1, H, W] - CRITICAL for prefetcher to work correctly
-            torch_tensor = padded_weight.unsqueeze(0).unsqueeze(0)
-
-            result = ttnn.as_tensor(
-                torch_tensor,
-                dtype=type,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=(
-                    ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
-                ),
-                cache_file_name=cache_name(name),
-            )
-            return result
-
-        # Sharded weights
-        w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
-        w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
-
-        layer_num = max(layer_num, 0)  # cross_block uses the configuration of the first decoder
-
-        # When prefetcher is enabled, use consistent dtypes across all layers to avoid
-        # race conditions caused by different block sizes
-        use_prefetcher = prefetcher is not None
-
+        layer_num = max(layer_num, 0)
         self.decoders_optimizations = self.args.decoders_optimizations
+        use_pf = prefetcher is not None
 
-        ff1_3_dtype = self.decoders_optimizations.get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.FF1_FF3, prefetcher=use_prefetcher
+        # Ring padding sizes for prefetcher
+        ring = prefetcher.ring_size if use_pf else 1
+        pad_ring = lambda x: args._pad_total_width(x // args.num_devices, ring) * args.num_devices
+        ff1_3_n_pad = pad_ring(args.hidden_dim) if use_pf else None
+        ff2_k_pad = ff1_3_n_pad
+        ff2_n_pad = args._pad_total_width(args.dim, ring) if use_pf else None
+
+        w1_dims, w2_dims = ((-1, -2), (-2, -1)) if args.is_galaxy else ((-2, -1), (-1, -2))
+        ff1_3_dtype = self.decoders_optimizations.get_tensor_dtype(layer_num, TensorGroup.FF1_FF3, use_pf)
+        ff2_dtype = self.decoders_optimizations.get_tensor_dtype(layer_num, TensorGroup.FF2, use_pf)
+
+        # Cache naming
+        hdim_str = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
+        ring_str = f".ring_{ring}" if use_pf else ""
+
+        def cache_name(name, suffix=""):
+            if args.dummy_weights:
+                return None
+            return weight_cache_path / f"{state_dict_prefix}.{name}_sharded{hdim_str}{suffix}"
+
+        # Decode memory configs (DRAM-sharded for matmul)
+        ff1_3_mem = args.create_dram_sharded_mem_config(
+            args.dim, args.hidden_dim // args.num_devices, prefetcher=prefetcher
         )
-        ff2_dtype = self.decoders_optimizations.get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
-        )
+        ff2_k_per_dev = (ff1_3_n_pad or args.hidden_dim) // args.num_devices
+        ff2_mem = args.create_dram_sharded_mem_config(ff2_k_per_dev, args.dim, prefetcher=prefetcher)
 
-        self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        def to_ttnn(w, dims, dtype, mem, cache):
+            return ttnn.as_tensor(
+                w.unsqueeze(0).unsqueeze(0),
+                dtype=dtype,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
+                memory_config=mem,
+                cache_file_name=cache,
+            )
 
-        # Default activation is SILU
+        def load_weight(name, dims, dtype, k_pad=None, n_pad=None):
+            w = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+            hdim_dim = dims[0] if args.is_galaxy else dims[-1]
+            # Decode version: ring-padded for prefetcher, or standard DRAM-sharded
+            if use_pf:
+                w_dec = w
+                if k_pad:
+                    w_dec = pad_to_size(w_dec, dim=-2, size=k_pad)
+                if n_pad:
+                    w_dec = pad_to_size(w_dec, dim=-1, size=n_pad)
+                dec_mem = ff2_mem if name == "w2" else ff1_3_mem
+            else:
+                w_dec = pad_to_size(w, dim=hdim_dim, size=args.hidden_dim)
+                dec_mem = ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else (ff2_mem if name == "w2" else ff1_3_mem)
+            decode = to_ttnn(w_dec, dims, dtype, dec_mem, cache_name(name, ring_str))
+            # Prefill version: standard padding, DRAM interleaved
+            w_pf = pad_to_size(w, dim=hdim_dim, size=args.hidden_dim)
+            prefill = to_ttnn(w_pf, dims, dtype, ttnn.DRAM_MEMORY_CONFIG, cache_name(name, ".prefill"))
+
+            return ModeWeight(decode, prefill)
+
+        self.w1 = load_weight("w1", w1_dims, ff1_3_dtype, n_pad=ff1_3_n_pad)
+        self.w3 = load_weight("w3", w1_dims, ff1_3_dtype, n_pad=ff1_3_n_pad)
+        self.w2 = load_weight("w2", w2_dims, ff2_dtype, k_pad=ff2_k_pad, n_pad=ff2_n_pad)
+
         self.activation_type = (
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
         )
 
-        # Insert the tensors into the prefetcher if it is used
         if self.prefetcher is not None:
 
             def register_weights():
-                self.prefetcher.insert_tensor(self.w1)
-                self.prefetcher.insert_tensor(self.w3)
-                self.prefetcher.insert_tensor(self.w2)
+                self.prefetcher.insert_tensor(self.w1.decode)
+                self.prefetcher.insert_tensor(self.w3.decode)
+                self.prefetcher.insert_tensor(self.w2.decode)
 
             self.prefetcher.register_callback(register_weights)
 
@@ -141,10 +155,9 @@ class MLP(LightweightModule):
         pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
-
         w1_out = ttnn.linear(
             x,
-            self.w1,
+            self.w1(mode),
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -155,9 +168,10 @@ class MLP(LightweightModule):
             if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
+
         w3_out = ttnn.linear(
             x,
-            self.w3,
+            self.w3(mode),
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -274,7 +288,7 @@ class MLP(LightweightModule):
 
         w2_out = ttnn.linear(
             w2_in,
-            self.w2,
+            self.w2(mode),
             compute_kernel_config=li_ff2_compute_kernel_cfg,
             dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
             program_config=pc_2,
@@ -286,7 +300,6 @@ class MLP(LightweightModule):
             else None,
         )
         ttnn.deallocate(w2_in)
-
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
@@ -310,6 +323,7 @@ class MLP(LightweightModule):
             else None,
         )
         # Ensure dim 0 and 1 are 1
+
         original_shape = w2_out_reduced.shape
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])

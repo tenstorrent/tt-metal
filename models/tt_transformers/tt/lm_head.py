@@ -144,7 +144,7 @@ class LMHead(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
+    def forward(self, x: ttnn.Tensor):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
         split_sizes = self.split_sizes_ring_mm if use_prefetcher else self.split_sizes_dram_sharded

@@ -21,7 +21,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([True]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -117,8 +117,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
-
-    tt_output_torch = tt_output_torch[:, :1, :, :]
+    tt_output_torch = tt_output_torch[:, :1, :, : reference_output.shape[3]]
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

@@ -252,6 +252,8 @@ class Prefetcher(LightweightModule):
         self.num_senders: int = len(self.pf_config["dram_banks"])
         self.global_cb_size: int = 0  # Size of the global circular buffer in bytes storing prefetched matmul weights
         self.max_tensor_block_size: int = 0  # Max tensor block size is the largest block size of a tensor in bytes
+        self._max_block_tiles: int = 0  # Max tiles per block across all tensors (for C++ cross-product sizing)
+        self._max_tile_size: int = 0  # Max tile size in bytes across all tensors (for C++ cross-product sizing)
         self.receiver_mapping_override: Optional[dict] = None
         self.model_name = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
@@ -449,10 +451,20 @@ class Prefetcher(LightweightModule):
             )
         h, w = tensor.shape[-2], tensor.shape[-1]
         h_tiles, w_tiles = math.ceil(h / ttnn.TILE_SIZE), math.ceil(w / ttnn.TILE_SIZE)
+        # Pad height to ring_size to match C++ round_up(height_in_tiles, num_blocks)
         h_tiles_padded = math.ceil(h_tiles / self.ring_size) * self.ring_size
-        w_tiles_padded = math.ceil(w_tiles / self.ring_size) * self.ring_size
-        max_tensor_tiles = (h_tiles_padded * w_tiles_padded) // self.ring_size
-        self.max_tensor_block_size = max(max_tensor_tiles * bytes_in_tile[tensor.dtype], self.max_tensor_block_size)
+        # block_tiles using full tensor width (includes all DRAM shards)
+        # C++ uses shard width * num_readers which equals full tensor width
+        block_tiles = (h_tiles_padded * w_tiles) // self.ring_size
+        tile_size = bytes_in_tile[tensor.dtype]
+        # Track max block tiles and max tile size independently.
+        # C++ reader CB is configured with a single tile size (max_tile_size) for all tensors,
+        # so CB size = max_tile_size * max_block_tiles * 3 (triple buffered).
+        # Global CB must be >= max_tile_size * max_block_tiles_full.
+        # When all prefetched tensors use the same dtype, this equals per-tensor max.
+        self._max_block_tiles = max(block_tiles, self._max_block_tiles)
+        self._max_tile_size = max(tile_size, self._max_tile_size)
+        self.max_tensor_block_size = self._max_block_tiles * self._max_tile_size
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
         logger.info(

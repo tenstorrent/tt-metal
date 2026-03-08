@@ -55,7 +55,6 @@ class DistributedNorm(LightweightModule):
         """Apply a norm, possibly gathering inputs if required."""
 
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
-
         if self.TG:
             if mode == Mode.DECODE:
                 return tt_sharded_distributed_rmsnorm(

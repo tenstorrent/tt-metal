@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([True]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -160,9 +160,6 @@ def test_attention_inference(
 
     if prefetcher is not None and mode == Mode.DECODE:
         prefetcher.prefetch()
-        # Prefetcher global CB size must be set to the max tensor block size amongst all 5 matmul weights
-        # 700 is an arbitrary value that is sufficient and avoids memory clobberring
-        prefetcher.max_tensor_block_size = 700 * 1088
 
     cos, sin = precompute_freqs(
         model_args.head_dim,

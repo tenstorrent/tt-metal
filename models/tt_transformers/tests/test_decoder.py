@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([True]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -207,7 +207,6 @@ def test_decoder_inference(
             * 2
         ) - 1
         tt_decode_input = pt_decode_input.clone()
-
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             model_args.get_residual_mem_config(mode, prefetcher),

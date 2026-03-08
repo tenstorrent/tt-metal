@@ -641,11 +641,9 @@ def test_prefetcher_BH(
     - FF2: TP on hidden_dim dimension (K-sharded)
     """
     mesh_shape = tuple(mesh_device.shape)
-    if not is_prefetcher_supported(
-        model_name, mesh_device.get_num_devices(), num_receiver_cores * 8
-    ) or mesh_device.get_num_devices() not in [2, 4, 8]:
+    if not is_prefetcher_supported(model_name, mesh_device.get_num_devices(), num_receiver_cores * 8) or mesh_device.get_num_devices() not in [2, 4, 8]:
         pytest.skip(
-            f"Model {model_name} does not fit in global CB with {mesh_device.get_num_devices()} devices and num_receiver_cores={num_receiver_cores}. DRAM Prefetcher is only supported on multi device configurations with 2, 4, or 8 devices."
+            f"Model {model_name} does not fit in global CB with {mesh_device.get_num_devices()} devices and num_receiver_cores={num_receiver_cores}"
         )
     logger.info(
         f"Testing DRAM Prefetcher + Ring Matmul for model {model_name} with dimensions: {VERIFIED_MODEL_CONFIGS[model_name]}"

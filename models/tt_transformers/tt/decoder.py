@@ -207,7 +207,7 @@ class TransformerBlock(LightweightModule):
         rot_mats_global=None,
         rot_mats_local=None,
         user_id=0,
-        mode="decode",
+        mode=Mode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -262,7 +262,7 @@ class TransformerBlock(LightweightModule):
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
-            if mode == "prefill":
+            if mode == Mode.PREFILL:
                 x.deallocate(True)
         else:
             hidden_states = attn_out
@@ -289,7 +289,7 @@ class TransformerBlock(LightweightModule):
 
         ttnn.deallocate(attn_out)
 
-        if TG and mode == "decode":
+        if TG and mode == Mode.DECODE:
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
         # MLP takes replicated inputs and produces fractured outputs
 
@@ -310,6 +310,7 @@ class TransformerBlock(LightweightModule):
                     cluster_axis=1,
                 )
 
+        hidden_states = self.args.unpad_to_residual(hidden_states, mode, self.prefetcher)
         out = ttnn.add(
             residual,
             hidden_states,
