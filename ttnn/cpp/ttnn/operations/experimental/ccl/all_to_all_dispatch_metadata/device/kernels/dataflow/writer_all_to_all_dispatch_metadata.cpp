@@ -308,9 +308,8 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already sent to this device for this token (avoid duplicate sends)
-        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] ==
-            0) {
-            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] = 1;
+        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
+            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, we dispatch the input token to it
@@ -405,9 +404,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already processed this device for this token
-        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] ==
-            0) {
-            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] = 1;
+        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
+            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, dispatch locally
