@@ -2,10 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal single-device Llama fine-tuning with LoRA on Shakespeare."""
+"""Llama fine-tuning with LoRA on Shakespeare, with optional DDP."""
 
 import argparse
 import os
+import re
 import time
 
 import numpy as np
@@ -18,7 +19,12 @@ from ttml.common.data import (
     load_shakespeare_text,
     get_batch,
 )
-from ttml.common.utils import set_seed, get_tt_metal_home, summary
+from ttml.common.utils import (
+    set_seed,
+    get_tt_metal_home,
+    summary,
+    get_loss_over_devices,
+)
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import (
     Llama,
@@ -32,7 +38,7 @@ MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BATCH_SIZE = 12
+BATCH_SIZE = 8
 STEPS = 500
 LR = 3e-4
 WEIGHT_DECAY = 0.01
@@ -44,6 +50,59 @@ LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
 LORA_IS_BIAS_TRAINABLE = False
 LORA_TRAINABLE_MODULES: list[str] = []
 LORA_DROPOUT = 0.05
+
+
+def validate_mesh_graph_descriptor(mesh_shape: list[int]) -> None:
+    """Validate that the MGD file's topology matches the requested mesh shape.
+
+    Reads the TT_MESH_GRAPH_DESC_PATH env var, parses the textproto to extract
+    device_topology dims and dim_types, then checks:
+      1. dims match the requested mesh_shape
+      2. the DDP axis (axis 1) uses RING topology
+    """
+    mgd_path = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+    if not mgd_path:
+        print("WARNING: TT_MESH_GRAPH_DESC_PATH not set, skipping MGD validation")
+        return
+
+    if not os.path.isfile(mgd_path):
+        print(f"WARNING: MGD file not found: {mgd_path}, skipping validation")
+        return
+
+    with open(mgd_path) as f:
+        content = f.read()
+
+    dims_match = re.search(
+        r"device_topology\s*\{[^}]*dims\s*:\s*\[\s*([\d\s,]+)\]", content
+    )
+    if not dims_match:
+        print(f"WARNING: Could not parse dims from MGD file: {mgd_path}")
+        return
+
+    mgd_dims = [int(d.strip()) for d in dims_match.group(1).split(",")]
+    if list(mgd_dims) != list(mesh_shape):
+        raise RuntimeError(
+            f"Mesh shape mismatch!\n"
+            f"  Requested mesh_shape: {mesh_shape}\n"
+            f"  MGD device_topology dims: {mgd_dims}\n"
+            f"Please ensure --ddp value matches the MGD file."
+        )
+
+    types_match = re.search(
+        r"device_topology\s*\{[^}]*dim_types\s*:\s*\[\s*([A-Z_,\s]+)\]", content
+    )
+    if types_match:
+        dim_types = [t.strip() for t in types_match.group(1).split(",")]
+        ddp_axis = 1
+        if ddp_axis < len(dim_types) and dim_types[ddp_axis] != "RING":
+            raise RuntimeError(
+                f"DDP axis (axis {ddp_axis}) expected RING topology  "
+                f", but MGD has '{dim_types[ddp_axis]}'.\n"
+                f"  MGD dim_types: {dim_types}\n"
+                f"  MGD file: {mgd_path}"
+            )
+
+    print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
 
 def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
@@ -169,6 +228,12 @@ def parse_args():
         action="store_true",
         help="Enable memory usage tracking (prints memory stats after first iteration)",
     )
+    parser.add_argument(
+        "--ddp",
+        type=int,
+        default=1,
+        help="Number of devices for distributed data parallel (default: 1, no DDP).",
+    )
     return parser.parse_args()
 
 
@@ -216,7 +281,27 @@ def main():
     train_ids = ids[:n_train]
 
     # ── Device ────────────────────────────────────────────────────────────────
-    ttml.autograd.AutoContext.get_instance().open_device([1, 1], [0])
+    num_devices = args.ddp
+    use_ddp = num_devices > 1
+    mesh_shape = [1, num_devices]
+
+    if use_ddp:
+        if BATCH_SIZE % num_devices != 0:
+            raise ValueError(
+                f"BATCH_SIZE ({BATCH_SIZE}) must be divisible by --ddp ({num_devices})"
+            )
+        ttml.core.distributed.enable_fabric(num_devices)
+        validate_mesh_graph_descriptor(mesh_shape)
+
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    if use_ddp:
+        autograd_ctx.open_device(mesh_shape)
+        autograd_ctx.initialize_parallelism_context(
+            ttml.autograd.DistributedConfig(enable_ddp=True)
+        )
+        print(f"DDP enabled: {num_devices} devices, mesh_shape={mesh_shape}")
+    else:
+        autograd_ctx.open_device([1, 1], [0])
 
     # ── Model ─────────────────────────────────────────────────────────────────
     if args.model_config is not None:
@@ -281,6 +366,12 @@ def main():
     if args.save_every > 0:
         os.makedirs(args.save_dir, exist_ok=True)
 
+    # ── DDP mapper ─────────────────────────────────────────────────────────────
+    mapper = None
+    if use_ddp:
+        device = autograd_ctx.get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+
     # ── Training loop ─────────────────────────────────────────────────────────
     model.train()
     is_first_step = True
@@ -293,15 +384,20 @@ def main():
             x_np.reshape(BATCH_SIZE, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
+            mapper,
         )
         tt_y = ttml.autograd.Tensor.from_numpy(
-            y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+            y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
         )
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
         loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
-        loss_val = float(loss.get_value().item())
+
+        if use_ddp:
+            loss_val = float(get_loss_over_devices(loss))
+        else:
+            loss_val = float(loss.get_value().item())
 
         if args.track_memory and is_first_step:
             MemoryUsageTracker.snapshot("FORWARD_PASS")
@@ -311,7 +407,11 @@ def main():
         if args.track_memory and is_first_step:
             MemoryUsageTracker.snapshot("BACKWARD_PASS")
 
-        ttml.autograd.AutoContext.get_instance().reset_graph()
+        autograd_ctx.reset_graph()
+
+        if use_ddp:
+            ttml.core.distributed.synchronize_gradients(model.parameters())
+
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000
 
@@ -331,7 +431,7 @@ def main():
         if args.save_every > 0 and (step % args.save_every == 0 or step == STEPS):
             save_lora_checkpoint(model, args.save_dir, step)
 
-    ttml.autograd.AutoContext.get_instance().close_device()
+    autograd_ctx.close_device()
 
 
 if __name__ == "__main__":
