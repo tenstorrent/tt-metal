@@ -1879,7 +1879,7 @@ class MLA1D(AbstractModule):
             tt_kv_rope,
             rope_tensors["cos_matrix_prefill_shape"],
             rope_tensors["sin_matrix_prefill_shape"],
-            rope_tensors["trans_matrix_prefill_shape"],
+            rope_tensors["trans_matrix"],
             is_decode_mode=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )

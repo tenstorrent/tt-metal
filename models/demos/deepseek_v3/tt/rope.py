@@ -251,10 +251,10 @@ class RotarySetup:
 
         # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
         cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            cos, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
         sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            sin, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
@@ -320,10 +320,10 @@ class RotarySetup:
 
         # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
         cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            cos, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
         sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            sin, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
