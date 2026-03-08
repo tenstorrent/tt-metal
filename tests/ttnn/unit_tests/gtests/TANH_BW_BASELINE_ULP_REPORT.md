@@ -175,7 +175,599 @@ Follow the tanh forward pattern — replace the composite with a fused SFPU kern
 2. **Wire through existing unary infrastructure**: `UnaryOpType::TANH_DERIVATIVE` or a new backward device operation
 3. **Two input tensors**: Unlike forward (1 input), backward needs grad and input — may require the gelu_bw experimental pattern (binary device operation) rather than simple unary
 
-**Blueprint:** The experimental GELU backward device operation (`ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/`) shows how to create a fused backward op with a custom compute kernel taking 2 inputs.
+**Blueprint:** The main API GELU backward device operation (PR #39303, `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/`) is the most directly applicable blueprint — same directory, same invoke() pattern, same CMakeLists.txt structure.
+
+---
+
+## Cross-Reference: Successful Fused Kernel Implementations
+
+Three PRs demonstrate how to fix precision bugs by replacing composite decompositions with fused SFPU kernels. All three are open, authored by the same developer, and follow the same architectural pattern.
+
+### PR #36366: Experimental GELU Backward (Max ULP 32,460 → 1)
+
+**PR:** [#36366](https://github.com/tenstorrent/tt-metal/pull/36366) — `[TTNN] Fix experimental gelu_bw ULP errors: polynomial kernel replaces broken erf+exp (Max ULP 32,460 → 1)`
+**State:** OPEN, REVIEW_REQUIRED
+**Branch:** `origin/ivoitovych/issue-35971-gelu-bw-ulp-fix-pr`
+**Changes:** +2773 / -107, 9 files
+
+#### Architecture
+
+The fix follows tt-metal's `DeviceOperationConcept` pattern. The existing device operation infrastructure was preserved — only the compute kernel was replaced.
+
+**Files changed:**
+
+| File | Change |
+|------|--------|
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | Added polynomial coefficients + evaluation functions |
+| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | Same (byte-identical pair) |
+| `tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h` | Added `gelu_derivative_tile()` API |
+| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_program_factory.cpp` | Kernel selection: "none" → `eltwise_bw_gelu_poly.cpp` |
+| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_poly.cpp` | **NEW** — polynomial compute kernel |
+| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp` | **DELETED** — broken erf+exp kernel |
+| `tests/ttnn/unit_tests/gtests/test_gelu_bw_ulp.cpp` | **NEW** — C++ ULP tests |
+| `tests/ttnn/unit_tests/gtests/sources.cmake` | Registered test file |
+| `tests/ttnn/unit_tests/operations/eltwise/test_gelu_bw_ulp.py` | **NEW** — Python ULP tests |
+
+#### Existing Device Operation (Preserved, Not New)
+
+The experimental gelu_bw already had a binary device operation before the PR. The PR kept this infrastructure intact:
+
+**Types** (`gelu_backward_device_operation_types.hpp`):
+```cpp
+struct GeluBackwardParams {
+    const DataType output_dtype = DataType::INVALID;
+    const MemoryConfig output_memory_config;
+    const std::string approximate = "none";
+};
+
+struct GeluBackwardInputs {
+    const Tensor& grad_output;
+    const Tensor& input;
+    std::optional<Tensor> preallocated_input_grad;
+};
+```
+
+**Device operation** (`gelu_backward_device_operation.hpp`):
+```cpp
+struct GeluBackwardDeviceOperation {
+    using operation_attributes_t = GeluBackwardParams;
+    using tensor_args_t = GeluBackwardInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<GeluBackwardProgramFactory>;
+    // validate, compute_output_specs, create_output_tensors, compute_program_hash
+};
+```
+
+**Invocation** (in `gelu_backward_device_operation.cpp`):
+```cpp
+namespace ttnn::prim {
+Tensor gelu_bw(const Tensor& grad_output, const Tensor& input,
+               const std::string& approximate, ...) {
+    return ttnn::device_operation::launch<GeluBackwardDeviceOperation>(
+        operation_attributes, tensor_args);
+}
+}
+```
+
+#### Circular Buffer Layout
+
+| CB Index | Name | Tiles | Purpose |
+|----------|------|-------|---------|
+| c_0 | cb_grad_out | 2 | Upstream gradient |
+| c_1 | cb_input | 2 | Forward input x |
+| c_2 | cb_grad_in | 2 | Output: grad × GELU'(x) |
+
+No intermediate CBs needed. Double-buffered (2 tiles each).
+
+#### Reader/Writer Kernels (Shared)
+
+- **Reader:** `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp`
+- **Writer:** `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+
+#### Compute Kernel (`eltwise_bw_gelu_poly.cpp`)
+
+```cpp
+for (uint32_t i = 0; i < per_core_block_size; ++i) {
+    tile_regs_acquire();
+    copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
+    copy_tile(cb_input, i, 1);       // dest[1] = input
+    gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
+    mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_grad_in);
+    tile_regs_release();
+}
+```
+
+#### SFPU Math: 5 Piecewise Regions
+
+The `calculate_gelu_derivative_simple()` function in `ckernel_sfpu_gelu.h`:
+
+**Region 1: x ≤ -13.375** — Saturate to 0 (BF16 natural saturation)
+
+**Region 2: (-13.375, -5]** — Fused x·exp(t) with Mills ratio correction:
+```cpp
+sfpi::vFloat x2 = x * x;
+sfpi::vFloat t = x2 * (-0.5f);
+sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
+sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);
+sfpi::vFloat inv_x4 = inv_x2 * inv_x2;
+sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
+result = x_exp * INV_SQRT_2PI * correction;
+```
+
+**Region 3: [-5, -3)** — Degree-8 shifted polynomial (t = x + 4 maps to [-1, 1]):
+```cpp
+sfpi::vFloat t = x + 4.0f;
+result = PolynomialEvaluator::eval(t, LEFT_C0, ..., LEFT_C8);
+```
+
+**Region 4: [-3, 3.1719)** — Degree-16 Sollya polynomial:
+```cpp
+result = PolynomialEvaluator::eval(x, CORE_C0, ..., CORE_C16);
+```
+
+**Region 5: x ≥ 3.1719** — Saturate to 1
+
+#### Fused x·exp(t) — Key Innovation
+
+The `x_times_exp_negative_tail()` function avoids intermediate underflow:
+```cpp
+sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat t) {
+    // Cody-Waite range reduction: t = k·ln(2) + r
+    sfpi::vFloat z = t * INV_LN2;
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat r = k * LN2_HI + t;
+    r = k * LN2_LO + r;
+
+    // Degree-5 Taylor for exp(r)
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5);
+
+    // KEY: Multiply by x BEFORE exponent shift to avoid underflow
+    sfpi::vFloat x_poly = x * poly;
+
+    // Exponent bit manipulation
+    sfpi::vInt xpoly_exp = sfpi::exexp_nodebias(x_poly);
+    sfpi::vInt new_exp = xpoly_exp + k_int;
+
+    // FTZ check on FINAL result
+    sfpi::vFloat result = sfpi::vConst0;
+    v_if(new_exp > 0) { result = sfpi::setexp(x_poly, new_exp); }
+    v_endif;
+    return result;
+}
+```
+
+The insight: `exp(-88.6) ≈ 3e-39` underflows in BF16, but `-13.3 × exp(-88.6) ≈ -4e-38` does NOT. By computing `(x × poly) × 2^k` instead of `x × (poly × 2^k)`, the intermediate stays representable.
+
+#### ULP Results
+
+| Region | Count | Max ULP (Before) | Max ULP (After) |
+|--------|-------|----------------:|----------------:|
+| x ≤ -13.375 | 15,681 | 32,460 | 0 |
+| (-13.375, -5] | 181 | ~6,256 | 1 |
+| [-5, -3) | 96 | ~1,886 | 1 |
+| [-3, 3.17) | 32,655 | ~146 | 1 |
+| x ≥ 3.17 | 15,947 | ~16,203 | 0 |
+| **OVERALL** | **64,560** | **32,460** | **1** |
+
+---
+
+### PR #39101: GELU Forward (Max ULP 47 → 2)
+
+**PR:** [#39101](https://github.com/tenstorrent/tt-metal/pull/39101) — `#35290: Fix forward GELU ULP precision with piecewise CDF polynomials`
+**State:** OPEN, CHANGES_REQUESTED (perf benchmark pending)
+**Branch:** `origin/ivoitovych/issue-35290-gelu-forward-ulp-fix`
+**Changes:** +2240 / -116, 7 files
+
+#### Files Changed
+
+| File | Change |
+|------|--------|
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | Replaced `calculate_gelu_chebyshev()` with `calculate_gelu_piecewise()` |
+| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | Same (byte-identical pair) |
+| `tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h` | Added `DST_ACCUM_MODE` passthrough for RNE rounding guard |
+| `tests/ttnn/unit_tests/gtests/test_gelu_fw_ulp.cpp` | **NEW** — 11 C++ ULP tests |
+| `tests/ttnn/unit_tests/gtests/sources.cmake` | Registered test file |
+| `tests/ttnn/unit_tests/operations/eltwise/generate_gelu_fw_coefficients.py` | **NEW** — coefficient generation |
+| `tests/ttnn/unit_tests/operations/eltwise/test_gelu_fw_saturation_research.py` | **NEW** — saturation research |
+
+#### What Was Replaced
+
+The old kernel used a single degree-15 Chebyshev polynomial covering x ∈ [-5.5, +∞), with Max ULP = 32,767 for x < -5.5 (returned 0) and a hardcoded floor of 2.98e-05 near zero.
+
+#### SFPU Math: 5 Piecewise Regions (`calculate_gelu_piecewise()`)
+
+```cpp
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
+    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x ≤ -13.1875
+
+    // Region 5: Identity saturation x ≥ 2.78125
+    v_if(x >= 2.78125f) { result = x; }
+
+    // Region 4: Core CDF [-3, 2.78125) — degree-13 odd-coefficient polynomial
+    v_elseif(x >= -3.0f) {
+        sfpi::vFloat u = x * x;  // u=x² factoring: only odd powers needed
+        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
+            u,
+            GELU_CDF_CORE_C1, GELU_CDF_CORE_C3, GELU_CDF_CORE_C5,
+            GELU_CDF_CORE_C7, GELU_CDF_CORE_C9, GELU_CDF_CORE_C11,
+            GELU_CDF_CORE_C13);
+        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;  // C0 = 0.5
+        result = x * phi;
+    }
+
+    // Region 3: Left CDF [-5, -3) — degree-8 shifted polynomial (t = x+4)
+    v_elseif(x >= -5.0f) {
+        sfpi::vFloat t = x + 4.0f;
+        sfpi::vFloat phi = PolynomialEvaluator::eval(
+            t, GELU_CDF_LEFT_C0, ..., GELU_CDF_LEFT_C8);
+        result = x * phi;
+    }
+
+    // Region 2: Exp-based (-13.1875, -5) — Mills ratio asymptotic
+    v_elseif(x > -13.1875f) {
+        constexpr float K = -0.3989422804014327f;   // -1/sqrt(2π)
+        constexpr float K3 = 3.0f * K;
+        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat t = x2 * (-0.5f);
+        sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);
+        sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);
+        sfpi::vFloat scaled = (K3 * inv_x2 - K) * inv_x2 + K;  // 2 MADs + 1 MUL
+        result = exp_val * scaled;
+    }
+    // Region 1: x ≤ -13.1875 saturates to 0
+    v_endif;
+    return result;
+}
+```
+
+**Key technique — u=x² factoring:** The CDF Φ(x) = 0.5 + odd_function(x), so only odd-power coefficients are needed. Evaluating via u=x² saves 47% SFPU ops vs the original degree-15 polynomial.
+
+**Core CDF coefficients (degree-13, odd powers + constant):**
+```
+C0  = 5.000000000e-01
+C1  = 3.989379361e-01
+C3  = -6.644114224e-02
+C5  = 9.881129978e-03
+C7  = -1.120736963e-03
+C9  = 9.164031378e-05
+C11 = -4.721944427e-06
+C13 = 1.119074048e-07
+```
+
+**RNE rounding guard** (when `is_fp32_dest_acc_en` is false):
+```cpp
+if constexpr (!is_fp32_dest_acc_en) {
+    result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+}
+```
+Rounds fp32 result to BF16 precision before writing to `dst_reg`, ensuring the packer's rounding matches expectations.
+
+**Infrastructure change** — `DST_ACCUM_MODE` passthrough:
+```cpp
+// Old: SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, fast_and_approx, idst)
+// New: SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, RC)
+```
+
+**Init function change:**
+```cpp
+// Old: _init_gelu_<APPROXIMATION_MODE>()
+// New: _init_reciprocal_<false, false>()  // accurate mode needs 1/x² for exp region
+```
+
+#### ULP Results
+
+| Region | Count | Mean ULP | Max ULP | Worst x |
+|--------|-------|----------|---------|---------|
+| Saturation to 0 (x ≤ -13.1875) | 15,917 | 0.00 | 0 | — |
+| Exp-based (-13.1875, -5] | 179 | 0.03 | 2 | -5.0 |
+| Left CDF poly [-5, -3) | 95 | 0.12 | 1 | -4.25 |
+| Core CDF poly [-3, 2.78125) | 32,629 | 0.00 | 1 | 2.342e-38 |
+| Identity (x ≥ 2.78125) | 16,206 | 0.00 | 0 | — |
+| **OVERALL** | **65,026** | **0.00** | **2** | **-5.0** |
+
+Only 1 value out of 65,026 has ULP = 2.
+
+---
+
+### PR #39303: Main API GELU Backward (Max ULP 32,460 → 1)
+
+**PR:** [#39303](https://github.com/tenstorrent/tt-metal/pull/39303) — `#38643: Replace composite gelu_bw(approximate=none) with fused polynomial kernel`
+**State:** OPEN, REVIEW_REQUIRED
+**Branch:** `origin/ivoitovych/issue-38643-gelu-bw-composite-fused-kernel-pr`
+**Changes:** +3207 / -18, 14 files
+**This is the most directly applicable blueprint for the tanh_bw fix.**
+
+#### Files Changed
+
+**New files (8):**
+
+| File | Purpose |
+|------|---------|
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/gelu_bw_device_operation_types.hpp` | `GeluBwParams` + `GeluBwInputs` |
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/gelu_bw_device_operation.hpp` | `GeluBwDeviceOperation` + `launch_gelu_bw()` |
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/gelu_bw_device_operation.cpp` | validate, compute_output_specs, create_output_tensors, hash |
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/gelu_bw_program_factory.hpp` | Program factory with `shared_variables_t` |
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/gelu_bw_program_factory.cpp` | CB setup, kernel creation, work distribution, runtime args |
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/kernels/compute/eltwise_bw_gelu_poly.cpp` | Compute kernel |
+| `tests/ttnn/unit_tests/gtests/test_gelu_bw_main_ulp.cpp` | C++ tests (19 tests) |
+| `tests/ttnn/unit_tests/operations/eltwise/test_gelu_bw_main_ulp.py` | Python tests (33 tests) |
+
+**Modified files (6):**
+
+| File | Change |
+|------|--------|
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/unary_backward.cpp` | Replace composite `else` branch with `launch_gelu_bw()` |
+| `ttnn/cpp/ttnn/operations/eltwise/unary_backward/CMakeLists.txt` | Add kernel file set + 2 source files |
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | Add derivative functions |
+| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | Same (byte-identical pair) |
+| `tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h` | Add `gelu_derivative_tile_init<>()` + `gelu_derivative_tile<>()` |
+| `tests/ttnn/unit_tests/gtests/sources.cmake` | Register test file |
+
+#### Architecture: 5-Layer Device Operation Pattern
+
+```
+Layer 1: Types         → gelu_bw_device_operation_types.hpp
+Layer 2: Operation     → gelu_bw_device_operation.hpp/.cpp
+Layer 3: Program Fact. → gelu_bw_program_factory.hpp/.cpp
+Layer 4: Compute Kern. → kernels/compute/eltwise_bw_gelu_poly.cpp
+Layer 5: SFPU API      → gelu.h (tile-level init/compute)
+```
+
+**Types** (`gelu_bw_device_operation_types.hpp`):
+```cpp
+struct GeluBwParams {
+    const DataType output_dtype = DataType::INVALID;
+    const MemoryConfig output_memory_config;
+};
+
+struct GeluBwInputs {
+    const Tensor& grad_output;
+    const Tensor& input;
+    std::optional<Tensor> preallocated_input_grad;
+};
+```
+
+Note: No `approximate` field — only `approximate="none"` uses the fused kernel; `approximate="tanh"` stays composite.
+
+**Device operation** (`gelu_bw_device_operation.hpp`):
+```cpp
+struct GeluBwDeviceOperation {
+    using operation_attributes_t = GeluBwParams;
+    using tensor_args_t = GeluBwInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<GeluBwProgramFactory>;
+};
+
+// Entry point — callable from unary_backward.cpp
+Tensor launch_gelu_bw(const Tensor& grad_output, const Tensor& input,
+    DataType output_dtype, const MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& preallocated_output);
+```
+
+**SFPU API** (`gelu.h`):
+```cpp
+template <bool fast_and_approx = false>
+ALWI void gelu_derivative_tile_init() {
+    MATH(SFPU_INIT_KERNEL_CALL(gelu_derivative, sfpu::gelu_derivative_polynomial_init,
+        fast_and_approx));
+}
+
+template <bool fast_and_approx = false>
+ALWI void gelu_derivative_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu_derivative_polynomial,
+        RC, fast_and_approx, idst));
+}
+```
+
+#### Circular Buffer Layout
+
+| CB Index | Name | Tiles | Purpose |
+|----------|------|-------|---------|
+| c_0 | cb_grad_out | 2 | Upstream gradient |
+| c_1 | cb_input | 2 | Forward input x |
+| c_2 | cb_grad_in | 2 | Output: grad × GELU'(x) |
+
+Same as experimental version. 2-tile double-buffering.
+
+#### Compute Kernel (`eltwise_bw_gelu_poly.cpp`)
+
+```cpp
+void kernel_main() {
+    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+    unary_op_init_common(cb_grad_out, cb_grad_in);
+    gelu_derivative_tile_init<false>();
+    mul_binary_tile_init();
+
+    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
+        cb_reserve_back(cb_grad_in, per_core_block_size);
+        cb_wait_front(cb_grad_out, per_core_block_size);
+        cb_wait_front(cb_input, per_core_block_size);
+
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            tile_regs_acquire();
+            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
+            copy_tile(cb_input, i, 1);       // dest[1] = input
+            gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
+            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_grad_in);
+            tile_regs_release();
+        }
+
+        cb_pop_front(cb_grad_out, per_core_block_size);
+        cb_pop_front(cb_input, per_core_block_size);
+        cb_push_back(cb_grad_in, per_core_block_size);
+    }
+}
+```
+
+#### How `unary_backward.cpp` Was Modified
+
+**BEFORE (composite, 17 lines):**
+```cpp
+    } else {
+        float kAlpha = M_SQRT1_2;
+        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
+        Tensor cdf = ttnn::multiply(
+            (ttnn::add(
+                ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)),
+                1, std::nullopt, output_memory_config)),
+            0.5);
+        Tensor pdf = ttnn::multiply(
+            ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config),
+            kBeta, std::nullopt, output_memory_config);
+        ttnn::multiply(
+            grad, ttnn::add(cdf, ttnn::multiply(input, pdf)), std::nullopt, output_memory_config, input_grad);
+        result.push_back(input_grad);
+    }
+```
+
+**AFTER (fused kernel, 5 lines):**
+```cpp
+    } else {
+        DataType output_dtype = input.dtype();
+        auto result_tensor = ttnn::operations::unary_backward::gelu_bw::launch_gelu_bw(
+            grad, input, output_dtype, output_memory_config, input_grad);
+        result.push_back(result_tensor);
+    }
+```
+
+Plus include at top: `#include "gelu_bw/device/gelu_bw_device_operation.hpp"`
+
+#### CMakeLists.txt Changes
+
+```cmake
+# Added before target_sources:
+file(GLOB_RECURSE kernels gelu_bw/device/kernels/*)
+
+# Added to target_sources PUBLIC section:
+    FILE_SET kernels TYPE HEADERS BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+    FILES ${kernels}
+
+# Added to target_sources PRIVATE section:
+    gelu_bw/device/gelu_bw_device_operation.cpp
+    gelu_bw/device/gelu_bw_program_factory.cpp
+```
+
+#### Key Design Decisions
+
+1. **Shared SFPU math, independent device ops.** The polynomial coefficients and `gelu_derivative_tile<>()` live in infrastructure headers (`ckernel_sfpu_gelu.h`, `gelu.h`). The device operation, program factory, and compute kernel are new and independent from the experimental API.
+
+2. **Only `approximate="none"` changed.** The `approximate="tanh"` path stays composite (no precision issue).
+
+3. **FP32 dest accumulation.** The program factory enables `UnpackToDestFp32` for both input CBs — this ensures polynomial evaluation happens in FP32 precision even when inputs/outputs are BF16.
+
+4. **Per-tile processing.** Cannot batch multiple tiles in dest because `gelu_derivative_tile` uses scratch dest registers during polynomial evaluation.
+
+5. **Interleaved-only.** Validates input is not sharded, is interleaved. Sharded support can be added later.
+
+#### Differences from Experimental API
+
+| Aspect | Main API (PR #39303) | Experimental API (PR #36366) |
+|--------|---------------------|------------------------------|
+| Namespace | `ttnn::operations::unary_backward::gelu_bw` | `ttnn::prim` |
+| Entry point | `launch_gelu_bw()` from `invoke()` | Registered as `ttnn::prim::gelu_bw_polynomial` |
+| Location | `ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/` | `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/` |
+| Independence | Completely independent | Separate codebase |
+| SFPU math | **Shared** `gelu_derivative_tile<false>()` | **Same shared SFPU primitive** |
+
+Either can be deleted without affecting the other.
+
+#### ULP Results
+
+| Region | Count | Max ULP (Before) | Max ULP (After) |
+|--------|-------|----------------:|----------------:|
+| x ≤ -13.375 | 15,681 | 0 | 0 |
+| (-13.375, -5] exp-based | 181 | 32,460 | 1 |
+| [-5, -3) LEFT poly | 96 | ~9,000 | 1 |
+| [-3, 3.17) CORE poly | 32,655 | ~100 | 1 |
+| x ≥ 3.17 | 15,947 | 0 | 0 |
+| **OVERALL** | **65,026** | **32,460** | **1** |
+
+---
+
+### Comparison of All Approaches
+
+| Operation | PR | Pre-Fix Max ULP | Post-Fix Max ULP | Fix Type | Regions |
+|-----------|-----|----------------:|----------------:|----------|---------|
+| tanh (forward) | — | — | **1** | Fused unary SFPU: minimax poly + sigmoid | 2 |
+| gelu (forward) | #39101 | 47 | **2** | Fused unary SFPU: piecewise CDF poly | 5 |
+| gelu_bw (experimental) | #36366 | 32,460 | **1** | Fused binary device op: SFPU derivative poly | 5 |
+| gelu_bw (main API) | #39303 | 32,460 | **1** | Fused binary device op: SFPU derivative poly | 5 |
+| **tanh_bw (this issue)** | — | **15,140** | **TBD** | **Planned: fused binary device op with sech²(x)** | **TBD** |
+
+**Key takeaways:**
+1. All successful fixes replace multi-op composite decompositions with fused SFPU kernels that compute the entire function in a single FP32 pass — eliminating intermediate BF16 rounding and catastrophic cancellation.
+2. The tanh_bw fix should follow the **PR #39303 pattern** (main API gelu_bw) exactly — same directory structure under `unary_backward/`, same invoke() modification, same CMakeLists.txt pattern, same 6-file device operation structure.
+3. The SFPU math for sech²(x) is simpler than GELU'(x) — likely 3 regions (saturation to 0 for |x| > ~4, core polynomial, identity at 0) vs GELU'(x)'s 5 regions with fused exp.
+
+### Shared SFPU Infrastructure Available for tanh_bw
+
+From the three PRs, these shared primitives are confirmed available and working:
+
+| Primitive | Source | Used By |
+|-----------|--------|---------|
+| `PolynomialEvaluator::eval()` | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_polyval.h` | All three PRs |
+| `_sfpu_exp_f32_accurate_()` | `ckernel_sfpu_exp.h` | GELU fw (#39101), GELU bw derivative (#36366, #39303) |
+| `_sfpu_reciprocal_<N>()` | `ckernel_sfpu_recip.h` | GELU fw (#39101), GELU bw derivative (#36366, #39303) |
+| `x_times_exp_negative_tail()` | `ckernel_sfpu_gelu.h` (new) | GELU bw derivative (#36366, #39303) |
+| `sfpi::float_to_fp16b()` | SFPI built-in | GELU fw (#39101) for RNE rounding guard |
+| `sfpi::exexp_nodebias()` | SFPI built-in | `x_times_exp_negative_tail()` |
+| `sfpi::setexp()` | SFPI built-in | `x_times_exp_negative_tail()` |
+| `v_if/v_elseif/v_endif` | SFPI built-in | All three PRs (piecewise dispatch) |
+| `copy_tile()` | Compute API | Backward kernels (load from CB to dest) |
+| `mul_binary_tile()` | Compute API | Backward kernels (grad × derivative) |
+| `reader_binary_interleaved_start_id.cpp` | `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/` | Both backward PRs |
+| `writer_unary_interleaved_start_id.cpp` | `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/` | Both backward PRs |
+
+### Blueprint: tanh_bw Implementation Plan
+
+Based on the three PR patterns, the tanh_bw fix should create:
+
+**Directory structure** (mirroring PR #39303):
+```
+ttnn/cpp/ttnn/operations/eltwise/unary_backward/tanh_bw/device/
+  tanh_bw_device_operation_types.hpp    (TanhBwParams + TanhBwInputs)
+  tanh_bw_device_operation.hpp          (TanhBwDeviceOperation + launch_tanh_bw)
+  tanh_bw_device_operation.cpp          (validate, output_specs, hash)
+  tanh_bw_program_factory.hpp           (TanhBwProgramFactory)
+  tanh_bw_program_factory.cpp           (3 CBs, 3 kernels, work distribution)
+  kernels/compute/eltwise_bw_tanh_deriv.cpp  (compute kernel)
+```
+
+**SFPU math** (in `ckernel_sfpu_tanh.h` or new `ckernel_sfpu_tanh_derivative.h`):
+- `calculate_tanh_derivative_polynomial()` computing sech²(x) piecewise
+- `tanh_derivative_tile_init<>()` and `tanh_derivative_tile<>()` in compute API header
+
+**Compute kernel pattern** (identical to gelu_bw):
+```cpp
+copy_tile(cb_grad_out, i, 0);          // dest[0] = grad
+copy_tile(cb_input, i, 1);            // dest[1] = input
+tanh_derivative_tile<false>(1);       // dest[1] = sech²(input)
+mul_binary_tile(0, 1, 0);             // dest[0] = grad × sech²(input)
+```
+
+**`unary_backward.cpp` modification** (same pattern as gelu_bw):
+```cpp
+// Replace lines 289-303 (composite 1-tanh²(x)) with:
+DataType output_dtype = input.dtype();
+auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
+    grad, input, output_dtype, output_mem_config, input_grad);
+```
 
 ---
 
