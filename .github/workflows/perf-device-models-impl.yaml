@@ -31,6 +31,7 @@ on:
 
 jobs:
   define-models:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       models-to-run: ${{ steps.compute-models.outputs.models-to-run }}
@@ -93,6 +94,7 @@ jobs:
 
   generate-matrix:
     needs: define-models
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
@@ -181,6 +183,7 @@ jobs:
   device-perf:
     needs: [define-models, generate-matrix]
     if: ${{ fromJSON(needs.generate-matrix.outputs.matrix).test-info != '[]' && fromJSON(needs.generate-matrix.outputs.matrix).test-info != null }}
+    timeout-minutes: 240
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
