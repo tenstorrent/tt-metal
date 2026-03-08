@@ -73,6 +73,9 @@ constexpr uint16_t BF16_NEG_INF = 0xFF80;
 inline uint16_t float_to_bf16_bits(float f) {
     uint32_t f32_bits;
     std::memcpy(&f32_bits, &f, sizeof(float));
+    // Round-to-nearest-even (RNE): add rounding bias before truncating
+    uint32_t rounding_bias = ((f32_bits >> 16) & 1) + 0x7FFF;
+    f32_bits += rounding_bias;
     return static_cast<uint16_t>(f32_bits >> 16);
 }
 
