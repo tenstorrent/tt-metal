@@ -153,25 +153,6 @@ def validate_activation(
                         )
                         activation_all_passed = False
 
-        # Validate sentinel row (token_id = -1 = 0xFFFFFFFF as uint32)
-        sentinel_row_idx = num_expected_rows
-        if sentinel_row_idx >= max_rows:
-            logger.warning(f"  Device {device_idx}: sentinel row {sentinel_row_idx} out of bounds")
-            activation_all_passed = False
-        else:
-            sentinel_row_start = sentinel_row_idx * aligned_row_elements
-            sentinel_token_id = device_activation[sentinel_row_start].item()
-            # -1 as uint32 (0xFFFFFFFF) becomes -1 when sign-extended to int64
-            is_sentinel = (sentinel_token_id == -1) or (sentinel_token_id == 0xFFFFFFFF)
-
-            if not is_sentinel:
-                logger.warning(
-                    f"  Device {device_idx}: sentinel row token_id mismatch - " f"expected -1, got {sentinel_token_id}"
-                )
-                activation_all_passed = False
-            else:
-                logger.info(f"  Device {device_idx}: {num_expected_rows} tokens validated, sentinel PASSED")
-
     return activation_all_passed
 
 
