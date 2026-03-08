@@ -74,6 +74,18 @@ def _filter_runtime_args(rt_args, core_range_set):
     return filtered
 
 
+def _extend_runtime_args(existing_rt_args, rt_args, core_range_set):
+    """Extend existing per-core runtime args with additional args for cores in core_range_set.
+
+    For cores that already have runtime args (e.g., MLA args), appends the new args
+    (e.g., SDPA args) so the kernel can read them sequentially.
+    For cores without existing args, sets them to the new args.
+    """
+    for coord, args in rt_args:
+        if core_range_set.contains(coord):
+            existing_rt_args[coord.x][coord.y].extend(list(args))
+
+
 class PostSDPA:
     """
     Post SDPA fused operation implementation using ttnn.generic_op.
@@ -143,8 +155,7 @@ class PostSDPA:
         sdpa_input_l_mesh=None,
         sdpa_input_ms_mesh=None,
         sdpa_output_l_mesh=None,
-        sdpa_r1_recv_mesh=None,
-        sdpa_r2_recv_mesh=None,
+        sdpa_intermediate_recv_mesh=None,
         sdpa_forwarder_scratch_mesh=None,
         sdpa_semaphores=None,
         sdpa_scale_fp32=1.0,
@@ -198,13 +209,6 @@ class PostSDPA:
         TILE_32x32 = ttnn.Tile((32, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
         tile_32x32_size = TILE_32x32.get_tile_size(data_format)
-
-        # CCL intermediate tensor info (32x32 tiles, only when CCL is enabled)
-        if ccl_enabled:
-            intermediate_tensor_sample = intermediate_tensors_per_device[0]
-            intermediate_tile = intermediate_tensor_sample.tile
-            intermediate_tile_height, intermediate_tile_width = intermediate_tile.tile_shape
-            standard_tile_size_bytes = intermediate_tile_height * intermediate_tile_width * element_size
 
         # ========================================================================
         # Core grid configuration — derived from production weight overlap specs
@@ -333,15 +337,12 @@ class PostSDPA:
             # SDPA CB indices (14-24, after existing CBs 0-13)
             sdpa_cb_local_l = 14
             sdpa_cb_local_ms = 15
-            sdpa_cb_r1_neighbor_l = 16
-            sdpa_cb_r1_neighbor_ms = 17
+            sdpa_cb_neighbor_l = 16
+            sdpa_cb_neighbor_ms = 17
             sdpa_cb_r1_result_l = 18
             sdpa_cb_r1_result_ms = 19
-            sdpa_cb_r2_neighbor_l = 20
-            sdpa_cb_r2_neighbor_ms = 21
-            sdpa_cb_l_out = 22
-            sdpa_cb_ms_out = 23
-            sdpa_cb_packet_slot = 24
+            sdpa_cb_l_out = 20
+            sdpa_cb_packet_slot = 21
 
             # SDPA forwarder parameters (using Type A/B worker split like original op)
             sdpa_num_workers = 8
@@ -391,20 +392,20 @@ class PostSDPA:
         # ========================================================================
         # CB indices
         # ========================================================================
-        matmul4_in0_cb = 0  # Matmul4 input (kv_b2 grid)
-        matmul4_in1_cb = 1  # Matmul4 weights (kv_b2 grid)
-        matmul4_out_cb = 2  # Matmul4 output (kv_b2 grid)
-        gather2_dst_cb = 3  # Gather2 output = Mcast3 source (gather core)
-        matmul5_in0_cb = 4  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
-        matmul5_in1_cb = 5  # Matmul5 weights (112 active cores)
-        matmul5_out_cb = 6  # Matmul5 output (112 active cores)
-        gather3_dst_cb = 7  # Gather3 output = CCL local data (gather core)
-        ccl_sender_in_cb = 8  # CCL sender reads gather3 output (sender core)
-        ccl_remote_data_cb = 9  # CCL received remote data (receiver core)
-        ccl_residual_cb = 10  # CCL residual (receiver core)
-        ccl_temp_cb = 11  # CCL temp for compute (receiver core)
-        ccl_output_cb = 12  # CCL output (receiver core)
-        ccl_packet_header_cb = 13  # CCL packet headers (sender + receiver cores)
+        matmul4_in0_cb = 44  # Matmul4 input (kv_b2 grid)
+        matmul4_in1_cb = 45  # Matmul4 weights (kv_b2 grid)
+        matmul4_out_cb = 46  # Matmul4 output (kv_b2 grid)
+        gather2_dst_cb = 47  # Gather2 output = Mcast3 source (gather core)
+        matmul5_in0_cb = 48  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
+        matmul5_in1_cb = 49  # Matmul5 weights (112 active cores)
+        matmul5_out_cb = 50  # Matmul5 output (112 active cores)
+        gather3_dst_cb = 51  # Gather3 output = CCL local data (gather core)
+        ccl_sender_in_cb = 52  # CCL sender reads gather3 output (sender core)
+        ccl_remote_data_cb = 53  # CCL received remote data (receiver core)
+        ccl_residual_cb = 54  # CCL residual (receiver core)
+        ccl_temp_cb = 55  # CCL temp for compute (receiver core)
+        ccl_output_cb = 56  # CCL output (receiver core)
+        ccl_packet_header_cb = 57  # CCL packet headers (sender + receiver cores)
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
@@ -587,10 +588,8 @@ class PostSDPA:
                             # SDPA CB indices
                             ("sdpa_cb_local_l", sdpa_cb_local_l),
                             ("sdpa_cb_local_ms", sdpa_cb_local_ms),
-                            ("sdpa_cb_r1_neighbor_l", sdpa_cb_r1_neighbor_l),
-                            ("sdpa_cb_r1_neighbor_ms", sdpa_cb_r1_neighbor_ms),
-                            ("sdpa_cb_r2_neighbor_l", sdpa_cb_r2_neighbor_l),
-                            ("sdpa_cb_r2_neighbor_ms", sdpa_cb_r2_neighbor_ms),
+                            ("sdpa_cb_neighbor_l", sdpa_cb_neighbor_l),
+                            ("sdpa_cb_neighbor_ms", sdpa_cb_neighbor_ms),
                             # SDPA tile/chunk sizes
                             ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
                             ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
@@ -728,14 +727,11 @@ class PostSDPA:
                             # SDPA CB indices
                             ("sdpa_cb_local_l", sdpa_cb_local_l),
                             ("sdpa_cb_local_ms", sdpa_cb_local_ms),
-                            ("sdpa_cb_r1_neighbor_l", sdpa_cb_r1_neighbor_l),
-                            ("sdpa_cb_r1_neighbor_ms", sdpa_cb_r1_neighbor_ms),
+                            ("sdpa_cb_neighbor_l", sdpa_cb_neighbor_l),
+                            ("sdpa_cb_neighbor_ms", sdpa_cb_neighbor_ms),
                             ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                             ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                            ("sdpa_cb_r2_neighbor_l", sdpa_cb_r2_neighbor_l),
-                            ("sdpa_cb_r2_neighbor_ms", sdpa_cb_r2_neighbor_ms),
                             ("sdpa_cb_l_out", sdpa_cb_l_out),
-                            ("sdpa_cb_ms_out", sdpa_cb_ms_out),
                             # SDPA compute params
                             ("sdpa_scale_fp32", sdpa_scale_fp32_bits),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
@@ -968,8 +964,7 @@ class PostSDPA:
                     sdpa_input_l_device = ttnn.get_device_tensors(sdpa_input_l_mesh)[device_idx]
                     sdpa_input_ms_device = ttnn.get_device_tensors(sdpa_input_ms_mesh)[device_idx]
                     sdpa_output_l_device = ttnn.get_device_tensors(sdpa_output_l_mesh)[device_idx]
-                    sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
-                    sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
+                    sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
 
                     # CB 14: SDPA local L (aliased to input tensor)
                     sdpa_local_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -986,26 +981,19 @@ class PostSDPA:
                     # CB 16: SDPA R1 neighbor L (aliased to R1 recv buffer)
                     # The recv buffer holds both L and MS data, but this CB should only
                     # cover the L portion. Override total_size like the original op does.
-                    sdpa_r1_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        sdpa_cb_r1_neighbor_l, sdpa_r1_recv_device
+                    sdpa_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        sdpa_cb_neighbor_l, sdpa_intermediate_recv_device
                     )
-                    sdpa_r1_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
-                    cb_list.append(sdpa_r1_neighbor_l_cb_descriptor)
+                    sdpa_neighbor_l_cb_descriptor.total_size = 2 * sdpa_l_tiles_per_worker * sdpa_l_tile_size
+                    cb_list.append(sdpa_neighbor_l_cb_descriptor)
 
                     # CB 17: SDPA R1 neighbor MS (scratch, not backed by tensor)
                     # Must use sdpa_tile (e.g., 8x32) to match MS input tensor tile format
-                    sdpa_r1_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_r1_neighbor_ms,
-                        data_format=data_format,
-                        page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(sdpa_tile),
+                    sdpa_neighbor_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        sdpa_cb_neighbor_ms, sdpa_intermediate_recv_device
                     )
-                    sdpa_r1_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_ms_tile_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_r1_neighbor_ms_cb_format],
-                    )
-                    cb_list.append(sdpa_r1_neighbor_ms_cb_descriptor)
+                    sdpa_neighbor_ms_cb_descriptor.total_size = 2 * sdpa_ms_tile_size
+                    cb_list.append(sdpa_neighbor_ms_cb_descriptor)
 
                     # CB 18: SDPA R1 result L (scratch, reused for scatter)
                     # Use actual tile from SDPA input tensor (e.g., 8x32), not hardcoded 32x32
@@ -1037,51 +1025,13 @@ class PostSDPA:
                     )
                     cb_list.append(sdpa_r1_result_ms_cb_descriptor)
 
-                    # CB 20: SDPA R2 neighbor L (aliased to R2 recv buffer)
-                    # Same total_size override as R1 neighbor L - only cover L portion.
-                    sdpa_r2_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        sdpa_cb_r2_neighbor_l, sdpa_r2_recv_device
-                    )
-                    sdpa_r2_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
-                    cb_list.append(sdpa_r2_neighbor_l_cb_descriptor)
-
-                    # CB 21: SDPA R2 neighbor MS (scratch)
-                    # Must use sdpa_tile to match MS input tensor tile format
-                    sdpa_r2_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_r2_neighbor_ms,
-                        data_format=data_format,
-                        page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(sdpa_tile),
-                    )
-                    sdpa_r2_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_ms_tile_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_r2_neighbor_ms_cb_format],
-                    )
-                    cb_list.append(sdpa_r2_neighbor_ms_cb_descriptor)
-
-                    # CB 22: SDPA L output (aliased to output tensor)
+                    # CB 20: SDPA L output (aliased to output tensor)
                     sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         sdpa_cb_l_out, sdpa_output_l_device
                     )
                     cb_list.append(sdpa_l_out_cb_descriptor)
 
-                    # CB 23: SDPA MS output (scratch, only used for R1 intermediate)
-                    # Must use sdpa_tile to match MS input tensor tile format
-                    sdpa_ms_out_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_ms_out,
-                        data_format=data_format,
-                        page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(sdpa_tile),
-                    )
-                    sdpa_ms_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_ms_tile_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_ms_out_cb_format],
-                    )
-                    cb_list.append(sdpa_ms_out_cb_descriptor)
-
-                    # CB 24: SDPA packet slot (for fabric packet headers)
+                    # CB 21: SDPA packet slot (for fabric packet headers)
                     sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
                     sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_packet_slot,
@@ -1304,12 +1254,11 @@ class PostSDPA:
                 sdpa_ctx = None
                 if sdpa_enabled:
                     # Get per-device SDPA tensors
-                    sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
-                    sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
+                    sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
                     sdpa_forwarder_scratch_device = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[device_idx]
 
                     # Get device for logical to NOC coordinate conversion
-                    device = sdpa_r1_recv_device.device()
+                    device = sdpa_intermediate_recv_device.device()
 
                     # Get fabric node IDs for SDPA CCL
                     sdpa_fabric_node_id = mesh_device.get_fabric_node_id(coord)
@@ -1374,8 +1323,8 @@ class PostSDPA:
                         # NCRISC runtime args: semaphore addresses, recv buffer addresses
                         r1_neighbor_sem_addr = sdpa_semaphore1_addr
                         r2_neighbor_sem_addr = sdpa_semaphore2_addr
-                        r1_recv_buffer_addr = sdpa_r1_recv_device.buffer_address()
-                        r2_recv_buffer_addr = sdpa_r2_recv_device.buffer_address()
+                        r1_recv_buffer_addr = sdpa_intermediate_recv_device.buffer_address()
+                        r2_recv_buffer_addr = r1_recv_buffer_addr + (sdpa_l_tiles_per_worker + 1) * sdpa_l_tile_size
 
                         ncrisc_base_args = [
                             r1_neighbor_sem_addr,
@@ -1444,11 +1393,11 @@ class PostSDPA:
                         brisc_rt_args = [
                             int(r1_dst_fabric_node_id.mesh_id),  # r1_dst_mesh_id (varies by type!)
                             r1_dst_fabric_node_id.chip_id,  # r1_dst_chip_id
-                            sdpa_r1_recv_device.buffer_address(),  # r1_neighbor_dst_addr
+                            r1_recv_buffer_addr,  # r1_neighbor_dst_addr
                             sdpa_semaphore1_addr,  # r1_neighbor_sem_addr
                             int(r2_dst_fabric_node_id.mesh_id),  # r2_dst_mesh_id (varies by type!)
                             r2_dst_fabric_node_id.chip_id,  # r2_dst_chip_id
-                            sdpa_r2_recv_device.buffer_address(),  # r2_neighbor_dst_addr
+                            r2_recv_buffer_addr,  # r2_neighbor_dst_addr
                             sdpa_semaphore2_addr,  # r2_neighbor_sem_addr
                             worker_core_noc.x,  # current_core_x (NOC coordinates)
                             worker_core_noc.y,  # current_core_y (NOC coordinates)
@@ -1579,8 +1528,7 @@ class PostSDPA:
         sdpa_input_l_mesh=None,
         sdpa_input_ms_mesh=None,
         sdpa_output_l_mesh=None,
-        sdpa_r1_recv_mesh=None,
-        sdpa_r2_recv_mesh=None,
+        sdpa_intermediate_recv_mesh=None,
         sdpa_forwarder_scratch_mesh=None,
         sdpa_semaphores=None,
         sdpa_scale_fp32=1.0,
@@ -1617,8 +1565,7 @@ class PostSDPA:
             sdpa_input_l_mesh,
             sdpa_input_ms_mesh,
             sdpa_output_l_mesh,
-            sdpa_r1_recv_mesh,
-            sdpa_r2_recv_mesh,
+            sdpa_intermediate_recv_mesh,
             sdpa_forwarder_scratch_mesh,
             sdpa_semaphores,
             sdpa_scale_fp32,
@@ -1707,20 +1654,6 @@ class PostSDPA:
                 )
                 sender_brisc_rt_args_ref.extend(sender_fabric_args)
 
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
-                    gather_core.y
-                ]
-                receiver_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl["receiver_link"]],
-                    program,
-                    receiver_ncrisc_kernel_idx,
-                    gather_core,
-                )
-                receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
-
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================
@@ -1802,8 +1735,7 @@ class PostSDPA:
                     sdpa_input_l_mesh,
                     sdpa_input_ms_mesh,
                     sdpa_output_l_mesh,
-                    sdpa_r1_recv_mesh,
-                    sdpa_r2_recv_mesh,
+                    sdpa_intermediate_recv_mesh,
                     sdpa_forwarder_scratch_mesh,
                 ]
             )

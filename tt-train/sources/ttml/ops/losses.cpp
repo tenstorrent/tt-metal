@@ -4,7 +4,6 @@
 
 #include "losses.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <stdexcept>
 #include <ttnn/types.hpp>
 
@@ -15,6 +14,9 @@
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
+#include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss.hpp"
+#include "ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {

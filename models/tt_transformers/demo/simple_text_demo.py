@@ -164,7 +164,7 @@ def load_inputs(user_input, batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    # It clips the excerpt to the max length provided to allow testing different long context lengths
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -745,7 +745,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
+# NOTE: Please do not add new pytest parameters between optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -1075,7 +1075,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
             )
-            if prefill_sampling_params is not None:
+            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:
                 logits = prefill_out
