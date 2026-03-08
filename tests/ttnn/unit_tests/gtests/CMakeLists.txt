@@ -50,6 +50,8 @@ target_link_libraries(
     PRIVATE
         test_common_libs
         TTNN::CPP
+        mpfr
+        gmp
 )
 target_precompile_headers(unit_tests_ttnn_basic REUSE_FROM TTNN::PCH)
 
