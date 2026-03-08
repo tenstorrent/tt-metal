@@ -35,8 +35,6 @@ namespace tt::tt_fabric {
 struct FabricRiscConfig;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
-class MultiPoolChannelAllocator;
-class ChannelToPoolMapping;
 class FabricRemoteChannelsAllocator;
 
 class FabricEriscDatamoverBuilder;
@@ -347,15 +345,6 @@ struct FabricEriscDatamoverConfig {
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Multi-pool allocator coordinator - manages all pool allocators
-    // Emits pool metadata and delegates to individual pools for CT args
-    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator;
-
-    // Channel-to-pool mapping for multi-pool support
-    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
-    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
-    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
 
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <sstream>
 #include <vector>
 
 namespace tt::tt_fabric {
@@ -50,6 +51,12 @@ public:
      * @param ct_args Vector to append compile-time arguments to
      */
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
+
+    /**
+     * Emit the complete ChannelAllocations CT arg block for remote receiver channels.
+     * Format: [tag] [num_entries] [per-entry data...] [receiver_to_entry_idx...]
+     */
+    void emit_channel_allocations_ct_args(std::vector<uint32_t>& ct_args, size_t num_used_receiver_channels) const;
 
     /**
      * Get the base address for a specific remote receiver channel in a specific VC.
@@ -136,3 +143,13 @@ inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
 }
 
 }  // namespace tt::tt_fabric
+
+// fmt formatter specialization for FabricRemoteChannelsAllocator
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricRemoteChannelsAllocator> : fmt::formatter<std::string> {
+    auto format(const tt::tt_fabric::FabricRemoteChannelsAllocator& allocator, fmt::format_context& ctx) const {
+        std::ostringstream stream;
+        stream << allocator;
+        return formatter<std::string>::format(stream.str(), ctx);
+    }
+};

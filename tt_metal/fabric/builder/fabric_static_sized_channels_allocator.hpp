@@ -40,6 +40,16 @@ public:
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     /**
+     * Emit the complete ChannelAllocations CT arg block including tag, num_entries,
+     * per-channel data, and channel-to-entry index mappings.
+     */
+    void emit_channel_allocations_ct_args(
+        std::vector<uint32_t>& ct_args,
+        size_t num_used_vc0_sender_channels,
+        size_t num_used_vc1_sender_channels,
+        size_t num_used_receiver_channels) const;
+
+    /**
      * Get the number of slots for a specific sender channel in a VC.
      * @param vc_id Virtual Channel ID (0 or 1)
      * @param channel_id Channel ID within the VC
