@@ -70,7 +70,6 @@ def create_decoder_block_tensors(
 
     M = 1
     K = 7168
-    post_sdpa_intermediate = 8192
     output_size = 7168
     shape = (1, K)
     max_seq_len = 32 * 1024
@@ -383,49 +382,6 @@ def create_decoder_block_tensors(
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-    ttnn_gather1_output = ttnn.from_torch(
-        torch.zeros((M, post_sdpa_intermediate), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn.get_device_tensors(input_tensor_mesh)[0].device(),
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(gather_core_grid, (M, post_sdpa_intermediate), ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-        tile=a_tile,
-    )
-
-    gather2_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_gather2_output = ttnn.from_torch(
-        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=gather2_mem,
-        mesh_mapper=shard_mesh_mapper,
-    )
-
-    ccl_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_ccl_intermediate = ttnn.from_torch(
-        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=ccl_mem,
-        mesh_mapper=shard_mesh_mapper,
-    )
-
     # ── Attention block output / MoE residual input (overlapped with sdpa_kv_cache_buffer) ──
     # These are temporally disjoint: the kv cache on core (12,9) is done after SDPA,
     # so the attention output and MoE residual input can reuse that L1 region.
@@ -611,9 +567,6 @@ def create_decoder_block_tensors(
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
         "sender_coord": sender_coord,
-        "ttnn_gather1_output": ttnn_gather1_output,
-        "ttnn_gather2_output": ttnn_gather2_output,
-        "ttnn_ccl_intermediate": ttnn_ccl_intermediate,
         "ttnn_sdpa_input_l": ttnn_sdpa_input_l,
         "ttnn_sdpa_input_ms": ttnn_sdpa_input_ms,
         "ttnn_sdpa_output_l": ttnn_sdpa_output_l,
@@ -743,9 +696,6 @@ def test_decoder_block_compile(
         # Post-SDPA
         d["kv_b2_overlapped"],
         d["o_proj_overlapped"],
-        d["ttnn_gather1_output"],
-        d["ttnn_gather2_output"],
-        d["ttnn_ccl_intermediate"],
         d["ttnn_sdpa_input_l"],
         d["ttnn_sdpa_input_ms"],
         d["ttnn_sdpa_output_l"],

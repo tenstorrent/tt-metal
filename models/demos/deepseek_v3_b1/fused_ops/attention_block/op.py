@@ -278,11 +278,17 @@ class AttentionBlock:
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
 
+        def _debug_checkpoint(message):
+            print(f"[AttentionBlock.get_program_context] {message}", flush=True)
+
+        _debug_checkpoint(f"enter sender=({sender_row},{sender_col}) skip_ccl={skip_ccl}")
+
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
+        _debug_checkpoint(f"mesh shape rows={mesh_rows} cols={mesh_cols}")
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
@@ -298,12 +304,17 @@ class AttentionBlock:
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
+        _debug_checkpoint("collected pre-SDPA per-device tensors")
 
         # Post-SDPA parameters
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
+        _debug_checkpoint("collected post-SDPA weights1 per-device tensors")
         post_sdpa_weights2_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights2_tensor.fused_tensor)
+        _debug_checkpoint("collected post-SDPA weights2 per-device tensors")
         post_sdpa_gather3_output_tensors_per_device = ttnn.get_device_tensors(post_sdpa_gather3_output_tensor)
+        _debug_checkpoint("collected post-SDPA gather3 output per-device tensors")
         post_sdpa_intermediate_tensors_per_device = ttnn.get_device_tensors(post_sdpa_intermediate_tensor)
+        _debug_checkpoint("collected post-SDPA per-device tensors")
 
         attention_block_output_is_overlapped = isinstance(attention_block_output_tensor, OverlappedTensor)
         if attention_block_output_is_overlapped:
@@ -317,6 +328,7 @@ class AttentionBlock:
             attention_block_semaphores is not None
             and len(attention_block_semaphores) == AttentionBlock.get_num_semaphores()
         )
+        _debug_checkpoint(f"validated semaphores count={len(attention_block_semaphores)}")
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
@@ -333,6 +345,7 @@ class AttentionBlock:
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
+        _debug_checkpoint("resolved base semaphore addresses")
 
         # Calculate packet size and page info for CCL broadcast
         packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
@@ -455,6 +468,9 @@ class AttentionBlock:
                     ttnn.CoreCoord(qrope_grid_end_x, HEAD_GRID_ROWS - 1),
                 )
             ]
+        )
+        _debug_checkpoint(
+            f"grid setup complete matmul_cores={matmul_num_cores} qnope_cols={QNOPE_GRID_COLS} qrope_cols={QROPE_GRID_COLS}"
         )
 
         dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor.core_range_set
@@ -597,6 +613,9 @@ class AttentionBlock:
         sdpa_forwarder_scratch_sample = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
         sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
         sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
+        _debug_checkpoint(
+            f"sdpa grids resolved worker_cores={sdpa_worker_grid.num_cores()} forwarder_cores={len(sdpa_forwarder_cores)}"
+        )
 
         # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
         full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
@@ -833,6 +852,7 @@ class AttentionBlock:
         # CB indices (auto-assigned via CircularBufferIdManager)
         # ==================================================================
         assert cb_id_context is not None, "cb_id_context must be provided"
+        _debug_checkpoint("starting CB id allocation")
 
         TD_INTERP = ttnn.TileDescriptor(interpreted_tile)
         TD_1x32 = ttnn.TileDescriptor(TILE_1x32)
@@ -952,6 +972,7 @@ class AttentionBlock:
         ccl_packet_header_cb = cb_id_context.get_cb_id(
             ttnn.uint32, TD_32x32
         )  # CCL packet headers (sender + receiver cores)
+        _debug_checkpoint("finished CB id allocation")
 
         attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
 
@@ -1867,16 +1888,18 @@ class AttentionBlock:
         rmsnorm2_page_size = TILE_16x32.get_tile_size(data_format)
 
         per_device_contexts = []
+        _debug_checkpoint("starting per-device context build")
 
         # ========================================================================
         # Kernel descriptors
         # ========================================================================
 
         for row in range(mesh_rows):
-            # ("start of loop for device row {}".format(row))
+            _debug_checkpoint(f"row {row}: begin")
             for col in range(mesh_cols):
                 mesh_coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
+                _debug_checkpoint(f"device ({row},{col}) idx={device_idx}: begin")
 
                 # CCL role calculation (only matters if not skipping CCL)
                 if skip_ccl:
@@ -2848,6 +2871,7 @@ class AttentionBlock:
                 attention_block_output_cb_descriptor.core_ranges = gather_core_grid
                 attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+                _debug_checkpoint(f"device ({row},{col}) idx={device_idx}: CB descriptors created")
 
                 # CB 13: CCL packet headers
                 ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
@@ -3794,7 +3818,11 @@ class AttentionBlock:
                         "sdpa_kv_cache_running_offset_mcast_core": sdpa_kv_cache_running_offset_mcast_core,
                     }
                 )
+                _debug_checkpoint(f"device ({row},{col}) idx={device_idx}: context appended")
 
+            _debug_checkpoint(f"row {row}: complete")
+
+        _debug_checkpoint(f"exit contexts={len(per_device_contexts)}")
         return full_device_grid, per_device_contexts
 
     @staticmethod

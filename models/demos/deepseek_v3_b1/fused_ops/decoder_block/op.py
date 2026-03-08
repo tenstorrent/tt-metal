@@ -19,6 +19,7 @@ from typing import Optional
 
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+from models.demos.deepseek_v3_b1.circular_buffer_utils import CircularBufferIdManager
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
@@ -193,9 +194,6 @@ class DecoderBlock:
         sender_coord,
         post_sdpa_weights1_tensor,
         post_sdpa_weights2_tensor,
-        post_sdpa_gather2_output_tensor,
-        post_sdpa_gather3_output_tensor,
-        post_sdpa_intermediate_tensor,
         sdpa_input_l_mesh,
         sdpa_input_ms_mesh,
         sdpa_output_l_mesh,
@@ -252,9 +250,10 @@ class DecoderBlock:
 
         # Phase 1: Build AttentionBlock program context
         print("Building AttentionBlock program context")
+        cb_id_manager = CircularBufferIdManager()
+        cb_id_context = cb_id_manager.create_context()
         full_device_grid, attn_ctxs = AttentionBlock.get_program_context(
             input_tensor_mesh,
-            intermediate_tensor_mesh,
             gamma_tensor,
             matmul_weights_tensor,
             rmsnorm2_gamma_tensor,
@@ -276,9 +275,6 @@ class DecoderBlock:
             sender_coord,
             post_sdpa_weights1_tensor,
             post_sdpa_weights2_tensor,
-            post_sdpa_gather2_output_tensor,
-            post_sdpa_gather3_output_tensor,
-            post_sdpa_intermediate_tensor,
             sdpa_input_l_mesh,
             sdpa_input_ms_mesh,
             sdpa_output_l_mesh,
@@ -297,6 +293,7 @@ class DecoderBlock:
             fp32_dest_acc_en=fp32_dest_acc_en,
             skip_ccl=skip_ccl,
             noc_mode=noc_mode,
+            cb_id_context=cb_id_context,
         )
 
         # Propagate the kv cache running offset to the OverlappedTensor so MoE places
