@@ -643,6 +643,11 @@ class DecoderBlock:
                     sender_brisc_kernel_idx,
                     ccl_sender_core,
                 )
+                print(
+                    f"[decoder_block] coord={_coord_str(coord)} "
+                    f"ccl_sender_fabric_args={list(sender_fabric_args)} "
+                    f"sender_brisc_rt_args_before_extend={list(sender_brisc_rt_args_ref)}"
+                )
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
 
             # MOE fabric connections (reduce-to-one)

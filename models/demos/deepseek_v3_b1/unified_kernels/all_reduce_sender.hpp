@@ -143,7 +143,13 @@ struct AllReduceSender {
             cb_push_back(WriterCT::packet_header_cb_id, 1);
 
             cb_wait_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
-            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
+            size_t fab_idx_copy = fabric_args_start_index;
+            DPRINT << " CCL SENDER FABRIC RAW [" << fabric_args_start_index << "]:";
+            for (size_t i = 0; i < 10; i++) {
+                DPRINT << " " << get_arg_val<uint32_t>(fabric_args_start_index + i);
+            }
+            DPRINT << ENDL();
+            open_connections(fabric_connection, WriterCT::num_connections, fab_idx_copy);
             auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
             fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
             packet_header_ptr->to_chip_unicast(WriterCT::dst_num_hops);
