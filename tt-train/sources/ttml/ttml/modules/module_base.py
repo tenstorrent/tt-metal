@@ -18,30 +18,27 @@ class AbstractModuleBase(CppModuleBase):
         self.create_name(self.__class__.__name__)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        attr_name = name
-        attr_value = value
-
-        object.__setattr__(self, attr_name, attr_value)
+        object.__setattr__(self, name, value)
 
         # Skip if not initialized yet
         if "_buffers" not in self.__dict__:
             return
 
         # Auto-register modules and tensors
-        if isinstance(attr_value, CppModuleBase):
-            self._bind_module(attr_value, attr_name)
+        if isinstance(value, CppModuleBase):
+            self._bind_module(value, name)
             return
 
-        if isinstance(attr_value, Parameter):
-            self._bind_tensor(attr_value.tensor, attr_name)
+        if isinstance(value, Parameter):
+            self._bind_parameter(value.tensor, name)
             return
 
-        if isinstance(attr_value, Buffer):
-            self._buffers[attr_name] = attr_value.tensor
+        if isinstance(value, Buffer):
+            self._bind_buffer(value.tensor, name)
             return
 
-        if hasattr(attr_value, "get_value"):
-            self._bind_tensor(attr_value, attr_name)
+        if hasattr(value, "get_value"):
+            self._bind_parameter(value, name)
 
     def __delattr__(self, name: str) -> None:
         self._buffers.pop(name, None)
@@ -54,12 +51,16 @@ class AbstractModuleBase(CppModuleBase):
         except RuntimeError:
             self.override_module(module, name)
 
-    def _bind_tensor(self, tensor, name: str) -> None:
+    def _bind_parameter(self, tensor, name: str) -> None:
         """Register or override a tensor parameter by name."""
         try:
             self.register_tensor(tensor, name)
         except RuntimeError:
             self.override_tensor(tensor, name)
+
+    def _bind_buffer(self, buffer, name: str) -> None:
+        """Register a buffer by name."""
+        self._buffers[name] = buffer
 
     def named_parameters(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
         """Yield (name, parameter) pairs."""
