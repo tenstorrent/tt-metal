@@ -35,6 +35,7 @@ on:
 jobs:
   triage-tests:
     name: Triage tests ${{ inputs.runner-label }}
+    timeout-minutes: 15
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
