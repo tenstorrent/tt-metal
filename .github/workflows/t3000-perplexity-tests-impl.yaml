@@ -19,6 +19,7 @@ on:
 
 jobs:
   t3000-accuracy-perplexity-tests:
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
