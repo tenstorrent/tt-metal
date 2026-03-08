@@ -23,7 +23,7 @@ void kernel_main() {
     uint64_t cpu_index = 0;
     asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
     // On Quasar since all 8 kernels are launched: execute only the processor matching dm_id ; skip others
-    if (cpu_index == 0) {
+    if (cpu_index != dm_id) {
         return;
     }
 #endif

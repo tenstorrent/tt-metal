@@ -393,14 +393,8 @@ uint32_t debug_sanitize_noc_addr(
                 // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
                 // Non-torus architectures (Quasar) require start <= end.
 #ifdef ARCH_QUASAR
-                if (noc_id == 0) {
-                    if (x > x_end || y > y_end) {
-                        return_code = DebugSanitizeNocMulticastInvalidRange;
-                    }
-                } else {
-                    if (x_end > x || y_end > y) {
-                        return_code = DebugSanitizeNocMulticastInvalidRange;
-                    }
+                if (x > x_end || y > y_end) {
+                    return_code = DebugSanitizeNocMulticastInvalidRange;
                 }
 #endif
             } else {
