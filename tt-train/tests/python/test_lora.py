@@ -30,10 +30,9 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.common.data import build_causal_mask
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
-from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
+from ttml.models.nanogpt import NanoGPTConfig, create_nanogpt
 from ttml.modules import LinearLayer, LoraConfig, LoraLinear, LoraModel, RunMode
 
 
