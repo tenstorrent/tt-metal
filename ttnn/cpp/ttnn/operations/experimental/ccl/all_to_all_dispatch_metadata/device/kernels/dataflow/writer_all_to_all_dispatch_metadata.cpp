@@ -990,7 +990,7 @@ void kernel_main() {
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
-        send_preparation_buffer_address, (token_end_idx - token_start_idx) * dispatch_devices * sizeof(uint8_t));
+        send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
@@ -1143,7 +1143,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 fabric_max_packet_size,
-                dispatch_devices,
+                num_devices,
                 selected_experts_k>(
                 fabric_connections,
                 unicast_packet_header_neg,
@@ -1168,7 +1168,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 fabric_max_packet_size,
-                dispatch_devices,
+                num_devices,
                 selected_experts_k>(
                 fabric_connections,
                 unicast_packet_header_neg,
