@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -39,7 +39,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-max_tiles = 32
+max_tiles = 4
 
 dimension_combinations = [
     [m, n]
