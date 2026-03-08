@@ -25,6 +25,8 @@ class TtCombineModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        memory_config: ttnn.MemoryConfig = None,
+        init_zeros: bool = True,
     ):
         """
         Initialize combine module wrapper.
@@ -36,6 +38,8 @@ class TtCombineModule(LightweightModule):
             experts_per_chip: Number of experts per chip
             num_experts_per_tok: Number of experts each token is routed to
             seq_len_per_chip: Sequence length per chip
+            memory_config: Output memory configuration (L1 or DRAM interleaved)
+            init_zeros: Whether to zero-initialize the output buffer
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -47,6 +51,8 @@ class TtCombineModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.memory_config = memory_config
+        self.init_zeros = init_zeros
 
     def forward(
         self,
@@ -76,5 +82,7 @@ class TtCombineModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
+            memory_config=self.memory_config,
+            init_zeros=self.init_zeros,
         )
         return output

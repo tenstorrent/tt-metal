@@ -41,6 +41,7 @@ void bind_combine(nb::module_& mod) {
             cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
             num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
             topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
+            init_zeros (bool, optional): Whether to zero-initialize the output buffer. Defaults to True.
 
         Returns:
             ttnn.Tensor: Combined output tensor of shape (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
@@ -74,7 +75,8 @@ void bind_combine(nb::module_& mod) {
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                std::optional<uint32_t> cluster_axis,
                std::optional<uint32_t> num_links,
-               std::optional<tt::tt_fabric::Topology> topology) {
+               std::optional<tt::tt_fabric::Topology> topology,
+               bool init_zeros) {
                 return self(
                     dispatched_buffer,
                     dispatched_metadata,
@@ -87,7 +89,8 @@ void bind_combine(nb::module_& mod) {
                     subdevice_id,
                     cluster_axis,
                     num_links,
-                    topology);
+                    topology,
+                    init_zeros);
             },
             nb::arg("dispatched_buffer").noconvert(),
             nb::arg("dispatched_metadata").noconvert(),
@@ -101,7 +104,8 @@ void bind_combine(nb::module_& mod) {
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
+            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
+            nb::arg("init_zeros") = true});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

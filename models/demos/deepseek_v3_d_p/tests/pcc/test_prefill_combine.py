@@ -281,6 +281,8 @@ def test_ttnn_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        init_zeros=True,
     )
 
     tt_output = tt_combine(

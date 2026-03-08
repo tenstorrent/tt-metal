@@ -30,6 +30,7 @@ struct CombineDeviceOperation {
         const tt::tt_fabric::Topology topology;
         const MemoryConfig output_mem_config;
         const CoreRangeSet worker_core_range_set;
+        const bool init_zeros;
 
         static constexpr auto attribute_names = std::forward_as_tuple(
             "dispatch_group_size",
@@ -40,7 +41,8 @@ struct CombineDeviceOperation {
             "num_links",
             "topology",
             "output_mem_config",
-            "worker_core_range_set");
+            "worker_core_range_set",
+            "init_zeros");
 
         auto attribute_values() const {
             return std::forward_as_tuple(
@@ -52,7 +54,8 @@ struct CombineDeviceOperation {
                 num_links,
                 topology,
                 output_mem_config,
-                worker_core_range_set);
+                worker_core_range_set,
+                init_zeros);
         };
     };
 
@@ -123,5 +126,6 @@ ttnn::Tensor prefill_combine(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set);
+    const CoreRangeSet& worker_core_range_set,
+    bool init_zeros);
 }  // namespace ttnn::prim
