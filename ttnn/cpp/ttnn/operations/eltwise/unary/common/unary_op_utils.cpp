@@ -97,6 +97,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -773,6 +774,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LOGSIGMOID: return {};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
+        case UnaryOpType::DIGAMMA: return {"digamma_tile_init();", fmt::format("digamma_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }

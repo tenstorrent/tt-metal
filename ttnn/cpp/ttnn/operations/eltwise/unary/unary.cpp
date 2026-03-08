@@ -126,6 +126,7 @@ template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
 template struct ExecuteUnary<UnaryOpType::CBRT>;
 template struct ExecuteUnary<UnaryOpType::LGAMMA>;
+template struct ExecuteUnary<UnaryOpType::DIGAMMA>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
