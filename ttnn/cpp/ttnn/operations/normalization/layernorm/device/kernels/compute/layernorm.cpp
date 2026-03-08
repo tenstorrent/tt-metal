@@ -14,11 +14,21 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#ifdef TILIZE_IN
+#include "api/compute/tilize.h"
+#endif
+#ifdef UNTILIZE_OUT
+#include "api/compute/pack_untilize.h"
+#endif
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+
+#include "layernorm_compute_utils.h"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -31,7 +41,7 @@ ALWI void REL() { release_dst(); }
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
@@ -58,6 +68,8 @@ void kernel_main() {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
 
+    constexpr auto cb_in_rm = tt::CBIndex::c_27;  // input row-major (if row-major input, otherwise unused)
+
     constexpr int onetile = 1;
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
@@ -73,14 +85,14 @@ void kernel_main() {
     constexpr uint32_t cb_x = cb_in;
 #endif
 
-#ifdef FUSE_PRE_ADD
+#ifdef TILIZE_IN
+    binary_op_init_common(cb_in_rm, cb_in_rm, cb_in);
+#elif defined(FUSE_PRE_ADD)
     binary_op_init_common(cb_in, cb_inb, cb_x);
-#else
-#ifdef RMSNORM
+#elif defined(RMSNORM)
     binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
 #else
     binary_op_init_common(cb_x, cb_scaler, cb_ex);
-#endif
 #endif
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
@@ -89,9 +101,20 @@ void kernel_main() {
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
-    const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
+    const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifdef TILIZE_IN
+        tilize_all_blocks_to_cb<block_size>(cb_in_rm, cb_in, Wt);
+        // Re-init binary ops after tilize hardware reconfiguration.
+#ifdef FUSE_PRE_ADD
+        binary_op_init_common(cb_in, cb_inb, cb_x);
+#elif defined(RMSNORM)
+        binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
+#else
+        binary_op_init_common(cb_x, cb_scaler, cb_ex);
+#endif
+#endif
 /*
  * X + Y
  */
@@ -99,7 +122,7 @@ void kernel_main() {
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
         add_tiles_init(cb_in, cb_inb);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             ACQ();
             // In/inb come from the reader and need to be
             // synced on full block size. Keep cb_x aligned
@@ -133,13 +156,13 @@ void kernel_main() {
 #ifndef RMSNORM
         // E[x]
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
-            cb_x, cb_scaler, cb_ex, W, Wt, blk);
+            cb_x, cb_scaler, cb_ex, W, Wt, block_size);
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
         cb_reserve_back(cb_xmm, total_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             ACQ();
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
@@ -160,7 +183,7 @@ void kernel_main() {
          * compute temp = xmm*xmm = (x-E[x])^2
          */
         mul_tiles_init(cb_xmm, cb_xmm);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
             cb_wait_front(cb_xmm, block.start() + block.size());
 #else
@@ -182,7 +205,7 @@ void kernel_main() {
 
         // Var[x]
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_xmm2, cb_scaler, cb_ex2, W, Wt, blk);
+            cb_xmm2, cb_scaler, cb_ex2, W, Wt, block_size);
 
         // Var[x] + eps
         cb_wait_front(cb_ex2, 1);
@@ -202,7 +225,7 @@ void kernel_main() {
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_wait_front(cb_ex2pe, 1);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
                 pack_reconfig_data_format(cb_out);
@@ -299,5 +322,10 @@ void kernel_main() {
         }
         cb_pop_front(cb_ex2pe, 1);
         cb_pop_front(cb_xmm, total_buffer_size);
+
+#ifdef UNTILIZE_OUT
+        constexpr auto cb_out_rm = tt::CBIndex::c_28;
+        untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
+#endif
     }  // NCHt loop
 }
