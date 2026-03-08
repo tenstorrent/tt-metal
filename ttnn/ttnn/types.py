@@ -93,6 +93,7 @@ BcastOpDim = ttnn._ttnn.types.BcastOpDim
 DataMovementProcessor = ttnn._ttnn.types.DataMovementProcessor
 NOC = ttnn._ttnn.types.NOC
 NOC_MODE = ttnn._ttnn.types.NOC_MODE
+KernelBuildOptLevel = ttnn._ttnn.types.KernelBuildOptLevel
 
 TileDescriptor = ttnn._ttnn.program_descriptor.TileDescriptor
 CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor

@@ -69,6 +69,8 @@ void py_module_types(nb::module_& mod) {
 
     export_enum<tt::tt_metal::NOC_MODE>(mod, "NOC_MODE");
 
+    export_enum<tt::tt_metal::KernelBuildOptLevel>(mod, "KernelBuildOptLevel");
+
     nb::implicitly_convertible<nb::int_, ttnn::QueueId>();
     nb::implicitly_convertible<unsigned char, ttnn::QueueId>();
 

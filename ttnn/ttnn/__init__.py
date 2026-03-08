@@ -251,6 +251,7 @@ from ttnn.types import (
     DataMovementProcessor,
     NOC,
     NOC_MODE,
+    KernelBuildOptLevel,
     TileDescriptor,
     CBFormatDescriptor,
     CBDescriptor,

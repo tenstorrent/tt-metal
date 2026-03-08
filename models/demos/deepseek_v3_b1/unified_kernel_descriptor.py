@@ -170,6 +170,9 @@ class UnifiedKernelDescriptor:
     ] = None  # Per-core runtime args for all RISCs
     defines: list = field(default_factory=list)  # List of (name, value) tuples
     noc_mode: ttnn.NOC_MODE = ttnn.NOC_MODE.DM_DEDICATED_NOC
+    ncrisc_opt_level: Optional[ttnn.KernelBuildOptLevel] = ttnn.KernelBuildOptLevel.O2
+    brisc_opt_level: Optional[ttnn.KernelBuildOptLevel] = ttnn.KernelBuildOptLevel.O2
+    trisc_opt_level: Optional[ttnn.KernelBuildOptLevel] = ttnn.KernelBuildOptLevel.O2
 
     def _get_core_range_set(
         self, core_range: Union[ttnn.CoreCoord, ttnn.CoreRange, ttnn.CoreRangeSet]
@@ -269,6 +272,7 @@ class UnifiedKernelDescriptor:
                 noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
                 noc_mode=self.noc_mode,
             ),
+            opt_level=self.ncrisc_opt_level,
         )
 
         # Writer kernel (BRISC)
@@ -286,6 +290,7 @@ class UnifiedKernelDescriptor:
                 noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
                 noc_mode=self.noc_mode,
             ),
+            opt_level=self.brisc_opt_level,
         )
 
         # Compute kernel (TRISC)
@@ -300,6 +305,7 @@ class UnifiedKernelDescriptor:
             common_runtime_args=self.trisc_common_runtime_args,
             runtime_args=trisc_runtime_args,
             config=compute_config,
+            opt_level=self.trisc_opt_level,
         )
 
         kernels = [reader_descriptor, writer_descriptor, compute_descriptor]

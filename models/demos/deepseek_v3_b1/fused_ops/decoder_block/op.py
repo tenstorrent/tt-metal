@@ -494,6 +494,9 @@ class DecoderBlock:
                 ),
                 defines=list(moe_defines.items()),
                 noc_mode=noc_mode,
+                ncrisc_opt_level=ttnn.KernelBuildOptLevel.Os,
+                brisc_opt_level=ttnn.KernelBuildOptLevel.Os,
+                trisc_opt_level=ttnn.KernelBuildOptLevel.Os,
             )
 
             kr = uk.get_kernel_descriptors()
