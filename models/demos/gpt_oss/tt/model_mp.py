@@ -675,9 +675,10 @@ class ModelWithMP:
 
         # Prepare page table if provided
         if page_table is not None:
-            page_table = [
-                ttnn.from_torch(page_table, device=submesh, dtype=ttnn.int32) for submesh in self.mp_submeshes
-            ]
+            if not isinstance(page_table, (tuple, list)):
+                page_table = [
+                    ttnn.from_torch(page_table, device=submesh, dtype=ttnn.int32) for submesh in self.mp_submeshes
+                ]
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
