@@ -99,8 +99,7 @@ inline void matmul_one_row(
     }
 
     tile_regs_commit();
-    pack_l1_acc_block(
-        static_cast<uint32_t>(cb_acc_idx), /*first_block=*/false, block_size, acc_offset, /*use_l1_acc=*/false);
+    pack_block_to_cb(static_cast<uint32_t>(cb_acc_idx), block_size, acc_offset);
 }
 
 inline void compute_sigmoid(uint32_t tile_offset, uint32_t current_block_size) {
