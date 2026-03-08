@@ -61,6 +61,7 @@ jobs:
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         HF_MODEL: ${{ matrix.model.hf_model }}
+        TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/${{ matrix.model.hf_model }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -154,6 +155,7 @@ jobs:
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         HF_MODEL: ${{ matrix.model.hf_model }}
+        TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/${{ matrix.model.hf_model }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
