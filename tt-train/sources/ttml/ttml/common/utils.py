@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -68,36 +68,27 @@ def initialize_device(yaml_config: dict):
 
 
 def create_optimizer(model, yaml_config: dict):
-    """Create AdamW or MorehAdamW optimizer from configuration.
+    """Create an optimizer from the optimizer config YAML.
+
+    Accepts either a top-level YAML config dict (with training_config.optimizer)
+    or the optimizer dict directly (detected by the presence of a "type" key).
+    Passes the dict straight to the C++ optimizer factory.
 
     Args:
         model: Model to optimize
-        yaml_config: Dictionary containing optimizer configuration
+        yaml_config: Top-level YAML config dict or optimizer dict
 
     Returns:
-        AdamW or MorehAdamW optimizer instance based on configuration
+        Optimizer instance
     """
-    optimizer_config = yaml_config.get("training_config", {})
-
-    lr = optimizer_config.get("learning_rate", 0.0003)
-    beta1 = optimizer_config.get("beta1", 0.9)
-    beta2 = optimizer_config.get("beta2", 0.999)
-    eps = optimizer_config.get("eps", 1e-8)
-    weight_decay = optimizer_config.get("weight_decay", 0.01)
-    use_moreh_adamw = optimizer_config.get("use_moreh_adamw", False)
-
-    adamw_cfg = ttml.optimizers.AdamWConfig.make(
-        float(lr),
-        float(beta1),
-        float(beta2),
-        float(eps),
-        float(weight_decay),
-    )
-
-    if use_moreh_adamw:
-        return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
+    if "type" in yaml_config:
+        optimizer_cfg = yaml_config
     else:
-        return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
+        tc = yaml_config.get("training_config", {})
+        optimizer_cfg = tc.get("optimizer")
+        if optimizer_cfg is None:
+            raise ValueError("training_config must contain an 'optimizer' section")
+    return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 
 def get_loss_over_devices(loss):

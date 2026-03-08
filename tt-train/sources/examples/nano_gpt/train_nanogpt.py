@@ -9,7 +9,7 @@ including:
 - Full model training with GPT2/NanoGPT and Llama architectures
 - Gradient accumulation
 - Learning rate scheduling (identity, warmup_linear)
-- Optimizers (AdamW, MorehAdamW)
+- Optimizers (via create_optimizer from config)
 - Model checkpointing and resuming
 - Loss tracking and averaging
 - Configurable training parameters
@@ -43,7 +43,7 @@ from ttml.models.llama import (
     LlamaRopeScalingConfig,
 )
 from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_home
+from ttml.common.utils import round_up_to_tile, get_tt_metal_home, create_optimizer
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 
@@ -79,9 +79,6 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
-        self.use_no_op = tc.get("use_no_op", False)
-        self.use_moreh_adamw = tc.get("use_moreh_adamw", False)
-        self.use_kahan_summation = tc.get("use_kahan_summation", False)
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
@@ -92,7 +89,6 @@ class TrainingConfig(BaseTrainingConfig):
         # Aliases to match expected field names in this example
         self.num_epochs = self.epochs
         self.model_save_interval = self.save_every
-        self.learning_rate = self.lr
 
 
 @dataclass
@@ -1017,12 +1013,6 @@ def main():
         help="Number of training epochs - overrides config",
     )
     parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=None,
-        help="Learning rate - overrides config",
-    )
-    parser.add_argument(
         "--clip_grad_norm",
         type=float,
         default=None,
@@ -1163,8 +1153,6 @@ def main():
         training_config.max_steps = args.max_steps
     if args.num_epochs is not None:
         training_config.num_epochs = args.num_epochs
-    if args.learning_rate is not None:
-        training_config.learning_rate = args.learning_rate
     if args.clip_grad_norm is not None:
         training_config.use_clip_grad_norm = True
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
@@ -1344,46 +1332,9 @@ def main():
         print("\n3. Inference mode - skipping optimizer setup")
     else:
         print("\n3. Setting up optimizer...")
-        # Create optimizer config
-        if training_config.use_no_op:
-            print("   WARNING: Using NoOp optimizer - parameters will NOT be updated.")
-            optimizer = None  # NoOp not available in Python API yet
-        else:
-            # AdamWConfig.make() requires: lr, beta1, beta2, epsilon, weight_decay
-            # Default values
-            beta1 = 0.9
-            beta2 = 0.999
-            epsilon = 1e-8
-
-            adamw_config = ttml.optimizers.AdamWConfig.make(
-                training_config.learning_rate,  # lr
-                beta1,  # beta1
-                beta2,  # beta2
-                epsilon,  # epsilon
-                training_config.weight_decay,  # weight_decay
-            )
-
-            # Note: use_kahan_summation is not exposed in Python API yet
-            # It's a property of AdamWConfig but can't be set via make()
-            # For now, we'll skip it (defaults to False)
-
-            # Get model parameters
-            parameters = model.parameters()
-
-            if training_config.use_moreh_adamw:
-                optimizer = ttml.optimizers.MorehAdamW(parameters, adamw_config)
-                print("   - Optimizer: MorehAdamW")
-            else:
-                optimizer = ttml.optimizers.AdamW(parameters, adamw_config)
-                print("   - Optimizer: AdamW")
-
-            print(f"   - Learning rate: {training_config.learning_rate}")
-            print(f"   - Weight decay: {training_config.weight_decay}")
-            print(f"   - Beta1: {beta1}, Beta2: {beta2}, Epsilon: {epsilon}")
-            if training_config.use_kahan_summation:
-                print(
-                    "   - Note: Kahan summation requested but not available in Python API"
-                )
+        optimizer = create_optimizer(model, yaml_config)
+        print(f"   - Optimizer: {optimizer.get_name()}")
+        print(f"   - Learning rate: {optimizer.get_lr()}")
 
         # Memory snapshot after optimizer creation
         if args.track_memory:
