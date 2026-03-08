@@ -99,6 +99,7 @@ env:
 jobs:
   ttnn-conv-tests:
     if: ${{ inputs.run_conv_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -152,6 +153,7 @@ jobs:
 
   ttnn-matmul-tests:
     if: ${{ inputs.run_matmul_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -204,6 +206,7 @@ jobs:
 
   ttnn-docs-examples-tests:
     if: ${{ inputs.run_docs_examples_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -252,6 +255,7 @@ jobs:
 
   ttnn-fused-tests:
     if: ${{ inputs.run_fused_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -304,6 +308,7 @@ jobs:
 
   ttnn-reduction-tests:
     if: ${{ inputs.run_reduction_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -356,6 +361,7 @@ jobs:
 
   ttnn-experimental-tests:
     if: ${{ inputs.run_experimental_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -408,6 +414,7 @@ jobs:
 
   ttnn-pool-tests:
     if: ${{ inputs.run_pool_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -460,6 +467,7 @@ jobs:
 
   ttnn-sdxl-tests:
     if: ${{ inputs.run_sdxl_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -520,6 +528,7 @@ jobs:
 
   ttnn-train-nightly-tests:
     if: ${{ inputs.run_train_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -573,6 +582,7 @@ jobs:
         if: always()
   ttnn-sdpa-nightly-tests:
     if: ${{ inputs.run_sdpa_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -628,6 +638,7 @@ jobs:
         if: always()
   ttnn-sdpa-stress-tests:
     if: ${{ inputs.run_sdpa_stress_tests }}
+    timeout-minutes: 240
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -684,6 +695,7 @@ jobs:
 
   ttnn-eltwise-tests:
     if: ${{ inputs.run_eltwise_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -749,6 +761,7 @@ jobs:
 
   ttnn-transformers-tests:
     if: ${{ inputs.run_transformers_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -801,6 +814,7 @@ jobs:
         if: always()
   ttnn-moreh-tests:
     if: ${{ inputs.run_moreh_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -853,6 +867,7 @@ jobs:
         if: always()
   ttnn-data_movement-tests:
     if: ${{ inputs.run_data_movement_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -915,6 +930,7 @@ jobs:
         if: always()
   ttnn-misc-tests:
     if: ${{ inputs.run_misc_tests }}
+    timeout-minutes: 180
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
