@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 InputLayout = Literal["NLC", "NHWC"]
 OutputLayout = Literal["NLC", "NHWC"]
@@ -132,31 +134,54 @@ def output_length_from_input_length(input_length, conv1d_config: Conv1dConfigura
     ) // conv1d_config.stride + 1
 
 
-def input_shape_to_slice_config(input_shape, conv1d_config: Conv1dConfiguration) -> Optional[ttnn.Conv2dSliceConfig]:
-    batch_size, input_height, input_width, input_channels = input_shape
-    output_len = output_length_from_input_length(input_width, conv1d_config)
-    # return determine_slice_strategy(batch_size, output_len, conv1d_config.in_channels, conv1d_config.kernel_size)
-
-    if (output_len, conv1d_config.in_channels, conv1d_config.kernel_size) in dims_to_num_slices:
-        num_slices = dims_to_num_slices[(output_len, conv1d_config.in_channels, conv1d_config.kernel_size)]
-        # num_slices = 1
-        return ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
-
-    return None
+dims_to_config_values = {
+    # (output_length, in_channels, out_channels, kernel_size): (num_slices, act_block_h_override, act_block_w_div)
+    (1780, 768, 768, 128): (56, 0, 1),
+    (113986, 1, 512, 10): (2, 32, 1),
+    ((113986 // 128) * 128, 1, 512, 10): (2, 128, 1),
+    (56992, 512, 512, 3): (3, 32 * 3, 1),
+    (28495, 512, 512, 3): (4, 32 * 0, 1),
+    (14247, 512, 512, 3): (1, 32 * 24, 1),
+    (35600, 1, 256, 96): (1, 32, 1),
+    (35600, 256, 256, 3): (1, 32 * 24, 1),
+    (35600, 256, 256, 7): (1, 32 * 24, 1),
+    (35600, 256, 256, 11): (1, 32 * 16, 1),
+    (213600, 1, 128, 16): (2, 32, 1),
+    (213600, 128, 128, 3): (2, 32, 1),
+    (213600, 128, 128, 7): (2, 32, 1),
+    (213600, 128, 128, 11): (4, 32, 1),
+    (427200, 1, 64, 8): (1, 32, 1),
+    (427200, 64, 64, 3): (2, 32, 1),
+    (427200, 64, 64, 7): (2, 32, 1),
+    (427200, 64, 64, 11): (2, 32, 1),
+    (854400, 1, 32, 4): (1, 32 * 4, 1),
+    (854400, 32, 32, 3): (2, 32 * 24, 1),
+    (854400, 32, 32, 7): (2, 32 * 16, 1),
+    (854400, 32, 32, 11): (32, 32 * 0, 1),
+    (1708800, 16, 16, 3): (32, 32 * 0, 1),
+    (1708800, 16, 16, 7): (32, 32, 1),
+    (1708800, 16, 16, 11): (32, 32 * 0, 1),
+    (1708800, 16, 1, 7): (16, 32 * 0, 1),
+}
 
 
 def get_conv_configs(
-    input_shape, conv1d_config: Conv1dConfiguration, device: ttnn.Device
+    input_length, conv1d_config: Conv1dConfiguration, device: ttnn.Device
 ) -> tuple[ttnn.Conv2dConfig, ttnn.Conv2dSliceConfig, ttnn.DeviceComputeKernelConfig]:
-    slice_config = input_shape_to_slice_config(input_shape, conv1d_config)
-    # if conv1d_config.activation is not None:
-    #     activation = conv1d_config.activation
+    output_length = output_length_from_input_length(input_length, conv1d_config)
+    num_slices, act_block_h_override, act_block_w_div = dims_to_config_values.get(
+        (output_length, conv1d_config.in_channels, conv1d_config.out_channels, conv1d_config.kernel_size),
+        (1, 0, 1),
+    )
+    slice_config = ttnn.Conv2dSliceConfig(
+        num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth
+    )  # if num_slices > 1 else None
 
     activation = conv1d_config.activation if conv1d_config.activation is not None else None
     return (
         ttnn.Conv2dConfig(
             weights_dtype=conv1d_config.weights_dtype,
-            shard_layout=None,
+            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             # output_layout=conv1d_config.output_layout,
             # deallocate_activation=conv1d_config.deallocate_activation,
             # reallocate_halo_output=conv1d_config.reallocate_halo_output,
@@ -164,7 +189,10 @@ def get_conv_configs(
             # enable_weights_double_buffer=conv1d_config.enable_weights_double_buffer,
             # config_tensors_in_dram=conv1d_config.config_tensors_in_dram,
             # force_split_reader=True,
-            # act_block_h_override=32,
+            config_tensors_in_dram=True,  # Force tensors in DRAM to avoid L1 thrashing for large activations
+            act_block_h_override=act_block_h_override,
+            act_block_w_div=act_block_w_div,
+            # reshard_if_not_optimal=True,
             activation=activation,
             # slice_config=slice_config,
         ),
@@ -176,73 +204,6 @@ def get_conv_configs(
             # packer_l1_acc=conv1d_config.packer_l1_acc,
         ),
     )
-
-
-dims_to_num_slices = {
-    (56992, 512, 3): 7,
-    # Conv1d: batch_size=1, input_length=569938, output_length=113986, in_channels=1, out_channels: 512, kernel_size=10, stride=5, padding=0, dilation=1
-    (113986, 1, 10): 3,
-    (113995, 1, 10): 64,
-    # Conv1d: batch_size=1, input_length=56992, output_length=28495, in_channels=512, out_channels: 512, kernel_size=3, stride=2, padding=0, dilation=1
-    (28495, 512, 3): 4,
-    # Conv1d: batch_size=1, input_length=28495, output_length=14247, in_channels=512, out_channels: 512, kernel_size=3, stride=2, padding=0, dilation=1
-    (14247, 512, 3): 2,
-    # Conv1d: batch_size=1, input_length=1780, output_length=1781, in_channels=768, out_channels: 768, kernel_size=128, stride=1, padding=64, dilation=1
-    (1781, 768, 128): 56,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=35600, in_channels=1, out_channels: 256, kernel_size=96, stride=48, padding=24, dilation=1
-    (35600, 1, 96): 3,
-    # Conv1d: batch_size=1, input_length=35600, output_length=35600, in_channels=256, out_channels: 256, kernel_size=3, stride=1, padding=1, dilation=1
-    (35600, 256, 3): 2,
-    # Conv1d: batch_size=1, input_length=35600, output_length=35600, in_channels=256, out_channels: 256, kernel_size=7, stride=1, padding=3, dilation=1
-    (35600, 256, 7): 4,
-    # Conv1d: batch_size=1, input_length=35600, output_length=35600, in_channels=256, out_channels: 256, kernel_size=11, stride=1, padding=5, dilation=1
-    (35600, 256, 11): 6,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=213600, in_channels=1, out_channels: 128, kernel_size=16, stride=8, padding=4, dilation=1
-    (213600, 1, 16): 3,
-    # Conv1d: batch_size=1, input_length=213600, output_length=213600, in_channels=128, out_channels: 128, kernel_size=3, stride=1, padding=1, dilation=1
-    (213600, 128, 3): 6,
-    # Conv1d: batch_size=1, input_length=213600, output_length=213600, in_channels=128, out_channels: 128, kernel_size=7, stride=1, padding=3, dilation=1
-    (213600, 128, 7): 14,
-    # Conv1d: batch_size=1, input_length=213600, output_length=213600, in_channels=128, out_channels: 128, kernel_size=11, stride=1, padding=5, dilation=1
-    (213600, 128, 11): 27,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=427200, in_channels=1, out_channels: 64, kernel_size=8, stride=4, padding=2, dilation=1
-    (427200, 1, 8): 3,
-    # Conv1d: batch_size=1, input_length=427200, output_length=427200, in_channels=64, out_channels: 64, kernel_size=3, stride=1, padding=1, dilation=1
-    (427200, 64, 3): 6,
-    # Conv1d: batch_size=1, input_length=427200, output_length=427200, in_channels=64, out_channels: 64, kernel_size=7, stride=1, padding=3, dilation=1
-    (427200, 64, 7): 11,
-    # Conv1d: batch_size=1, input_length=427200, output_length=427200, in_channels=64, out_channels: 64, kernel_size=11, stride=1, padding=5, dilation=1
-    (427200, 64, 11): 18,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=854400, in_channels=1, out_channels: 32, kernel_size=4, stride=2, padding=1, dilation=1
-    (854400, 1, 4): 3,
-    # Conv1d: batch_size=1, input_length=854400, output_length=854400, in_channels=32, out_channels: 32, kernel_size=3, stride=1, padding=1, dilation=1
-    (854400, 32, 3): 6,
-    # Conv1d: batch_size=1, input_length=854400, output_length=854400, in_channels=32, out_channels: 32, kernel_size=7, stride=1, padding=3, dilation=1
-    (854400, 32, 7): 11,
-    # Conv1d: batch_size=1, input_length=854400, output_length=854400, in_channels=32, out_channels: 32, kernel_size=11, stride=1, padding=5, dilation=1
-    (854400, 32, 11): 17,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=1708800, in_channels=16, out_channels: 16, kernel_size=3, stride=1, padding=1, dilation=1
-    (1708800, 16, 3): 8,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=1708800, in_channels=16, out_channels: 16, kernel_size=7, stride=1, padding=3, dilation=1
-    (1708800, 16, 7): 13,
-    # Conv1d: batch_size=1, input_length=1708800, output_length=1708800, in_channels=16, out_channels: 16, kernel_size=11, stride=1, padding=5, dilation=1
-    (1708800, 16, 11): 18,
-}
-
-# def determine_slice_strategy(
-#     batch_size: int, ouput_length: int, in_channels: int, kernel_size: int
-# ) -> Optional[SliceStrategy]:
-#     if (ouput_length, in_channels, kernel_size) in dims_to_num_slices:
-#         num_slices = dims_to_num_slices[(ouput_length, in_channels, kernel_size)]
-#         return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
-#     else:
-#         return ttnn.Op2DSliceConfig(num_slices=1, slice_type=ttnn.Op2DDRAMSliceWidth)
-#     l1_free_th = 1_300_000 * 60  # in bytes
-#     memory_cost = batch_size * ouput_length * in_channels * kernel_size * 2  # assuming bfloat16, so 2 bytes per element
-#     if memory_cost > l1_free_th:
-#         num_slices = (memory_cost + l1_free_th - 1) // l1_free_th + 2
-#         return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
-#     return None
 
 
 class Conv1d:
@@ -309,7 +270,10 @@ class Conv1d:
             1,
             self.configuration.kernel_size,
         )
+        # Keep a torch-reference copy for internal F.conv1d parity check.
+        self.torch_weight = parameters[weight_key].detach().to(torch.float32).contiguous()
         bias = parameters[bias_key] if bias_key in parameters and parameters[bias_key] is not None else None
+        self.torch_bias = None if bias is None else bias.detach().to(torch.float32).contiguous()
         self.weight_tensor = ttnn.from_torch(wt, dtype=ttnn.bfloat16)
         self.bias_tensor = None
         if bias is not None:
@@ -325,7 +289,7 @@ class Conv1d:
         input_2d = input1d_to_2d(input_tensor)
         batch_size = input_2d.shape[0]
         input_length = input_2d.shape[2]
-        conv2d_config, slice_config, compute_config = get_conv_configs(input_2d.shape, self.configuration, self.device)
+        conv2d_config, slice_config, compute_config = get_conv_configs(input_length, self.configuration, self.device)
         conv_result, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
             input_tensor=input_2d,
             weight_tensor=self.weight_tensor,
@@ -351,7 +315,34 @@ class Conv1d:
         output_shape = conv_result.shape
         conv_result = ttnn.to_layout(conv_result, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(conv_result, (batch_size, output_shape[2], output_shape[3]))
+        # self._check_against_torch(input_tensor, x)
         return x
+
+    def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
+        # Compare TT Conv1d output against torch.nn.functional.conv1d reference.
+        torch_input = ttnn.to_torch(ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)).to(torch.float32)
+        if not hasattr(self, "torch_weight"):
+            raise ValueError("Conv1d torch reference weight is not initialized. Call load_parameters first.")
+        torch_weight = self.torch_weight
+        torch_bias = self.torch_bias
+
+        # TT interface uses NLC, while torch conv1d expects NCL.
+        torch_input_ncl = torch_input.permute(0, 2, 1).contiguous()
+        pad_left, pad_right = self.configuration.padding
+        if pad_left != 0 or pad_right != 0:
+            torch_input_ncl = F.pad(torch_input_ncl, (pad_left, pad_right))
+        torch_ref = F.conv1d(
+            torch_input_ncl,
+            torch_weight,
+            bias=torch_bias,
+            stride=self.configuration.stride,
+            padding=0,
+            dilation=self.configuration.dilation,
+            groups=self.configuration.groups,
+        )
+        torch_ref_nlc = torch_ref.permute(0, 2, 1).contiguous()
+        tt_output_torch = ttnn.to_torch(ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)).to(torch.float32)
+        assert_with_pcc(torch_ref_nlc, tt_output_torch, pcc=0.99)
 
     def deallocate(self) -> None:
         if self.weight_tensor is not None:
