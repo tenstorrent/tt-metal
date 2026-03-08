@@ -19,6 +19,17 @@
     DebugPrinter()
 #endif
 
+// Zero a DRAM page by writing zeros from L1's MEM_ZEROS_BASE
+void zero_dram_page_async(uint64_t dram_noc_addr, uint32_t page_size) {
+    uint32_t bytes = page_size;
+    while (bytes > 0) {
+        uint32_t curr_bytes = std::min(bytes, (uint32_t)MEM_ZEROS_SIZE);
+        noc_async_write(MEM_ZEROS_BASE, dram_noc_addr, curr_bytes);
+        dram_noc_addr += curr_bytes;
+        bytes -= curr_bytes;
+    }
+}
+
 void kernel_main() {
     // ===== Compile Time Args =====
     // CB IDs (indices 0-3)
@@ -77,6 +88,18 @@ void kernel_main() {
                    << " seq_len_per_chip=" << seq_len_per_chip
                    << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert
                    << " hidden_size=" << hidden_size << ENDL();
+
+    // Zero-initialize output buffer before reading inputs
+    // This overlaps with fabric initialization in the writer kernel
+    // Each chip initializes its own output tensor to ensure predictable values
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    DPRINT_COMBINE << "Zero-init output: pages=" << output_pages << " page_size=" << aligned_output_page_size << ENDL();
+    for (uint32_t page = 0; page < output_pages; page++) {
+        uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
+        zero_dram_page_async(page_noc_addr, aligned_output_page_size);
+    }
+    noc_async_write_barrier();
+    DPRINT_COMBINE << "Zero-init done" << ENDL();
 
     // ====
     // read experts token counter (chips/fractured ==1, experts_per_chip)
