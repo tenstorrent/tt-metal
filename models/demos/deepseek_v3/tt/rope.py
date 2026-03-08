@@ -275,10 +275,10 @@ class RotarySetup:
 
         # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
         cos_matrix_transposeHC = ttnn.to_memory_config(
-            cos, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            cos, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
         sin_matrix_transposeHC = ttnn.to_memory_config(
-            sin, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            sin, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
         # print(f"[get_rot_mats] cos_matrix_transposeHC.shape={cos_matrix_transposeHC.shape}, sin_matrix_transposeHC.shape={sin_matrix_transposeHC.shape}", flush=True)
@@ -373,10 +373,10 @@ class RotarySetup:
 
         # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
         cos_matrix_transposeHC = ttnn.to_memory_config(
-            cos, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            cos, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
         sin_matrix_transposeHC = ttnn.to_memory_config(
-            sin, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            sin, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
         # print(f"[get_rot_mats_from_rot_idxs] cos_matrix_transposeHC.shape={cos_matrix_transposeHC.shape}, sin_matrix_transposeHC.shape={sin_matrix_transposeHC.shape}", flush=True)

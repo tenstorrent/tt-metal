@@ -1792,7 +1792,7 @@ class MLA1D(AbstractModule):
             tt_kv_rope,
             rope_tensors["cos_matrix_transposeHC"],
             rope_tensors["sin_matrix_transposeHC"],
-            rope_tensors["trans_matrix_for_hc"],
+            rope_tensors["trans_matrix"],
             is_decode_mode=True,
             input_transpose=ttnn.RotaryEmbeddingTranspose.HC,
             memory_config=ttnn.L1_MEMORY_CONFIG,
