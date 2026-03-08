@@ -317,16 +317,15 @@ class MasterConfigLoader:
         """
         if master_file_path is None:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2.json")
             reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
+            master_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
 
-            # Prefer reconstructed V2 if it exists (from database)
             if os.path.exists(reconstructed_v2_path):
                 logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
                 master_file_path = reconstructed_v2_path
-            elif os.path.exists(v2_path):
-                logger.info(f"✅ Using V2 JSON: {v2_path}")
-                master_file_path = v2_path
+            elif os.path.exists(master_path):
+                logger.info(f"✅ Using fresh trace JSON: {master_path}")
+                master_file_path = master_path
             else:
                 # JSON not available (e.g., in CI execution jobs where only pre-generated
                 # vectors are needed). Skip silently — the loader will return empty configs.
@@ -856,6 +855,10 @@ class MasterConfigLoader:
                     config_dict[f"{key}_layout"] = parsed_layout
                     config_dict[f"{key}_memory_config"] = parsed_mem_config
                     config_dict[f"{key}_tensor_placement"] = tensor_config.tensor_placement
+                elif key == "memory_config" and isinstance(value, dict) and "memory_layout" in value:
+                    config_dict[key] = self.parse_memory_config(value)
+                elif isinstance(value, dict) and value.get("type") == "DataType":
+                    config_dict[key] = self.parse_dtype(value.get("repr", ""))
                 else:
                     # Scalar/bool kwarg - pass as-is (preserve name)
                     # Try enum parsing first, then float parsing
