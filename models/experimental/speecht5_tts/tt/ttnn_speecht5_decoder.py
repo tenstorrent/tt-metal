@@ -1143,6 +1143,42 @@ class TTNNSpeechT5Decoder:
         self.causal_mask_cache = {}
         self._precompute_causal_masks()
 
+    def update_speaker_embedding(self, speaker_embeddings: torch.Tensor):
+        """
+        Update the baked-in speaker embedding in-place without rebuilding the decoder.
+
+        The speaker embedding is stored in DRAM as a normalized [batch, 1, speaker_dim]
+        tensor inside the prenet parameters. This method overwrites it in-place using
+        ttnn.copy, so the existing decoder weights, layers, causal masks, and all
+        captured traces remain valid — only the prenet's speaker vector changes.
+
+        This is the preferred path for speaker switching: it avoids the ~35-45s
+        trace re-capture that would be required if the decoder were fully rebuilt.
+
+        Args:
+            speaker_embeddings: New speaker embeddings [batch, speaker_dim] or [1, speaker_dim]
+        """
+        import torch.nn.functional as F
+
+        # L2-normalize (same as preprocess_decoder_parameters)
+        speaker_embeddings_normalized = F.normalize(speaker_embeddings, p=2, dim=-1)
+
+        batch_size = speaker_embeddings_normalized.shape[0]
+        speaker_embeddings_normalized = speaker_embeddings_normalized.reshape(
+            batch_size, 1, self.config.speaker_embedding_dim
+        )
+
+        # Overwrite the existing DRAM tensor in-place
+        new_tensor = ttnn.from_torch(
+            speaker_embeddings_normalized,
+            dtype=self.prenet.parameters["speaker_embeddings_normalized"].dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(new_tensor, self.prenet.parameters["speaker_embeddings_normalized"])
+        ttnn.deallocate(new_tensor)
+
     def _precompute_causal_masks(self):
         """
         Pre-compute causal masks for common sequence lengths.
