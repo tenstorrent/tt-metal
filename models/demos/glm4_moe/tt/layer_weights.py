@@ -99,6 +99,23 @@ def _env_dense_dtype() -> ttnn.DataType:
     raise ValueError(f"Invalid GLM4_MOE_DENSE_TT_DTYPE={override!r}")
 
 
+def _env_attn_dtype() -> ttnn.DataType:
+    """Attention weight dtype (QKV and O projections), separate from dense MLP dtype.
+
+    Override via GLM4_MOE_ATTN_TT_DTYPE. Falls back to _env_dense_dtype() if unset.
+    """
+    override = os.environ.get("GLM4_MOE_ATTN_TT_DTYPE", "").strip().lower()
+    if not override:
+        return _env_dense_dtype()
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if override in {"f32", "fp32", "float32"}:
+        return ttnn.float32
+    raise ValueError(f"Invalid GLM4_MOE_ATTN_TT_DTYPE={override!r}")
+
+
 def _linear_weight_tt(
     *,
     device,
@@ -289,6 +306,7 @@ def convert_decoder_layer_weights(
         return None if cache_dir is None else cache_dir / f"layer{layer_idx}_{name}{suffix}"
 
     dense_dtype = _env_dense_dtype()
+    attn_dtype = _env_attn_dtype()
     tp_axis, tp_size = _tp_axis_and_size(device)
     num_devices = int(device.get_num_devices()) if _is_mesh_device(device) else 1
 
@@ -378,7 +396,7 @@ def convert_decoder_layer_weights(
 
     w_qkv = ttnn.as_tensor(
         qkv_cat,
-        dtype=dense_dtype,
+        dtype=attn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -423,7 +441,7 @@ def convert_decoder_layer_weights(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
         cache_file=c("w_o", tp_variant),
-        dtype=dense_dtype,
+        dtype=attn_dtype,
         mesh_mapper=wo_mapper,
     )
     logger.info("  [DEBUG L{}] w_o done", layer_idx)

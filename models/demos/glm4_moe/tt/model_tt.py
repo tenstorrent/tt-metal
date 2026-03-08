@@ -294,7 +294,7 @@ class Glm4MoeTT:
 
     hparams: Glm4MoeHParams
     state: Any  # LazyStateDict
-    embed_w: ttnn.Tensor
+    embed_w: Optional[ttnn.Tensor]
     embed_w_cpu: torch.Tensor
     rope: dict[str, Any]
     final_norm: RMSNorm
@@ -334,12 +334,9 @@ class Glm4MoeTT:
 
         # Embedding.
         embed_w_cpu = state["model.embed_tokens.weight"].clone().to(torch.bfloat16)
-        embed_w = convert_embedding_weight_to_tt(
-            device=device,
-            embed_weight=state["model.embed_tokens.weight"],
-            cache_file_name=cache_dir / "embed_w",
-            dtype=ttnn.bfloat16,
-        )
+        # Skip device embedding — TG mesh uses host-side lookup (embed_w_cpu).
+        # Saves ~1.49 GB DRAM per device.
+        embed_w = None
 
         # RoPE for partial rotary (rope_dim = head_dim * partial_rotary_factor = 64).
         rope_dim = int(hparams.head_dim * hparams.partial_rotary_factor)
@@ -746,6 +743,138 @@ class Glm4MoeTT:
 
         return next_ids_flat
 
+    def _sample_from_trace_logits(self, logits_tt: ttnn.Tensor, active: int) -> torch.Tensor:
+        """Device-side greedy sampling from trace-owned logits (OUTSIDE trace).
+
+        Called after execute_trace + synchronize_device. The logits_tt tensor
+        is trace-owned and must NOT be deallocated.
+
+        For TP-sharded vocab: per-shard max+argmax on device, then pick global
+        best on host. Transfers only ~64 bytes instead of 9.6 MB.
+        """
+        vocab = int(self.hparams.vocab_size)
+
+        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+            # Vocab-sharded: per-device max+argmax, reduce on host.
+            logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+            vocab_per_shard = int(self.lm_head_vocab_per_shard)
+            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab_per_shard])
+            max_out = ttnn.max(logits_rm_view, dim=3, keepdim=True)
+            if isinstance(max_out, tuple):
+                local_max_tt, local_argmax_tt = max_out
+            else:
+                local_max_tt = max_out
+                local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+
+            num_devices = int(self.device.get_num_devices())
+            tp_size = self.lm_head_tp_size
+            local_max_dts = ttnn.get_device_tensors(local_max_tt)
+            local_idx_dts = ttnn.get_device_tensors(local_argmax_tt)
+
+            # Skip DP duplicates: pick one shard per TP position
+            dp_stride = num_devices // tp_size if num_devices > tp_size else 1
+
+            next_ids = torch.empty((active,), dtype=torch.int32)
+            for b in range(active):
+                best_val = None
+                best_global = None
+                for tp_idx in range(tp_size):
+                    shard_idx = tp_idx * dp_stride
+                    max_val = float(ttnn.to_torch(local_max_dts[shard_idx].cpu()).reshape(-1)[b].item())
+                    local_idx = int(ttnn.to_torch(local_idx_dts[shard_idx].cpu()).reshape(-1)[b].item())
+                    global_idx = tp_idx * vocab_per_shard + local_idx
+                    if global_idx >= vocab:
+                        continue
+                    if best_val is None or max_val > best_val:
+                        best_val = max_val
+                        best_global = global_idx
+                if best_global is None:
+                    best_global = max(0, vocab - 1)
+                next_ids[b] = best_global
+
+            # Clean up temporaries (NOT logits_tt — trace-owned)
+            ttnn.deallocate(local_max_tt, force=True)
+            ttnn.deallocate(local_argmax_tt, force=True)
+            ttnn.deallocate(logits_rm_view, force=False)
+            ttnn.deallocate(logits_rm, force=True)
+        else:
+            # Non-sharded: single argmax
+            logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
+            logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
+            if isinstance(max_out, tuple):
+                _, next_ids_tt = max_out
+            else:
+                next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+
+            next_ids = _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
+            next_ids = next_ids.reshape(-1).to(dtype=torch.int32).cpu()
+
+            ttnn.deallocate(next_ids_tt, force=True)
+            ttnn.deallocate(logits_rm_tight, force=True)
+            ttnn.deallocate(logits_rm_view, force=False)
+            ttnn.deallocate(logits_rm, force=True)
+
+        return next_ids
+
+    def _host_argmax_from_trace_logits(
+        self, logits_tt: ttnn.Tensor, active: int, vocab: int,
+    ) -> torch.Tensor:
+        """Host-side argmax from trace-owned logits, optimized for minimal work.
+
+        Instead of concatenating all TP shards into full vocab then running argmax,
+        does per-shard argmax on host and picks global best. Avoids the full
+        torch.cat allocation.
+
+        Does NOT deallocate logits_tt (trace-owned).
+        """
+        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+            shards = ttnn.get_device_tensors(logits_tt)
+            num_shards = len(shards)
+            tp_size = self.lm_head_tp_size
+            vocab_per_shard = int(self.lm_head_vocab_per_shard)
+
+            # Select one shard per TP position (skip DP duplicates).
+            dp_stride = num_shards // tp_size if num_shards > tp_size else 1
+
+            next_ids = torch.empty((active,), dtype=torch.int32)
+
+            # Transfer shards and do per-shard argmax on host
+            shard_maxvals = []
+            shard_argmaxes = []
+            for tp_idx in range(tp_size):
+                shard_idx = tp_idx * dp_stride
+                shard_torch = ttnn.to_torch(shards[shard_idx].cpu())
+                # Slice to valid batch and vocab range
+                shard_torch = shard_torch[..., :active, :vocab_per_shard]
+                shard_flat = shard_torch.reshape(active, -1).to(torch.float32)
+                shard_maxvals.append(shard_flat.max(dim=-1))
+                shard_argmaxes.append(shard_flat.argmax(dim=-1))
+
+            # Pick global best across shards
+            for b in range(active):
+                best_val = None
+                best_global = None
+                for tp_idx in range(tp_size):
+                    max_val = float(shard_maxvals[tp_idx].values[b].item())
+                    local_idx = int(shard_argmaxes[tp_idx][b].item())
+                    global_idx = tp_idx * vocab_per_shard + local_idx
+                    if global_idx >= vocab:
+                        continue
+                    if best_val is None or max_val > best_val:
+                        best_val = max_val
+                        best_global = global_idx
+                if best_global is None:
+                    best_global = max(0, vocab - 1)
+                next_ids[b] = best_global
+
+            return next_ids
+        else:
+            # Non-sharded: simple host transfer + argmax
+            logits_host = self._logits_to_host(logits_tt, active, vocab)
+            return logits_host.reshape(active, -1)[:, :vocab].argmax(dim=-1).to(torch.int32)
+
     def _logits_to_host(
         self,
         logits_tt: ttnn.Tensor,
@@ -853,8 +982,18 @@ class Glm4MoeTT:
             return next_ids_torch
 
         if state.logits_tt is not None:
+            if sampling_params is not None:
+                if _is_mesh_device(self.device):
+                    # TG mesh: device-side sampling ops hang. Use optimized host transfer.
+                    vocab = int(self.hparams.vocab_size)
+                    return self._host_argmax_from_trace_logits(state.logits_tt, active, vocab)
+                else:
+                    # Non-TG: device-side sampling works fine outside trace.
+                    return self._sample_from_trace_logits(state.logits_tt, active)
+            # Non-sampling path: still need full logits on host
             vocab = int(self.hparams.vocab_size)
-            return self._logits_to_host(state.logits_tt, active, vocab)
+            logits_host = self._logits_to_host(state.logits_tt, active, vocab)
+            return logits_host
 
         return torch.zeros((active, 1, int(self.hparams.vocab_size)), dtype=torch.float32)
 
@@ -888,7 +1027,7 @@ class Glm4MoeTT:
                     self.device, dims=(None, 0), mesh_shape=mesh_shape,
                 )
 
-        # Create persistent input tensors (BEFORE trace capture).
+        # Create persistent input tensors (BEFORE trace capture AND warm-up).
         page_table_tt = ttnn.from_torch(
             page_table.contiguous().clone(),
             device=self.device,
@@ -913,9 +1052,10 @@ class Glm4MoeTT:
             mesh_mapper=mapper,
         )
 
-        # Embedding: host-side lookup to avoid device-side tile conversion hang on TG mesh.
+        # Pre-allocate embedding tensor BEFORE compile warm-up!
+        # This ensures the memory allocator state exactly matches during trace capture.
         embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
-        x = ttnn.from_torch(
+        embed_tt = ttnn.from_torch(
             embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, B, hidden]
             device=self.device,
             dtype=ttnn.bfloat16,
@@ -926,20 +1066,25 @@ class Glm4MoeTT:
 
         rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"])
 
-        # Run forward once (compile) before trace capture.
+        # Run forward once (compile warm-up) using the persistent tensors.
+        x = embed_tt
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
                                 active_batch=active)
-            ttnn.deallocate(x, force=False)
+            # Match trace capture exactly: skip deallocation of embed_tt!
+            if layer_idx > 0:
+                ttnn.deallocate(x, force=False)
             x = x_next
 
         x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
         logits_tt = ttnn.linear(x, self.lm_head_w)
 
+        # On TG mesh, skip sampling in compile warm-up (matches trace capture pattern).
+        # On non-TG, include sampling to compile those programs too.
         top1_values_tt = None
         top1_indices_tt = None
-        if sampling_params is not None:
+        if not is_mesh and sampling_params is not None:
             vocab = int(self.hparams.vocab_size)
             logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
             logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
@@ -954,33 +1099,24 @@ class Glm4MoeTT:
             ttnn.deallocate(logits_rm, force=False)
 
         # Synchronize device to drain all async ops from compile-forward
-        # before starting trace capture.  Without this, async CCL ops from the
-        # compile pass may not have completed, leaving device state inconsistent
-        # for the trace recording pass (DSv3 pattern).
+        # before starting trace capture.
         ttnn.synchronize_device(self.device)
 
-        # EXP11: Explicitly free compile-forward outputs to match DSv3 pattern.
-        # Without this, Python GC frees them NON-DETERMINISTICALLY during trace
-        # capture, creating fragile allocation sequences that break on replay.
+        # Explicitly free compile-forward outputs.
         ttnn.deallocate(x, force=True)
         ttnn.deallocate(logits_tt, force=True)
-        if top1_values_tt is not None:
-            ttnn.deallocate(top1_values_tt, force=True)
-        if top1_indices_tt is not None:
-            ttnn.deallocate(top1_indices_tt, force=True)
         x = logits_tt = top1_values_tt = top1_indices_tt = None
         ttnn.synchronize_device(self.device)
 
-        # Pre-allocate embedding tensor BEFORE trace capture (host writes not allowed in trace).
-        embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
-        embed_tt = ttnn.from_torch(
-            embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, B, hidden]
-            device=self.device,
+        # Re-copy persistent inputs before trace capture (like GLM4-Flash)
+        # to ensure no inadvertent in-place mutation broke them.
+        host_embed = ttnn.from_torch(
+            embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+            mesh_mapper=mapper,
         )
+        ttnn.copy_host_to_device_tensor(host_embed, embed_tt)
 
         # Now capture trace.
         logger.info("Capturing decode trace for batch={}", active)
@@ -988,20 +1124,26 @@ class Glm4MoeTT:
             self.tt_ccl.reset_sem_counters()
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
 
-        # Trace starts from pre-allocated embedding (x = embed_tt).
+        # Trace reads from embed_tt; we must NOT deallocate it after first layer
+        # so it survives for copy_host_to_device_tensor during replay.
         x = embed_tt
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
                                 active_batch=active)
-            ttnn.deallocate(x, force=False)
+            # Skip deallocate on first iteration: x IS embed_tt which must survive
+            # for copy_host_to_device_tensor during trace replay.
+            if layer_idx > 0:
+                ttnn.deallocate(x, force=False)
             x = x_next
 
         x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
         logits_tt = ttnn.linear(x, self.lm_head_w)
 
-        if sampling_params is not None:
+        # On TG mesh, sampling ops (to_layout, slice, max, argmax) inside trace
+        # produce wrong results. Do sampling on host instead (read logits from trace output).
+        if not _is_mesh_device(self.device) and sampling_params is not None:
             vocab = int(self.hparams.vocab_size)
             logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
             logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
@@ -1018,6 +1160,8 @@ class Glm4MoeTT:
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         logger.info("Decode trace captured for batch={}", active)
 
+        # TG mesh: logits_tt for host-side sampling; non-TG: use on-device sampling results
+        use_logits_output = _is_mesh_device(self.device)
         return _DecodeTraceState(
             trace_id=trace_id,
             batch=active,
@@ -1028,9 +1172,9 @@ class Glm4MoeTT:
             sin_batch_tt=sin_batch,
             trans_matrix_tt=self.rope["trans_matrix"],
             page_table_tt=page_table_tt,
-            logits_tt=logits_tt if sampling_params is None else None,
-            top1_values_tt=top1_values_tt,
-            top1_indices_tt=top1_indices_tt,
+            logits_tt=logits_tt if use_logits_output else (logits_tt if sampling_params is None else None),
+            top1_values_tt=top1_values_tt if not use_logits_output else None,
+            top1_indices_tt=top1_indices_tt if not use_logits_output else None,
             embed_tt=embed_tt,
         )
 
@@ -1072,14 +1216,6 @@ class Glm4MoeTT:
         )
         ttnn.copy_host_to_device_tensor(host_embed, state.embed_tt)
 
-        # Update tokens (host tensor, then copy to pre-allocated device buffer).
-        host_tokens = ttnn.from_torch(
-            tokens.contiguous().clone().to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt)
 
         # Update positions (host tensor, then copy).
         host_positions = ttnn.from_torch(
