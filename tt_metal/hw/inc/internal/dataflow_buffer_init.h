@@ -182,9 +182,6 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                                << " initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
                                << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
                         llk_intf_reset(tensix_id, tc_id);
-                        DPRINT  << " capacity: "
-                                << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
-                                << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL();
                         llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
                                                 DPRINT << " capacity: "
                                 << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))

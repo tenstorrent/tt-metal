@@ -154,6 +154,7 @@ uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_
         bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
         bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
         bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
+        // bool use_remapper = core_has_remapper && (producer_is_tensix_only || consumer_is_tensix_only);
         bool dm_dm_blocked = (config.cap == ::experimental::AccessPattern::BLOCKED) &&
                             !producer_is_tensix_only && !consumer_is_tensix_only;
         return is_producer ? (dm_dm_blocked ? config.num_consumers : 1) : config.num_producers;
@@ -519,7 +520,7 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
 }
 
 void ProgramImpl::finalize_single_dfb_config(
-    std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool use_remapper) {
+    std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool core_has_remapper) {
     const auto& config = dfb->config;
 
     TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
@@ -533,6 +534,7 @@ void ProgramImpl::finalize_single_dfb_config(
     bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
     bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
     bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
+    bool use_remapper = core_has_remapper && (producer_is_tensix_only || consumer_is_tensix_only);
     TT_FATAL(
         !(producer_is_tensix_only && consumer_is_tensix_only),
         "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
