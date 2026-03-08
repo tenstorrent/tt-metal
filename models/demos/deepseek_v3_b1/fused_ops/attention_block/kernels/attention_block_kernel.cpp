@@ -49,6 +49,7 @@
 // Defined at namespace scope (local classes cannot have static data members)
 struct Core {
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
+    static constexpr bool is_full_mcast_grid_core = get_named_compile_time_arg_val("is_full_mcast_grid_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
     // Qnope/Qrope core differentiation for interleaved Q head layout after matmul2
@@ -84,8 +85,6 @@ struct Core {
     static constexpr bool is_matmul4_core = get_named_compile_time_arg_val("is_matmul4_core") == 1;
     // Gather core (12, 9) - receives gather2, sends mcast3, receives gather3, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
-    // Mcast3 receiver grid (13x10 = 130 cores) - receives mcast3 data
-    static constexpr bool is_mcast3_receiver_core = get_named_compile_time_arg_val("is_mcast3_receiver_core") == 1;
     // Active matmul5 cores (112 cores: o_proj grid 12x8 + 8x2)
     static constexpr bool is_matmul5_core = get_named_compile_time_arg_val("is_matmul5_core") == 1;
     // CCL sender core (11, 9) - reads from gather core, sends via fabric
@@ -151,7 +150,7 @@ void kernel_main() {
     // Mcast2 receiver args (for matmul2 cores to receive matmul2 input from input core)
     // Uses same semaphore as first mcast
     deepseek_b1_ops::Mcast::ReceiverArgs mcast2_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("matmul2_in0"),
         get_named_compile_time_arg_val("mcast2_dst_num_pages"),
     };
@@ -303,12 +302,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather2_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather2_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather2_row_major"),
-        get_named_compile_time_arg_val("gather2_receiver_data_addr"),
+        get_common_arg_val<uint32_t>(15),  // gather2_receiver_data_addr
         get_named_compile_time_arg_val("gather2_sender_idx"),
     };
 
     // Mcast3 receiver args
-    using Mcast3CTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast3_args{
         get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast3_dst_cb"),
@@ -333,7 +331,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather3_row_major"),
-        get_named_compile_time_arg_val("gather3_receiver_data_addr"),
+        get_common_arg_val<uint32_t>(16),  // gather3_receiver_data_addr
         get_named_compile_time_arg_val("gather3_sender_idx"),
     };
 
@@ -478,7 +476,7 @@ void kernel_main() {
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
-        Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
+        Core::is_input_core && Core::is_full_mcast_grid_core>;  // loopback = false
 
     // RMSNorm writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
@@ -563,7 +561,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
         get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("mcast2_data_size_bytes"),
         mcast2_src_cb,  // Wait for rmsnorm2_output_cb
         get_named_compile_time_arg_val("mcast2_src_num_pages"),
@@ -689,19 +687,14 @@ void kernel_main() {
     };
 
     // Mcast3 sender args
-    using Mcast3CTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast3_num_cores"),
-        get_named_compile_time_arg_val("mcast3_is_part_of_receiver_grid") == 1,
-        false>;  // loopback = false
-
     constexpr uint32_t mcast3_src_cb = get_named_compile_time_arg_val("mcast3_src_cb");
     constexpr uint32_t mcast3_dst_cb = get_named_compile_time_arg_val("mcast3_dst_cb");
     deepseek_b1_ops::Mcast::SenderArgs mcast3_args{
-        get_named_compile_time_arg_val("mcast3_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast3_data_sender_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
         get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast3_data_size_bytes"),
         mcast3_src_cb,
@@ -1067,7 +1060,6 @@ void kernel_main() {
     deepseek_b1_ops::Gather::ComputeArgs gather2_args{};
 
     // Mcast3 CTArgs (no-op)
-    using Mcast3CTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast3_args{};
 
     // Matmul5 CTArgs
@@ -1188,7 +1180,7 @@ void kernel_main() {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
 #elif defined(COMPILE_FOR_NCRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(14);
 #elif defined(COMPILE_FOR_TRISC)
@@ -1201,7 +1193,8 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::Op<
         McastCTArgs,
         Core::is_input_core,
-        Core::is_matmul2_core,
+        // Receive on the whole grid. This is used to block downstream ccls
+        Core::is_full_mcast_grid_core,
         Core::is_matmul_core || Core::is_dkv_matmul_core,
         true>
         mcast;
@@ -1239,11 +1232,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
     uint32_t cur_pos = pos_ptr[0];
 
-    // const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
-    //     cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
-    const bool skip_attention = false;
-    const bool skip_kv_cache_update = false;
-    const uint32_t local_cur_pos = cur_pos;
+    const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
+        cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
+
+    using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::
+        Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>;
 
     if (!skip_attention) {
         // ====================================================================
@@ -1409,11 +1402,17 @@ void kernel_main() {
         // ====================================================================
         {
             DeviceZoneScopedN("FLASH_MLA");
-            deepseek_b1_ops::FlashMLADecode::
-                Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>
-                    flash_mla;
+            FlashMLAOp flash_mla;
             flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
             flash_mla(flash_mla_args);
+        }
+    } else {
+        // This device has no sequence data (e.g. SP2/SP3 with seq_len = 2047 and per_device_chunk_size = 1024).
+        // Push dummy tiles into the hand-off CBs so SDPA reduce does not hang.
+        // TODO: Fuse the final SP reduce into Flash MLA and handle this internally,
+        // eliminating the need for this explicit dummy push.
+        if constexpr (Core::is_sdpa_worker_core) {
+            FlashMLAOp::push_dummy_sdpa_inputs();
         }
     }
     {
@@ -1428,6 +1427,23 @@ void kernel_main() {
                 }
                 if constexpr (Core::is_sdpa_forwarder_core) {
                     deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
+                    // We need to make sure both riscs wait for the initial broadcast CCL to complete since
+                    // reduce forwarder uses both riscs to send over fabric
+                    // The first mcast syncs the ncrisc, so we need to also make sure brisc waits for the first mcast
+#if defined(COMPILE_FOR_NCRISC)
+                    volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+                    // Make sure the value is different from the mcasted value
+                    // The wait below is for safety if this runs on the same core as another doing the same sync
+                    // If that is the case we don't actually need to do another sync
+                    noc_semaphore_wait(sync_sem, 0);
+                    noc_semaphore_set(sync_sem, 2);
+#elif defined(COMPILE_FOR_BRISC)
+                    volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+                    noc_semaphore_wait(sync_sem, 2);
+                    noc_semaphore_set(sync_sem, 0);
+#endif
                     sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
                 }
 #if defined(COMPILE_FOR_NCRISC)
@@ -1469,11 +1485,9 @@ void kernel_main() {
             // Source: gather2_dst_cb (CB 3), Destination: mcast3_dst_cb = matmul5_in0 (CB 4)
             // Note: 18 inactive grid cores only do semaphore handshake; only matmul5 cores do full CB receive
             // ========================================================================
-            constexpr bool is_mcast3_grid_core = Core::is_mcast3_receiver_core && !Core::is_gather_receiver_core;
             deepseek_b1_ops::Mcast::
-                Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
+                Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_matmul5_core, Core::is_matmul5_core, true>
                     mcast3;
-            // mcast3.init(mcast3_args);
             {
                 DeviceZoneScopedN("MCAST3");
                 mcast3(mcast3_args);
@@ -1526,9 +1540,19 @@ void kernel_main() {
             // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
             // needs to wait for remote data and perform the reduction.
             // ========================================================================
-#if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_ccl_sender_core) {
-                DeviceZoneScopedN("CCL_SENDER_READ");
+                DeviceZoneScopedN("CCL_SENDER_SEND");
+#if defined(COMPILE_FOR_NCRISC)
+                // We need to make sure brisc waits for the initial broadcast CCL to complete before connecting
+                // to fabric. Alternative is to move brisc connection logic after the cb wait
+                // The first mcast syncs the ncrisc, so we need to also make sure brisc waits for the first mcast
+                volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+                // Make sure the value is different from the mcasted value
+                // The wait below is for safety if this runs on the same core as another doing the same sync
+                // If that is the case we don't actually need to do another sync
+                noc_semaphore_wait(sync_sem, 0);
+                noc_semaphore_set(sync_sem, 2);
 
                 // Wait for gather3 to complete before reading from gather core
                 constexpr uint32_t gather3_completion_semaphore_id =
@@ -1540,35 +1564,29 @@ void kernel_main() {
 
                 deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
                 ccl_sender_reader(ccl_sender_args);
+#elif defined(COMPILE_FOR_BRISC)
+                volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+                noc_semaphore_wait(sync_sem, 2);
+                noc_semaphore_set(sync_sem, 0);
+                deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
+                ccl_sender_writer(ccl_sender_args);
+#endif
             }
 
             if constexpr (Core::is_ccl_receiver_core) {
-                DeviceZoneScopedN("CCL_RECEIVER_WAIT");
+                DeviceZoneScopedN("CCL_RECEIVER");
+#if defined(COMPILE_FOR_NCRISC)
                 // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
                 // Should avoid this and not pop in RMSNorm
                 deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
                 ccl_receiver_reader(ccl_receiver_args);
-            }
-
-#elif defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_ccl_sender_core) {
-                DeviceZoneScopedN("CCL_SENDER_SEND");
-
-                deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-                ccl_sender_writer(ccl_sender_args);
-            }
-            // CCL Receiver BRISC is no-op
-
 #elif defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_ccl_receiver_core) {
-                DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
-
                 deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
                     ccl_receiver_compute;
                 ccl_receiver_compute(ccl_receiver_args);
-            }
-            // CCL Sender TRISC is no-op
 #endif
+            }
     }
 
     // ====================================================================

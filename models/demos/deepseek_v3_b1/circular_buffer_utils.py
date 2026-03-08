@@ -28,7 +28,7 @@ class CircularBufferIdManager:
         self._id_to_format: dict[int, tuple] = {}
         self._next_id = 0
 
-    def _allocate_id(self, data_format, tile: ttnn.TileDescriptor, exclude: set[int]) -> int:
+    def _allocate_id(self, data_format: ttnn.DataType, tile: ttnn.TileDescriptor, exclude: set[int]) -> int:
         """Find a reusable ID or allocate a new one.
 
         Reuse is possible when an existing ID has the same (data_format, tile)
@@ -36,6 +36,8 @@ class CircularBufferIdManager:
         """
         if not isinstance(tile, ttnn.TileDescriptor):
             raise TypeError(f"tile must be a ttnn.TileDescriptor, got {type(tile).__name__}")
+        if not isinstance(data_format, ttnn.DataType):
+            raise TypeError(f"data_format must be a ttnn.DataType, got {type(data_format).__name__}")
         key = (data_format, tile)
 
         for cb_id, fmt_key in self._id_to_format.items():
@@ -61,7 +63,7 @@ class CircularBufferIdManager:
             self._manager = manager
             self._used_ids: set[int] = set()
 
-        def get_cb_id(self, data_format, tile: ttnn.TileDescriptor) -> int:
+        def get_cb_id(self, data_format: ttnn.DataType, tile: ttnn.TileDescriptor) -> int:
             cb_id = self._manager._allocate_id(data_format, tile, self._used_ids)
             self._used_ids.add(cb_id)
             return cb_id
@@ -80,9 +82,8 @@ class CircularBufferIdManager:
         descs = []
         i = 0
         for cb_id, (data_format, tile_desc) in self._id_to_format.items():
-            i += 1
-            tile = ttnn.Tile([tile_desc.height, tile_desc.width])
-            page_size = 16
+            # Minimal page size for dummy descriptors
+            page_size = 1
 
             fmt = ttnn.CBFormatDescriptor(
                 buffer_index=cb_id,
