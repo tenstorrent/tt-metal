@@ -36,10 +36,7 @@ def create_torch_w0_tensors(L, E, H, N):
     for e in range(E):
         torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
         torch_w0_tensors.append(torch_w0)
-    # torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    # torch_w0_tensors = [torch_w0.clone() for _ in range(E)]
 
-    # TODO: (GR)
     return torch_w0_tensors
 
 
@@ -48,10 +45,7 @@ def create_torch_w1_tensors(L, E, H, N):
     for e in range(E):
         torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
         torch_w1_tensors.append(torch_w1)
-    # torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    # torch_w1_tensors = [torch_w1.clone() for _ in range(E)]
 
-    # TODO: (GR)
     return torch_w1_tensors
 
 
@@ -60,10 +54,7 @@ def create_torch_w2_tensors(L, E, N, H):
     for e in range(E):
         torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
         torch_w2_tensors.append(torch_w2)
-    # torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
-    # torch_w2_tensors = [torch_w2.clone() for _ in range(E)]
 
-    # TODO: (GR)
     return torch_w2_tensors
 
 
@@ -85,18 +76,9 @@ def gen_torch_expert_mapping_tensor(experts_per_cluster, dispatch_devices, devic
 
 def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
     tokens = []
-    # factor = -256
-    factor = 1
     for _ in range(batch):
         for _ in range(seq):
-            if False:
-                # if scheme == "sequential":
-                tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) * factor)
-                factor += 1
-                if factor == 0:
-                    factor += 1
-            else:
-                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) - 0.5)
+            tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) - 0.5)
     res = torch.cat(tokens, dim=0)
     return res.reshape(batch, 1, seq, hidden_size)
 
@@ -399,7 +381,7 @@ def _expert_on_device(e, d, expert_mapping):
     return expert_mapping[e].item() == linearized_mesh_coord
 
 
-# TODO: (GR) confirm on quad (128 devices, diff )
+# TODO: (GR) finish + confirm on quad (128 devices, diff )
 def gen_dispatch_golden(
     torch_dispatch_input_tensor,  # [T * D, 1, 1, H]
     torch_dispatch_input_expert_indices,  # [T * D, 1, 1, K]
@@ -427,6 +409,7 @@ def gen_dispatch_golden(
     return torch_dispatch_ref_tensor, torch_dispatch_ref_map
 
 
+# TODO: (GR) adjust for diff cluster axis
 def gen_combine_golden(
     torch_dispatch_input_tensor,  # [512, 1, 1, H]
     torch_w0_tensors,  # [E, L, 1, H, N]
@@ -461,7 +444,6 @@ def gen_combine_golden(
                 e = torch_dispatch_input_expert_indices[global_b, :, :, k].item()
 
                 if e >= lower_expert and e < upper_expert:
-                    # TODO: (GR) use actual expert index
                     contrib = gen_matmul_golden(token, torch_w0_tensors[e], torch_w1_tensors[e], torch_w2_tensors[e])
 
                     torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
@@ -469,6 +451,7 @@ def gen_combine_golden(
     return torch_combine_ref_tensor
 
 
+# TODO: (GR) finish
 def verify_dispatch(iteration, mesh_device, mesh_shape, cluster_axis, tt_dispatch_tensor, torch_dispatch_golden):
     if cluster_axis == 0:
         # TODO: (GR) remove hardcoding
@@ -478,17 +461,6 @@ def verify_dispatch(iteration, mesh_device, mesh_shape, cluster_axis, tt_dispatc
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 0)),
         )
         torch_dispatch_output = torch_combine_output.reshape(1, 65536, 7168)
-
-        # TODO: (GR) check if this works for col major
-        # device_shards = [
-        #     ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_dispatch_tensor)
-        # ]
-        # ordered_shards = []
-        # for ir in range(mesh_shape[1]):
-        #     for ic in range(mesh_shape[0]):
-        #         ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
-        # torch_dispatch_output = torch.cat(ordered_shards, dim=0)
-
     else:
         torch_dispatch_output = ttnn.to_torch(
             tt_dispatch_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
@@ -520,6 +492,9 @@ def verify_dispatch(iteration, mesh_device, mesh_shape, cluster_axis, tt_dispatc
 
 
 def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_combine_golden):
+    PCC_THRESHOLD = 0.988
+    ATOL_THRESHOLD = 625.0
+
     # TODO: (GR) remove hardcoding
     tt_combine_tensor = ttnn.reshape(tt_combine_tensor, [8, 1, 32, 7168])
     torch_combine_output = ttnn.to_torch(
@@ -529,31 +504,19 @@ def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_
     )
     torch_combine_output = torch_combine_output.reshape(8, 4096, 7168)
 
-    # torch.set_printoptions(
-    #     threshold=float("inf"),  # Print all elements (no truncation)
-    #     linewidth=200,  # Wider lines before wrapping
-    #     precision=10,  # Decimal places for floats
-    #     # sci_mode=False,          # Disable scientific notation
-    # )
+    pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
+    logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
+    if not pcc_passed:
+        logger.warning(f"FAILED Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
 
-    # print("REFERENCE")
-    # print(torch_combine_golden[0, 0:64, 0:4])
+    allclose_passed, allclose_output = comp_allclose(
+        torch_combine_golden, torch_combine_output, atol=ATOL_THRESHOLD, rtol=0
+    )
+    logger.info(f"Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
+    if not allclose_passed:
+        logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
 
-    ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-
-    # print("TT")
-    # [8, 32, 7168] local
-    # [8, 4096, 7168] global
-    # print(torch_combine_output[0, 0:64, 0:4])
-
-    eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
-    logger.info(f"{output}, iteration {iteration}")
-    if not eq:
-        logger.warning(f"COMBINE FAILED: {output}")
-
-    logger.info(comp_allclose(torch_combine_golden, torch_combine_output))
-
-    return eq
+    return pcc_passed and allclose_passed
 
 
 def gen_output_reference(
@@ -594,6 +557,9 @@ def gen_output_reference(
 
 
 def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
+    PCC_THRESHOLD = 0.988
+    ATOL_THRESHOLD = 1670.0
+
     # bring to host
     # (1, 1, 32, 896) -> (1, 1, 512, 7168)
     tt_output_tensor = ttnn.to_torch(
@@ -602,23 +568,24 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(-2, -1)),
     )
 
+    # reshape for comparison with golden
     # (1, 1, 512, 7168) -> (512, 1, 1, 7168)
     tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
 
-    logger.info(comp_allclose(output_reference_tensor, tt_output_tensor))
-
     # compare output
-    eq, output = comp_pcc(tt_output_tensor, output_reference_tensor)
-    logger.info(f"{output}, iteration {iteration}")
-    if not eq:
-        logger.warning(f"FAILED: {output}")
+    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=PCC_THRESHOLD)
+    logger.info(f"Final Output - Iteration: {iteration} - PCC: {pcc_output}")
+    if not pcc_passed:
+        logger.warning(f"FAILED Final Output - Iteration: {iteration} - PCC: {pcc_output}")
 
-    # allclose_passed = torch.allclose(output_reference_tensor, tt_output_tensor, atol=600)
-    # logger.info(f"AllClose: {allclose_passed}")
+    allclose_passed, allclose_output = comp_allclose(
+        output_reference_tensor, tt_output_tensor, atol=ATOL_THRESHOLD, rtol=0
+    )
+    logger.info(f"Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
+    if not allclose_passed:
+        logger.warning(f"FAILED Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
 
-    # logger.info(comp_allclose(output_reference_tensor, tt_output_tensor))
-
-    return eq
+    return pcc_passed and allclose_passed
 
 
 @pytest.mark.requires_device(["QUAD"])
@@ -848,15 +815,6 @@ def test_optimized_moe_decode_block(
     )
 
     # ------------------------------------------------------------------------
-    # How many sets of input tensors we need
-    # Need an additional set of inputs for the trace compile run (since we deallocate inputs after each iteration)
-    # ------------------------------------------------------------------------
-    if enable_trace:
-        num_input_sets = num_iterations + 1
-    else:
-        num_input_sets = num_iterations
-
-    # ------------------------------------------------------------------------
     # Generate the tensors
     # ------------------------------------------------------------------------
     tt_dispatch_input_tensors = []
@@ -866,7 +824,7 @@ def test_optimized_moe_decode_block(
     output_reference_tensors = []
     torch_dispatch_goldens = []
     torch_combine_goldens = []
-    for iteration in range(num_input_sets):
+    for iteration in range(num_iterations):
         dispatch_input_dtype = ttnn.bfloat16
         dispatch_input_expert_indices_dtype = ttnn.uint16
         dispatch_input_expert_scores_dtype = ttnn.bfloat16
@@ -1078,37 +1036,22 @@ def test_optimized_moe_decode_block(
     ############################################
     logger.info(f"Begin running op iterations")
 
-    ttnn.set_printoptions(profile="full", precision=4)
-
     def run_op(iteration):
         # move dispatch inputs into L1
-        # logger.info("XXXXX")
         tt_dispatch_input_tensor = ttnn.to_memory_config(
             tt_dispatch_input_tensors[iteration], memory_config=dispatch_input_memory_config
         )
-        # logger.info("YYYYY")
         tt_dispatch_input_expert_indices_tensor = ttnn.to_memory_config(
             tt_dispatch_input_expert_indices_tensors[iteration],
             memory_config=dispatch_input_expert_indices_memory_config,
         )
-        # logger.info("ZZZZZ")
         tt_dispatch_input_expert_scores_tensor = ttnn.to_memory_config(
             tt_dispatch_input_expert_scores_tensors[iteration],
             memory_config=dispatch_input_expert_scores_memory_config,
         )
 
-        logger.info("AAAAA")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("BBBBB")
-
-        # logger.info("Dispatch Inputs")
-        # logger.info(f"Input: {tt_dispatch_input_tensor.shape}")
-        # logger.info(f"Indices: {tt_dispatch_input_expert_indices_tensor.shape}")
-        # logger.info(f"Scores: {tt_dispatch_input_expert_scores_tensor.shape}")
-        # logger.info(f"Mapping: {tt_expert_mapping.shape}")
-
         # create persistent output tensor for combine
-        # runtime since it needs to be a zeroed out tensor
+        # runtime since it needs to be a zeroed out tensor (for each layer)
         # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
         tt_preallocated_combine_output = ttnn.moreh_full(
             shape=[select_experts_k, tokens_per_device, hidden_size],
@@ -1118,10 +1061,6 @@ def test_optimized_moe_decode_block(
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        logger.info("CCCCC")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("DDDDD")
 
         (
             tt_dispatch_output_sparse_buffer,
@@ -1141,10 +1080,6 @@ def test_optimized_moe_decode_block(
             cross_device_semaphore=dispatch_global_semaphore,
         )
 
-        logger.info("EEEEE")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("FFFFF")
-
         # NOTE:
         # - deallocate inputs to dispatch that are allocated in L1
         # - needed since compute uses just about all of L1
@@ -1152,20 +1087,10 @@ def test_optimized_moe_decode_block(
         ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
         ttnn.deallocate(tt_dispatch_input_expert_scores_tensor)
 
-        logger.info("GGGGG")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("HHHHH")
-
         # NOTE: DRAM so the L1 version can be deallocated later in the sequence
         tt_dram_dispatch_output_sparse_buffer = ttnn.to_memory_config(
             tt_dispatch_output_sparse_buffer, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-
-        # logger.info("Compute Inputs")
-        # logger.info(f"Input: {tt_dispatch_output_sparse_buffer.shape}")
-        # logger.info(f"Indices: {tt_dispatch_output_expert_indices.shape}")
-        # logger.info(f"Scores: {tt_dispatch_output_expert_scores.shape}")
-        # logger.info(f"Mapping: {tt_expert_mapping.shape}")
 
         (
             tt_compute_output_token_counts,
@@ -1185,16 +1110,6 @@ def test_optimized_moe_decode_block(
             output_width_shard_dim=compute_output_width_shard_dim,
             cluster_axis=cluster_axis,
         )
-
-        logger.info("IIIII")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("JJJJJ")
-
-        # logger.info("Combine Inputs")
-        # logger.info(f"Input: {tt_compute_output.shape}")
-        # logger.info(f"Expert Activation: {tt_compute_output_dense_expert_activation.shape}")
-        # logger.info(f"E_T: {tt_compute_ouput_dense_e_t.shape}")
-        # logger.info(f"Token Counts: {tt_compute_output_token_counts.shape}")
 
         tt_combine_output = ttnn.experimental.selective_reduce_combine(
             tt_compute_output,
@@ -1217,46 +1132,19 @@ def test_optimized_moe_decode_block(
             optional_cross_device_semaphore=combine_global_semaphore,
         )
 
-        logger.info("KKKKK")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("LLLLL")
-
-        # logger.info("Tilized Compute Input")
-        # logger.info(f"Input: {tt_combine_output.shape}")
-
         tt_tilized_compute_output = ttnn.to_layout(
             tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
         )
-
-        logger.info("MMMMM")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("NNNNN")
-
-        # logger.info("Unsqueeze Input")
-        # logger.info(f"Input: {tt_tilized_compute_output.shape}")
 
         # unsqueeze
         # (8, 32, 896) -> (8, 1, 32, 896)
         tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
 
-        logger.info("OOOOO")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("PPPPP")
-
         # TODO: (GR)
-        # logger.info("Scale Input")
-        # logger.info(f"Input: {tt_unsqueezed_output.shape}")
         # topk_experts_weights = ttnn.permute(tt_dispatch_input_expert_scores_tensors[iteration], (3, 1, 0, 2), memory_config=scaled_output_memory_config)
         # topk_experts_weights = ttnn.to_layout(topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config)
         # tt_scaled_output = ttnn.mul(tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config)
         tt_scaled_output = tt_unsqueezed_output
-
-        logger.info("QQQQQ")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("RRRRR")
-
-        # logger.info("Fast Reduce Input")
-        # logger.info(f"Input: {tt_scaled_output.shape}")
 
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
             tt_scaled_output,
@@ -1264,13 +1152,6 @@ def test_optimized_moe_decode_block(
             split_size=int(tt_scaled_output.shape[-1] // rs_devices),
             output_memory_config=fast_reduce_output_memory_config,
         )
-
-        logger.info("SSSSS")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("TTTTT")
-
-        # logger.info("Reduce Scatter Input")
-        # logger.info(f"Single Slice: {tt_fast_reduce_output_tensors[0].shape}")
 
         tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
             tt_fast_reduce_output_tensors,
@@ -1281,11 +1162,6 @@ def test_optimized_moe_decode_block(
             cluster_axis=1,
         )
 
-        logger.info("UUUUU")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("VVVVV")
-
-        logger.info(f"Final Output Shape: {tt_final_output.shape}")
         return tt_final_output, tt_dram_dispatch_output_sparse_buffer, tt_combine_output
 
     tt_output_tensors = []
@@ -1293,17 +1169,17 @@ def test_optimized_moe_decode_block(
     tt_combine_tensors = []
     if enable_trace:
         logger.info(f"Begin compiling op")
-        # when running multiple iterations, we have to deallocate dispatch input tensors
-        # so we need an additional set of input tensors for the compile run
-        run_op(num_iterations)
+        run_op(0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done compiling op")
 
         logger.info(f"Begin capturing trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for iteration in range(num_iterations):
-            tt_output = run_op(iteration)
+            tt_output, tt_dispatch_output, tt_combine_output = run_op(iteration)
             tt_output_tensors.append(tt_output)
+            tt_dispatch_tensors.append(tt_dispatch_output)
+            tt_combine_tensors.append(tt_combine_output)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done capturing trace")
@@ -1312,8 +1188,6 @@ def test_optimized_moe_decode_block(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
     else:
-        # run_op(0)
-
         for iteration in range(num_iterations):
             tt_output, tt_dispatch_output, tt_combine_output = run_op(iteration)
             tt_output_tensors.append(tt_output)
@@ -1335,6 +1209,7 @@ def test_optimized_moe_decode_block(
     for iteration in range(num_iterations):
         logger.info(f"Validating iteration: {iteration}")
 
+        # TODO: (GR)
         # if not verify_dispatch(
         #     iteration, mesh_device, mesh_shape, cluster_axis, tt_dispatch_tensors[iteration], torch_dispatch_goldens[iteration]
         # ):
@@ -1355,8 +1230,6 @@ def test_optimized_moe_decode_block(
             all_iterations_passed = False
 
     logger.info(f"\nMoE Verification: {'PASSED' if all_iterations_passed else 'FAILED'}")
-
-    # TODO: (GR)
-    # assert all_iterations_passed, "MoE Verification Failed!"
+    assert all_iterations_passed, "MoE Verification Failed!"
 
     logger.info(f"Done validating output")
