@@ -286,8 +286,7 @@ private:
         //  1. Single shard dimension (multi-dim chunking produces non-trivial strides).
         //  2. All dimensions preceding the shard dimension have size 1, so each chunk
         //     occupies a contiguous memory region in the row-major source buffer.
-        //  3. Physical layout matches logical layout (no encoding / padding), because
-        //     from_borrowed_data stores raw data without encode_tensor_data.
+        //  3. Physical layout matches logical layout (no padding)
         //  4. Buffer element type matches shard spec dtype (no type conversion needed).
         const bool can_borrow = [&]() {
             if (shard_dims.size() != 1) {
@@ -299,7 +298,7 @@ private:
             if (!tt::tt_metal::logical_matches_physical(shard_spec)) {
                 return false;
             }
-            if (tt::tt_metal::convert_to_data_type<T>() != shard_spec.data_type()) {
+            if (tt::tt_metal::convert_to_data_type<std::remove_const_t<T>>() != shard_spec.data_type()) {
                 return false;
             }
             const int shard_dim = shard_dims[0];
@@ -333,7 +332,8 @@ private:
                 distributed_buffer.emplace_shard(
                     mapped_coord,
                     [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value, buffer_pin, can_borrow]() {
-                        // ZoneScopedN("create_tensor_shard");
+                        // The callable makes a copy from the strided xtensor view to a vector; on multi-host systems,
+                        // executed only for shards that are local to this host.
 
                         auto it = converted_buffers.find(&xtensor_view->get());
                         if (it != converted_buffers.end()) {
@@ -343,8 +343,9 @@ private:
                         tt::tt_metal::HostBuffer buffer;
                         if (can_borrow) {
                             auto& view = xtensor_view->get();
+                            using U = std::remove_const_t<T>;
                             auto shard_tensor = Tensor::from_borrowed_data(
-                                tt::stl::Span<T>(const_cast<T*>(view.data() + view.data_offset()), view.size()),
+                                tt::stl::Span<U>(const_cast<U*>(view.data() + view.data_offset()), view.size()),
                                 shard_spec.logical_shape(),
                                 buffer_pin);
                             buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
@@ -403,18 +404,12 @@ public:
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
         ZoneScopedN("MeshToTensor::compose");
-        log_info(tt::LogAlways, "[DEBUG] tensor.storage_type(): {}", tensor.storage_type());
-
         const auto cpu_tensor = tensor.cpu();
         auto all_gather_tensor = host_ccl::all_gather(cpu_tensor);
         const auto& src_buffer = all_gather_tensor.host_storage().buffer();
 
-        log_info(tt::LogAlways, "[DEBUG] src_buffer.shape(): {}", src_buffer.shape());
-
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
-        log_info(tt::LogAlways, "[DEBUG] dst_buffer.shape(): {}", dst_buffer.shape());
-        log_info(tt::LogAlways, "[DEBUG] distribution_shape_: {}", distribution_shape_);
 
         for (const auto& dst_coord : MeshCoordinateRange(dst_buffer.shape())) {
             auto shard_opt = src_buffer.get_shard(remap_fn(dst_coord));
@@ -513,7 +508,6 @@ Tensor TensorToMesh::operator()(
 
 TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMapperConfig& config) {
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
-    log_info(tt::LogAlways, "[DEBUG] mesh_device.shape() {}", mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
         "The size of the supplied mesh shape {} does not match the device shape size {}",
@@ -650,10 +644,8 @@ Tensor create_distributed_tensor(
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
-    using U = std::remove_cv_t<T>;
-    tt::stl::Span<U> mutable_buffer(const_cast<U*>(buffer.data()), buffer.size());
     Tensor output =
-        mapper.template operator()<U>(mutable_buffer, global_shape, tt::tt_metal::MemoryPin(), shard_layout, pad_value);
+        mapper.template operator()<const T>(buffer, global_shape, tt::tt_metal::MemoryPin(), shard_layout, pad_value);
     if (mesh_device.has_value()) {
         return output.to_device(&(mesh_device->get()), output.memory_config(), cq_id);
     }
