@@ -132,19 +132,22 @@ struct AllReduceReceiver {
 
             // Push local and residual tiles to compute immediately (they're ready)
             // Skip local push if data is already in CB (e.g., from preceding gather operation)
+            DPRINT << " RESERVE cb_in2" << ENDL();
             if constexpr (!ReaderCT::skip_local_push) {
                 cb_reserve_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
                 cb_push_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
             }
-
+            DPRINT << " RESERVE cb_residual" << ENDL();
             if constexpr (ReaderCT::has_residual) {
                 cb_reserve_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
                 cb_push_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
             }
+            DPRINT << " PUSHED" << ENDL();
 
             // Wait for remote sender to signal data has been written to intermediate tensor
             auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sender_semaphore_addr);
             noc_semaphore_wait(local_semaphore_ptr, 1);
+            DPRINT << " WAITED" << ENDL();
             noc_semaphore_set(local_semaphore_ptr, 0);
 
             // Remote data is now ready, push to compute

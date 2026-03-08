@@ -367,14 +367,19 @@ class DecoderBlock:
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
         print("Merging per-device and executing")
+        mesh_device = moe_ctx.mesh_device
+        print("[decoder_block] Mesh coordinate → device ID mapping:")
+        for ac in attn_ctxs:
+            c = ac["mesh_coord"]
+            print(f"  mesh({c[0]},{c[1]}) → device-{mesh_device.get_device_id(c)}")
         for ac in attn_ctxs:
             coord = ac["mesh_coord"]
             row = coord[0]
             col = coord[1]
             chip_id = row * moe_ctx.mesh_cols + col
-            local_moe_fabric_node_id = moe_ctx.mesh_device.get_fabric_node_id(coord)
+            local_moe_fabric_node_id = mesh_device.get_fabric_node_id(coord)
             reduce_root_fabric_node_id = (
-                moe_ctx.mesh_device.get_fabric_node_id(reduce_root_coord) if reduce_root_coord is not None else None
+                mesh_device.get_fabric_node_id(reduce_root_coord) if reduce_root_coord is not None else None
             )
             print(
                 f"[decoder_block] coord={_coord_str(coord)} chip_id={chip_id} "
@@ -411,14 +416,24 @@ class DecoderBlock:
                 if base != 0:
                     brisc_base_overrides.append((core_coord, base))
 
+            mesh_coord_args = [("mesh_row", row), ("mesh_col", col)]
             merged_ncrisc = (
-                ac["ncrisc_named_compile_time_args"] + moe_ncrisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
+                mesh_coord_args
+                + ac["ncrisc_named_compile_time_args"]
+                + moe_ncrisc_args
+                + [("reconfig_cb_config_l1_addr", reconfig_addr)]
             )
             merged_brisc = (
-                ac["brisc_named_compile_time_args"] + moe_brisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
+                mesh_coord_args
+                + ac["brisc_named_compile_time_args"]
+                + moe_brisc_args
+                + [("reconfig_cb_config_l1_addr", reconfig_addr)]
             )
             merged_trisc = (
-                ac["trisc_named_compile_time_args"] + moe_trisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
+                mesh_coord_args
+                + ac["trisc_named_compile_time_args"]
+                + moe_trisc_args
+                + [("reconfig_cb_config_l1_addr", reconfig_addr)]
             )
 
             merged_ncrisc_crt = ac.get("ncrisc_common_runtime_args", []) + moe.ncrisc_common_rt_args

@@ -50,6 +50,9 @@
 // Compile-time role flags for dead code elimination via if constexpr.
 // Merged from AttentionBlock and MoE kernels.
 struct Core {
+    static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
+    static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
+
     // === AttentionBlock roles ===
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_full_mcast_grid_core = get_named_compile_time_arg_val("is_full_mcast_grid_core") == 1;
@@ -105,6 +108,7 @@ struct Core {
 };
 
 void kernel_main() {
+    DPRINT << " DECODER BLOCK START" << ENDL();
     // ============================================================================
     // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
     // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
@@ -2130,6 +2134,7 @@ void kernel_main() {
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
         {
+            DPRINT << " POST_SDPA" << ENDL();
             DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
@@ -2266,7 +2271,6 @@ void kernel_main() {
     // ========================================================================
     // Phase 3: MoE Operations
     // ========================================================================
-
     deepseek_b1_ops::Mcast::Op<
         Moe::Routed::ResidualMcastCTArgs,
         Core::is_sender_core,
@@ -2283,6 +2287,8 @@ void kernel_main() {
         Core::is_input_mcast_receiver,
         true>
         moe_mcast;
+
+    DPRINT << " STARTING MOE" << ENDL();
 
     {
         DeviceZoneScopedN("MOE_RESIDUAL_MCAST");
@@ -2372,6 +2378,7 @@ void kernel_main() {
     }
 
     {
+        DPRINT << " MOE_GATE_PROJ" << ENDL();
         DeviceZoneScopedN("MOE_GATE_PROJ");
         constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
         deepseek_b1_ops::DRAMStreamingMatmul::
