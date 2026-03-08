@@ -66,6 +66,7 @@ jobs:
 
   multi-host-t3k:
     if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
+    timeout-minutes: 120
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
@@ -119,6 +120,7 @@ jobs:
 
   multi-host-glx-2x:
     if: ${{ github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
+    timeout-minutes: 120
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
@@ -172,6 +174,7 @@ jobs:
 
   multi-host-glx-4x:
     if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+    timeout-minutes: 120
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
