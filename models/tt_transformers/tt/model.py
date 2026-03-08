@@ -18,7 +18,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
 class Transformer(LightweightModule):
@@ -63,8 +63,6 @@ class Transformer(LightweightModule):
             embd_cls = Embedding
         self.embd = embd_cls(**embd_kwargs)
 
-        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
-
         rope_setup_kwargs = {
             "device": mesh_device,
             "batch_size": args.max_batch_size,
@@ -75,21 +73,25 @@ class Transformer(LightweightModule):
             "use_qk_fused": args.use_qk_fused,
             "prefetcher": prefetcher,
         }
+        DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
         if "rotary_dim" in inspect.signature(ActualRopeSetupClass.__init__).parameters:
             rope_setup_kwargs["rotary_dim"] = args.rotary_dim
         self.rope_setup = ActualRopeSetupClass(**rope_setup_kwargs)
 
         if args.rope_theta_local:
-            self.rope_local_setup = RotarySetup(
-                mesh_device,
-                args.max_batch_size,
-                args.head_dim,
-                args.max_seq_len,
-                args.rope_theta_local,
-                use_qk_fused=args.use_qk_fused,
-                prefetcher=None,
-                rotary_dim=args.rotary_dim,
-            )
+            local_rope_setup_kwargs = {
+                "device": mesh_device,
+                "batch_size": args.max_batch_size,
+                "head_dim": args.head_dim,
+                "max_seq_len": args.max_seq_len,
+                "rope_theta": args.rope_theta_local,
+                "use_qk_fused": args.use_qk_fused,
+                "prefetcher": None,
+            }
+            if "rotary_dim" in inspect.signature(DefaultRopeSetup.__init__).parameters:
+                local_rope_setup_kwargs["rotary_dim"] = args.rotary_dim
+            self.rope_local_setup = DefaultRopeSetup(**local_rope_setup_kwargs)
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -167,13 +169,79 @@ class Transformer(LightweightModule):
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
-        logits = self.norm(
-            logits, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
+        logits = self._apply_norm_and_lm_head(logits)
+        return logits
+
+    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract each user's last-token hidden state from batched prefill output.
+
+        Reads hidden states to host, extracts the relevant row for each user,
+        and sends the combined tensor back to device with the correct column-sharded
+        mesh mapping (ShardTensorToMesh dim=-1) so the DistributedNorm all-gather
+        produces the correct full hidden dim.
+
+        Args:
+            hidden_states: [padded_batch, 1, prefill_seq_len, dim_per_device] on device (column-sharded, TILE_LAYOUT)
+            last_token_idx_list: list of length padded_batch with per-user last token positions
+            padded_batch: number of slots (typically 32)
+            prefill_seq_len: padded sequence length per user
+
+        Returns:
+            user_tokens: [1, 1, padded_batch, dim_per_device] per device, column-sharded, TILE_LAYOUT
+        """
+        active_indices = [lt for lt in last_token_idx_list if lt > 0]
+        all_same = len(set(active_indices)) <= 1
+
+        if all_same and active_indices:
+            common_last = active_indices[0]
+            get_last = (common_last // 32) * 32
+            R = common_last % 32
+            block = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last, 0),
+                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
+            )
+        else:
+            block = hidden_states
+            R = None
+
+        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
+        host_full = torch.cat(host_tensors, dim=-1)
+
+        if R is not None:
+            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
+        else:
+            rows = []
+            for slot in range(padded_batch):
+                lt_idx = last_token_idx_list[slot]
+                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
+            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        user_tokens = ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+        )
+        return user_tokens
+
+    def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract last tokens and run norm + lm_head once for all users."""
+        user_tokens = self.extract_last_tokens_batched_prefill(
+            hidden_states, last_token_idx_list, padded_batch, prefill_seq_len
+        )
+        return self._apply_norm_and_lm_head(user_tokens)
+
+    def _apply_norm_and_lm_head(self, x):
+        """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
+        x = self.norm(
+            x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
         )
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
         if lm_head_input_mem_cfg.is_sharded():
-            logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
-        logits = self.lm_head(logits)
+            x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
+        logits = self.lm_head(x)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
@@ -197,13 +265,18 @@ class Transformer(LightweightModule):
         )
         return hidden_states
 
-    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            batch_size=batch_size,
+            user_id=user_id,
         )
         return host_inputs
 
@@ -221,6 +294,8 @@ class Transformer(LightweightModule):
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batch_size=1,
+        user_id=0,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -233,8 +308,16 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
+        # For batched prefill, tokens come in as [padded_batch, S]
+        # Each user's tokens are at their slot index in dimension 0
+        # Reshape to [1, 1, 1, padded_batch * S] for embedding
+        if batch_size > 1:
+            # Tokens are in slot-based format [padded_batch, S_per_user]
+            S = tokens.shape[-1]  # Per-user sequence length
+            tokens = tokens.reshape(1, 1, 1, -1)  # Flatten to [1, 1, 1, padded_batch * S]
+        else:
+            tokens = tokens.reshape(1, 1, 1, -1)
+            S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
             device=device,
@@ -250,11 +333,9 @@ class Transformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
-        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        # Calculate if padding is needed (when required_end > mat_len)
         required_end = start_pos + S
         pad_len = max(0, required_end - mat_len)
 
@@ -296,6 +377,8 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
+            # For batched prefill, replicate page_table to all devices (same as single-user path)
+            # The KV cache fill will loop over users and use batch_idx=user_id for each
             tt_page_table = ttnn.from_torch(
                 page_table,
                 device=device,
@@ -487,6 +570,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -504,6 +588,7 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -598,6 +683,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
@@ -630,6 +716,7 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                batch_size=batch_size,
             )
 
         if mode == Mode.DECODE:
@@ -657,4 +744,5 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return x

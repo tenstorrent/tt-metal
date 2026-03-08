@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -45,7 +45,7 @@ std::unordered_map<SocketConnection, uint32_t> get_receiver_ids_per_sender(const
     return connection_to_receiver_id;
 }
 
-// Get the maximum number of downstreams per sender core to calcalate size of the metadata buffer.
+// Get the maximum number of downstreams per sender core to calculate size of the metadata buffer.
 // This will get cleaned up along with improved socket APIs. See Issue #27207
 uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
     std::unordered_map<MeshCoreCoord, uint32_t> num_downstreams_per_core;

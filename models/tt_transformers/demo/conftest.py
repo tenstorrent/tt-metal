@@ -55,10 +55,13 @@ def pytest_addoption(parser):
     parser.addoption(
         "--enable_trace",
         action="store",
+        nargs="?",
+        const=1,
         default=None,
         type=int,
-        help="Whether to enable tracing",
+        help="Enable tracing. Accepts --enable_trace, --enable_trace 1, or --enable_trace 0",
     )
+    parser.addoption("--disable_trace", action="store_false", dest="enable_trace", default=None, help="Disable tracing")
     parser.addoption(
         "--num_layers",
         action="store",
@@ -79,4 +82,10 @@ def pytest_addoption(parser):
         default=None,
         type=int,
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
+    )
+    parser.addoption(
+        "--use_hf_rope",
+        action="store_true",
+        default=False,
+        help="Whether to use HF-style rope, if not passed, the default mllama will be used",
     )

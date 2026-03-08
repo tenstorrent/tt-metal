@@ -240,6 +240,7 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ) -> ttnn.Tensor:
         if self.is_phi_model:
             return self._forward_phi(
@@ -274,7 +275,10 @@ class TransformerBlock(LightweightModule):
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
 
-        # Attention takes replicated inputs and produces fractured outputs
+        # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
+        if batch_size > 1:
+            attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
+
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
@@ -286,6 +290,12 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # To match the batch-related reshape inside the attention module
+        # Use the batch_size parameter instead of inferring from shape[-3]
+        # because for [32, 1, S, H] tensors, shape[-3] is 1, not 32
+        # This reshape is only applicable in prefill mode with batched prefill
+        if mode == Mode.PREFILL and batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 

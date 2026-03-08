@@ -28,7 +28,7 @@
 #include <array>
 #include <cstdint>
 
-constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
+constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignment
 static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 static_assert(sizeof(CQPrefetchCmdLarge) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 struct CQPrefetchHToPrefetchDHeader_s {
@@ -1142,7 +1142,7 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
                    l1_cache) < l1_cache_elements_rounded);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
         (volatile uint32_t tt_l1_ptr*)(data_ptr), amt, l1_cache_pos);
-    // Store a sentinal non 0 value at the end to save a test/branch in read path
+    // Store a sentinel non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayPagedPackedSubCmd*)&l1_cache_pos[amt])->length = 1;
 
     process_relay_paged_packed_sub_cmds(total_length, l1_cache);
@@ -1538,7 +1538,7 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(
 
     void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
-    // Store a sentinal non 0 value at the end to save a test/branch in read path
+    // Store a sentinel non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayPagedPackedSubCmd*)end)->length = 1;
 
     process_relay_paged_packed_sub_cmds(total_length, l1_cache);
@@ -1547,7 +1547,7 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(
 
 uint32_t process_exec_buf_cmd(
     uint32_t cmd_ptr_outer, uint32_t& downstream_data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
-    // dispatch on eth cores is memory constrained, so exec_buf re-uses the cmddat_q
+    // dispatch on eth cores is memory constrained, so exec_buf reuses the cmddat_q
     // prefetch_h stalls upon issuing an exec_buf to prevent conflicting use of the cmddat_q,
     // the exec_buf contains the release commands
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr_outer;

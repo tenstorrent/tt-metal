@@ -32,8 +32,12 @@ from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
+    convert_hf_to_meta_mllama_no_qkv_permute,
+    convert_hf_to_meta_no_qkv_permute,
     convert_meta_to_hf,
+    convert_meta_to_hf_no_qkv_permute,
     convert_vision_hf_to_meta,
+    convert_vision_hf_to_meta_no_qkv_permute,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -458,6 +462,7 @@ class ModelArgs:
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
+        "Phi-4": "models/tt_transformers/model_params/phi-4",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
     }
@@ -474,6 +479,7 @@ class ModelArgs:
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         prefetcher=None,
+        use_hf_rope=False,  # Choose HF or mllama RoPE (default: mllama, previously, only that one was used). mllama will be removed, only HF will remain (Issue #37605).
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -507,6 +513,7 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -523,17 +530,20 @@ class ModelArgs:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
                 self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+            if self.use_hf_rope:
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, "hf_rope")
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
+            if "phi-4" in self.model_name.lower():
+                self.model_name = "Phi-4"
         else:
-            assert False, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
+            raise ValueError("Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct")
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
-
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.CKPT_DIR)
         self.model_cache_path = Path(self.CACHE_PATH)
@@ -562,9 +572,10 @@ class ModelArgs:
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
 
         if (
-            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b"]
+            self.base_model_name
+            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
             and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"):
+        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -603,14 +614,15 @@ class ModelArgs:
         self.processor = None if dummy_weights else self.create_processor()
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We currently disable this fusion of ops for vision-capable or multimodal models and when prefetcher is enabled
-        self.use_qk_fused = not self.is_multimodal
+        # We currently disable this fusion of ops for vision-capable or multimodal models
+        # we also disable fused qk when using HF-style rotary embedding
+        self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
-            # Parameter intialization
+            # Parameter initialization
             # ============================================================================
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (
@@ -2275,6 +2287,7 @@ class ModelArgs:
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -2537,6 +2550,7 @@ class ModelArgs:
         # multimodal llama additionally adds cross attention layers
         # they are calculated in HF but not calculated in Meta
         self.n_layers -= len(text_config.get("cross_attention_layers", ()))
+        self.vision_num_cross_attention_layers = len(text_config.get("cross_attention_layers", ()))
 
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
@@ -2644,7 +2658,9 @@ class ModelArgs:
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
         # Configurable MLP activation type
-        self.mlp_activation_name = (text_config.get("hidden_act") or text_config.get("hidden_activation") or "silu").lower()
+        self.mlp_activation_name = (
+            text_config.get("hidden_act") or text_config.get("hidden_activation") or "silu"
+        ).lower()
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
@@ -2690,9 +2706,6 @@ class ModelArgs:
         chunk_size_fallback = self.image_size if self.image_size != -1 else vision_config.get("image_size", -1)
         self.vision_chunk_size = vision_config.get("vision_chunk_size", chunk_size_fallback)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
-        self.vision_num_cross_attention_layers = vision_config.get(
-            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", 8)
-        )
 
         # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
@@ -2958,21 +2971,36 @@ class ModelArgs:
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
             if self.is_llama_vision():
-                state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+                if self.use_hf_rope:
+                    # For HF-style RoPE: skip QKV format conversion
+                    state_dict = convert_hf_to_meta_mllama_no_qkv_permute(state_dict, self.head_dim, self.hf_config)
+                else:
+                    # Standard: convert to Meta format
+                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
             else:
-                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+                if self.use_hf_rope:
+                    # For HF-style RoPE: skip QKV format conversion
+                    state_dict = convert_vision_hf_to_meta_no_qkv_permute(state_dict, self.head_dim)
+                else:
+                    # Standard: convert to Meta format
+                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(
-                state_dict,
-                self.head_dim,
-                self.n_heads,
-                self.n_kv_heads,
-                rotary_dim=self.rotary_dim,
-                model_type=self.model_type,
-            )
+            if self.use_hf_rope:
+                # For Attention: skip QKV format conversion
+                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            else:
+                # Standard: convert to Meta format
+                state_dict = convert_hf_to_meta(
+                    state_dict,
+                    self.head_dim,
+                    self.n_heads,
+                    self.n_kv_heads,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -3467,9 +3495,12 @@ class ModelArgs:
         model = self.reference_transformer(wrap=False)
         layer = model.lm_head
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(
-            convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
-        )
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            )
         return layer
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
@@ -3570,6 +3601,7 @@ class ModelArgs:
                 config=self.hf_config,
                 rotary_dim=self.rotary_dim,
                 model_type=self.model_type,
+                use_hf_rope=self.use_hf_rope,
             )
             return wrapper
         else:
@@ -3593,9 +3625,12 @@ class ModelArgs:
         layers = getattr(model, "layers", getattr(model, "model", {}).layers)
         layer = layers[0].input_layernorm
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(
-            convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
-        )
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            )
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
@@ -3635,7 +3670,13 @@ class ModelArgs:
                 model = self.cached_hf_model
             model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
-            wrapper = HfModelWrapper(model, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            wrapper = HfModelWrapper(
+                model,
+                self.head_dim,
+                rotary_dim=self.rotary_dim,
+                model_type=self.model_type,
+                use_hf_rope=self.use_hf_rope,
+            )
             return wrapper
         else:
             return model
@@ -3734,15 +3775,20 @@ class ModelArgs:
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].mlp
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(
-            convert_meta_to_hf(
-                x,
-                self.head_dim,
-                fuse_mlp=self.fuse_mlp,
-                rotary_dim=self.rotary_dim,
-                model_type=self.model_type,
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(x, fuse_mlp=self.fuse_mlp)
             )
-        )
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(
+                    x,
+                    self.head_dim,
+                    fuse_mlp=self.fuse_mlp,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
+            )
         return layer
 
     def reference_embedding(self, reference_model=None):
@@ -3753,13 +3799,16 @@ class ModelArgs:
             layer = reference_model.model.model.embed_tokens
 
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(
-            convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
-        )
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            )
         return layer
 
-    def reference_decoder(self):
-        model = self.reference_transformer(wrap=False)
+    def reference_decoder(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0]
         use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
         if hasattr(model.model, "rotary_emb_local"):
@@ -3773,11 +3822,12 @@ class ModelArgs:
             rotary_emb_local,
             rotary_dim=self.rotary_dim,
             model_type=self.model_type,
+            use_hf_rope=self.use_hf_rope,
         )
         return wrapper
 
-    def reference_attention(self):
-        model = self.reference_transformer(wrap=False)
+    def reference_attention(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0].self_attn
         use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
         wrapper = HfAttentionWrapper(
@@ -3786,6 +3836,7 @@ class ModelArgs:
             model.model.rotary_emb if use_position_embeddings else None,
             rotary_dim=self.rotary_dim,
             model_type=self.model_type,
+            use_hf_rope=self.use_hf_rope,
         )
         return wrapper
 
@@ -3871,7 +3922,7 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb, rotary_dim=None, model_type=None):
+    def __init__(self, attention, head_dim, rotary_emb, rotary_dim=None, model_type=None, use_hf_rope=False):
         from transformers import DynamicCache
 
         super().__init__()
@@ -3881,6 +3932,7 @@ class HfAttentionWrapper:
         self.rotary_emb = rotary_emb
         self.rotary_dim = rotary_dim
         self.model_type = model_type
+        self.use_hf_rope = use_hf_rope
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
@@ -3916,23 +3968,31 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-        return self.attention.load_state_dict(
-            convert_meta_to_hf(
-                state_dict,
-                self.head_dim,
-                fuse_qkv,
-                rotary_dim=self.rotary_dim,
-                model_type=self.model_type,
+        if self.use_hf_rope:
+            return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv))
+        else:
+            return self.attention.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
             )
-        )
 
     @property
     def cache_k(self):
         [(k, v)] = self.past_key_value.to_legacy_cache()
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+
+        if self.use_hf_rope:
+            # No transformation needed for HF-style RoPE
+            return hf_k
+
+        # Llama-style: apply reverse_permute transformation
         batch_size, seq_len, n_heads, head_dim = hf_k.shape
         rotary_dim = self.rotary_dim or head_dim
-
         meta_k = torch.zeros_like(hf_k)
         for b in range(batch_size):
             for s in range(seq_len):
@@ -3956,7 +4016,9 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None, rotary_dim=None, model_type=None):
+    def __init__(
+        self, decoder, head_dim, rotary_emb, rotary_emb_local=None, rotary_dim=None, model_type=None, use_hf_rope=False
+    ):
         from transformers import DynamicCache
 
         self.decoder = decoder
@@ -3966,6 +4028,7 @@ class HfDecoderWrapper:
         self.rotary_dim = rotary_dim
         self.model_type = model_type
         self.past_key_values = DynamicCache()
+        self.use_hf_rope = use_hf_rope
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
@@ -4010,20 +4073,56 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.decoder.load_state_dict(
-            convert_meta_to_hf(
-                state_dict,
-                self.head_dim,
-                fuse_qkv,
-                fuse_mlp,
-                rotary_dim=self.rotary_dim,
-                model_type=self.model_type,
+        if self.use_hf_rope:
+            return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp))
+        else:
+            return self.decoder.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    fuse_mlp,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
             )
-        )
+
+    @property
+    def cache_k(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+
+        if self.use_hf_rope:
+            # No transformation needed for HF-style RoPE
+            return hf_k
+
+        # Llama-style: apply reverse_permute transformation
+        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        rotary_dim = self.rotary_dim or head_dim
+        meta_k = torch.zeros_like(hf_k)
+        for b in range(batch_size):
+            for s in range(seq_len):
+                if rotary_dim == head_dim:
+                    flat = hf_k[b, s].flatten()
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                else:
+                    per_head = hf_k[b, s].clone()
+                    rotary = per_head[:, :rotary_dim].reshape(n_heads * rotary_dim)
+                    rotary = reverse_permute(rotary.unsqueeze(-1), n_heads, rotary.shape[0], 1).squeeze(-1)
+                    per_head[:, :rotary_dim] = rotary.reshape(n_heads, rotary_dim)
+                    meta_k[b, s] = per_head
+
+        return meta_k
+
+    @property
+    def cache_v(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim, config=None, rotary_dim=None, model_type=None):
+    def __init__(self, model, head_dim, config=None, rotary_dim=None, model_type=None, use_hf_rope=False):
         from transformers import DynamicCache
 
         self.model = model
@@ -4032,6 +4131,7 @@ class HfModelWrapper:
         self.rotary_dim = rotary_dim
         self.model_type = model_type
         self.past_key_values = DynamicCache()
+        self.use_hf_rope = use_hf_rope
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
         position_ids = torch.tensor(
@@ -4057,17 +4157,22 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.model.load_state_dict(
-            convert_meta_to_hf(
-                state_dict,
-                self.head_dim,
-                fuse_qkv,
-                fuse_mlp,
-                self.config,
-                rotary_dim=self.rotary_dim,
-                model_type=self.model_type,
+        if self.use_hf_rope:
+            return self.model.load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config)
             )
-        )
+        else:
+            return self.model.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    fuse_mlp,
+                    self.config,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
+            )
 
     def eval(self):
         self.model.eval()
@@ -4081,9 +4186,15 @@ class HfModelWrapper:
             hf_k = k.permute(
                 0, 2, 1, 3
             )  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+
+            if self.use_hf_rope:
+                # No transformation needed for HF-style RoPE
+                meta_ks.append(hf_k)
+                continue
+
+            # Llama-style: apply reverse_permute transformation
             batch_size, seq_len, n_heads, head_dim = hf_k.shape
             effective_rotary_dim = rotary_dim or head_dim
-
             meta_k = torch.zeros_like(hf_k)
             for b in range(batch_size):
                 for s in range(seq_len):
