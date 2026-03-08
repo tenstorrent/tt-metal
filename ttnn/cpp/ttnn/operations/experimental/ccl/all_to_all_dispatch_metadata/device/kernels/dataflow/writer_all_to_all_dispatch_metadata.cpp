@@ -266,7 +266,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 //   FabricMaxPacketSize - Maximum fabric packet size in bytes
-//   DispatchDevices - Total number of dispatch devices in a single cluster
+//   NumDevices - Total number of devices
 //   SelectedExpertsK - Number of experts selected per token
 //   OutputAddrGenT - Type of the output address generator (TensorAccessor)
 // ============================================================================
@@ -277,7 +277,7 @@ template <
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     uint32_t FabricMaxPacketSize,
-    uint32_t DispatchDevices,
+    uint32_t NumDevices,
     uint32_t SelectedExpertsK,
     typename OutputAddrGenT,
     typename FabricConnectionsType>
@@ -297,7 +297,6 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast_1d;
-    using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
@@ -309,12 +308,9 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already sent to this device for this token (avoid duplicate sends)
-        uint32_t intra_cluster_target_device_id =
-            get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-        if (send_preparation_buffer
-                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] == 0) {
-            send_preparation_buffer
-                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] = 1;
+        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] ==
+            0) {
+            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, we dispatch the input token to it
@@ -364,7 +360,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 //   FabricMaxPacketSize - Maximum fabric packet size in bytes
-//   DispatchDevices - Total number of dispatch devices in a single cluster
+//   NumDevices - Total number of devices
 //   SelectedExpertsK - Number of experts selected per token
 //   OutputAddrGenT - Type of the output address generator (TensorAccessor)
 // ============================================================================
@@ -375,7 +371,7 @@ template <
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     uint32_t FabricMaxPacketSize,
-    uint32_t DispatchDevices,
+    uint32_t NumDevices,
     uint32_t SelectedExpertsK,
     typename OutputAddrGenT,
     typename FabricConnectionsType>
@@ -395,13 +391,12 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d;
-    using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
 
     // Collect all unique remote destinations for this token
-    uint32_t remote_token_destinations[DispatchDevices];
+    uint32_t remote_token_destinations[NumDevices];
     uint32_t num_remote_token_destinations = 0;
 
     for (uint32_t k = 0; k < SelectedExpertsK; k++) {
@@ -410,12 +405,9 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already processed this device for this token
-        uint32_t intra_cluster_target_device_id =
-            get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-        if (send_preparation_buffer
-                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] == 0) {
-            send_preparation_buffer
-                [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] = 1;
+        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] ==
+            0) {
+            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + intra_cluster_target_device_id] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, dispatch locally
@@ -435,7 +427,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             Topology,
             MeshRows,
             MeshCols,
-            DispatchDevices,
+            NumDevices,
             FabricMaxPacketSize>(
             output_addr_gen,
             fabric_connections,
