@@ -102,12 +102,12 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
     result = None
 
     if impl == "native":
-        # On-device all_reduce with explicit Linear topology.
+        # On-device all_reduce with explicit Ring topology (8 chips on axis 0).
         result = ttnn.all_reduce(
             tensor,
             cluster_axis=cluster_axis,
             memory_config=mc,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
         ttnn.deallocate(tensor, force=False)
 
@@ -292,6 +292,15 @@ class Glm4MoeAttention(LightweightModule):
 
         # Paged attention config
         self.paged_attention_config = paged_attention_config
+
+        # SDPA decode program config: limit cores to 64 (8x8) for Galaxy Wormhole
+        # Galaxy has 72 cores (8x9) but SDPA tree reduction supports max 64 cores per KV head
+        self.sdpa_decode_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
 
         # Sequence length limits
         self.MAX_QKV_MM_SEQ_LEN = configuration.get("MAX_QKV_MM_SEQ_LEN", 4096)
@@ -587,7 +596,7 @@ class Glm4MoeAttention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # 7. SDPA (paged)
+        # 7. SDPA (paged) — limit to 64 cores for Galaxy Wormhole tree reduction
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             keys,
@@ -595,6 +604,7 @@ class Glm4MoeAttention(LightweightModule):
             page_table_tensor=page_table,
             cur_pos_tensor=current_pos,
             scale=self.scale,
+            program_config=self.sdpa_decode_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
@@ -646,6 +656,13 @@ class Glm4MoeAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output)
 
+        # DEBUG: force synchronize to isolate if compute pipeline or reduce hangs
+        import os as _os
+        if _os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
+            logger.info("  [DEBUG] synchronizing before all_reduce, dense_out.shape=%s", list(dense_out.shape))
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("  [DEBUG] synchronize complete, proceeding to all_reduce")
+
         # 11. All-reduce on cluster_axis=0 (TP reduction for row-parallel O projection)
         dense_out = _simple_all_reduce(
             dense_out,
@@ -684,6 +701,17 @@ class Glm4MoeAttention(LightweightModule):
         seq_len = x.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
+        import os as _os
+        import sys
+        _dbg = _os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
+        def _sync(label):
+            if _dbg:
+                print(f"  [DEBUG PREFILL] {label} ...", flush=True, file=sys.stderr)
+                ttnn.synchronize_device(self.mesh_device)
+                print(f"  [DEBUG PREFILL] {label} OK", flush=True, file=sys.stderr)
+
+        _sync("before QKV linear")
+
         # 1. QKV linear (reshape for long sequences)
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
@@ -697,6 +725,8 @@ class Glm4MoeAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        _sync("after QKV linear")
 
         # Add QKV bias
         xqkv = xqkv + self.wqkv_bias
@@ -719,14 +749,18 @@ class Glm4MoeAttention(LightweightModule):
         # q: [1, 12, seq_len, 128], k: [1, 1, seq_len, 128], v: [1, 1, seq_len, 128]
 
         ttnn.deallocate(xqkv)
+        _sync("after split heads")
 
         # 4. QK Norm
         q = self.q_norm(q, mode="prefill")
         k = self.k_norm(k, mode="prefill")
 
+        _sync("after QK norm")
+
         # 5. Partial RoPE (prefill mode)
         q = self._apply_partial_rope_prefill(q, rot_mats[0], rot_mats[1], rot_mats[2])
         k = self._apply_partial_rope_prefill(k, rot_mats[0], rot_mats[1], rot_mats[2])
+        _sync("after RoPE")
 
         # 6. Fill KV cache
         keys = kv_cache[0]
@@ -762,6 +796,8 @@ class Glm4MoeAttention(LightweightModule):
             ttnn.fill_cache(keys, k_fill, user_id % self.batch_size_per_device_group)
             ttnn.fill_cache(values, v_fill, user_id % self.batch_size_per_device_group)
 
+        _sync("after KV cache fill")
+
         # 7. SDPA — match Q dtype to KV cache dtype (avoid BF8 precision loss for BF16 KV)
         q_8b = ttnn.typecast(q, dtype=keys.dtype)
         ttnn.deallocate(q)
@@ -787,6 +823,8 @@ class Glm4MoeAttention(LightweightModule):
         ttnn.deallocate(k_8b)
         ttnn.deallocate(v_8b)
 
+        _sync("after SDPA")
+
         # 8. Reshape and concat heads
         attn_output = ttnn.reshape(attn_output, [1, self.n_local_heads, -1, self.head_dim])
         attn_output = ttnn.experimental.nlp_concat_heads(
@@ -811,6 +849,8 @@ class Glm4MoeAttention(LightweightModule):
         if seq_len > 1024:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output)
+
+        _sync("after O projection")
 
         # 10. All-reduce on cluster_axis=0 (TP reduction for row-parallel O projection)
         # NOTE: Prefill runs outside trace — do NOT pass ccl to avoid async CCL ops

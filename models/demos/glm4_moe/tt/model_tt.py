@@ -273,6 +273,7 @@ class _DecodeTraceState:
     logits_tt: ttnn.Tensor | None = None
     top1_values_tt: ttnn.Tensor | None = None
     top1_indices_tt: ttnn.Tensor | None = None
+    embed_tt: ttnn.Tensor | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +295,7 @@ class Glm4MoeTT:
     hparams: Glm4MoeHParams
     state: Any  # LazyStateDict
     embed_w: ttnn.Tensor
+    embed_w_cpu: torch.Tensor
     rope: dict[str, Any]
     final_norm: RMSNorm
     lm_head_w: ttnn.Tensor
@@ -331,6 +333,7 @@ class Glm4MoeTT:
         state = load_glm_lazy_state_dict(snapshot_dir, num_layers=int(hparams.num_hidden_layers))
 
         # Embedding.
+        embed_w_cpu = state["model.embed_tokens.weight"].clone().to(torch.bfloat16)
         embed_w = convert_embedding_weight_to_tt(
             device=device,
             embed_weight=state["model.embed_tokens.weight"],
@@ -438,8 +441,16 @@ class Glm4MoeTT:
             num_layers_to_run, hparams.num_hidden_layers, enable_moe, num_devices, max_seq_len,
         )
 
+        # DEBUG: test device sync before loading layers
+        if os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
+            import sys
+            print("  [DEBUG MODEL] synchronizing before layer loading ...", flush=True, file=sys.stderr)
+            ttnn.synchronize_device(device)
+            print("  [DEBUG MODEL] synchronize before layers OK", flush=True, file=sys.stderr)
+
         for layer_idx in range(num_layers_to_run):
             t0 = time.perf_counter()
+            logger.info("  [DEBUG] Starting layer {} weight conversion", layer_idx)
             lw = convert_decoder_layer_weights(
                 device=device,
                 state=state,
@@ -449,6 +460,7 @@ class Glm4MoeTT:
                 enable_moe=enable_moe and (layer_idx >= int(hparams.first_k_dense_replace)),
             )
             layer_weights_dict[layer_idx] = lw
+            logger.info("  [DEBUG] Layer {} weights converted, creating decoder layer", layer_idx)
 
             dl = Glm4MoeDecoderLayer(
                 mesh_device=device,
@@ -465,6 +477,19 @@ class Glm4MoeTT:
             if layer_idx == 0 or (layer_idx + 1) % 10 == 0 or (layer_idx + 1) == num_layers_to_run:
                 logger.info("  Layer {}/{} loaded ({:.1f}s)", layer_idx + 1, num_layers_to_run, elapsed)
 
+            # DEBUG: sync after each layer to find which one hangs the device
+            if os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
+                print(f"  [DEBUG MODEL] sync after layer {layer_idx} ...", flush=True, file=sys.stderr)
+                ttnn.synchronize_device(device)
+                print(f"  [DEBUG MODEL] sync after layer {layer_idx} OK", flush=True, file=sys.stderr)
+
+        # DEBUG: test device sync after model init
+        if os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
+            import sys
+            print("  [DEBUG MODEL] synchronizing after all layers loaded ...", flush=True, file=sys.stderr)
+            ttnn.synchronize_device(device)
+            print("  [DEBUG MODEL] synchronize after layers OK", flush=True, file=sys.stderr)
+
         return cls(
             device=device,
             snapshot_dir=snapshot_dir,
@@ -473,6 +498,7 @@ class Glm4MoeTT:
             hparams=hparams,
             state=state,
             embed_w=embed_w,
+            embed_w_cpu=embed_w_cpu,
             rope=rope,
             final_norm=final_norm,
             lm_head_w=lm_head_w,
@@ -591,16 +617,16 @@ class Glm4MoeTT:
             dp_shard_axis=dp_shard_axis,
         )
 
-        # Embedding.
-        x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, active, 1, hidden))
-        x = ttnn.permute(x, (0, 2, 1, 3))  # [1, 1, B, D]
-        x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
-        x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x, force=False)
-        x = x_tight
+        # Embedding: host-side lookup to avoid device-side tile conversion hang on TG mesh.
+        embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
+        x = ttnn.from_torch(
+            embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, B, hidden]
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+        )
 
         # RoPE mats for attention (cos, sin, trans_matrix).
         rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"])
@@ -887,16 +913,16 @@ class Glm4MoeTT:
             mesh_mapper=mapper,
         )
 
-        # Embedding using pre-allocated device tensor (no host writes).
-        x = ttnn.embedding(tokens_tt, self.embed_w, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, active, 1, hidden))
-        x = ttnn.permute(x, (0, 2, 1, 3))
-        x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
-        x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x, force=False)
-        x = x_tight
+        # Embedding: host-side lookup to avoid device-side tile conversion hang on TG mesh.
+        embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
+        x = ttnn.from_torch(
+            embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, B, hidden]
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+        )
 
         rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"])
 
@@ -945,23 +971,25 @@ class Glm4MoeTT:
         x = logits_tt = top1_values_tt = top1_indices_tt = None
         ttnn.synchronize_device(self.device)
 
+        # Pre-allocate embedding tensor BEFORE trace capture (host writes not allowed in trace).
+        embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
+        embed_tt = ttnn.from_torch(
+            embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, B, hidden]
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+        )
+
         # Now capture trace.
         logger.info("Capturing decode trace for batch={}", active)
         if self.tt_ccl is not None:
             self.tt_ccl.reset_sem_counters()
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
 
-        # Re-run the forward (this time captured in trace).
-        # Use ttnn.embedding with pre-allocated device tensor (no host writes).
-        x = ttnn.embedding(tokens_tt, self.embed_w, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, active, 1, hidden))
-        x = ttnn.permute(x, (0, 2, 1, 3))
-        x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
-        x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x, force=False)
-        x = x_tight
+        # Trace starts from pre-allocated embedding (x = embed_tt).
+        x = embed_tt
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
@@ -1003,6 +1031,7 @@ class Glm4MoeTT:
             logits_tt=logits_tt if sampling_params is None else None,
             top1_values_tt=top1_values_tt,
             top1_indices_tt=top1_indices_tt,
+            embed_tt=embed_tt,
         )
 
     def _update_trace_inputs(
@@ -1032,6 +1061,16 @@ class Glm4MoeTT:
                 rope_mapper = ttnn.ShardTensor2dMesh(
                     self.device, dims=(None, 1), mesh_shape=mesh_shape,
                 )
+
+        # Update embedding (host lookup + copy to pre-allocated device buffer).
+        embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
+        host_embed = ttnn.from_torch(
+            embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, B, hidden]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mapper,
+        )
+        ttnn.copy_host_to_device_tensor(host_embed, state.embed_tt)
 
         # Update tokens (host tensor, then copy to pre-allocated device buffer).
         host_tokens = ttnn.from_torch(
@@ -1199,13 +1238,33 @@ class Glm4MoeTT:
                     self.rope["sin_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim]
                 )
 
-            # Embedding.
-            x = run_tt_embedding(device=self.device, token_ids=input_padded, tt_weight=self.embed_w)
-            if x.layout != ttnn.TILE_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.reshape(x, (1, 1, padded_len, hidden))
+            # DEBUG: sync checkpoints for prefill pipeline
+            _dbg = os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
+            def _psync(label):
+                if _dbg:
+                    import sys
+                    print(f"  [DEBUG PREFILL-MODEL] {label} ...", flush=True, file=sys.stderr)
+                    ttnn.synchronize_device(self.device)
+                    print(f"  [DEBUG PREFILL-MODEL] {label} OK", flush=True, file=sys.stderr)
+
+            _psync("after page_table + rope_slice")
+
+            # Embedding: do host-side lookup to avoid device-side tile conversion hang on TG.
+            # ttnn.embedding with TILE_LAYOUT and ttnn.to_layout both hang on 32-device TG mesh.
+            embed_torch = self.embed_w_cpu[input_padded[0].long()]  # [padded_len, hidden]
+            x = ttnn.from_torch(
+                embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1, 1, padded_len, hidden]
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+            )
+            _psync("after embedding (host)")
 
             rot_mats = (cos_matrix, sin_matrix, self.rope["trans_matrix"])
+
+            _psync("before layer loop")
 
             # Chunked prefill: process PREFILL_CHUNK_SIZE tokens at a time.
             if padded_len > PREFILL_CHUNK_SIZE:

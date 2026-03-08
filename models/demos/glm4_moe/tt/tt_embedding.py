@@ -71,4 +71,18 @@ def run_tt_embedding(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.__class__.__name__ == "MeshDevice" else None,
     )
-    return ttnn.embedding(tt_ids, tt_weight, layout=output_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    import os, sys
+    if os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
+        print(f"  [DEBUG EMBED] before ttnn.embedding, ids={list(tt_ids.shape)}, weight={list(tt_weight.shape)}", flush=True, file=sys.stderr)
+        ttnn.synchronize_device(device)
+        print(f"  [DEBUG EMBED] sync before embedding OK", flush=True, file=sys.stderr)
+
+    result = ttnn.embedding(tt_ids, tt_weight, layout=output_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
+        print(f"  [DEBUG EMBED] after ttnn.embedding, result={list(result.shape)}", flush=True, file=sys.stderr)
+        ttnn.synchronize_device(device)
+        print(f"  [DEBUG EMBED] sync after embedding OK", flush=True, file=sys.stderr)
+
+    return result

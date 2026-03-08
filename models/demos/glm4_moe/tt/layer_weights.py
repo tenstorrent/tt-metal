@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -340,6 +341,7 @@ def convert_decoder_layer_weights(
         weight_dtype=ttnn.bfloat16,
         is_distributed=False,
     )
+    logger.info("  [DEBUG L{}] norms done", layer_idx)
 
     # ---- Fused QKV Weights (following tt_transformers/attention.py pattern) ----
     # Load Q [12288, 5120], K [1024, 5120], V [1024, 5120]
@@ -383,6 +385,7 @@ def convert_decoder_layer_weights(
         mesh_mapper=qkv_mapper,
         cache_file_name=c("w_qkv", tp_variant),
     )
+    logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
 
     # ---- Fused QKV Bias ----
     bq_full = state[f"model.layers.{layer_idx}.self_attn.q_proj.bias"]  # [12288]
@@ -410,6 +413,7 @@ def convert_decoder_layer_weights(
         mesh_mapper=qkv_mapper,
         cache_file_name=c("w_qkv_bias", tp_variant),
     )
+    logger.info("  [DEBUG L{}] w_qkv_bias done", layer_idx)
 
     # ---- O Projection (row-parallel: shard input dim by TP) ----
     # HF: [5120, 12288] -> TT: [1, 1, 12288, 5120], shard dim=2 (input) by TP
@@ -422,6 +426,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=wo_mapper,
     )
+    logger.info("  [DEBUG L{}] w_o done", layer_idx)
 
     # ---- MLP Weights ----
     dense_layer = layer_idx < int(hparams.first_k_dense_replace)
@@ -481,6 +486,7 @@ def convert_decoder_layer_weights(
         )
         w_mlp_gate = w_mlp_gate_up  # placeholder (unused when w_gate_up is set)
         w_mlp_up = w_mlp_gate_up    # placeholder (unused when w_gate_up is set)
+    logger.info("  [DEBUG L{}] mlp gate/up done (dense={})", layer_idx, dense_layer)
     w_mlp_down = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}down_proj.weight"],
@@ -488,10 +494,19 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=mlp_down_mapper,
     )
+    logger.info("  [DEBUG L{}] mlp down done", layer_idx)
 
     # ---- Routed MoE (layers >= first_k_dense_replace) ----
     moe: Optional[MoELayerTTWeights] = None
     if enable_moe and not dense_layer:
+        import sys as _sys
+        _dbg_sync = os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
+        def _msync(label):
+            if _dbg_sync:
+                print(f"  [DEBUG MOE L{layer_idx}] {label} ...", flush=True, file=_sys.stderr)
+                ttnn.synchronize_device(device)
+                print(f"  [DEBUG MOE L{layer_idx}] {label} OK", flush=True, file=_sys.stderr)
+
         # Gate: [96, 5120] -> [1, 1, 5120, 96] replicated
         w_gate = _linear_weight_tt(
             device=device,
@@ -499,6 +514,7 @@ def convert_decoder_layer_weights(
             cache_file=c("w_moe_gate"),
             dtype=ttnn.bfloat16,
         )
+        _msync("after gate weight")
 
         # e_score_correction_bias: center before BF16 cast to preserve ordering
         e_bias_torch = state[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"].to(dtype=torch.float32)
@@ -509,7 +525,18 @@ def convert_decoder_layer_weights(
             cache_file=c("e_score_correction_bias_centered_v1"),
             dtype=ttnn.bfloat16,
         )
-        e_bias_tile = ttnn.to_layout(e_bias, ttnn.TILE_LAYOUT)
+        _msync("after e_bias vector")
+        # Create tile-layout version directly via as_tensor (ttnn.to_layout hangs on TG mesh)
+        is_mesh = _is_mesh_device(device)
+        e_bias_tile = ttnn.as_tensor(
+            e_bias_centered.contiguous().view(1, 1, 1, -1),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+        )
+        _msync("after e_bias_tile as_tensor")
 
         # Stack and shard expert weights across all 32 devices (EP=32)
         experts_dtype = _env_experts_dtype()
@@ -549,24 +576,28 @@ def convert_decoder_layer_weights(
         w3_stacked = torch.stack(w3_list, dim=0)  # [96, hidden, moe_intermediate]
         w2_stacked = torch.stack(w2_list, dim=0)  # [96, moe_intermediate, hidden]
 
+        _msync("after expert stacking")
         w1_experts = _experts_weight_tt(
             device=device,
             torch_weights=w1_stacked,
             cache_file=c("w1_experts", experts_variant),
             dtype=experts_dtype,
         )
+        _msync("after w1_experts")
         w3_experts = _experts_weight_tt(
             device=device,
             torch_weights=w3_stacked,
             cache_file=c("w3_experts", experts_variant),
             dtype=experts_dtype,
         )
+        _msync("after w3_experts")
         w2_experts = _experts_weight_tt(
             device=device,
             torch_weights=w2_stacked,
             cache_file=c("w2_experts", experts_variant),
             dtype=experts_dtype,
         )
+        _msync("after w2_experts")
 
         moe = MoELayerTTWeights(
             w_gate=w_gate,

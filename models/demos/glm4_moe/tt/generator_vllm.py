@@ -231,7 +231,7 @@ class Glm4MoeForCausalLM(nn.Module):
     # Warmup
     # -------------------------------------------------------------------
 
-    def warmup_model_prefill(self, *, kv_cache, enable_trace, sampling_params):
+    def warmup_model_prefill(self, *, kv_cache, enable_trace, sampling_params=None, **kwargs):
         """vLLM TT backend warmup hook."""
         self._ensure_tt_runner()
 
@@ -245,6 +245,27 @@ class Glm4MoeForCausalLM(nn.Module):
             kv_cache=kv_cache,
             start_pos=torch.zeros((1,), dtype=torch.int32),
             enable_trace=False,
+            read_from_device=True,
+        )
+
+    def warmup_model_decode(self, *, kv_cache, enable_trace, max_batch_size, num_blocks, **kwargs):
+        """vLLM TT backend decode warmup hook.
+
+        NOTE: V1 batch>1 is BLOCKED for REAP-218B (ttnn.all_reduce cluster_axis=1 crash).
+        We warmup with batch=1 only regardless of max_batch_size.
+        """
+        self._ensure_tt_runner()
+
+        warmup_batch = 1  # batch>1 blocked on V1 for this model
+        page_table = torch.zeros((warmup_batch, max(1, num_blocks)), dtype=torch.int32)
+        page_table[:, 0] = 0
+
+        _ = self.decode_forward(
+            tokens=torch.zeros((warmup_batch, 1), dtype=torch.int32),
+            page_table=page_table,
+            kv_cache=kv_cache,
+            start_pos=torch.zeros((warmup_batch,), dtype=torch.int32),
+            enable_trace=enable_trace,
             read_from_device=True,
         )
 
