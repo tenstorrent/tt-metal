@@ -31,47 +31,19 @@ jobs:
       matrix:
         model:
           - name: "llama-3.2-11b-vision"
-            cmd: >-
-              HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/llama_3_2_11b_vision
+            hf_model: "meta-llama/Llama-3.2-11B-Vision-Instruct"
           - name: "llama-3.2-1b"
-            cmd: >-
-              HF_MODEL=meta-llama/Llama-3.2-1B-Instruct
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/llama_3_2_1b
+            hf_model: "meta-llama/Llama-3.2-1B-Instruct"
           - name: "qwen-2.5-coder-7b"
-            cmd: >-
-              HF_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/qwen_2_5_coder_7b
+            hf_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
           - name: "mistral-7b-v0.3"
-            cmd: >-
-              HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/mistral_7b_v0_3
+            hf_model: "mistralai/Mistral-7B-Instruct-v0.3"
           - name: "deepseek-llm-7b"
-            cmd: >-
-              HF_MODEL=deepseek-ai/deepseek-llm-7b-chat
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/deepseek_llm_7b
+            hf_model: "deepseek-ai/deepseek-llm-7b-chat"
           - name: "phi-3-mini-128k"
-            cmd: >-
-              HF_MODEL=microsoft/Phi-3-mini-128k-instruct
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/phi_3_mini_128k
+            hf_model: "microsoft/Phi-3-mini-128k-instruct"
           - name: "llama-krikri-8b"
-            cmd: >-
-              HF_MODEL=ilsp/Llama-Krikri-8B-Instruct
-              python model_tracer/generic_ops_tracer.py
-              models/tt_transformers/demo/simple_text_demo.py
-              --store -o traced_outputs/llama_krikri_8b
+            hf_model: "ilsp/Llama-Krikri-8B-Instruct"
     name: "Trace ${{ matrix.model.name }}"
     runs-on:
       - N300
@@ -88,6 +60,7 @@ jobs:
         GITHUB_ACTIONS: true
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_MODEL: ${{ matrix.model.hf_model }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -122,7 +95,10 @@ jobs:
         timeout-minutes: 120
         run: |
           mkdir -p traced_outputs
-          ${{ matrix.model.cmd }}
+          python model_tracer/generic_ops_tracer.py \
+            models/tt_transformers/demo/simple_text_demo.py::test_demo_text \
+            --store \
+            -o traced_outputs/${{ matrix.model.name }}
 
       - name: Zip trace output
         if: ${{ !cancelled() }}
