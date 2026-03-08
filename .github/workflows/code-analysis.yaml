@@ -12,7 +12,7 @@ on:
           - RelWithDebInfo
         description: "Build type configuration"
 
-run-name: "Trace Models (N300 Single Card)"
+run-name: "Code Analysis"
 
 jobs:
   build-artifact:
@@ -92,7 +92,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Run tracer for ${{ matrix.model.name }}
-        timeout-minutes: 120
+        timeout-minutes: 600
         run: |
           mkdir -p traced_outputs
           python model_tracer/generic_ops_tracer.py \
