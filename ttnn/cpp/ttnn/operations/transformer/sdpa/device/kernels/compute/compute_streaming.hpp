@@ -124,10 +124,7 @@ void reduce_c_row_group(
     uint32_t row_group_index,
     bool do_eltwise_max,
     uint32_t SBH,
-    uint32_t reduce_cols = 0) {
-    if (reduce_cols == 0) {
-        reduce_cols = cols;
-    }
+    uint32_t reduce_cols = cols) {
     const uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
@@ -615,7 +612,6 @@ static void sdpa_inner_loop_step(
     const bool is_last_iter,
     const bool is_first_iter,
     [[maybe_unused]] const bool apply_mask = false,
-    const uint32_t lw_num_padded = 0,
     const uint32_t lw_partial_tile_idx = 0,
     const uint32_t effective_Sk = 0) {
     constexpr uint32_t sbh = subblock_h;
@@ -624,7 +620,7 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / sbh;
     // K-padding skip: active_Sk = useful K tiles in this chunk.
     // Tile-level granularity: full subblocks + partial subblock for the tail.
-    // V matmul narrowed to sub_exp'd width. Reduce runs at full Sk_chunk_t.
+    // V matmul narrowed to sub_exp'd width. Reduce narrowed to active_Sk via runtime LLK.
     const uint32_t active_Sk = (effective_Sk > 0) ? effective_Sk : Sk_chunk_t;
     const uint32_t kt_num_full_subblocks = active_Sk / qkt_subblock_w;
     const uint32_t kt_remainder = active_Sk % qkt_subblock_w;
@@ -785,8 +781,8 @@ static void sdpa_inner_loop_step(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
-                    0,  // no full-tile padding needed
-                    true,
+                    0,     // no full-tile padding needed
+                    true,  // has_partial — guaranteed by outer guard (lw_partial_tile_idx > 0)
                     lw_partial_tile_idx,
                     sbh);
                 PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1183,7 +1179,6 @@ void sdpa_standard_v2(
                 is_last,
                 is_first,
                 false,  // apply_mask
-                0,      // lw_num_padded
                 0,      // lw_partial_tile_idx
                 eff_Sk);
         };
@@ -1360,7 +1355,6 @@ void sdpa_ring_v2(
                 false,  // is_last_iter
                 is_first,
                 apply_mask,
-                lw_num_padded,
                 lw_partial_tile_idx,
                 effective_Sk_param);
 
