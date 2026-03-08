@@ -1126,6 +1126,8 @@ bool write_to_device_buffer(
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
+    ZoneScopedN("write_to_device_buffer");
+
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 

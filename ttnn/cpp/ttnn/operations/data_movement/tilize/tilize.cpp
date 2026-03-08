@@ -41,6 +41,7 @@ ttnn::Tensor ExecuteTilize::invoke(
     bool use_multicore,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    log_info(tt::LogAlways, "[ExecuteTilize] input_tensor.padded_shape(): {}", input_tensor.padded_shape());
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =

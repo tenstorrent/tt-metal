@@ -123,6 +123,7 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
     const std::vector<Expression>& expressions,
     const ttsl::SmallVector<int>& num_chunks,
     const ttsl::SmallVector<int>& dims) {
+    ZoneScopedN("ttnn::experimental::xtensor::concat_ndim");
     using DataType = typename Expression::value_type;
 
     if (expressions.empty()) {
@@ -169,11 +170,9 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
     }
     const size_t result_volume =
         std::accumulate(result_shape.begin(), result_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
-    XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
-    // An optimization for concatenating along the outer dimension.
+    // Fast path: memcpy for concatenation along the leading dimension.
     if (normalized_dims.size() == 1) {
-        // Check if all dimensions before the concat dimension have size 1.
         bool can_use_memcpy = true;
         for (int d = 0; d < normalized_dims[0]; ++d) {
             if (expected_shape[d] != 1) {
@@ -183,43 +182,56 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         }
 
         if (can_use_memcpy) {
-            DataType* result_ptr = result.data().data();
+            ZoneScopedN("ttnn::experimental::xtensor::concat_ndim[can_use_memcpy]");
             const size_t chunk_size = std::accumulate(
                 expected_shape.begin(), expected_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
+
+            auto buffer_ptr = std::make_shared_for_overwrite<DataType[]>(result_volume);
+            ttsl::Span<DataType> span(buffer_ptr.get(), result_volume);
+
+            DataType* result_ptr = span.data();
             size_t offset = 0;
             for (const auto& expr : expressions) {
+                ZoneScopedN("ttnn::experimental::xtensor::concat_ndim[memcpy]");
                 std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));
                 offset += chunk_size;
             }
-            return result;
+            std::vector<DataType> result_data;
+            result_data.reserve(result_volume);
+            std::copy(span.data(), span.data() + result_volume, std::back_inserter(result_data));
+            return XtensorAdapter<DataType>(std::move(result_data), std::move(result_shape));
         }
     }
 
-    // Get the size of each piece along concatenation dimensions
+    // General path: pre-allocate result buffer for multi-dimensional concatenation via xtensor views.
+    XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
+
     ttsl::SmallVector<size_t> piece_sizes(dims.size());
     for (size_t i = 0; i < dims.size(); ++i) {
         piece_sizes[i] = expected_shape[normalized_dims[i]];
     }
 
-    // Copy pieces into result in row-major order
-    ttsl::SmallVector<size_t> current_indices(dims.size(), 0);
-    for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
-        const auto& expr = expressions[expr_idx];
+    {
+        ZoneScopedN("ttnn::experimental::xtensor::concat_ndim[copy_loop]");
+        ttsl::SmallVector<size_t> current_indices(dims.size(), 0);
+        for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+            const auto& expr = expressions[expr_idx];
 
-        xt::xdynamic_slice_vector indices(num_dims, xt::all());
-        for (size_t i = 0; i < dims.size(); ++i) {
-            const int dim = normalized_dims[i];
-            const size_t offset = current_indices[i] * piece_sizes[i];
-            indices[dim] = xt::range(offset, offset + piece_sizes[i]);
-        }
-
-        xt::dynamic_view(result.expr(), indices) = expr;
-
-        for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
-            if (++current_indices[i] < num_chunks[i]) {
-                break;
+            xt::xdynamic_slice_vector indices(num_dims, xt::all());
+            for (size_t i = 0; i < dims.size(); ++i) {
+                const int dim = normalized_dims[i];
+                const size_t offset = current_indices[i] * piece_sizes[i];
+                indices[dim] = xt::range(offset, offset + piece_sizes[i]);
             }
-            current_indices[i] = 0;
+
+            xt::dynamic_view(result.expr(), indices) = expr;
+
+            for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
+                if (++current_indices[i] < num_chunks[i]) {
+                    break;
+                }
+                current_indices[i] = 0;
+            }
         }
     }
 

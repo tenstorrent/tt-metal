@@ -249,23 +249,21 @@ def test_benchmark_from_torch_deep_seek_mc(benchmark, device):
 
 
 @pytest.mark.parametrize(
-    "shape,shard_shape,memory_layout",
+    "shape, shard_shape, memory_layout, shard_dims",
     [
-        # wq_b: WIDTH_SHARDED, shard [1536, 256], 12 DRAM banks, shard_dims=(0, -1)
-        ((1, 1536, 3072), (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # wo: WIDTH_SHARDED, shard [16384, 96], 12 DRAM banks, shard_dims=(0, -1)
-        ((1, 16384, 1152), (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # wq_kv_a: WIDTH_SHARDED, shard [896, 192], 12 DRAM banks, shard_dims=(0, -2)
-        ((1, 896, 2304), (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # wkv_b1: HEIGHT_SHARDED, shard [256, 512], 12 DRAM banks, shard_dims=(0, -3)
-        ((1, 3072, 512), (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1536, 3072], (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 16384, 1152], (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 896, 2304], (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
+        ([1, 16, 128, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
         # wkv_b2: HEIGHT_SHARDED, shard [5632, 128], 12 DRAM banks, shard_dims=(0, None)
         # ((4, 128,512, 128), (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ],
     ids=["wq_b", "wo", "wq_kv_a", "wkv_b1"],  # , "wkv_b2"
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b])
-def test_benchmark_from_torch_deep_seek_single_device(benchmark, device, shape, shard_shape, memory_layout, ttnn_dtype):
+def test_benchmark_from_torch_deep_seek_single_device(
+    benchmark, device, shape, shard_shape, memory_layout, shard_dims, ttnn_dtype
+):
     torch.manual_seed(0)
 
     torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)  # torch.rand(shape, dtype=torch_dtype)
@@ -291,23 +289,23 @@ def test_benchmark_from_torch_deep_seek_single_device(benchmark, device, shape, 
 
 
 @pytest.mark.parametrize(
-    "shape,shard_shape,memory_layout",
+    "shape, shard_shape, memory_layout, shard_dims",
     [
-        # wq_b: WIDTH_SHARDED, shard [1536, 256], 12 DRAM banks, shard_dims=(0, -1)
-        ((1, 1536, 3072), (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # wo: WIDTH_SHARDED, shard [16384, 96], 12 DRAM banks, shard_dims=(0, -1)
-        ((1, 16384, 1152), (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # wq_kv_a: WIDTH_SHARDED, shard [896, 192], 12 DRAM banks, shard_dims=(0, -2)
-        ((1, 896, 2304), (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # wkv_b1: HEIGHT_SHARDED, shard [256, 512], 12 DRAM banks, shard_dims=(0, -3)
-        ((1, 16, 128, 512), (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1536, 3072], (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 16384, 1152], (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 896, 2304], (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
+        ([1, 16, 128, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
         # wkv_b2: HEIGHT_SHARDED, shard [5632, 128], 12 DRAM banks, shard_dims=(0, None)
-        # ((4, 5632, 128), (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # ((4, 128,512, 128), (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ],
     ids=["wq_b", "wo", "wq_kv_a", "wkv_b1"],  # , "wkv_b2"
 )
-def test_benchmark_from_torch_deep_seek_galaxy(benchmark, device, shape, shard_shape, memory_layout):
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b])
+def test_benchmark_from_torch_deep_seek_host_single_device(
+    benchmark, device, shape, shard_shape, memory_layout, shard_dims, ttnn_dtype
+):
     torch.manual_seed(0)
+
     torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)  # torch.rand(shape, dtype=torch_dtype)
     torch_input_tensor = quantize_to_bf4(torch_input_tensor)
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
@@ -320,14 +318,104 @@ def test_benchmark_from_torch_deep_seek_galaxy(benchmark, device, shape, shard_s
     def from_torch():
         tensor = ttnn.from_torch(
             torch_input_tensor,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.float32,
-            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn_dtype,
+            device=None,
             memory_config=memory_config,
         )
-
-        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
-        tensor = ttnn.typecast(tensor, ttnn.bfloat4_b)
+        tensor = ttnn.to_device(tensor, device=device)
         ttnn.synchronize_device(device)
 
     benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
+
+
+@pytest.mark.parametrize(
+    "shape,shard_shape,memory_layout, shard_dims",
+    [
+        ([1, 1536, 3072], (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 16384, 1152], (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 896, 2304], (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
+        ([1, 16, 128, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
+        # ((4, 5632, 128), (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ],
+    ids=["wq_b", "wo", "wq_kv_a", "wkv_b1"],  # , "wkv_b2"
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_benchmark_from_torch_deep_seek_galaxy(benchmark, mesh_device, shape, shard_shape, memory_layout, shard_dims):
+    torch.manual_seed(0)
+
+    if shard_dims[0] is not None:
+        shape[shard_dims[0]] = shape[shard_dims[0]] * mesh_device.shape[0]
+
+    if shard_dims[1] is not None:
+        shape[shard_dims[1]] = shape[shard_dims[1]] * mesh_device.shape[1]
+
+    torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)
+    torch_input_tensor = quantize_to_bf4(torch_input_tensor)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
+    memory_config = ttnn.MemoryConfig(
+        memory_layout,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    def from_torch():
+        tensor = ttnn.from_torch(
+            torch_input_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+        )
+
+        ttnn.synchronize_device(mesh_device)
+
+    benchmark.pedantic(from_torch, iterations=2, rounds=2, warmup_rounds=1)  # iter = 10 , round = 5
+
+
+@pytest.mark.parametrize(
+    "shape,shard_shape,memory_layout, shard_dims",
+    [
+        ([1, 1536, 3072], (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 16384, 1152], (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 896, 2304], (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
+        ([1, 16, 128, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
+        # ((4, 5632, 128), (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ],
+    ids=["wq_b", "wo", "wq_kv_a", "wkv_b1"],  # , "wkv_b2"
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_benchmark_from_torch_deep_seek_host_galaxy(
+    benchmark, mesh_device, shape, shard_shape, memory_layout, shard_dims
+):
+    torch.manual_seed(0)
+
+    if shard_dims[0] is not None:
+        shape[shard_dims[0]] = shape[shard_dims[0]] * mesh_device.shape[0]
+
+    if shard_dims[1] is not None:
+        shape[shard_dims[1]] = shape[shard_dims[1]] * mesh_device.shape[1]
+
+    torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)
+    torch_input_tensor = quantize_to_bf4(torch_input_tensor)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
+    memory_config = ttnn.MemoryConfig(
+        memory_layout,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    def from_torch():
+        tensor = ttnn.from_torch(
+            torch_input_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+        )
+
+        tensor = ttnn.to_device(tensor, device=mesh_device)
+        ttnn.synchronize_device(mesh_device)
+
+    benchmark.pedantic(from_torch, iterations=2, rounds=2, warmup_rounds=1)

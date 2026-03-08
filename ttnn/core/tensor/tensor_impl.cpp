@@ -57,6 +57,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
 
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    ZoneScopedN("ttnn::allocate_device_buffer");
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
@@ -595,6 +596,7 @@ DeviceStorage write_to_mesh_buffer(
     const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     std::optional<tt::tt_metal::QueueId> cq_id) {
+    ZoneScopedN("ttnn::write_to_mesh_buffer");
     std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
     mesh_buffer->device()->mesh_command_queue(cq_id_int).enqueue_write(
         mesh_buffer, distributed_host_buffer, /*blocking=*/false);
@@ -615,6 +617,7 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const TensorSpec& tensor_spec,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
+    ZoneScopedN("ttnn::to_device_mesh_buffer");
     const auto& host_storage_shape = host_storage.buffer().shape();
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
@@ -1441,6 +1444,8 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     if (src_type == dtype) {
         return input_tensor;
     }
+
+    log_info(tt::LogOp, "[HOST]Converting tensor from dtype: {} to dtype: {} ", input_tensor.dtype(), dtype);
 
     TT_FATAL(is_cpu_tensor(input_tensor), "to_dtype(...) function only supports host tensors!");
 

@@ -84,14 +84,35 @@ Tensor create_tt_tensor_from_host_data(
     ttnn::distributed::MeshDevice* device,
     bool preserve_nan_values) {
     using namespace tt::tt_metal;
+
+    ZoneScopedN("ttnn::create_tt_tensor_from_host_data");
+    auto args_str = fmt::format(
+        "convert_python_tensor_to_tt_tensor shape: {}\n src_data_type: {}\n dst_dtype: {}\n layout: {}\n"
+        "memory_config: "
+        "{}\n device: {}\n cq_id: {}\n  mesh_mapper: {}\n pad_value: {}\n",
+        tensor_shape,
+        src_dtype,
+        dst_dtype,
+        layout,
+        memory_config,
+        device != nullptr ? "not null" : "null",
+        cq_id,
+        mesh_mapper ? "not null" : "null",
+        pad_value);
+
+    std::replace(args_str.begin(), args_str.end(), '\n', '\t');
+    log_info(tt::LogAlways, "{}", args_str);
+    ZoneText(args_str.c_str(), args_str.size());
+
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile);  // memory_config
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
 
-        log_info(tt::LogOp, "[HOST] construct_on_device: {}", construct_on_device);
-        log_info(tt::LogOp, "[HOST] exec_on_device: {}", exec_on_device);
-
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
+        auto distrib_dtype =
+            src_dtype;  // Workarond for L1: src_dtype == DataType::FLOAT32 ? DataType::BFLOAT16 : src_dtype;
+        TensorLayout src_tensor_layout(
+            distrib_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), memory_config);
+        // TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
@@ -102,7 +123,7 @@ Tensor create_tt_tensor_from_host_data(
             // with `Number of shards along height 32 must not exceed number of cores 16` if the
             // spec is constructed directly.
 
-            const bool must_construct_on_host = false;
+            const bool must_construct_on_host = (device == nullptr);
             //     // Sharded typecast does not support conversion between types with different tile sizes, like
             //     // FLOAT32 -> BFLOAT4/8. In this case the type conversion should be done on host.
             //     (memory_config.is_sharded() &&
@@ -184,12 +205,13 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
     };
 
     const DataType mapped_dst_type =
-        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dst_dtype;
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : dst_dtype;
 
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
     }
 
+    // TODO: Remove this check
     if (is_sharded && get_datatype_tile_size(dst_dtype) != get_datatype_tile_size(to_ttnn_dtype(src_dtype))) {
         // Sharded typecast does not support conversion between tensors with types of different tile size:
         // See explicit assertion in the `TypecastShardedProgramFactory::create` method implementation.
@@ -220,7 +242,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value,
     bool preserve_nan_values,
     bool col_tilize) {
-    ZoneScoped;
+    ZoneScopedN("ttnn::convert_python_tensor_to_tt_tensor");
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
@@ -296,12 +318,13 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
-            output = ttnn::to_layout(output, target, std::nullopt);
+            output = ttnn::to_layout(output, target);
         }
     };
 
     if (device) {
         output = output.to_device(device.value(), memory_config, cq_id);
+        // TODO: typecast now should support ROW_MAJOR layout
         if (output.dtype() != dst_dtype) {
             // Need to perform final data conversion on device, typecast requires TILE layout.
             set_layout(Layout::TILE);

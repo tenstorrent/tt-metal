@@ -410,6 +410,7 @@ Tensor Tensor::to_device(
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) const {
+    ZoneScopedN("ttnn::Tensor::cpu");
     return tt::tt_metal::cpu(*this, blocking, cq_id);
 }
 

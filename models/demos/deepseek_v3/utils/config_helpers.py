@@ -1061,19 +1061,12 @@ def _shard_device_impl(
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
-        ttnn_tensor = ttnn.from_torch(
-            tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
-        )
-    else:
-        ttnn_tensor = ttnn.from_torch(
-            tensor,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        ttnn_tensor = ttnn.to_dtype(ttnn_tensor, dtype)
-        ttnn_tensor = ttnn_tensor.to(layout)
+    print(f"[PY_DEBUG][W] tensor shape: {tensor.shape}")
+    print(f"[PY_DEBUG][W] memory_config: {memory_config}")
+    print(f"[PY_DEBUG][W] dtype: {dtype}")
+    ttnn_tensor = ttnn.from_torch(
+        tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
+    )
 
     assert memory_config == ttnn_tensor.memory_config()
     assert dtype == ttnn_tensor.dtype

@@ -261,7 +261,11 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 // The returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(
     const Tensor& tt_tensor, const ttnn::distributed::MeshToTensor& mesh_composer) {
-    //
+    log_info(
+        tt::LogAlways,
+        "[DEBUG] convert_to_row_major_host_buffer, tt_tensor.storage_type(): {}",
+        tt_tensor.storage_type());
+    ZoneScopedN("ttnn::convert_to_row_major_host_buffer(distributed)");
     auto dispatch_to_concrete = [&mesh_composer]<typename T>(const Tensor& tt_tensor) {
         auto [data, shape] = mesh_composer.compose<T>(tt_tensor);
         tt::stl::Span<const uint32_t> shape_view = shape.view();
@@ -1248,9 +1252,13 @@ void pytensor_module(nb::module_& mod) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::pytorch> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
+                log_info(tt::LogAlways, "[DEBUG] to_torch, self.storage_type(): {}", self.storage_type());
+
+                // self.host_storage().buffer()
 
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             nb::rv_policy::take_ownership,
