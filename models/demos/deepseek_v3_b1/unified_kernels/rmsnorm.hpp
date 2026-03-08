@@ -104,9 +104,11 @@ struct RMSNorm {
             // TRISC (Compute)
             // ================================================================
             // Init block done only once
+            DPRINT << "RMS NORM CB Wait" << ENDL();
             cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
-
+            DPRINT << "RMS NORM CB Wait done" << ENDL();
             compute_rmsnorm(args);
+            DPRINT << "RMS NORM Compute done" << ENDL();
 #endif
         }
 

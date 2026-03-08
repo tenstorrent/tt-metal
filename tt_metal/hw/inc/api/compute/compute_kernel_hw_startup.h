@@ -44,11 +44,13 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
-
+    DPRINT_PACK(DPRINT << "PACK HW CONFIGURE" << ENDL());
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    DPRINT_PACK(DPRINT << "PACK INIT" << ENDL());
     PACK((llk_pack_init<false /*untilize*/, false /*zero_output*/, false /*tilize*/>(ocb)));
+    DPRINT_PACK(DPRINT << "PACK DEST INIT" << ENDL());
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false /*untilize*/>(ocb)));
-
+    DPRINT_PACK(DPRINT << "PACK DEST INIT DONE" << ENDL());
     ComputeKernelSentinel::instance().set_srca(icb0).set_srcb(icb1).set_pack(ocb);
 #endif  // TODO: AM; add Quasar implementation
 }

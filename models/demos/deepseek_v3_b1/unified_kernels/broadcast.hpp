@@ -132,6 +132,7 @@ struct Broadcast {
             if constexpr (IsWorkerCore) {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
+                    DPRINT << "BRISC waiting on socket pages" << ENDL();
                     if constexpr (CTArgs::use_socket) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
@@ -163,7 +164,7 @@ struct Broadcast {
             }
 
 #elif defined(COMPILE_FOR_NCRISC)
-            DPRINT << "BCAST OP STARTED" << ENDL();
+            DPRINT << "BCAST OP STARTED NCRISC" << ENDL();
             // ================================================================
             // NCRISC - bcast writer
             // ================================================================
@@ -320,7 +321,7 @@ struct Broadcast {
                 }
                 noc_async_write_barrier();
             }
-            DPRINT << "BCAST OP ENDED" << ENDL();
+            DPRINT << "BCAST OP ENDED NCRISC" << ENDL();
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC - No-op (CCL broadcast is dataflow only)

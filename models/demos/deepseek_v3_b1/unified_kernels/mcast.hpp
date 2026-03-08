@@ -352,7 +352,7 @@ struct Mcast {
                 DPRINT << "MCAST SEND STARTED" << ENDL();
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
-
+                DPRINT << "MCAST SEND CB Wait done" << ENDL();
                 // Send data with state
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
@@ -363,6 +363,7 @@ struct Mcast {
                     true,
                     true,
                     write_cmd_buf>(args.input_data_addr, args.mcast_receiver_data_addr, args.data_size_bytes);
+                DPRINT << "Data Mcast done" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -372,6 +373,7 @@ struct Mcast {
                     true,
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
+                DPRINT << "Semaphore Mcast done" << ENDL();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
@@ -388,6 +390,7 @@ struct Mcast {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
                 // Reserve space in destination CB before mcast writes to it
+                DPRINT << "NCRISC Is receiver core" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
@@ -395,6 +398,7 @@ struct Mcast {
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             } else if constexpr (IsMcastGridCore) {
+                DPRINT << "NCRISC Is mcast grid core" << ENDL();
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
