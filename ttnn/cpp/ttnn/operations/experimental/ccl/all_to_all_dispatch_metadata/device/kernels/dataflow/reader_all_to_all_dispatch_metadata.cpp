@@ -41,15 +41,14 @@ void kernel_main() {
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
     constexpr uint32_t dispatch_devices = get_compile_time_arg_val(37);
-    constexpr uint32_t replicated_devices = get_compile_time_arg_val(38);
 
     // scores tensor compile time args
-    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
-    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
-    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(42);
+    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(38);
+    constexpr uint32_t scores_pages = get_compile_time_arg_val(39);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(40);
+    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(41);
 
-    constexpr auto input_args = TensorAccessorArgs<43>();
+    constexpr auto input_args = TensorAccessorArgs<42>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();

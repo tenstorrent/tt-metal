@@ -279,10 +279,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         operation_attributes.axis.has_value()
             ? operation_attributes.axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()
             : mesh_view.num_devices();
-    uint32_t replicated_devices =
-        operation_attributes.axis.has_value()
-            ? operation_attributes.axis.value() == 0 ? mesh_view.num_cols() : mesh_view.num_rows()
-            : 1;
 
     uint32_t hidden_size = input_shape[-1];
     uint32_t batch_size = input_shape[0] * dispatch_devices;
@@ -547,7 +543,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         linearized_mesh_coord,
 
         dispatch_devices,
-        replicated_devices,
 
         // scores tensor args
         scores_tensor_cb_id,
