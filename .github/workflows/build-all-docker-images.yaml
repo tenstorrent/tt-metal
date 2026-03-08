@@ -297,14 +297,18 @@ jobs:
               return
             fi
             # Get manifest and calculate total compressed size (config + layers)
+            # Using docker buildx imagetools inspect for OCI manifest support
             local size_bytes
-            size_bytes=$(docker manifest inspect "$image" 2>/dev/null | jq '
-              if .manifests then
-                # Multi-arch manifest: sum sizes of all platform manifests
-                [.manifests[].size] | add
+            size_bytes=$(docker buildx imagetools inspect "$image" --format '{{json .}}' 2>/dev/null | jq '
+              if .manifest then
+                # Single platform OCI manifest: config size + layer sizes
+                (.manifest.config.size // 0) + ([.manifest.layers[].size] | add // 0)
+              elif .manifests then
+                # Multi-platform index: sum the descriptor sizes as an approximation
+                # (full size would require fetching each platform manifest)
+                ([.manifests[].size] | add // 0)
               else
-                # Single manifest: config size + layer sizes
-                (.config.size // 0) + ([.layers[].size] | add)
+                0
               end
             ' 2>/dev/null || echo "0")
 
