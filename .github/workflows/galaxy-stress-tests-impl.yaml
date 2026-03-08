@@ -23,6 +23,7 @@ on:
 
 jobs:
   galaxy-stress:
+    timeout-minutes: 240
     runs-on:
       - ${{ inputs.extra-tag }}
       - topology-6u
@@ -75,6 +76,7 @@ jobs:
         if: always()
 
   galaxy-long-tests:
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
