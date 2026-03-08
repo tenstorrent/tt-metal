@@ -25,6 +25,7 @@ on:
 jobs:
   ttnn:
     name: didt tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    timeout-minutes: 120
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
