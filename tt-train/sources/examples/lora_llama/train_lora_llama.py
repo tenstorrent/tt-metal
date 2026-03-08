@@ -38,8 +38,8 @@ MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BATCH_SIZE = 8
-STEPS = 500
+BATCH_SIZE_DEFAULT = 1
+STEPS_DEFAULT = 500
 LR = 3e-4
 WEIGHT_DECAY = 0.01
 PRINT_INTERVAL = 1
@@ -234,11 +234,25 @@ def parse_args():
         default=1,
         help="Number of devices for distributed data parallel (default: 1, no DDP).",
     )
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=BATCH_SIZE_DEFAULT,
+        help=f"Global batch size (default: {BATCH_SIZE_DEFAULT}).",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=STEPS_DEFAULT,
+        help=f"Number of training steps (default: {STEPS_DEFAULT}).",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    batch_size = args.batch
+    steps = args.steps
 
     # ── Memory tracking ───────────────────────────────────────────────────────
     memory_guard = None
@@ -286,9 +300,9 @@ def main():
     mesh_shape = [1, num_devices]
 
     if use_ddp:
-        if BATCH_SIZE % num_devices != 0:
+        if batch_size % num_devices != 0:
             raise ValueError(
-                f"BATCH_SIZE ({BATCH_SIZE}) must be divisible by --ddp ({num_devices})"
+                f"--batch ({batch_size}) must be divisible by --ddp ({num_devices})"
             )
         ttml.core.distributed.enable_fabric(num_devices)
         validate_mesh_graph_descriptor(mesh_shape)
@@ -376,12 +390,12 @@ def main():
     model.train()
     is_first_step = True
 
-    for step in range(1, STEPS + 1):
+    for step in range(1, steps + 1):
         t0 = time.perf_counter()
-        x_np, y_np = get_batch(train_ids, seq_len, BATCH_SIZE)
+        x_np, y_np = get_batch(train_ids, seq_len, batch_size)
 
         tt_x = ttml.autograd.Tensor.from_numpy(
-            x_np.reshape(BATCH_SIZE, 1, 1, seq_len),
+            x_np.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
             mapper,
@@ -417,7 +431,7 @@ def main():
 
         if step % PRINT_INTERVAL == 0 or step == 1:
             print(
-                f"step {step:>4}/{STEPS}  loss={loss_val:.4f}  step_time={step_ms:.1f}ms"
+                f"step {step:>4}/{steps}  loss={loss_val:.4f}  step_time={step_ms:.1f}ms"
             )
 
         if args.track_memory and is_first_step:
@@ -428,7 +442,7 @@ def main():
             if memory_guard:
                 memory_guard.release()
 
-        if args.save_every > 0 and (step % args.save_every == 0 or step == STEPS):
+        if args.save_every > 0 and (step % args.save_every == 0 or step == steps):
             save_lora_checkpoint(model, args.save_dir, step)
 
     autograd_ctx.close_device()
