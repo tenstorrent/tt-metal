@@ -25,6 +25,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <mpfr.h>
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
@@ -139,13 +140,35 @@ inline std::vector<float> all_valid_bf16_values() {
 }  // namespace bf16_ulp_tanh_fw
 
 // =============================================================================
-// tanh reference: fp64 std::tanh
+// tanh reference: fp64 std::tanh (golden)
 // =============================================================================
 
 inline float tanh_expected_bf16_daz(float x) {
     float x_daz = bf16_ulp_tanh_fw::bf16_daz_normalize(x);
     double result = std::tanh(static_cast<double>(x_daz));
     return bf16_ulp_tanh_fw::bf16_daz_normalize(static_cast<float>(result));
+}
+
+// =============================================================================
+// tanh reference: MPFR-256 (platinum)
+// =============================================================================
+
+inline float tanh_mpfr256_bf16_daz(float x) {
+    float x_daz = bf16_ulp_tanh_fw::bf16_daz_normalize(x);
+
+    mpfr_t mx, mr;
+    mpfr_init2(mx, 256);
+    mpfr_init2(mr, 256);
+
+    mpfr_set_d(mx, static_cast<double>(x_daz), MPFR_RNDN);
+    mpfr_tanh(mr, mx, MPFR_RNDN);
+
+    float result = static_cast<float>(mpfr_get_d(mr, MPFR_RNDN));
+
+    mpfr_clear(mx);
+    mpfr_clear(mr);
+
+    return bf16_ulp_tanh_fw::bf16_daz_normalize(result);
 }
 
 // =============================================================================
@@ -468,6 +491,56 @@ TEST_F(TanhFwUlpTest, ReferenceImplementationVerification) {
     log_debug(tt::LogTest, "tanh(1) = {} (expected ~0.7616)", std::tanh(1.0));
     log_debug(tt::LogTest, "tanh(100) = {} (expected ~1.0)", std::tanh(100.0));
     log_debug(tt::LogTest, "tanh(-100) = {} (expected ~-1.0)", std::tanh(-100.0));
+}
+
+// =============================================================================
+// Platinum reference verification: fp64 golden vs MPFR-256
+// =============================================================================
+
+// Validates that our fp64 golden reference (std::tanh) produces the same
+// BF16 result as the MPFR-256 platinum reference across all valid BF16 values.
+// Any disagreement means the golden reference has insufficient precision.
+TEST_F(TanhFwUlpTest, PlatinumReferenceVerification) {
+    auto all_values = bf16_ulp_tanh_fw::all_valid_bf16_values();
+
+    int mismatches = 0;
+    int total = 0;
+    float worst_x = 0;
+    float worst_golden = 0;
+    float worst_platinum = 0;
+
+    std::ostringstream oss;
+    oss << "\n============================================================\n"
+        << "GOLDEN (fp64) vs PLATINUM (MPFR-256) REFERENCE COMPARISON\n"
+        << "============================================================\n";
+
+    for (float x : all_values) {
+        float golden = tanh_expected_bf16_daz(x);
+        float platinum = tanh_mpfr256_bf16_daz(x);
+        total++;
+
+        if (golden != platinum) {
+            mismatches++;
+            if (mismatches <= 20) {
+                int32_t ulp_diff = bf16_ulp_tanh_fw::ulp_distance_bf16_daz(golden, platinum);
+                oss << "  MISMATCH at x=" << std::scientific << std::setprecision(6) << x << ": golden=" << golden
+                    << " platinum=" << platinum << " ULP_diff=" << ulp_diff << "\n";
+            }
+            worst_x = x;
+            worst_golden = golden;
+            worst_platinum = platinum;
+        }
+    }
+
+    oss << "------------------------------------------------------------\n"
+        << "Total values: " << total << ", Mismatches: " << mismatches << "\n"
+        << "============================================================\n";
+    log_debug(tt::LogTest, "{}", oss.str());
+
+    EXPECT_EQ(mismatches, 0) << mismatches << " of " << total
+                             << " values differ between golden (fp64) and platinum (MPFR-256). "
+                             << "Last mismatch at x=" << worst_x << ": golden=" << worst_golden
+                             << " platinum=" << worst_platinum;
 }
 
 }  // namespace ttnn::test

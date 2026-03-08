@@ -38,6 +38,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <mpfr.h>
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
@@ -174,6 +175,32 @@ inline float sech2_expected_bf16_daz(float x) {
     float x_daz = bf16_ulp_tanh_bw::bf16_daz_normalize(x);
     double result = sech2_exact(x_daz);
     return bf16_ulp_tanh_bw::bf16_daz_normalize(static_cast<float>(result));
+}
+
+// =============================================================================
+// tanh derivative reference: MPFR-256 sech²(x) (platinum)
+// =============================================================================
+
+inline float sech2_mpfr256_bf16_daz(float x) {
+    float x_daz = bf16_ulp_tanh_bw::bf16_daz_normalize(x);
+
+    mpfr_t mx, mcosh, mr;
+    mpfr_init2(mx, 256);
+    mpfr_init2(mcosh, 256);
+    mpfr_init2(mr, 256);
+
+    mpfr_set_d(mx, static_cast<double>(x_daz), MPFR_RNDN);
+    mpfr_cosh(mcosh, mx, MPFR_RNDN);
+    mpfr_mul(mr, mcosh, mcosh, MPFR_RNDN);  // cosh²(x)
+    mpfr_ui_div(mr, 1, mr, MPFR_RNDN);      // 1/cosh²(x)
+
+    float result = static_cast<float>(mpfr_get_d(mr, MPFR_RNDN));
+
+    mpfr_clear(mx);
+    mpfr_clear(mcosh);
+    mpfr_clear(mr);
+
+    return bf16_ulp_tanh_bw::bf16_daz_normalize(result);
 }
 
 /**
@@ -628,6 +655,56 @@ TEST_F(TanhBwUlpTest, SaturationRegionAnalysis) {
     }
 
     EXPECT_LE(max_ulp_found, 2) << "Saturation region max ULP " << max_ulp_found << " at x=" << worst_x;
+}
+
+// =============================================================================
+// Platinum reference verification: fp64 golden vs MPFR-256
+// =============================================================================
+
+// Validates that our fp64 golden reference (sech2_exact using std::cosh) produces
+// the same BF16 result as the MPFR-256 platinum reference across all valid BF16 values.
+// Any disagreement means the golden reference has insufficient precision.
+TEST_F(TanhBwUlpTest, PlatinumReferenceVerification) {
+    auto all_values = bf16_ulp_tanh_bw::all_valid_bf16_values();
+
+    int mismatches = 0;
+    int total = 0;
+    float worst_x = 0;
+    float worst_golden = 0;
+    float worst_platinum = 0;
+
+    std::ostringstream oss;
+    oss << "\n============================================================\n"
+        << "GOLDEN (fp64 sech²) vs PLATINUM (MPFR-256 sech²) COMPARISON\n"
+        << "============================================================\n";
+
+    for (float x : all_values) {
+        float golden = sech2_expected_bf16_daz(x);
+        float platinum = sech2_mpfr256_bf16_daz(x);
+        total++;
+
+        if (golden != platinum) {
+            mismatches++;
+            if (mismatches <= 20) {
+                int32_t ulp_diff = bf16_ulp_tanh_bw::ulp_distance_bf16_daz(golden, platinum);
+                oss << "  MISMATCH at x=" << std::scientific << std::setprecision(6) << x << ": golden=" << golden
+                    << " platinum=" << platinum << " ULP_diff=" << ulp_diff << "\n";
+            }
+            worst_x = x;
+            worst_golden = golden;
+            worst_platinum = platinum;
+        }
+    }
+
+    oss << "------------------------------------------------------------\n"
+        << "Total values: " << total << ", Mismatches: " << mismatches << "\n"
+        << "============================================================\n";
+    log_debug(tt::LogTest, "{}", oss.str());
+
+    EXPECT_EQ(mismatches, 0) << mismatches << " of " << total
+                             << " values differ between golden (fp64 sech²) and platinum (MPFR-256 sech²). "
+                             << "Last mismatch at x=" << worst_x << ": golden=" << worst_golden
+                             << " platinum=" << worst_platinum;
 }
 
 }  // namespace ttnn::test
