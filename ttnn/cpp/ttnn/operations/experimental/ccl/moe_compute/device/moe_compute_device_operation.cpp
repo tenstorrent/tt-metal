@@ -72,7 +72,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     // Total size: (tokens + 1) * aligned_row_bytes for sentinel row, stored as single DRAM page
     uint32_t activation_row_elements = (2 * experts_per_device) + 1;
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
-    uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;  // +1 to account for sentinel row
+    uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
     auto tilize_expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
     auto tilize_expert_activation_spec = TensorSpec(
         Shape(tilize_expert_activation_shape),
