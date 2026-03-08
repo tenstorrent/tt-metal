@@ -65,8 +65,9 @@ DEFAULT_CHUNK_SIZE = 150
 MAX_KV_STEPS = 800
 
 # Encoder sizes to warm-up and trace in demo_ttnn.py.
+# 32/64 cover short texts; 128/256 cover typical chunked inputs.
 # 384 causes L1 OOM on N150 — max supported is 256.
-DEMO_WARMUP_SIZES = [128, 256]
+DEMO_WARMUP_SIZES = [32, 64, 128, 256]
 
 
 def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE, processor=None):
@@ -759,9 +760,25 @@ def main():
     vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
     hf_model.eval()
 
-    # Load speaker embeddings
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
-    speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+    # Load speaker embeddings.
+    # datasets 2.9.0 + fsspec >=2024 has a LocalFileSystem incompatibility; fall back
+    # to reading the cached Arrow file directly when load_dataset raises NotImplementedError.
+    try:
+        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+        speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+    except NotImplementedError:
+        import pyarrow as pa, glob, os, numpy as np
+
+        cache_root = os.path.expanduser("~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors")
+        arrow_files = glob.glob(os.path.join(cache_root, "**", "*validation*.arrow"), recursive=True)
+        if not arrow_files:
+            raise RuntimeError(
+                "Could not find cached cmu-arctic-xvectors arrow file. "
+                "Delete ~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors and re-run."
+            )
+        with pa.memory_map(arrow_files[0], "r") as src:
+            table = pa.ipc.open_stream(src).read_all()
+        speaker_embeddings = torch.tensor(np.array(table["xvector"][7306].as_py())).unsqueeze(0)
 
     # Initialize TTNN device
     print("Initializing TTNN device...")
@@ -857,11 +874,13 @@ def main():
     warmup_start_time = time.time()
 
     # Synthetic texts: chosen so that tokenized length lands in each encoder bucket.
-    # With chunk sizes up to 150 chars, real inputs land in [128, 256].
+    # With chunk sizes up to 256 chars, real inputs land in [32, 64, 128, 256].
     # This mirrors the LLM approach (simple_text_demo / warmup_model_prefill) of sweeping
     # all canonical padded lengths with synthetic inputs, making warm-up input-independent.
     warmup_texts_per_size = {
-        128: "Hello there.",  # ~14 tokens  -> pads to 128
+        32: "Hi.",  # ~5 tokens  -> pads to 32
+        64: "A " * 17,  # ~35 tokens -> pads to 64
+        128: "A " * 35,  # ~71 tokens -> pads to 128
         256: "A " * 65,  # ~131 tokens -> pads to 256
     }
 
@@ -890,7 +909,7 @@ def main():
 
     warmup_duration = time.time() - warmup_start_time
     print(f"✅ Initial warm-up completed in {warmup_duration:.1f}s")
-    print("   Encoder sizes [128, 256] compiled — consistent performance for any input text!")
+    print("   Encoder sizes [32, 64, 128, 256] compiled — consistent performance for any input text!")
 
     print(f"\n🔧 Capturing traces for encoder sizes: {DEMO_WARMUP_SIZES}...")
     generator.capture_all_traces(batch_size=1, sizes=DEMO_WARMUP_SIZES)
