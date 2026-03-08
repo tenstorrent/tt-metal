@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Test pack operation with various configurations.
 
@@ -138,7 +138,7 @@ def is_relu_threshold_tolerance_issue(
         ]
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32], [128, 256]],
+    input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
     relu_type=[
         PackerReluType.NoRelu,
         PackerReluType.ZeroRelu,

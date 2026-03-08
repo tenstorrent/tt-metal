@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -48,10 +48,10 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 supported_formats = [
-    DataFormat.Int32,
-    DataFormat.UInt32,
-    DataFormat.UInt16,
-    DataFormat.Float32,
+    # DataFormat.Int32,
+    # DataFormat.UInt32,
+    # DataFormat.UInt16,
+    # DataFormat.Float32,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]

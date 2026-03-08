@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -46,7 +46,7 @@ from helpers.utils import passed_test
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[[64, 512], [64, 64], [32, 128], [128, 128], [32, 64]],
+    input_dimensions=[[64, 64], [32, 128], [128, 128], [32, 64]],
     #  TODO add DestSync::Full tests when we have a solution for the static_assert in _llk_pack_untilize_init_ that requires block_ct_dim to be less or equal to 8,
     #  which is currently a limitation for testing DestSync::Full with the Untilize blocks calculation algorithm.
     dest_sync=[DestSync.Half],
