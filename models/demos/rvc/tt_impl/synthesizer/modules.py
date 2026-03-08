@@ -217,8 +217,10 @@ class ResBlock1:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for c1, c2 in zip(self.convs1, self.convs2, strict=True):
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt0 = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
             xt1 = _conv_output_to_nlc(c1(xt0))
+            xt1 = ttnn.to_layout(xt1, ttnn.TILE_LAYOUT)
             xt2 = ttnn.leaky_relu(xt1, negative_slope=self.lrelu_slope)
             xt3 = _conv_output_to_nlc(c2(xt2))
             x = xt3 + x
@@ -256,6 +258,7 @@ class ResBlock2:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for conv in self.convs:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
             xt = _conv_output_to_nlc(conv(xt))
             x = xt + x

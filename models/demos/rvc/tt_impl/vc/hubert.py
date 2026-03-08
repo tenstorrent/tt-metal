@@ -83,6 +83,7 @@ class MultiheadAttention:
         v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
 
         attn_weights = ttnn.matmul(q, k, transpose_b=True)
+        attn_weights = ttnn.to_layout(attn_weights, ttnn.TILE_LAYOUT)
         attn_probs = ttnn.softmax(attn_weights, dim=-1)
         attn = ttnn.matmul(attn_probs, v)
 
@@ -311,15 +312,14 @@ class ConvFeatureExtractionModel:
                     bias=ttnn.to_layout(ln_b, ttnn.TILE_LAYOUT),
                     epsilon=1e-5,
                 )
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
             elif self.mode == "default" and i == 0:
                 group_norm = self.group_norms[i]
                 if group_norm is None:
                     raise ValueError("GroupNorm parameters are not loaded.")
                 # x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 x = group_norm.gp_slice(x)
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             x = ttnn.gelu(x)
         # Match Torch output shape: B x C x T
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -358,7 +358,7 @@ class PositionalConvEmbedding:
         input_length = x.shape[1]
         output_length = input_length + 2 * (self.kernel_size // 2) - self.kernel_size + 1
         x = self.conv(x)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         # x = ttnn.reshape(x, (batch_size, output_length, self.embed_dim))
         # if self.remove > 0:
         #     x = ttnn.slice(x, (0, 0, 0), (batch_size, output_length - self.remove, self.embed_dim))
@@ -395,6 +395,7 @@ class FeedForwardModule:
         self.w_2.load_parameters(parameters=parameters, key="w_2", prefix=prefix)
 
     def _apply_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         if self.activation_fn == "relu":
             return ttnn.relu(x)
         if self.activation_fn == "gelu":
@@ -532,6 +533,7 @@ class ConvolutionModule:
         )
 
     def _apply_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         if self.activation_fn == "relu":
             return ttnn.relu(x)
         if self.activation_fn == "gelu":

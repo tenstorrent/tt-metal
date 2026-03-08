@@ -200,6 +200,7 @@ class TextEncoder:
         if self.use_f0 and pitch is not None and self.emb_pitch is not None:
             x0 = x0 + self.emb_pitch(pitch)
         x1 = x0 * math.sqrt(self.hidden_channels)
+        x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT)
         x2 = ttnn.leaky_relu(x1, negative_slope=0.1)
         x = self.encoder(x2)
         stats = self.proj_linear(x)
@@ -331,6 +332,7 @@ class Generator:
             x = x + self.cond_linear(g)
 
         for i in range(self.num_upsamples):
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
             x = _to_nlc(self.ups[i](x))
             xs = self.resblocks[i * self.num_kernels](x)
@@ -338,8 +340,10 @@ class Generator:
                 xs = xs + self.resblocks[i * self.num_kernels + j](x)
             x = xs * (1.0 / self.num_kernels)
 
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
         x = _to_nlc(self.conv_post(x))
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.tanh(x)
 
 
@@ -522,6 +526,7 @@ class GeneratorNSF:
             x = x0
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x0 = x
+            x0 = ttnn.to_layout(x0, ttnn.TILE_LAYOUT)
             x1 = ttnn.leaky_relu(x0, negative_slope=self.lrelu_slope)
             x = _to_nlc(ups(x1))
             if isinstance(noise_convs, Linear):
@@ -533,9 +538,13 @@ class GeneratorNSF:
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):
                 xs = xs + self.resblocks[j](x)
             x = xs * (1.0 / self.num_kernels)
+
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
         x = _to_nlc(self.conv_post(x))
-        return ttnn.tanh(x)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.tanh(x)
+        return x
 
 
 sr2sr = {
@@ -613,7 +622,8 @@ class SynthesizerTrnMsNSF:
             * 0.66666
         )
         z = self.flow(z_p, g=g)
-        return self.dec(z, nsff0, g=g)
+        o = self.dec(z, nsff0, g=g)
+        return o
 
 
 class SynthesizerTrnMsNSF_nono:

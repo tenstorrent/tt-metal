@@ -218,9 +218,6 @@ class Pipeline:
             feats = feats.mean(-1)
         assert feats.dim() == 1, feats.dim()
         feats = feats.view(1, -1, 1)
-        # pad feates to be divisible by 128
-        # pad_len = (128 - feats.shape[1] % 128) % 128
-        # feats = F.pad(feats, (0, 0, 0, pad_len))
         hubert_input = ttnn.from_torch(
             feats,
             dtype=ttnn.bfloat16,
