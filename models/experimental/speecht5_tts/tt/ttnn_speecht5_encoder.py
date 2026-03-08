@@ -463,6 +463,11 @@ class TTNNSpeechT5EncoderBlock:
         """
 
         # Attention sub-layer (POST-NORM pattern)
+        # Ensure hidden_states is in interleaved L1 (not width-sharded) before attention.
+        # The previous block's LayerNorm outputs width-sharded tensors, but the attention
+        # QKV linear uses the full device core grid (11x10 on Blackhole) which conflicts
+        # with the 24-core (8x3) width-sharded layout, causing incorrect computation.
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         residual = hidden_states
 
         # Attention - rely on internal L1 memory configs
