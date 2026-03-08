@@ -191,9 +191,7 @@ void kernel_main() {
                 cb_lse_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat,
-                local_n_padded_tiles,
-                joint_n_padded_tiles>(
+                uniform_dataformat>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
