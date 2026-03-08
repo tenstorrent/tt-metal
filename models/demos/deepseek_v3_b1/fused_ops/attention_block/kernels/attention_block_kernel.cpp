@@ -1587,6 +1587,13 @@ void kernel_main() {
                 ccl_receiver_compute(ccl_receiver_args);
 #endif
             }
+
+#if defined(COMPILE_FOR_BRISC)
+            // Update cur position tensor on all cores
+            // We will eventually pass user id and position tensor as socket inputs
+            // The kernel shouldn't manage/modify cur position
+            pos_ptr[0] = cur_pos + 1;
+#endif
     }
 
     // ====================================================================
