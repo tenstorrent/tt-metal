@@ -1084,7 +1084,6 @@ def test_attention_block(
             tp_start = tp_group * slice_size
             tp_end = tp_start + slice_size
             expected = golden_mla_output[tp_start:tp_end, :]
-            print(expected[:8, :32:8])
 
             if received.shape != expected.shape:
                 logger.error(
@@ -1093,7 +1092,7 @@ def test_attention_block(
                 )
                 continue
 
-            passing, pcc = comp_pcc(expected, received, 0.84)
+            passing, pcc = comp_pcc(expected, received, 0.99)  # TODO: Might need to tweak if too high
             logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {pcc}")
             assert passing, f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {pcc}"
 
@@ -1105,6 +1104,14 @@ def test_attention_block(
         passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
+
+    # Verify cur_pos was incremented by 1 on every core of every device
+    cur_pos_torch = ttnn.to_torch(ttnn_position_ids, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    expected_pos = position_id + 1
+    assert (
+        cur_pos_torch == expected_pos
+    ).all(), f"cur_pos not incremented correctly: expected {expected_pos}, got unique values {cur_pos_torch.unique().tolist()}"
+    logger.info(f"✓ cur_pos correctly incremented to {expected_pos}")
 
     logger.info("✓ Attention Block mesh test passed!")
 
