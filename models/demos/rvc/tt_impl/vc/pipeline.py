@@ -19,7 +19,6 @@ from scipy import signal
 import ttnn
 from models.demos.rvc.torch_impl.audio import load_audio
 from models.demos.rvc.torch_impl.configs.config import Config
-from models.demos.rvc.torch_impl.vc.utils import load_hubert as load_hubert_torch
 from models.demos.rvc.tt_impl.synthesizer.models import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
 from models.demos.rvc.tt_impl.vc.utils import load_hubert
 
@@ -146,7 +145,6 @@ class Pipeline:
         self.synthesizer, data_cfg = _load_synthesizer(self.tt_device, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
         self.hubert_model = load_hubert(self.config, hubert_path, hubert_cfg_path, self.tt_device)
-        self.hubert_model_torch = load_hubert_torch(self.config, hubert_path, hubert_cfg_path)
         self._init_timing(self.tgt_sr, self.config)
 
     def _init_timing(self, tgt_sr: int, config: Config) -> None:
