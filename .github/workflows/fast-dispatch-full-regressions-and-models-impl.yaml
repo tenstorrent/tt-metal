@@ -27,6 +27,7 @@ on:
         description: "Enable Tracy ops recording for all tests"
 jobs:
   create-test-matrix:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     outputs:
       stable_matrix:   ${{ steps.ctm.outputs.stable_matrix }}
@@ -144,6 +145,7 @@ jobs:
   nightly-wh-models:
     needs: create-test-matrix
     if: ${{ needs.create-test-matrix.outputs.stable_count != '0' }}
+    timeout-minutes: 180
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -224,6 +226,7 @@ jobs:
   nightly-wh-unstable-models:
     needs: create-test-matrix
     if: ${{ needs.create-test-matrix.outputs.unstable_count != '0' }}
+    timeout-minutes: 180
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -277,6 +280,7 @@ jobs:
   nightly-wh-models-civ2:
     needs: create-test-matrix
     if: ${{ needs.create-test-matrix.outputs.stable_ci_v2_count != '0' }}
+    timeout-minutes: 180
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -347,6 +351,7 @@ jobs:
   aggregate-ops-recording:
     needs: [nightly-wh-models, nightly-wh-models-civ2]
     if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
