@@ -171,9 +171,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     size_t expected_size = 0;
     size_t expected_peak_size = 0;
 
-    // tensor 2 is converted to row major + to_layout for some reason allocated additional 4096 bytes
+    // tensor 2 is converted to row major + to_layout for some reason allocated additional bytes
     // TODO: Trace those extra allocations. 99% those are programs caches + intermediate tensors.
-    expected_peak_size = compute_tensor_size(add_result) + compute_tensor_size(tensor2) + 4096;
+    expected_peak_size = compute_tensor_size(add_result) + compute_tensor_size(tensor2) + 2048;
     expected_peak_size += compute_tensor_size(mul_result) + 10240;
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
     expected_peak_size +=
@@ -227,8 +227,8 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage();
 
-        // TODO: verify that 12288 comes from program cache
-        EXPECT_EQ(dram_usage.total_allocations, 12288);
+        // TODO: verify that 10240 comes from program cache
+        EXPECT_EQ(dram_usage.total_allocations, 10240);
 
         // peak_cb = tile_size * sizeof(bfloat16) * n_cb (cb0, cb1, cb_out)
         size_t expected_peak_cb = 2048 * 2 * 3;
@@ -377,11 +377,11 @@ TEST_F(MemoryUtilsTest, SnapshotFeature) {
     // Verify individual snapshots have captured memory usage with exact values
     // Snapshot 1: Add operation
     auto dram_usage_1 = ttml::utils::MemoryUsageTracker::get_dram_usage("add_operation");
-    // 2 inputs + output have size of 64*64*sizeof(bfloat16) + 12288 bytes of program cache
-    // 36864 = 3 * (64 * 64) * sizeof(bfloat16) + 12288
-    EXPECT_EQ(dram_usage_1.peak, 36864);
-    EXPECT_EQ(dram_usage_1.total_allocations, 36864);
-    EXPECT_EQ(dram_usage_1.total_deallocations, 12288);
+    // 2 inputs + output have size of 64*64*sizeof(bfloat16) + 10240 bytes of program cache
+    // 34816 = 3 * (64 * 64) * sizeof(bfloat16) + 10240
+    EXPECT_EQ(dram_usage_1.peak, 34816);
+    EXPECT_EQ(dram_usage_1.total_allocations, 34816);
+    EXPECT_EQ(dram_usage_1.total_deallocations, 10240);
 
     // Snapshot 2: Matmul operation
     auto dram_usage_2 = ttml::utils::MemoryUsageTracker::get_dram_usage("matmul_operation");
@@ -392,10 +392,10 @@ TEST_F(MemoryUtilsTest, SnapshotFeature) {
     // Snapshot 3: L1 multiply operation
     auto dram_usage_3 = ttml::utils::MemoryUsageTracker::get_dram_usage("multiply_l1_operation");
     auto l1_usage_3 = ttml::utils::MemoryUsageTracker::get_l1_usage("multiply_l1_operation");
-    EXPECT_EQ(dram_usage_3.peak, 274432);
-    // Total DRAM allocations = (256 * 256 * sizeof(bfloat16) * 2) /*DRAM inputs*/ + 20480 /*program cache*/
-    EXPECT_EQ(dram_usage_3.total_allocations, 282624);
-    EXPECT_EQ(dram_usage_3.total_deallocations, 20480);
+    EXPECT_EQ(dram_usage_3.peak, 272384);
+    // Total DRAM allocations = (256 * 256 * sizeof(bfloat16) * 2) /*DRAM inputs*/ + 18432 /*program cache*/
+    EXPECT_EQ(dram_usage_3.total_allocations, 280576);
+    EXPECT_EQ(dram_usage_3.total_deallocations, 18432);
     // peak_l1 = (256 * 256 * sizeof(bfloat16)) * 2 /*DRAM inputs*/ + (256 * 256 * sizeof(bfloat16)) /*L1 output*/
     EXPECT_EQ(l1_usage_3.peak_l1, 393216);
 
