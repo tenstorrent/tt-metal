@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 
 
-def assert_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
+def measure_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     std = torch_output.std().item()
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / std if std > 0 else 0.0
@@ -57,8 +57,7 @@ def rms_norm_golden(input_tensor, epsilon, weight, bias, activation):
 
 def run_dit_rms_norm_unary_fused_test(
     device,
-    h,
-    w,
+    shape,
     epsilon=1e-5,
     use_weight=False,
     use_bias=False,
@@ -68,20 +67,24 @@ def run_dit_rms_norm_unary_fused_test(
     fp32_dest_acc_en=False,
     # --- sharded path: shard_params = (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) or None ---
     shard_params=None,
+    input_layout=ttnn.TILE_LAYOUT,
 ):
     """
     Test helper for dit_rms_norm_unary_fused.
 
-    When sharded=False (default): uses the interleaved path (layernorm.cpp kernel).
-    When sharded=True: wraps the input in a BLOCK_SHARDED memory config and passes a
+    When shard_params=None (default): uses the interleaved path (layernorm.cpp kernel).
+    When shard_params is provided: wraps the input in a BLOCK_SHARDED memory config and passes a
     LayerNormShardedMultiCoreProgramConfig (layernorm_sharded.cpp kernel).
-    shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) when sharded=True.
+    shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt).
 
     Weight/bias tensors use shape (1, w) regardless of path.
     """
     torch.manual_seed(42)
 
-    torch_input = torch.randn(h, w, dtype=torch.bfloat16)
+    w = shape[-1]
+    h = shape[-2]
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_weight = torch.ones(w, dtype=torch.bfloat16) if use_weight else None
     torch_bias = torch.rand(w, dtype=torch.bfloat16) if use_bias else None
 
@@ -116,7 +119,7 @@ def run_dit_rms_norm_unary_fused_test(
     torch_expected = rms_norm_golden(torch_input, epsilon, torch_weight, torch_bias, activation)
 
     tt_input = ttnn.from_torch(
-        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        torch_input, dtype=dtype, layout=input_layout, device=device, memory_config=memory_config
     )
     tt_weight = (
         ttnn.from_torch(torch_weight.unsqueeze(0), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -146,63 +149,72 @@ def run_dit_rms_norm_unary_fused_test(
         compute_kernel_config=compute_config,
         activation=activation,
     )
+
+    assert (
+        tt_output.layout == tt_input.layout
+    ), f"tt_output.layout: {tt_output.layout} != tt_input.layout: {tt_input.layout}"
+
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    return assert_quality(torch_expected, tt_output_torch)
+    return measure_quality(torch_expected, tt_output_torch)
 
 
 @pytest.mark.parametrize("activation", [None, "silu", ttnn.UnaryOpType.SILU], ids=["none", "silu", "UnaryOpType.SILU"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation, layout):
     """Test with SiLU activation passed as ttnn.UnaryOpType."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=1,
-        w=4096,
+        shape=(1, 4096),
         activation=activation,
         dtype=dtype,
+        input_layout=layout,
     )
     assert check_result["pcc"] > 0.9995, f"PCC too low: {check_result['pcc']}"
     assert check_result["relative_rmse"] < 0.03, f"Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
-    "h, w, name",
+    "shape, name",
     [
-        (1, 256, "small"),
-        (1, 512, "medium"),
-        (38, 4096, "dit_norm_shape"),
+        ((1, 256), "small"),
+        ((1, 512), "medium"),
+        ((128, 4096), "large"),
     ],
-    ids=["small", "medium", "dit_norm_shape"],
+    ids=["small", "medium", "large"],
 )
-def test_dit_rms_norm_unary_fused_basic_shapes(device, h, w, name):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_dit_rms_norm_unary_fused_basic_shapes(device, shape, name, layout):
     """Basic shapes test with SiLU activation."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=h,
-        w=w,
+        shape=shape,
         activation="silu",
+        input_layout=layout,
     )
     assert check_result["pcc"] > 0.9995, f"[{name}] PCC too low: {check_result['pcc']}"
     assert check_result["relative_rmse"] < 0.03, f"[{name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
-    "h, w, config_name",
+    "shape, config_name",
     [
-        (9472, 5120, "wan2.2_14b-720p-full"),
-        (2368, 5120, "wan2.2_14b-720p-single"),
+        ((9472, 5120), "wan2.2_14b-720p-full"),
+        ((2368, 5120), "wan2.2_14b-720p-single"),
+        ((1, 384, 1, 90, 160), "wan.decoder.up_blocks.3.resnets.0.norm1"),
     ],
-    ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
+    ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single", "wan.decoder.up_blocks.3.resnets.0.norm1"],
 )
-def test_dit_rms_norm_unary_fused_wan2_shapes(device, h, w, config_name):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_dit_rms_norm_unary_fused_wan2_shapes(device, shape, config_name, layout):
     """Test with actual Wan2.2 transformer shapes."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=h,
-        w=w,
+        shape=shape,
         activation="silu",
         dtype=ttnn.bfloat16,
+        input_layout=layout,
     )
     assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
     assert (
@@ -220,15 +232,16 @@ def test_dit_rms_norm_unary_fused_wan2_shapes(device, h, w, config_name):
     ["silu", None],
     ids=["silu", "no_activation"],
 )
-def test_dit_rms_norm_unary_fused_weight_bias(device, use_weight, use_bias, activation):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_dit_rms_norm_unary_fused_weight_bias(device, use_weight, use_bias, activation, layout):
     """Weight/bias combinations for the interleaved (non-sharded) path."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=1,
-        w=1024,
+        shape=(1, 1024),
         use_weight=use_weight,
         use_bias=use_bias,
         activation=activation,
+        input_layout=layout,
     )
     assert (
         check_result["pcc"] > 0.9995
@@ -239,8 +252,8 @@ def test_dit_rms_norm_unary_fused_weight_bias(device, use_weight, use_bias, acti
 
 
 @pytest.mark.parametrize(
-    "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
-    [(256, 320, 2, 5, 4, 2, 1)],
+    "shape, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
+    [((256, 320), 2, 5, 4, 2, 1)],
 )
 @pytest.mark.parametrize(
     "use_weight, use_bias",
@@ -248,7 +261,7 @@ def test_dit_rms_norm_unary_fused_weight_bias(device, use_weight, use_bias, acti
     ids=["bias_only", "weight_and_bias"],
 )
 def test_dit_rms_norm_unary_fused_sharded_weight_bias(
-    device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_weight, use_bias
+    device, shape, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_weight, use_bias
 ):
     """
     Sharded path weight/bias combinations without activation.
@@ -256,8 +269,7 @@ def test_dit_rms_norm_unary_fused_sharded_weight_bias(
     """
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=h,
-        w=w,
+        shape=shape,
         shard_params=(num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt),
         use_weight=use_weight,
         use_bias=use_bias,

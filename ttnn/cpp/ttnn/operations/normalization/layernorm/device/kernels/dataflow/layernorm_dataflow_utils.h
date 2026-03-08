@@ -12,6 +12,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
+
 namespace norm::layernorm::device::kernels::dataflow {
 
 using NumNocAddrs = uint32_t;
@@ -175,6 +178,112 @@ inline void read_block_to_cb(
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, block.full_block_size());
+}
+
+/**
+ * @brief Read one column block of row-major input data from DRAM into cb_id_in_rm.
+ *
+ * Reads `num_valid_rows` rows, each of width `block.size() * tile_stride_bytes` bytes, starting
+ * at column `block.start() * tile_stride_bytes` within each row. Rows are written into L1
+ * contiguously with `rm_row_stride_bytes` stride (= full block width including padding tiles).
+ * A full block slot (`block.full_block_size()`) is reserved/pushed for synchronization.
+ */
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+inline void read_row_major_block_to_cb(
+    const uint32_t cb_id_in_rm,
+    const T& src_a,
+    const uint32_t curr_tile_row,
+    const uint32_t num_valid_rows,
+    const uint32_t tile_stride_bytes,
+    const uint32_t rm_row_stride_bytes,
+    const Block& block) {
+    const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
+    const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
+    cb_reserve_back(cb_id_in_rm, block.full_block_size());
+
+    uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
+    for (uint32_t row = 0; row < num_valid_rows; ++row) {
+        const uint64_t noc_addr = get_noc_addr(curr_tile_row * TILE_H + row, src_a) + col_byte_offset;
+        noc_async_read(noc_addr, l1_ptr, row_read_bytes);
+        l1_ptr += rm_row_stride_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_id_in_rm, block.full_block_size());
+}
+
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+inline void write_row_major_block_from_cb(
+    const uint32_t cb_id_out_rm,
+    const T& dst_a,
+    const uint32_t abs_row_base,
+    const uint32_t num_valid_rows,
+    const uint32_t tile_width_bytes,
+    const uint32_t block_row_stride_bytes,
+    const Block& block) {
+    // Compute produces block_size tiles (full_block_size) in cb_out_rm; the last block
+    // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
+    cb_wait_front(cb_id_out_rm, block.full_block_size());
+    const uint32_t l1_base = get_read_ptr(cb_id_out_rm);
+
+    // Column byte offset in the output row where this block starts.
+    const uint32_t col_byte_offset = block.start() * tile_width_bytes;
+    // Number of valid bytes to write per row (only block.size() valid tiles).
+    const uint32_t valid_bytes = block.size() * tile_width_bytes;
+
+    for (uint32_t r = 0; r < num_valid_rows; r++) {
+        const uint32_t l1_src = l1_base + r * block_row_stride_bytes;
+        const uint64_t noc_dst = get_noc_addr(abs_row_base + r, dst_a) + col_byte_offset;
+        noc_async_write(l1_src, noc_dst, valid_bytes);
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_id_out_rm, block.full_block_size());
+}
+
+/**
+ * @brief Push all column blocks of one tile-row of row-major input data into cb_id_in_rm.
+ *
+ * Iterates over all blocks (via `generic::blocks(Wt, block_size)`) and reads each block from DRAM
+ * into cb_id_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
+ * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
+ */
+template <typename T, uint32_t TILE_W, uint32_t TILE_H>
+inline void push_row_major_blocks_to_cb(
+    const uint32_t cb_id_in_rm,
+    const T& src_a,
+    const uint32_t Wt,
+    const uint32_t block_size,
+    const uint32_t curr_tile_row,
+    const uint32_t elem_size_bytes,
+    const uint32_t rm_row_stride_bytes,
+    const uint32_t H_logical) {
+    const uint32_t abs_row_start = curr_tile_row * TILE_H;
+    const uint32_t tile_stride_bytes = TILE_W * elem_size_bytes;
+
+    // Number of valid rows in this tile-row. When H is tile-aligned this equals
+    // TILE_H for every tile-row and the zero-fill branch is never taken.
+    uint32_t num_valid_rows = TILE_H;
+    if (abs_row_start >= H_logical) {
+        num_valid_rows = 0;
+    } else if (H_logical - abs_row_start < TILE_H) {
+        num_valid_rows = H_logical - abs_row_start;
+    }
+
+    for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
+        const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
+        const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
+
+        cb_reserve_back(cb_id_in_rm, block.full_block_size());
+
+        uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
+        for (uint32_t row = 0; row < num_valid_rows; ++row) {
+            const uint64_t noc_addr = get_noc_addr(curr_tile_row * TILE_H + row, src_a) + col_byte_offset;
+            noc_async_read(noc_addr, l1_ptr, row_read_bytes);
+            l1_ptr += rm_row_stride_bytes;
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(cb_id_in_rm, block.full_block_size());
+    }
 }
 
 }  // namespace norm::layernorm::device::kernels::dataflow
