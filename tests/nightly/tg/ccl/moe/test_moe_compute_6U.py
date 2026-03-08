@@ -562,7 +562,20 @@ def tt_to_torch_dtype(tt_dtype):
         raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
-def gen_expert_mapping(experts, mesh_shape, cluster_axis):
+def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, experts_per_cluster, experts_per_device):
+    if cluster_axis == 0:
+        cluster_id = expert_id // experts_per_cluster
+        expert_id_within_cluster = expert_id % experts_per_cluster
+        device_id_within_cluster = expert_id_within_cluster // experts_per_device
+
+        return device_id_within_cluster * num_replicated_devices + cluster_id
+    else:
+        return expert_id // experts_per_device
+
+
+def gen_expert_mapping(
+    num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+):
     """
     Create per-device expert mapping tensor that maps each expert to the device it belongs to.
     Shape: [num_devices, experts] where each entry is the linearized mesh coordinate of the device
@@ -577,11 +590,11 @@ def gen_expert_mapping(experts, mesh_shape, cluster_axis):
 
     This tensor is replicated on every device (even devices not along the dispatch axis).
     """
-    num_devices = mesh_shape[0] * mesh_shape[1]
-    experts_per_device = experts // num_devices
     expert_mapping = torch.zeros(1, experts, dtype=torch.uint16)
     for e in range(experts):
-        expert_mapping[0, e] = e // experts_per_device
+        expert_mapping[0, e] = get_linearized_mesh_coord(
+            num_replicated_devices, cluster_axis, e, experts_per_cluster, experts_per_device
+        )
     # Replicate across all devices (same mapping for now)
     expert_mapping = expert_mapping.repeat(num_devices, 1)
     return expert_mapping
@@ -976,7 +989,9 @@ def test_moe_compute(
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
+    num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
+    experts_per_cluster = experts // num_replicated_devices
     experts_per_device = experts // num_devices
 
     logger.info(f"Test configuration:")
@@ -1001,7 +1016,9 @@ def test_moe_compute(
     # Each device gets its own row after sharding, but since it's replicated,
     # we give each device the full tensor and it uses its own row.
     # Expert mapping is constant across all runs.
-    expert_mapping = gen_expert_mapping(experts, mesh_shape, cluster_axis)
+    expert_mapping = gen_expert_mapping(
+        num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+    )
     expert_mapping_mem_config = ttnn.L1_MEMORY_CONFIG
     tt_expert_mapping = ttnn.from_torch(
         expert_mapping,
