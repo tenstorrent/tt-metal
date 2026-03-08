@@ -787,6 +787,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void dispatch_token_bidirectional_multicast(
     FabricConnectionsType& fabric_connections,
@@ -801,7 +802,8 @@ FORCE_INLINE void dispatch_token_bidirectional_multicast(
         LinearizedSrcMeshCoord,
         MeshRows,
         MeshCols,
-        Axis>(
+        Axis,
+        DispatchDevices>(
         fabric_connections,
         packet_header_pos,
         packet_header_neg,
@@ -1066,8 +1068,9 @@ void kernel_main() {
         linearized_mesh_coord,
         mesh_rows,
         mesh_cols,
-        dispatch_devices,
-        axis>(fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
+        axis,
+        dispatch_devices>(
+        fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
 
     // Wait for all devices to complete initialization synchronization
@@ -1131,7 +1134,8 @@ void kernel_main() {
                 linearized_mesh_coord,
                 mesh_rows,
                 mesh_cols,
-                axis>(
+                axis,
+                dispatch_devices>(
                 fabric_connections,
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,

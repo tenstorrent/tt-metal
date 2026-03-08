@@ -315,7 +315,7 @@ uint32_t get_intra_cluster_id_from_linearized_mesh_coord(uint32_t linearized_des
     if constexpr (Axis == ReplicateGroup::COLS) {
         return linearized_dest_mesh_coord / MeshCols;
     } else if constexpr (Axis == ReplicateGroup::ROWS) {
-        return linearized_dest_mesh_coord / MeshCols;
+        return linearized_dest_mesh_coord % MeshCols;
     } else {
         return linearized_dest_mesh_coord;
     }
