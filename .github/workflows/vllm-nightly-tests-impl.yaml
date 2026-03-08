@@ -25,6 +25,7 @@ on:
 
 jobs:
   generate-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -314,6 +315,7 @@ jobs:
 
   vllm-tests:
     needs: generate-matrix
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
