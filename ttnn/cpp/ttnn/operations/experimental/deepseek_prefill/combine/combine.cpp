@@ -24,7 +24,8 @@ ttnn::Tensor ExecuteCombine::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    bool init_zeros) {
     // Get device and subdevice info
     auto* mesh_device = dispatched_buffer.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -62,7 +63,8 @@ ttnn::Tensor ExecuteCombine::invoke(
         num_links_,
         usable_topology,
         memory_config_,
-        subdevice_core_range_set);
+        subdevice_core_range_set,
+        init_zeros);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

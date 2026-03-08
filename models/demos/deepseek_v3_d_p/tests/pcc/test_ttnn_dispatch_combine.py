@@ -279,6 +279,8 @@ def test_ttnn_dispatch_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        init_zeros=True,
     )
 
     # Run TTNN combine

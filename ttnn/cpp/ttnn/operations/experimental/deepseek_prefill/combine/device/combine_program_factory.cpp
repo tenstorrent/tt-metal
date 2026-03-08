@@ -293,6 +293,50 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
     tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
 
+    // Generate defines for reader kernel
+    std::map<std::string, std::string> reader_defines;
+    reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
+
+    // Check if output is L1 interleaved and add multicast defines
+    bool is_l1_output = output_tensor.buffer()->buffer_type() == BufferType::L1;
+    reader_defines["IS_L1_OUTPUT"] = is_l1_output ? "1" : "0";
+
+    if (is_l1_output && operation_attributes.init_zeros) {
+        // Get compute_with_storage_grid for L1 bank cores
+        auto compute_grid = mesh_device->compute_with_storage_grid_size();
+        uint32_t num_l1_banks = compute_grid.x * compute_grid.y;
+
+        // Get NOC coordinates for the bank core grid
+        // Start is (0,0), end is (grid_x-1, grid_y-1) in logical coords
+        // Convert to virtual/NOC coords
+        CoreCoord logical_start(0, 0);
+        CoreCoord logical_end(compute_grid.x - 1, compute_grid.y - 1);
+        CoreCoord noc_start = mesh_device->virtual_core_from_logical_core(logical_start, tt::CoreType::WORKER);
+        CoreCoord noc_end = mesh_device->virtual_core_from_logical_core(logical_end, tt::CoreType::WORKER);
+
+        // Calculate bytes per bank (total buffer size / num_banks, rounded up)
+        uint32_t total_output_bytes =
+            detail::get_num_pages(output_tensor) * detail::get_aligned_page_size(output_tensor);
+        uint32_t bytes_per_bank = (total_output_bytes + num_l1_banks - 1) / num_l1_banks;
+
+        reader_defines["NUM_L1_BANKS"] = std::to_string(num_l1_banks);
+        reader_defines["OUTPUT_BYTES_PER_BANK"] = std::to_string(bytes_per_bank);
+        reader_defines["L1_BANK_NOC_X_START"] = std::to_string(noc_start.x);
+        reader_defines["L1_BANK_NOC_Y_START"] = std::to_string(noc_start.y);
+        reader_defines["L1_BANK_NOC_X_END"] = std::to_string(noc_end.x);
+        reader_defines["L1_BANK_NOC_Y_END"] = std::to_string(noc_end.y);
+
+        log_debug(
+            tt::LogOp,
+            "L1 multicast zero-init: num_banks={} bytes_per_bank={} grid=({},{}) to ({},{})",
+            num_l1_banks,
+            bytes_per_bank,
+            noc_start.x,
+            noc_start.y,
+            noc_end.x,
+            noc_end.y);
+    }
+
     // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -301,7 +345,8 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
 
     // Create writer kernel - shares same compile time args
     const auto& writer_compile_time_args = reader_compile_time_args;

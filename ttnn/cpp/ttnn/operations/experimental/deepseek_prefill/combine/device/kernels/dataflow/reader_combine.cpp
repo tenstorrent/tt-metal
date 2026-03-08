@@ -19,16 +19,23 @@
     DebugPrinter()
 #endif
 
-// Zero a DRAM page by writing zeros from L1's MEM_ZEROS_BASE
-void zero_dram_page_async(uint64_t dram_noc_addr, uint32_t page_size) {
+// Zero a DRAM/L1 page by writing zeros from L1's MEM_ZEROS_BASE (unicast)
+void zero_page_async(uint64_t noc_addr, uint32_t page_size) {
     uint32_t bytes = page_size;
     while (bytes > 0) {
         uint32_t curr_bytes = std::min(bytes, (uint32_t)MEM_ZEROS_SIZE);
-        noc_async_write(MEM_ZEROS_BASE, dram_noc_addr, curr_bytes);
-        dram_noc_addr += curr_bytes;
+        noc_async_write(MEM_ZEROS_BASE, noc_addr, curr_bytes);
+        noc_addr += curr_bytes;
         bytes -= curr_bytes;
     }
 }
+
+// L1 multicast zero-init is enabled when all required defines are present
+#if defined(IS_L1_OUTPUT) && IS_L1_OUTPUT && defined(L1_BANK_NOC_X_START) && defined(NUM_L1_BANKS)
+#define USE_L1_MULTICAST_ZERO 1
+#else
+#define USE_L1_MULTICAST_ZERO 0
+#endif
 
 void kernel_main() {
     // ===== Compile Time Args =====
@@ -93,13 +100,33 @@ void kernel_main() {
     // This overlaps with fabric initialization in the writer kernel
     // Each chip initializes its own output tensor to ensure predictable values
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
-    DPRINT_COMBINE << "Zero-init output: pages=" << output_pages << " page_size=" << aligned_output_page_size << ENDL();
-    for (uint32_t page = 0; page < output_pages; page++) {
-        uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-        zero_dram_page_async(page_noc_addr, aligned_output_page_size);
+#if INIT_ZEROS
+#if USE_L1_MULTICAST_ZERO
+    // L1 interleaved: use multicast to zero all bank cores at once
+    // This is faster than per-page unicast since one multicast covers all cores
+    constexpr uint32_t per_bank_bytes = OUTPUT_BYTES_PER_BANK;
+    DPRINT_COMBINE << "Zero-init L1 (multicast): per_bank_bytes=" << per_bank_bytes << " num_banks=" << NUM_L1_BANKS
+                   << ENDL();
+    // Inline multicast loop - zeros same L1 offset on ALL bank cores simultaneously
+    for (uint32_t offset = 0; offset < per_bank_bytes; offset += MEM_ZEROS_SIZE) {
+        uint32_t chunk_size = std::min((uint32_t)MEM_ZEROS_SIZE, per_bank_bytes - offset);
+        uint64_t mcast_addr = get_noc_multicast_addr(
+            L1_BANK_NOC_X_START, L1_BANK_NOC_Y_START, L1_BANK_NOC_X_END, L1_BANK_NOC_Y_END, output_addr + offset);
+        noc_async_write_multicast(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS - 1);
     }
     noc_async_write_barrier();
+#else
+    // DRAM interleaved or L1 without multicast defines: use per-page unicast
+    DPRINT_COMBINE << "Zero-init (unicast): pages=" << output_pages << " page_size=" << aligned_output_page_size
+                   << ENDL();
+    for (uint32_t page = 0; page < output_pages; page++) {
+        uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
+        zero_page_async(page_noc_addr, aligned_output_page_size);
+    }
+    noc_async_write_barrier();
+#endif
     DPRINT_COMBINE << "Zero-init done" << ENDL();
+#endif
 
     // ====
     // read experts token counter (chips/fractured ==1, experts_per_chip)

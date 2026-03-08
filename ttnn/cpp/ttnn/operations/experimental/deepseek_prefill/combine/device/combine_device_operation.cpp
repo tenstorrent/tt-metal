@@ -42,7 +42,7 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     // Validate output memory config
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
-        "Output memory config must be DRAM interleaved, not sharded");
+        "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
     // Validate tensor shapes are compatible
     // Dispatch outputs are 5D: (per_device_batch, 1, experts_per_chip, max_dispatched_tokens, hidden_dim/metadata_len)
@@ -117,7 +117,8 @@ ttnn::Tensor prefill_combine(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    bool init_zeros) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -129,7 +130,8 @@ ttnn::Tensor prefill_combine(
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .worker_core_range_set = worker_core_range_set},
+            .worker_core_range_set = worker_core_range_set,
+            .init_zeros = init_zeros},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,
