@@ -124,8 +124,95 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
+  trace-models-t3k:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - name: "qwen-2.5-coder-32b"
+            hf_model: "Qwen/Qwen2.5-Coder-32B"
+          - name: "deepseek-r1-distill-qwen-32b"
+            hf_model: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+          - name: "qwen3-32b"
+            hf_model: "Qwen/Qwen3-32B"
+    name: "Trace ${{ matrix.model.name }} (T3K)"
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-functional
+      - in-service
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_MODEL: ${{ matrix.model.hf_model }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >-
+        --device /dev/tenstorrent
+        --cap-add=ALL
+        --security-opt seccomp=unconfined
+        --ulimit nproc=65536:65536
+        --ulimit nofile=65536:65536
+        --privileged
+        -v /sys:/sys
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Run tracer for ${{ matrix.model.name }}
+        timeout-minutes: 600
+        run: |
+          mkdir -p traced_outputs
+          python model_tracer/generic_ops_tracer.py \
+            models/tt_transformers/demo/simple_text_demo.py::test_demo_text \
+            --store \
+            -o traced_outputs/${{ matrix.model.name }} \
+            -- --timeout=0
+
+      - name: Zip trace output
+        if: ${{ !cancelled() }}
+        run: |
+          cd traced_outputs
+          tar -czf /work/${{ matrix.model.name }}-traces.tar.gz .
+
+      - name: Upload trace artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: traces-${{ matrix.model.name }}
+          path: /work/${{ matrix.model.name }}-traces.tar.gz
+          retention-days: 30
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
   aggregate-traces:
-    needs: trace-models
+    needs: [trace-models, trace-models-t3k]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -150,12 +237,12 @@ jobs:
               done
             fi
           done
-          tar -czf all-model-traces-n300.tar.gz -C combined-traces .
-          ls -lh all-model-traces-n300.tar.gz
+          tar -czf all-model-traces.tar.gz -C combined-traces .
+          ls -lh all-model-traces.tar.gz
 
       - name: Upload combined traces
         uses: actions/upload-artifact@v4
         with:
-          name: all-model-traces-n300
-          path: all-model-traces-n300.tar.gz
+          name: all-model-traces
+          path: all-model-traces.tar.gz
           retention-days: 90
