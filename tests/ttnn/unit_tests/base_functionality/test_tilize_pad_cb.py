@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from loguru import logger
 import pytest
 
@@ -16,6 +18,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("shape", [[1, 1, 1, 50304], [1, 3, 5, 25152], [17, 32, 10944]])
 def test_tilize_with_zero_padding(device, in_dtype, use_multicore, shape):
+    if in_dtype == ttnn.float32 and os.environ.get("TT_METAL_SIMULATOR") is not None:
+        pytest.skip("TTSim does not model UnpackToDestFp32 for tilize (issue #39403)")
+
     torch_input = torch.randn(shape, dtype=torch.bfloat16).bfloat16()
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
