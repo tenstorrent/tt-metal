@@ -234,7 +234,7 @@ def main():
     best_ulp = 999
     best_degree = 0
 
-    for degree in range(6, 12):
+    for degree in range(6, 13):
         print(f"\n--- Degree {degree} in u (= degree {2*degree} in x) ---")
 
         # Initial fit
@@ -256,7 +256,7 @@ def main():
             # Also validate with negatives
             print(f"Validation (positive + negative x):")
             validate_with_negative(coeffs, verbose=True)
-            break
+            # Don't break — continue to show higher degrees too
 
     print(f"\n{'=' * 70}")
     print(f"BEST RESULT: Degree {best_degree}, Max ULP = {best_ulp}")
