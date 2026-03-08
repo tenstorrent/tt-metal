@@ -5,7 +5,6 @@ import pathlib
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_watcher_enabled
 from ttnn.graph_tracer_utils import GraphTracerUtils
 from ttnn.operations.conv2d import Conv2dConfig
 
@@ -37,9 +36,25 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     ttnn.graph.visualize(captured_graph, file_name=tmp_path / pathlib.Path("graph.svg"))
 
 
+@pytest.mark.parametrize("k", [2])
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_graph_capture_topk(device, k, mode):
+    """Sanity check that graph capture doesn't fail"""
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 32, 128)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.graph.begin_graph_capture(mode)
+    _ = ttnn.topk(tt_input, k, dim=-1, largest=True, sorted=True)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    assert captured_graph[0]["node_type"] == "capture_start"
+    assert captured_graph[-1]["node_type"] == "capture_end"
+
+
 def test_graph_capture_with_all_parameters(device):
-    if is_watcher_enabled():
-        pytest.skip("Skipping due to failure with watcher enabled, github issue #37096")
     # Create input tensor
     torch_input = torch.rand((1, 1, 2048, 512), dtype=torch.bfloat16)
 
@@ -216,8 +231,6 @@ def test_graph_capture_without_dtype(device):
 
 
 def test_graph_capture_with_all_parameters_json_output(device):
-    if is_watcher_enabled():
-        pytest.skip("Skipping due to failure with watcher enabled, github issue #37096")
     # Create input tensor
     torch_input = torch.rand((1, 1, 2048, 512), dtype=torch.bfloat16)
 

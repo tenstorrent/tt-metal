@@ -7,7 +7,13 @@ import torch
 import ttnn
 import numpy as np
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_allclose,
+    generate_all_bfloat16_bitpatterns,
+    flush_subnormal_values_to_zero,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -463,3 +469,61 @@ def test_mish_golden_verification(ttnn_dtype, torch_dtype, device):
     output_tensor = ttnn.mish(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(golden_output, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "float32",
+        "bfloat16",
+    ],
+)
+@pytest.mark.parametrize("alpha_p, alpha_n", [(0.8, 0.8), (0.3, 0.1), (0.5, 1.0), (1.0, 0.5)])
+def test_xielu(alpha_p, alpha_n, dtype, device):
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch.manual_seed(0)
+    torch_input = torch.randn([32, 32], dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.xielu)
+    torch_output = golden_fn(torch_input, alpha_p=alpha_p, alpha_n=alpha_n)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.xielu(ttnn_input, alpha_p=alpha_p, alpha_n=alpha_n)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    if dtype == "float32":
+        assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
+    else:
+        assert_with_ulp(torch_output, ttnn_output, 1)
+
+
+def test_lgamma_bfloat16(device):
+    high = 1000
+    low = -1000
+
+    # All 2^16 bfloat16 bit patterns (256x256), flattened for masking
+    input_tensor = generate_all_bfloat16_bitpatterns(torch.bfloat16).flatten()
+    input_tensor = flush_subnormal_values_to_zero(input_tensor)
+    input_tensor_f32 = input_tensor.to(torch.float32)
+
+    in_range = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    is_non_positive_int = (input_tensor_f32 <= 0) & (input_tensor_f32 == torch.floor(input_tensor_f32))
+    mask = in_range & ~is_non_positive_int  # exclude lgamma poles at 0,-1,-2,...
+
+    input_tensor = input_tensor[mask]
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.lgamma)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.lgamma(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_with_pcc(golden, result, 0.999)

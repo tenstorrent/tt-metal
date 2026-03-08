@@ -60,7 +60,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             {tt::CBIndex::c_16, 1},                                                // input_grad
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
@@ -184,7 +184,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             {tt::CBIndex::c_16, 1},                                                // input_grad
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
@@ -311,7 +311,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             {tt::CBIndex::c_16, 1},                                                // input_grad
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);

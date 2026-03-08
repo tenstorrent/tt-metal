@@ -298,30 +298,8 @@ using PerfTelemetryRecorder = std::conditional_t<
     LowResolutionBandwidthTelemetry,
     std::conditional_t<PERF_TELEMETRY_DISABLED, bool, std::nullptr_t>>;
 
-// Currently, we enable elastic channels in an all-or-nothing manner for router -> router
-// connections.
-
-constexpr bool ANY_SENDER_CHANNELS_ARE_ELASTIC() {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        if (IS_ELASTIC_SENDER_CHANNEL[i]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-constexpr bool PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC = ANY_SENDER_CHANNELS_ARE_ELASTIC();
-
-// Stubbed out the elastic channel writer adapter until elastic channels implemented
-// Issue: https://github.com/tenstorrent/tt-metal/issues/26311
-template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
-struct RouterElasticChannelWriterAdapter {};
-
 template <uint8_t SENDER_NUM_BUFFERS>
-using RouterToRouterSender = std::conditional_t<
-    PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC,
-    tt::tt_fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
-    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
+using RouterToRouterSender = tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>;
 
 constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
@@ -2300,7 +2278,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_fabric_telemetry);
 #endif
                     }
-                } else {
+                } else {  // non-speedy mode
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
                     // Capture these to see if we made progress
 
@@ -2395,79 +2373,81 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 inner_loop_perf_telemetry_collector,
                                 local_fabric_telemetry);
                         }
-#if defined(FABRIC_2D_VC1_SERVICED)
-                        tx_progress |= run_sender_channel_step<
-                            VC1_RECEIVER_CHANNEL,
-                            ACTUAL_VC0_SENDER_CHANNELS,
-                            ENABLE_FIRST_LEVEL_ACK_VC1>(
-                            local_sender_channels,
-                            local_sender_channel_worker_interfaces,
-                            outbound_to_receiver_channel_pointer_ch1,
-                            remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
-                            inner_loop_perf_telemetry_collector,
-                            local_fabric_telemetry);
-                        tx_progress |= run_sender_channel_step<
-                            VC1_RECEIVER_CHANNEL,
-                            ACTUAL_VC0_SENDER_CHANNELS + 1,
-                            ENABLE_FIRST_LEVEL_ACK_VC1>(
-                            local_sender_channels,
-                            local_sender_channel_worker_interfaces,
-                            outbound_to_receiver_channel_pointer_ch1,
-                            remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
-                            inner_loop_perf_telemetry_collector,
-                            local_fabric_telemetry);
-                        tx_progress |= run_sender_channel_step<
-                            VC1_RECEIVER_CHANNEL,
-                            ACTUAL_VC0_SENDER_CHANNELS + 2,
-                            ENABLE_FIRST_LEVEL_ACK_VC1>(
-                            local_sender_channels,
-                            local_sender_channel_worker_interfaces,
-                            outbound_to_receiver_channel_pointer_ch1,
-                            remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
-                            inner_loop_perf_telemetry_collector,
-                            local_fabric_telemetry);
-                        if constexpr (ACTUAL_VC1_SENDER_CHANNELS > 3) {
-                            tx_progress |= run_sender_channel_step<
-                                VC1_RECEIVER_CHANNEL,
-                                ACTUAL_VC0_SENDER_CHANNELS + 3,
-                                ENABLE_FIRST_LEVEL_ACK_VC1>(
-                                local_sender_channels,
-                                local_sender_channel_worker_interfaces,
-                                outbound_to_receiver_channel_pointer_ch1,
-                                remote_receiver_channels,
-                                channel_connection_established,
-                                local_sender_channel_free_slots_stream_ids,
-                                sender_channel_from_receiver_credits,
-                                inner_loop_perf_telemetry_collector,
-                                local_fabric_telemetry);
-                        }
-                        rx_progress |= run_receiver_channel_step<
-                            1,
-                            ENABLE_FIRST_LEVEL_ACK_VC1,
-                            VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
-                            DownstreamSenderVC1T,
-                            decltype(local_relay_interface)>(
-                            local_receiver_channels,
-                            downstream_edm_noc_interfaces_vc1,
-                            local_relay_interface,
-                            receiver_channel_pointers_ch1,
-                            receiver_channel_1_trid_tracker,
-                            port_direction_table,
-                            receiver_channel_response_credit_senders,
-                            routing_table,
-                            local_fabric_telemetry);
-#endif  // FABRIC_2D_VC1_SERVICED
                     }
-                }  // end else (non-speedy path)
+                }  // end of if constexpr (super_speedy_mode) else block
+                if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D_VC1_SERVICED)
+                    tx_progress |= run_sender_channel_step<
+                        VC1_RECEIVER_CHANNEL,
+                        ACTUAL_VC0_SENDER_CHANNELS,
+                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                    tx_progress |= run_sender_channel_step<
+                        VC1_RECEIVER_CHANNEL,
+                        ACTUAL_VC0_SENDER_CHANNELS + 1,
+                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                    tx_progress |= run_sender_channel_step<
+                        VC1_RECEIVER_CHANNEL,
+                        ACTUAL_VC0_SENDER_CHANNELS + 2,
+                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                    if constexpr (ACTUAL_VC1_SENDER_CHANNELS > 3) {
+                        tx_progress |= run_sender_channel_step<
+                            VC1_RECEIVER_CHANNEL,
+                            ACTUAL_VC0_SENDER_CHANNELS + 3,
+                            ENABLE_FIRST_LEVEL_ACK_VC1>(
+                            local_sender_channels,
+                            local_sender_channel_worker_interfaces,
+                            outbound_to_receiver_channel_pointer_ch1,
+                            remote_receiver_channels,
+                            channel_connection_established,
+                            local_sender_channel_free_slots_stream_ids,
+                            sender_channel_from_receiver_credits,
+                            inner_loop_perf_telemetry_collector,
+                            local_fabric_telemetry);
+                    }
+                    rx_progress |= run_receiver_channel_step<
+                        1,
+                        ENABLE_FIRST_LEVEL_ACK_VC1,
+                        VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
+                        DownstreamSenderVC1T,
+                        decltype(local_relay_interface)>(
+                        local_receiver_channels,
+                        downstream_edm_noc_interfaces_vc1,
+                        local_relay_interface,
+                        receiver_channel_pointers_ch1,
+                        receiver_channel_1_trid_tracker,
+                        port_direction_table,
+                        receiver_channel_response_credit_senders,
+                        routing_table,
+                        local_fabric_telemetry);
+#endif  // FABRIC_2D_VC1_SERVICED
+                }
             }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -3063,26 +3043,16 @@ void kernel_main() {
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
 
-    // create the remote receiver channel buffers using multi-pool system
-    auto remote_receiver_channels = tt::tt_fabric::MultiPoolEthChannelBuffers<
+    auto remote_receiver_channels = tt::tt_fabric::ReceiverChannelBuffersFromAllocs<
         PACKET_HEADER_TYPE,
-        eth_remote_channel_pools_args,
-        REMOTE_RECEIVER_TO_POOL_TYPE,
-        REMOTE_RECEIVER_TO_POOL_IDX>::make();
+        eth_remote_channel_allocs,
+        REMOTE_RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_receiver_channels =
-        tt::tt_fabric::MultiPoolEthChannelBuffers<
-            PACKET_HEADER_TYPE,
-            channel_pools_args,
-            RECEIVER_TO_POOL_TYPE,
-            RECEIVER_TO_POOL_IDX
-        >::make();
+    auto local_receiver_channels = tt::tt_fabric::
+        ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_sender_channels = tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
-        PACKET_HEADER_TYPE,
-        channel_pools_args,
-        SENDER_TO_POOL_TYPE,
-        SENDER_TO_POOL_IDX>::make();
+    auto local_sender_channels =
+        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -3303,19 +3273,13 @@ void kernel_main() {
 #endif
 
     // initialize the local receiver channel buffers
-    local_receiver_channels.init<channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    local_receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
     // initialize the remote receiver channel buffers
-    remote_receiver_channels.init<eth_remote_channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    remote_receiver_channels.init<eth_remote_channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the local sender channel worker interfaces
-    local_sender_channels.init<channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    // initialize the local sender channel buffers
+    local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
     // initialize the local sender channel worker interfaces
     // Sender channel 0 is always for local worker in the new design

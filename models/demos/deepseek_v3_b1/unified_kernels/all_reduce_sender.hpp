@@ -92,6 +92,7 @@ struct AllReduceSender {
     struct WriterArgs {
         uint32_t receiver_base_address;
         uint32_t receive_semaphore_addr;
+        uint32_t fabric_args_start_index = 0;
     };
 
     // TRISC compute args (no-op for sender)
@@ -109,15 +110,10 @@ struct AllReduceSender {
     template <typename ReaderCT, typename WriterCT>
     class Op {
     public:
-        void operator()(const RTArgs& args) {
-            size_t unused = 0;
-            impl(args, unused);
-        }
-
-        void operator()(const RTArgs& args, size_t& fabric_arg_idx) { impl(args, fabric_arg_idx); }
+        void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] size_t& fabric_arg_idx) {
+        void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Reader) - reads local tensor data into CB
@@ -136,7 +132,9 @@ struct AllReduceSender {
             constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-            open_connections(fabric_connection, WriterCT::num_connections, fabric_arg_idx);
+
+            size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
+            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
 
             cb_reserve_back(WriterCT::packet_header_cb_id, 1);
             uint32_t packet_header_addr = get_read_ptr(WriterCT::packet_header_cb_id);
