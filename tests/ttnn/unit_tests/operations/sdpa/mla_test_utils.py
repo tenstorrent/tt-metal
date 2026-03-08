@@ -268,15 +268,12 @@ def run_flash_mla_decode_impl(
     start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
-    q_locally_available = q_mem_config is not None and q_mem_config != ttnn.DRAM_MEMORY_CONFIG
-
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
         max_cores_per_head_batch=max_cores_per_head_batch,
-        q_locally_available=q_locally_available,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(

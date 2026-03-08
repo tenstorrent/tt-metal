@@ -57,7 +57,7 @@ def create_replicated_q_shard_spec(device, batch, nh, d, num_cores_per_head=4):
 @pytest.mark.parametrize("d_rope", [64])
 @pytest.mark.parametrize("q_num_cores", [64])
 @pytest.mark.parametrize("q_dtype, dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)])
-@pytest.mark.parametrize("q_custom_shard", [False])
+@pytest.mark.parametrize("q_custom_shard", [True, False])
 @pytest.mark.parametrize("reuse_k", [True])
 @pytest.mark.parametrize("use_paged_attention", [True])
 @pytest.mark.parametrize("block_size", [32])

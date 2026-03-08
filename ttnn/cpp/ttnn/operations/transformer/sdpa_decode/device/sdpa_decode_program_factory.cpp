@@ -61,8 +61,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     const bool use_attention_mask = attn_mask.has_value();
     const bool use_attention_sink = attention_sink.has_value();
-    const bool q_locally_available = program_config.has_value() && program_config->q_locally_available;
-
     // ========== Tensor Shapes ==========
     auto q_shape = input_tensor_q.padded_shape();
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);
@@ -87,6 +85,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // Handle paged attention sequence length
     if (is_paged_attention) {
+        B = page_table_tensor.value().padded_shape()[0];
         uint32_t block_size = k_shape[2];
         original_block_size = input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
@@ -95,23 +94,24 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     }
 
     // ========== Q Sharding & MLA Parallelization ==========
+    // Q is "locally available" when sharded for MLA with data replicated across all worker cores.
+    //   Replicated layout:   Q shape = (1, 1, B * num_q_heads * num_cores_per_head, D) — batch folded into dim 2.
+    //   Non-replicated layout: Q shape = (1, B, num_q_heads, D) — batch in dim 1.
+    bool q_locally_available = false;
     if (is_q_sharded && use_mla) {
         const uint32_t q_shard_height = input_tensor_q.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = program_config.has_value() ? program_config->max_cores_per_head_batch : 16;
+        const uint32_t num_q_shards = input_tensor_q.memory_config().shard_spec()->grid.num_cores();
+        const uint32_t num_groups = num_q_shards / max_cores;
+        q_heads_parallel_factor = num_groups / B;
+        q_locally_available = (q_shape[2] == B * q_shard_height * q_heads_parallel_factor * max_cores);
         if (q_locally_available) {
-            // Deduce batch from page_table (paged) or K tensor (non-paged)
-            B = is_paged_attention ? page_table_tensor.value().padded_shape()[0] : k_shape[0];
-            // Deduce Q heads from shard config: num_groups = shards / cores_per_group
-            const uint32_t num_q_shards = input_tensor_q.memory_config().shard_spec()->grid.num_cores();
-            const uint32_t num_groups = num_q_shards / max_cores;
-            q_heads_parallel_factor = num_groups / B;
             num_q_heads = q_heads_parallel_factor * q_shard_height;
             PNH = num_q_heads;
-            B *= q_heads_parallel_factor;
         } else {
             q_heads_parallel_factor = std::max(1u, (num_q_heads + q_shard_height - 1) / q_shard_height);
-            B *= q_heads_parallel_factor;
         }
+        B *= q_heads_parallel_factor;
         TT_FATAL(
             q_heads_parallel_factor == 1 || num_kv_heads == 1,
             "Q head parallelization (factor={}) requires num_kv_heads=1, got {}",

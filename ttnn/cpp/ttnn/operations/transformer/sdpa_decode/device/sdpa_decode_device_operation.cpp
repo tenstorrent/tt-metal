@@ -352,8 +352,7 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const auto& input = tensor_args.q;
     const auto q_shape = input.padded_shape();
     const auto q_shape_unpadded = input.logical_shape();
-    const bool q_locally_available =
-        operation_attributes.program_config.has_value() && operation_attributes.program_config->q_locally_available;
+    const bool use_mla = operation_attributes.use_mla.value_or(false);
     uint32_t B;
     if (operation_attributes.paged_attention && tensor_args.page_table_tensor.has_value()) {
         const auto& page_table = tensor_args.page_table_tensor.value();
@@ -369,23 +368,22 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
             B = page_table.padded_shape()[0];
         }
     } else {
-        // Non-paged: K tensor has shape [B, num_kv_heads, S, D] or similar
         B = tensor_args.k.padded_shape()[0];
     }
-    uint32_t num_q_heads;
-    // Q heads parallelization
-    if (q_locally_available) {
-        TT_FATAL(
-            q_locally_available && input.is_sharded(),
-            "In order for Q tensor to be locally available to all worker cores, it must be sharded");
+    bool q_locally_available = false;
+    uint32_t num_q_heads = q_shape_unpadded[2];
+
+    if (input.is_sharded() && use_mla && operation_attributes.program_config.has_value()) {
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
         const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
         const uint32_t num_groups = num_q_shards / max_cores;
         const uint32_t q_heads_parallel_factor = num_groups / B;
-        num_q_heads = q_heads_parallel_factor * q_shard_height;
-    } else {
-        num_q_heads = q_shape_unpadded[2];
+
+        q_locally_available = (q_shape[2] == B * q_shard_height * q_heads_parallel_factor * max_cores);
+        if (q_locally_available) {
+            num_q_heads = q_heads_parallel_factor * q_shard_height;
+        }
     }
 
     Layout output_layout = Layout::TILE;
@@ -398,7 +396,6 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
         output_shape[2] = tt::round_up(num_q_heads, tt::constants::TILE_HEIGHT);
         output_layout = Layout::TILE;
     }
-    bool use_mla = operation_attributes.use_mla.value_or(false);
     if (use_mla) {
         output_shape[3] = operation_attributes.head_dim_v.value();
     }
