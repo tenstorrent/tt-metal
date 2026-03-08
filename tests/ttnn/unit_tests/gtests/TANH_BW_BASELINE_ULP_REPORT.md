@@ -108,7 +108,74 @@ val = val * (-val) + vConst1;  // 1 - tanh(x)² — same cancellation
 
 ## Fix Target
 
-Replace the composite `1 - tanh²(x)` with a fused SFPU kernel using piecewise polynomials for sech²(x), following the same pattern as the gelu_bw fix (PR #39303). Target: **Max ULP <= 2** across the entire BF16 range.
+Replace the composite `1 - tanh²(x)` with a fused SFPU kernel computing sech²(x) directly, following the tanh forward's infrastructure pattern. Target: **Max ULP <= 2** across the entire BF16 range.
+
+---
+
+## Implementation Research
+
+### tanh Forward (Max ULP = 1) — How It Works
+
+**Call chain:**
+`ttnn::tanh(tensor)` → `Tanh::invoke()` → `detail::unary_impl({UnaryOpType::TANH})` → `prim::unary()` → `UnaryDeviceOperation` → `UnaryProgramFactory` → compute kernel `eltwise_sfpu.cpp` → macro expansion `tanh_tile<0u>(idst)` → LLK `llk_math_eltwise_unary_sfpu_tanh()` → `ckernel_sfpu_tanh.h`
+
+**Key files:**
+
+| File | Role |
+|------|------|
+| `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp` | API registration, `Tanh` struct |
+| `ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp` | `Tanh::invoke()` — delegates to `UnaryOpType::TANH` |
+| `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp` | Macro generation: `tanh_tile_init<>()` / `tanh_tile<>(idst)` |
+| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp` | Generic SFPU compute kernel (macro substitution) |
+| `tt_metal/hw/inc/api/compute/compute_kernel_api.h` | `tanh_tile_init<>()` / `tanh_tile<>()` templates |
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_tanh.h` | LLK math wrapper |
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh.h` | **SFPU kernel — the math** |
+
+**Math (3 modes in `ckernel_sfpu_tanh.h`):**
+
+1. **FP32 accurate (`_sfpu_tanh_fp32_accurate_`):**
+   - |x| < 0.6: degree-8 minimax polynomial for tanh(x)/x (Sollya fpminimax, even powers)
+   - |x| >= 0.6: `tanh(x) = 2·sigmoid(2x) - 1` (uses `_sfpu_sigmoid_` → `_sfpu_exp_improved_` → `_sfpu_reciprocal_`)
+
+2. **BF16 polynomial (`_sfpu_tanh_polynomial_`):**
+   - degree-6 minimax polynomial on |x|, clamped to [-1, 1], sign restored
+   - Coefficients: c1=0.999, c2=0.031, c3=-0.489, c4=0.282, c5=-0.067, c6=0.006
+
+3. **Approximate (LUT):** hardware `lut()` instruction with 3 programmed registers
+
+### tanh_bw (Max ULP = 15,140) — Current Implementation
+
+**The backward is a pure composite (host-side) decomposition — no device operation, no SFPU kernel.**
+
+**Call chain:**
+`ttnn::tanh_bw(grad, input)` → `ExecuteUnaryBackwardTanh::invoke()` → 4 separate tensor ops on host
+
+**Buggy code** (`unary_backward.cpp` lines 289-303):
+```cpp
+Tensor tanh_res = ttnn::tanh(input, output_mem_config);        // saturates to ±1.0
+tanh_res = ttnn::square(tanh_res, output_mem_config);           // 1.0² = 1.0
+tanh_res = ttnn::rsub(tanh_res, 1.0f, ...);                    // 1.0 - 1.0 = 0.0 ← BUG
+ttnn::multiply(grad, tanh_res, ..., input_grad);                // grad * 0 = 0
+```
+
+**Orphaned SFPU kernel** (`ckernel_sfpu_tanh_derivative.h`, 7 lines of math):
+```cpp
+val = lut(val, l0, l1, l2);           // compute tanh(x) via LUT
+val = val * (-val) + vConst1;         // 1 - tanh²(x) — SAME BUG
+```
+This kernel exists but is **never called** by `ttnn::tanh_bw`. It has the same cancellation bug anyway.
+
+**No enum dispatch:** Backward ops have no `UnaryBackwardOpType` enum — they are all standalone structs with `invoke()`.
+
+### Fix Strategy
+
+Follow the tanh forward pattern — replace the composite with a fused SFPU kernel:
+
+1. **New SFPU kernel** in `ckernel_sfpu_tanh_derivative.h`: compute sech²(x) = 1/cosh²(x) directly using the same infrastructure as tanh forward (piecewise polynomial or `_sfpu_exp_` + reciprocal)
+2. **Wire through existing unary infrastructure**: `UnaryOpType::TANH_DERIVATIVE` or a new backward device operation
+3. **Two input tensors**: Unlike forward (1 input), backward needs grad and input — may require the gelu_bw experimental pattern (binary device operation) rather than simple unary
+
+**Blueprint:** The experimental GELU backward device operation (`ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/`) shows how to create a fused backward op with a custom compute kernel taking 2 inputs.
 
 ---
 
