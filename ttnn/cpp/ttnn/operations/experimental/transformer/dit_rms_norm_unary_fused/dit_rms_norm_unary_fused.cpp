@@ -28,6 +28,8 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
     auto kernel_config_val = compute_kernel_config.value_or(
         init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc));
 
+    kernel_config_val.fp32_dest_acc_en = input_tensor.dtype() == DataType::FLOAT32;
+
     return ttnn::prim::layer_norm(
         input_tensor,
         epsilon,
