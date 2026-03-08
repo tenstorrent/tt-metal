@@ -188,11 +188,16 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run health tests
-        timeout-minutes: 20
+        id: cluster-validation
+        timeout-minutes: 5
+        run: |
+          ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
+      - name: Run 6u Fabric Tests (Quick)
+        if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
+        timeout-minutes: 15
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         # Skipping UnitMeshCQSingleCardProgramFixture.* and UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites as per issue #31319
         run: |
-          ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
           TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
@@ -201,9 +206,17 @@ jobs:
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
       - name: Run Multi-Process tests
-        if: always()
-        timeout-minutes: 15
-        uses: ./docker-job/.github/actions/run-multi-process-tests
+        if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml
+          tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" python3 tests/ttnn/distributed/test_multi_mesh.py
+          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests
+          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
+          tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_acyclic.yaml
+          tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_cyclic.yaml
+          tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_sanity_common.yaml
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
