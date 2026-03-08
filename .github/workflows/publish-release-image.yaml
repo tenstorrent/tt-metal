@@ -32,6 +32,7 @@ on:
 jobs:
   create-docker-release-image:
     name: Build ${{ inputs.image }} image
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -107,6 +108,7 @@ jobs:
   smoke-test-docker-image:
     if: ${{ !inputs.dry-run }}
     needs: create-docker-release-image
+    timeout-minutes: 60
     strategy:
       matrix:
         test_group:
@@ -161,6 +163,7 @@ jobs:
   tag-docker-image-as-latest:
     if: ${{ !inputs.dry-run }}
     needs: [smoke-test-docker-image, create-docker-release-image]
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Docker login
