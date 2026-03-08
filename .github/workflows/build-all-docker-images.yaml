@@ -296,20 +296,45 @@ jobs:
             if [ -z "$image" ]; then
               return
             fi
-            # Get manifest and calculate total compressed size (config + layers)
-            # Using docker buildx imagetools inspect for OCI manifest support
-            local size_bytes
-            size_bytes=$(docker buildx imagetools inspect "$image" --format '{{json .}}' 2>/dev/null | jq '
-              if .manifest then
-                # Single platform OCI manifest: config size + layer sizes
-                (.manifest.config.size // 0) + ([.manifest.layers[].size] | add // 0)
-              elif .manifests then
-                # Multi-platform index: sum the descriptor sizes as an approximation
-                # (full size would require fetching each platform manifest)
-                ([.manifests[].size] | add // 0)
+            # Get the registry manifest and calculate compressed size from config + layers.
+            # Buildx may publish an OCI index with attestations, so resolve the linux/amd64
+            # image manifest first when needed.
+            local manifest_json
+            manifest_json=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' 2>/dev/null || true)
+            if [ -z "$manifest_json" ]; then
+              printf "  %-30s %10s\n" "$name" "(unavailable)"
+              return
+            fi
+
+            local image_ref="$image"
+            local child_digest
+            child_digest=$(echo "$manifest_json" | jq -r '
+              if (.mediaType // "") | test("manifest.list|image.index") then
+                (
+                  [.manifests[]
+                   | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")
+                   | select((.platform.os // "") == "linux")
+                   | select((.platform.architecture // "") == "amd64")
+                  ][0].digest
+                ) // ""
               else
-                0
+                ""
               end
+            ' 2>/dev/null)
+
+            if [ -n "$child_digest" ]; then
+              local repo_ref="$image"
+              repo_ref="${repo_ref%@*}"
+              if [[ "${repo_ref##*/}" == *:* ]]; then
+                repo_ref="${repo_ref%:*}"
+              fi
+              image_ref="${repo_ref}@${child_digest}"
+              manifest_json=$(docker buildx imagetools inspect "$image_ref" --format '{{json .Manifest}}' 2>/dev/null || true)
+            fi
+
+            local size_bytes
+            size_bytes=$(echo "$manifest_json" | jq -r '
+              (.config.size // 0) + (([.layers[]?.size] | add) // 0)
             ' 2>/dev/null || echo "0")
 
             if [ "$size_bytes" != "0" ] && [ -n "$size_bytes" ]; then
