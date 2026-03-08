@@ -25,6 +25,12 @@ void SwiGLUGateUpDeviceOperation::validate_on_program_cache_miss(
             name);
 
         TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "SwiGLUGateUp operation requires {} buffer to be in DRAM. Buffer type: {}",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
+
+        TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "SwiGLUGateUp operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
@@ -56,6 +62,8 @@ void SwiGLUGateUpDeviceOperation::validate_on_program_cache_miss(
     const auto& w3_shape = w3.logical_shape();
 
     TT_FATAL(input_shape.rank() == 4U, "Input tensor must be 4D");
+    TT_FATAL(w1_shape.rank() == 4U, "W1 tensor must be 4D [1, 1, embed, hidden]. W1 shape: {}", w1_shape);
+    TT_FATAL(w3_shape.rank() == 4U, "W3 tensor must be 4D [1, 1, embed, hidden]. W3 shape: {}", w3_shape);
 
     uint32_t embed_dim = input_shape[-1];
     uint32_t hidden_dim = w1_shape[-1];
