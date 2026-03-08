@@ -309,7 +309,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already sent to this device for this token (avoid duplicate sends)
-        uint16_t intra_cluster_target_device_id =
+        uint32_t intra_cluster_target_device_id =
             get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
         if (send_preparation_buffer
                 [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] == 0) {
@@ -410,7 +410,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
         uint16_t target_device = expert_mapping[expert_chosen];
 
         // Check if we've already processed this device for this token
-        uint16_t intra_cluster_target_device_id =
+        uint32_t intra_cluster_target_device_id =
             get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
         if (send_preparation_buffer
                 [(local_token - token_start_idx) * DispatchDevices + intra_cluster_target_device_id] == 0) {
