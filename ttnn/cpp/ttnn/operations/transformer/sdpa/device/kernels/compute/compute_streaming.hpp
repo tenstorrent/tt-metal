@@ -1242,9 +1242,7 @@ template <
     uint32_t cb_lse_out,
     uint32_t cb_prev_out,
     uint32_t cb_out,
-    bool uniform_dataformat = false,
-    uint32_t local_n_padded_tiles_ct = 0,
-    uint32_t joint_n_padded_tiles_ct = 0>
+    bool uniform_dataformat = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1267,7 +1265,6 @@ void sdpa_ring_v2(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
     const LightweightMaskContext& lw_mask = {}) {
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
 
     uint32_t KV_chunks_processed_in_iter = 0;
@@ -1292,35 +1289,31 @@ void sdpa_ring_v2(
 
             bool is_first = (KV_chunks_processed == 1);
 
-            // Determine if this K chunk needs masking
-            bool apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
-                              (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
-                              (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
+            // Determine if this K chunk needs masking (partial tile within a tile boundary)
+            const bool is_global_n_mask_chunk = ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id;
+            const bool is_local_n_mask_chunk = local_n_needs_masking && k_chunk == local_n_mask_chunk_id;
+            const bool is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
+                                               (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
 
-            // Resolve lightweight mask params once per K chunk
-            uint32_t lw_num_padded = 0, lw_partial_tile_idx = 0;
+            bool apply_mask = is_global_n_mask_chunk || is_joint_n_mask_chunk;
+
+            // Resolve lightweight mask params for partial tile masking
+            uint32_t lw_partial_tile_idx = 0;
             if (apply_mask && lw_mask.enabled) {
-                if (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) {
-                    lw_num_padded = lw_mask.global_n_padded_tiles;
+                if (is_global_n_mask_chunk) {
                     lw_partial_tile_idx = lw_mask.global_n_partial_tile_idx;
-                } else if (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) {
-                    lw_num_padded = lw_mask.local_n_padded_tiles;
-                } else if (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) {
-                    lw_num_padded = lw_mask.joint_n_padded_tiles;
+                } else if (is_joint_n_mask_chunk) {
                     lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
                 }
             }
 
-            // Per-chunk-type effective_Sk: tile-level skip for padded chunks.
-            uint32_t effective_Sk_param = 0;  // 0 = no skip, use full Sk_chunk_t
-            if (lw_num_padded > 0) {
-                bool is_local_n_mask_chunk = local_n_needs_masking && k_chunk == local_n_mask_chunk_id;
-                bool is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
-                                             (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
-                bool global_n_also_applies = ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id;
-                if ((is_local_n_mask_chunk && !global_n_also_applies) || is_joint_n_mask_chunk) {
-                    effective_Sk_param = Sk_chunk_t - lw_num_padded;
-                }
+            // Tile-level matmul skip for local_n or joint_n padding.
+            // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
+            uint32_t effective_Sk_param = 0;  // 0 = use full Sk_chunk_t
+            if (is_local_n_mask_chunk && !is_global_n_mask_chunk) {
+                effective_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
+            } else if (is_joint_n_mask_chunk) {
+                effective_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
             }
 
             sdpa_inner_loop_step<
@@ -1408,8 +1401,6 @@ void sdpa_ring_v2(
                 mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
                 if constexpr (!uniform_format) {
                     reconfig_data_format(cb_prev_out, alias_sub);
-                }
-                if constexpr (!uniform_format) {
                     pack_reconfig_data_format(cb_out);
                 }
                 sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
@@ -1419,8 +1410,6 @@ void sdpa_ring_v2(
 
                 if constexpr (!uniform_format) {
                     pack_reconfig_data_format(alias_sig);
-                }
-                if constexpr (!uniform_format) {
                     reconfig_data_format(cb_lse_in, alias_cur_lse);
                 }
                 logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
