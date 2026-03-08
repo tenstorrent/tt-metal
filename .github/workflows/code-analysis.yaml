@@ -1,4 +1,4 @@
-name: "Trace Models (N300 Single Card)"
+name: "Code analysis"
 
 on:
   workflow_dispatch:
