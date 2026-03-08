@@ -1,4 +1,4 @@
-name: "Code analysis"
+name: "Code Analysis"
 
 on:
   workflow_dispatch:
@@ -98,7 +98,8 @@ jobs:
           python model_tracer/generic_ops_tracer.py \
             models/tt_transformers/demo/simple_text_demo.py::test_demo_text \
             --store \
-            -o traced_outputs/${{ matrix.model.name }}
+            -o traced_outputs/${{ matrix.model.name }} \
+            -- --timeout=0
 
       - name: Zip trace output
         if: ${{ !cancelled() }}
