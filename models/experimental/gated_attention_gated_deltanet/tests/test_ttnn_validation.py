@@ -62,6 +62,260 @@ def assert_with_pcc(torch_output, ttnn_output, pcc_threshold=0.99):
     return pcc_val
 
 
+def print_kernels_operations(name_prefix="", is_ttnn=False):
+    """
+    Print the kernels/operations used in torch or TTNN implementation.
+
+    Args:
+        name_prefix: Prefix for the model name (e.g., "TORCH " or "TTNN ")
+        is_ttnn: Whether this is for TTNN (True) or torch (False)
+    """
+    print(f"\n{'='*80}")
+    print(f"⚙️  {name_prefix}KERNELS/OPERATIONS")
+    print(f"{'='*80}")
+
+    if is_ttnn:
+        # TTNN operations used in fused_chunked_delta_rule_ttnn
+        ttnn_ops = [
+            "ttnn.transpose",
+            "ttnn.typecast",
+            "ttnn.reshape",
+            "ttnn.multiply",
+            "ttnn.cumsum",
+            "ttnn.exp",
+            "ttnn.subtract",
+            "ttnn.matmul",
+            "ttnn.neg",
+            "ttnn.add",
+            "ttnn.slice",
+            "ttnn.to_layout",
+            "ttnn.sum",
+            "ttnn.zeros",
+            "ttnn.concat",
+            "ttnn.from_torch",
+            "ttnn.to_torch",
+            "l2_norm_ttnn (custom)",
+            "_create_eye_matrix_ttnn (custom)",
+            "_create_tril_ones_ttnn (custom)",
+            "_create_strict_lower_tril_ttnn (custom)",
+        ]
+
+        print(f"\n📋 TTNN Operations ({len(ttnn_ops)} total):")
+        for i, op in enumerate(ttnn_ops, 1):
+            print(f"  {i:2d}. {op}")
+
+        print(f"\n🔧 Key Operations:")
+        print(f"  • Data Movement: transpose, reshape, slice, concat, to_layout")
+        print(f"  • Element-wise: multiply, exp, subtract, add, neg")
+        print(f"  • Reduction: cumsum, sum")
+        print(f"  • Linear Algebra: matmul (with program_config optimization)")
+        print(f"  • Type Conversion: typecast, from_torch, to_torch")
+        print(f"  • Custom Helpers: l2_norm, matrix creation helpers")
+
+    else:
+        # Torch operations used in chunk_gated_delta_rule
+        torch_ops = [
+            "torch.transpose",
+            "torch.contiguous",
+            "torch.to(torch.float32)",
+            "torch.nn.functional.pad",
+            "torch.reshape / tensor.reshape",
+            "torch.mul / *",
+            "torch.cumsum",
+            "torch.exp",
+            "torch.unsqueeze",
+            "torch.sub / -",
+            "torch.triu",
+            "torch.tril",
+            "torch.eye",
+            "torch.masked_fill",
+            "torch.matmul / @",
+            "torch.zeros / torch.zeros_like",
+            "torch.clone",
+            "l2_norm (custom)",
+        ]
+
+        print(f"\n📋 PyTorch Operations ({len(torch_ops)} total):")
+        for i, op in enumerate(torch_ops, 1):
+            print(f"  {i:2d}. {op}")
+
+        print(f"\n🔧 Key Operations:")
+        print(f"  • Data Movement: transpose, contiguous, reshape, pad")
+        print(f"  • Element-wise: mul, exp, sub, add")
+        print(f"  • Reduction: cumsum")
+        print(f"  • Linear Algebra: matmul (@ operator)")
+        print(f"  • Masking: triu, tril, masked_fill")
+        print(f"  • Matrix Creation: eye, zeros, zeros_like")
+        print(f"  • Custom Helpers: l2_norm")
+
+    print(f"{'='*80}\n")
+
+
+def compare_kernels_operations():
+    """
+    Compare kernels/operations between torch and TTNN implementations.
+    Shows which operations are equivalent and which are TTNN-specific.
+    """
+    print(f"\n{'='*80}")
+    print(f"🔍 KERNEL/OPERATION COMPARISON: TORCH vs TTNN")
+    print(f"{'='*80}")
+
+    # Mapping of torch operations to TTNN equivalents
+    operation_mapping = {
+        "torch.transpose": "ttnn.transpose",
+        "torch.contiguous": "ttnn.to_layout (TILE_LAYOUT)",
+        "torch.to(torch.float32)": "ttnn.typecast to float32",
+        "torch.nn.functional.pad": "ttnn.concat with zeros / ttnn.pad",
+        "torch.reshape / tensor.reshape": "ttnn.reshape",
+        "torch.mul / *": "ttnn.multiply",
+        "torch.cumsum": "ttnn.cumsum",
+        "torch.exp": "ttnn.exp",
+        "torch.unsqueeze": "ttnn.reshape (add dimension)",
+        "torch.sub / -": "ttnn.subtract",
+        "torch.triu": "_create_triu_ones_ttnn (custom helper)",
+        "torch.tril": "_create_tril_ones_ttnn (custom helper)",
+        "torch.eye": "_create_eye_matrix_ttnn (custom helper)",
+        "torch.masked_fill": "ttnn.multiply with mask",
+        "torch.matmul / @": "ttnn.matmul (with program_config optimization)",
+        "torch.zeros / torch.zeros_like": "ttnn.zeros",
+        "torch.clone": "Not needed (TTNN tensors are immutable)",
+        "l2_norm (custom)": "l2_norm_ttnn (custom)",
+    }
+
+    print(f"\n📋 Operation Mapping:")
+    print(f"{'Torch Operation':<40} {'→':<5} {'TTNN Equivalent':<50}")
+    print(f"{'-'*95}")
+    for torch_op, ttnn_op in operation_mapping.items():
+        print(f"{torch_op:<40} {'→':<5} {ttnn_op:<50}")
+
+    print(f"\n✅ Direct Equivalents:")
+    direct_equiv = ["transpose", "reshape", "multiply", "cumsum", "exp", "subtract", "add", "matmul", "zeros", "sum"]
+    for op in direct_equiv:
+        print(f"  • torch.{op} ↔ ttnn.{op}")
+
+    print(f"\n🔄 TTNN-Specific Optimizations:")
+    print(f"  • ttnn.matmul with program_config (kernel optimization)")
+    print(f"  • ttnn.to_layout (memory layout management)")
+    print(f"  • ttnn.typecast (explicit type conversion)")
+    print(f"  • ttnn.slice (explicit slicing with padded_shape support)")
+    print(f"  • ttnn.from_torch / ttnn.to_torch (device transfer)")
+
+    print(f"\n⚠️  Differences:")
+    print(f"  • torch.clone: Not needed in TTNN (tensors are immutable)")
+    print(f"  • torch.masked_fill: Replaced with ttnn.multiply + mask")
+    print(f"  • torch.triu/tril: Custom helpers for matrix creation")
+    print(f"  • torch.contiguous: Replaced with ttnn.to_layout")
+
+    print(f"\n📊 Summary:")
+    print(f"  • Torch operations: 18 total")
+    print(f"  • TTNN operations: 21 total")
+    print(f"  • Direct equivalents: {len(direct_equiv)}")
+    print(f"  • TTNN-specific: 5 (program_config, to_layout, typecast, slice, from/to_torch)")
+    print(f"  • Custom helpers: 4 (l2_norm, eye, triu, tril)")
+
+    print(f"{'='*80}\n")
+
+
+def print_model_structure(inputs_dict, outputs_dict, name_prefix=""):
+    """
+    Print the structure/layers of a model by showing input and output shapes.
+
+    Args:
+        inputs_dict: Dictionary of input tensors with their names
+        outputs_dict: Dictionary of output tensors with their names
+        name_prefix: Prefix for the model name
+    """
+    print(f"\n{'='*80}")
+    print(f"🏗️  {name_prefix}MODEL STRUCTURE")
+    print(f"{'='*80}")
+
+    print(f"\n📥 INPUTS:")
+    for name, tensor in inputs_dict.items():
+        if hasattr(tensor, "shape"):
+            shape = tensor.shape
+        else:
+            try:
+                import ttnn as ttnn_lib
+
+                if hasattr(tensor, "logical_shape"):
+                    shape = tensor.logical_shape()
+                else:
+                    shape = ttnn_lib.to_torch(tensor).shape
+            except:
+                shape = "unknown"
+        print(f"  {name}: {shape}")
+
+    print(f"\n📤 OUTPUTS:")
+    for name, tensor in outputs_dict.items():
+        if hasattr(tensor, "shape"):
+            shape = tensor.shape
+        else:
+            try:
+                import ttnn as ttnn_lib
+
+                if hasattr(tensor, "logical_shape"):
+                    shape = tensor.logical_shape()
+                else:
+                    shape = ttnn_lib.to_torch(tensor).shape
+            except:
+                shape = "unknown"
+        print(f"  {name}: {shape}")
+
+    print(f"{'='*80}\n")
+
+
+def print_model_info(tensor, name, is_ttnn=False):
+    """
+    Print detailed information about a tensor (torch or TTNN).
+
+    Args:
+        tensor: torch.Tensor or ttnn.Tensor
+        name: Name/label for the tensor
+        is_ttnn: Whether the tensor is a TTNN tensor (needs conversion)
+    """
+    import ttnn as ttnn_lib
+
+    # Convert to torch if needed
+    if is_ttnn:
+        if isinstance(tensor, torch.Tensor):
+            torch_tensor = tensor
+        else:
+            torch_tensor = ttnn_lib.to_torch(tensor).to(torch.float32)
+    else:
+        torch_tensor = tensor.to(torch.float32) if isinstance(tensor, torch.Tensor) else tensor
+
+    # Compute statistics
+    flat = torch_tensor.flatten()
+    shape = torch_tensor.shape
+    num_elements = flat.numel()
+
+    min_val = flat.min().item()
+    max_val = flat.max().item()
+    mean_val = flat.mean().item()
+    std_val = flat.std().item()
+    median_val = flat.median().item()
+
+    # Sample values (first few elements)
+    sample_size = min(10, num_elements)
+    sample_values = flat[:sample_size].tolist()
+
+    print(f"\n{'='*80}")
+    print(f"📊 {name.upper()}")
+    print(f"{'='*80}")
+    print(f"  Shape: {shape}")
+    print(f"  Elements: {num_elements:,}")
+    print(f"  Dtype: {torch_tensor.dtype}")
+    print(f"\n  Statistics:")
+    print(f"    Min:    {min_val:.6e}")
+    print(f"    Max:    {max_val:.6e}")
+    print(f"    Mean:   {mean_val:.6e}")
+    print(f"    Std:    {std_val:.6e}")
+    print(f"    Median: {median_val:.6e}")
+    print(f"\n  Sample values (first {sample_size}):")
+    print(f"    {sample_values}")
+    print(f"{'='*80}\n")
+
+
 def test_gated_attention_ttnn():
     """Compare TTNN Gated Attention against torch golden."""
     try:
@@ -261,12 +515,27 @@ def test_fused_chunked_delta_rule_ttnn(
     beta = torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32)
     g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2  # negative log-decay
 
+    # Print torch kernels/operations
+    print_kernels_operations(name_prefix="TORCH ", is_ttnn=False)
+
+    # Compare kernels/operations
+    compare_kernels_operations()
+
     # Torch golden
     torch_out, torch_state = chunk_gated_delta_rule(
         q, k, v, g, beta, chunk_size=chunk_size, output_final_state=True, use_qk_l2norm=True
     )
-    print(f"torch_out {torch_out}")
-    print("........................................................................................................")
+
+    # Print torch model outputs
+    print_model_info(torch_out, "TORCH OUTPUT", is_ttnn=False)
+    print_model_info(torch_state, "TORCH STATE", is_ttnn=False)
+
+    # Print torch model structure with outputs
+    print_model_structure(
+        {"q": q, "k": k, "v": v, "g": g, "beta": beta},
+        {"output": torch_out, "state": torch_state},
+        name_prefix="TORCH ",
+    )
 
     # TTNN forward
     device = ttnn.open_device(device_id=0)
@@ -278,18 +547,24 @@ def test_fused_chunked_delta_rule_ttnn(
         beta_ttnn = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         g_ttnn = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
+        # Print TTNN kernels/operations
+        print_kernels_operations(name_prefix="TTNN ", is_ttnn=True)
+
         # Run fused implementation (may fail with kernel compilation issues)
         try:
             ttnn_out, ttnn_state = fused_chunked_delta_rule_ttnn(
                 q_ttnn, k_ttnn, v_ttnn, beta_ttnn, g_ttnn, chunk_size=chunk_size, device=device
             )
-            print(f"ttnn_out {ttnn_out}")
-            print(
-                "........................................................................................................"
-            )
-            print(f"ttnn_state {ttnn_state}")
-            print(
-                "........................................................................................................"
+
+            # Print TTNN model outputs
+            print_model_info(ttnn_out, "TTNN OUTPUT", is_ttnn=True)
+            print_model_info(ttnn_state, "TTNN STATE", is_ttnn=True)
+
+            # Print TTNN model structure with outputs
+            print_model_structure(
+                {"q": q_ttnn, "k": k_ttnn, "v": v_ttnn, "g": g_ttnn, "beta": beta_ttnn},
+                {"output": ttnn_out, "state": ttnn_state},
+                name_prefix="TTNN ",
             )
 
             # Compare outputs
