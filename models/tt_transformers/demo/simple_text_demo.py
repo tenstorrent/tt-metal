@@ -815,8 +815,8 @@ def test_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     test_id = request.node.callspec.id
     if is_ci_env:
-        if not ci_only:
-            pytest.skip("CI only runs the CI-only tests")
+        # if not ci_only:
+        #     pytest.skip("CI only runs the CI-only tests")
         if "accuracy" in test_id and "ci-token-matching" not in test_id:
             pytest.skip("CI only runs the tests with performance optimizations except for ci-token-matching case")
 
