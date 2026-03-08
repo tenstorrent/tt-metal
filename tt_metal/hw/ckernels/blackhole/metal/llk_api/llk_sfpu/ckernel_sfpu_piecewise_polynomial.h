@@ -28,6 +28,9 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#if defined(RANGE_REDUCTION_EXP) || defined(RANGE_REDUCTION_TRIG) || defined(RANGE_REDUCTION_LOG)
+#include "ckernel_sfpu_piecewise_rational.h"
+#endif
 
 using namespace sfpi;
 
@@ -41,9 +44,11 @@ namespace sfpu {
 template <uint32_t DEGREE>
 __attribute__((always_inline)) inline vFloat piecewise_poly_eval(const float* coeffs, vFloat x) {
     vFloat result = coeffs[DEGREE];
+    if constexpr (DEGREE > 0) {
 #pragma unroll
-    for (int i = DEGREE - 1; i >= 0; i--) {
-        result = result * x + coeffs[i];
+        for (int i = static_cast<int>(DEGREE) - 1; i >= 0; i--) {
+            result = result * x + coeffs[i];
+        }
     }
     return result;
 }
@@ -92,11 +97,13 @@ __attribute__((always_inline)) inline void piecewise_poly_eval_dual(
         result1 = c;
         result2 = c;
     }
+    if constexpr (DEGREE > 0) {
 #pragma unroll
-    for (int i = DEGREE - 1; i >= 0; i--) {
-        vFloat c = coeffs[i];
-        result1 = result1 * x1 + c;
-        result2 = result2 * x2 + c;
+        for (int i = static_cast<int>(DEGREE) - 1; i >= 0; i--) {
+            vFloat c = coeffs[i];
+            result1 = result1 * x1 + c;
+            result2 = result2 * x2 + c;
+        }
     }
 }
 
