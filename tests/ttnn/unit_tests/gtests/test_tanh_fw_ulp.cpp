@@ -140,6 +140,84 @@ inline std::vector<float> all_valid_bf16_values() {
 }  // namespace bf16_ulp_tanh_fw
 
 // =============================================================================
+// Reference ULP calculator: brute-force sorted table
+// =============================================================================
+
+namespace bf16_ulp_reference {
+
+// Build a lookup table mapping every uint16_t BF16 bit pattern to its
+// order index under DAZ+FTZ. The table is constructed mechanically:
+//   1. Enumerate all 65,536 bit patterns
+//   2. Filter out NaN and Inf
+//   3. Convert to float (with DAZ: denormals → 0)
+//   4. Sort by float value
+//   5. Assign indices: equal values share the same index
+//
+// This is the ground truth — no formulas, no assumptions.
+
+struct Bf16Entry {
+    uint16_t bits;
+    float value;
+};
+
+inline std::unordered_map<uint16_t, int32_t> build_order_index_table() {
+    // Collect all non-NaN, non-Inf bit patterns with DAZ-normalized values
+    std::vector<Bf16Entry> entries;
+    entries.reserve(65536);
+    for (uint32_t b = 0; b <= 0xFFFF; ++b) {
+        uint16_t bits = static_cast<uint16_t>(b);
+        uint16_t exp = (bits >> 7) & 0xFF;
+        uint16_t mantissa = bits & 0x007F;
+
+        // Skip NaN
+        if (exp == 0xFF && mantissa != 0) {
+            continue;
+        }
+        // Skip Inf
+        if (bits == 0x7F80 || bits == 0xFF80) {
+            continue;
+        }
+
+        // DAZ normalize: denormals and -0 become +0
+        uint16_t norm_bits = bf16_ulp_tanh_fw::bf16_daz_normalize(bits);
+        float value = bf16_ulp_tanh_fw::bf16_bits_to_float(norm_bits);
+
+        entries.push_back({bits, value});
+    }
+
+    // Sort by float value
+    std::sort(entries.begin(), entries.end(), [](const Bf16Entry& a, const Bf16Entry& b) { return a.value < b.value; });
+
+    // Assign order indices: equal values share the same index
+    std::unordered_map<uint16_t, int32_t> table;
+    int32_t current_index = 0;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (i > 0 && entries[i].value != entries[i - 1].value) {
+            current_index++;
+        }
+        table[entries[i].bits] = current_index;
+    }
+
+    return table;
+}
+
+inline int32_t reference_ulp_distance(
+    const std::unordered_map<uint16_t, int32_t>& table, uint16_t a_bits, uint16_t b_bits) {
+    // DAZ normalize both
+    a_bits = bf16_ulp_tanh_fw::bf16_daz_normalize(a_bits);
+    b_bits = bf16_ulp_tanh_fw::bf16_daz_normalize(b_bits);
+
+    auto it_a = table.find(a_bits);
+    auto it_b = table.find(b_bits);
+    if (it_a == table.end() || it_b == table.end()) {
+        return -1;
+    }
+    return std::abs(it_a->second - it_b->second);
+}
+
+}  // namespace bf16_ulp_reference
+
+// =============================================================================
 // tanh reference: fp64 std::tanh (golden)
 // =============================================================================
 
@@ -491,6 +569,153 @@ TEST_F(TanhFwUlpTest, ReferenceImplementationVerification) {
     log_debug(tt::LogTest, "tanh(1) = {} (expected ~0.7616)", std::tanh(1.0));
     log_debug(tt::LogTest, "tanh(100) = {} (expected ~1.0)", std::tanh(100.0));
     log_debug(tt::LogTest, "tanh(-100) = {} (expected ~-1.0)", std::tanh(-100.0));
+}
+
+// =============================================================================
+// ULP calculator verification: formula vs brute-force sorted table
+// =============================================================================
+
+// Validates bf16_value_order_index_daz() against a mechanically-constructed
+// reference table. The reference enumerates all BF16 bit patterns, sorts by
+// float value, and assigns order indices. Any formula bug will show as a
+// mismatch. This test does NOT require a device.
+TEST_F(TanhFwUlpTest, UlpCalculatorVerification) {
+    auto ref_table = bf16_ulp_reference::build_order_index_table();
+
+    int index_mismatches = 0;
+    int distance_mismatches = 0;
+    int total_patterns = 0;
+
+    std::ostringstream oss;
+    oss << "\n============================================================\n"
+        << "ULP CALCULATOR: FORMULA vs REFERENCE TABLE\n"
+        << "============================================================\n";
+
+    // Part 1: Verify order indices preserve distances (constant offset is OK)
+    // The formula and reference may use different origins, so we check that
+    // (formula[a] - formula[b]) == (ref[a] - ref[b]) for all pairs.
+    // Equivalently: (formula[x] - ref[x]) must be the same constant for all x.
+    int32_t offset = 0;
+    bool offset_set = false;
+    for (uint32_t b = 0; b <= 0xFFFF; ++b) {
+        uint16_t bits = static_cast<uint16_t>(b);
+        uint16_t exp = (bits >> 7) & 0xFF;
+
+        // Skip NaN and Inf — formula returns -1 for these
+        if (exp == 0xFF) {
+            continue;
+        }
+
+        total_patterns++;
+
+        int32_t formula_idx = bf16_ulp_tanh_fw::bf16_value_order_index_daz(bits);
+        uint16_t norm_bits = bf16_ulp_tanh_fw::bf16_daz_normalize(bits);
+        auto it = ref_table.find(norm_bits);
+
+        if (it == ref_table.end()) {
+            index_mismatches++;
+            if (index_mismatches <= 10) {
+                oss << "  INDEX: bits=0x" << std::hex << bits << " norm=0x" << norm_bits << " formula=" << std::dec
+                    << formula_idx << " ref=NOT_FOUND\n";
+            }
+            continue;
+        }
+
+        int32_t diff = formula_idx - it->second;
+        if (!offset_set) {
+            offset = diff;
+            offset_set = true;
+        } else if (diff != offset) {
+            index_mismatches++;
+            if (index_mismatches <= 10) {
+                float val = bf16_ulp_tanh_fw::bf16_bits_to_float(norm_bits);
+                oss << "  INDEX: bits=0x" << std::hex << bits << " val=" << std::scientific << val
+                    << " formula=" << std::dec << formula_idx << " ref=" << it->second << " offset=" << diff
+                    << " (expected " << offset << ")\n";
+            }
+        }
+    }
+
+    oss << "Index offset (formula - ref): " << offset << "\n";
+
+    // Part 2: Verify ULP distance for strategic value pairs
+    struct DistTestCase {
+        float a;
+        float b;
+    };
+    std::vector<DistTestCase> dist_cases = {
+        {0.0f, 0.0f},
+        {1.0f, 1.0f},
+        {1.0f, 1.0078125f},    // adjacent BF16 values
+        {-1.0f, -1.0078125f},  // adjacent negative
+        {0.0f, 1.0f},
+        {-1.0f, 1.0f},
+        {-3.389e+38f, 3.389e+38f},  // near extremes
+        {1.175494e-38f, 0.0f},      // FLT_MIN to zero (DAZ boundary)
+    };
+
+    for (auto& tc : dist_cases) {
+        uint16_t a_bits = bf16_ulp_tanh_fw::bf16_daz_normalize(bf16_ulp_tanh_fw::float_to_bf16_bits(tc.a));
+        uint16_t b_bits = bf16_ulp_tanh_fw::bf16_daz_normalize(bf16_ulp_tanh_fw::float_to_bf16_bits(tc.b));
+
+        int32_t formula_dist = bf16_ulp_tanh_fw::ulp_distance_bf16_daz(tc.a, tc.b);
+        int32_t ref_dist = bf16_ulp_reference::reference_ulp_distance(ref_table, a_bits, b_bits);
+
+        if (formula_dist != ref_dist) {
+            distance_mismatches++;
+            oss << "  DISTANCE: a=" << tc.a << " b=" << tc.b << " formula=" << formula_dist << " ref=" << ref_dist
+                << "\n";
+        }
+    }
+
+    // Part 3: Exhaustive ULP distance check — every adjacent pair in sorted order
+    // Collect all unique DAZ-normalized values and sort them
+    std::vector<std::pair<float, uint16_t>> sorted_values;
+    std::set<uint16_t> seen_norm;
+    for (uint32_t b = 0; b <= 0xFFFF; ++b) {
+        uint16_t bits = static_cast<uint16_t>(b);
+        uint16_t exp = (bits >> 7) & 0xFF;
+        if (exp == 0xFF) {
+            continue;
+        }
+        uint16_t norm = bf16_ulp_tanh_fw::bf16_daz_normalize(bits);
+        if (seen_norm.count(norm)) {
+            continue;
+        }
+        seen_norm.insert(norm);
+        sorted_values.push_back({bf16_ulp_tanh_fw::bf16_bits_to_float(norm), norm});
+    }
+    std::sort(sorted_values.begin(), sorted_values.end());
+
+    int adjacent_mismatches = 0;
+    for (size_t i = 0; i + 1 < sorted_values.size(); ++i) {
+        float a = sorted_values[i].first;
+        float b = sorted_values[i + 1].first;
+        int32_t formula_dist = bf16_ulp_tanh_fw::ulp_distance_bf16_daz(a, b);
+
+        // Adjacent unique values should be exactly 1 ULP apart
+        if (formula_dist != 1) {
+            adjacent_mismatches++;
+            if (adjacent_mismatches <= 10) {
+                oss << "  ADJACENT: a=" << std::scientific << a << " (0x" << std::hex << sorted_values[i].second
+                    << ") b=" << std::scientific << b << " (0x" << sorted_values[i + 1].second << ") dist=" << std::dec
+                    << formula_dist << " expected=1\n";
+            }
+        }
+    }
+
+    oss << "------------------------------------------------------------\n"
+        << "Patterns tested: " << total_patterns << "\n"
+        << "Index mismatches: " << index_mismatches << "\n"
+        << "Distance mismatches (strategic): " << distance_mismatches << "\n"
+        << "Adjacent distance mismatches: " << adjacent_mismatches << "\n"
+        << "Unique DAZ values: " << sorted_values.size() << "\n"
+        << "============================================================\n";
+    log_debug(tt::LogTest, "{}", oss.str());
+
+    EXPECT_EQ(index_mismatches, 0) << index_mismatches << " order index mismatches between formula and reference table";
+    EXPECT_EQ(distance_mismatches, 0) << distance_mismatches << " ULP distance mismatches on strategic pairs";
+    EXPECT_EQ(adjacent_mismatches, 0) << adjacent_mismatches << " adjacent value pairs with ULP distance != 1";
 }
 
 // =============================================================================
