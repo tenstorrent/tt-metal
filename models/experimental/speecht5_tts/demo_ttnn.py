@@ -57,17 +57,57 @@ import time
 import re
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
+from num2words import num2words
 
-DEFAULT_CHUNK_SIZE = 150
+DEFAULT_CHUNK_SIZE = 256
 
 # Maximum KV cache slots pre-allocated in the generator.
 # ~3 mel frames per input token * 256 max tokens = 768, rounded up to 800.
 MAX_KV_STEPS = 800
 
 # Encoder sizes to warm-up and trace in demo_ttnn.py.
-# 32/64 cover short texts; 128/256 cover typical chunked inputs.
+# 32/64 cover short texts; 128/192/256 cover typical chunked inputs.
 # 384 causes L1 OOM on N150 — max supported is 256.
-DEMO_WARMUP_SIZES = [32, 64, 128, 256]
+DEMO_WARMUP_SIZES = [32, 64, 128, 160, 192, 256]
+
+
+def normalize_text_for_tts(text: str) -> str:
+    """Normalize text for SpeechT5 by converting numbers to spoken-word form.
+
+    SpeechT5 was not trained robustly on digit tokens, so bare numbers like
+    "9" or "133.9" are often skipped or garbled. Converting them to words
+    ("nine", "one hundred and thirty-three point nine") gives the model tokens
+    it can pronounce reliably.
+
+    Handles: ordinals (1st, 2nd), decimals (133.9), number+unit (250cc),
+    and plain integers (9, 122).
+    """
+
+    # Ordinals first (e.g. "1st", "23rd") — before plain integers
+    def _ordinal(m):
+        return num2words(int(m.group(1)), to="ordinal")
+
+    text = re.sub(r"\b(\d+)(?:st|nd|rd|th)\b", _ordinal, text, flags=re.IGNORECASE)
+
+    # Decimals (e.g. "133.9") — before plain integers so the dot isn't stranded
+    def _decimal(m):
+        return num2words(float(m.group(0)))
+
+    text = re.sub(r"\b\d+\.\d+\b", _decimal, text)
+
+    # Number+unit (e.g. "250cc") — split into "two hundred and fifty cc"
+    def _number_unit(m):
+        return num2words(int(m.group(1))) + " " + m.group(2)
+
+    text = re.sub(r"\b(\d+)([a-zA-Z]+)\b", _number_unit, text)
+
+    # Plain integers (e.g. "9", "122")
+    def _integer(m):
+        return num2words(int(m.group(0)))
+
+    text = re.sub(r"\b\d+\b", _integer, text)
+
+    return text
 
 
 def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE, processor=None):
@@ -225,6 +265,15 @@ def generate_speech_fp32(
 
     ttnn_input_ids = ttnn.from_torch(token_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
+    # Build encoder self-attention mask so pad tokens cannot corrupt real token
+    # representations. Shape [1, 1, padded_seq_len] broadcasts over
+    # [batch*heads, seq_len, seq_len] inside each encoder attention layer.
+    encoder_self_attn_mask = None
+    if real_seq_len < padded_seq_len:
+        mask = torch.zeros(1, 1, padded_seq_len, dtype=torch.float32)
+        mask[:, :, real_seq_len:] = -1e9
+        encoder_self_attn_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
     # Trace enabled when KV cache is enabled and generator is provided
     enable_trace = use_kv_cache and generator is not None
     batch_size = 1
@@ -233,7 +282,7 @@ def generate_speech_fp32(
     if not warmup_mode:
         print("🔄 Encoding text...")
     encoder_start = time.time()
-    encoder_output = ttnn_encoder(ttnn_input_ids)[0]
+    encoder_output = ttnn_encoder(ttnn_input_ids, attention_mask=encoder_self_attn_mask)[0]
     encoder_time = time.time() - encoder_start
     encoder_output = ttnn.unsqueeze(encoder_output, dim=1)  # Add batch dimension for decoder
 
@@ -611,15 +660,14 @@ def generate_speech_long_text(
     for i, chunk in enumerate(chunks):
         print(f"\n   Chunk {i+1}/{num_chunks}: '{chunk[:50]}{'...' if len(chunk) > 50 else ''}'")
 
-        # Reset KV caches between chunks
+        # Reset KV caches between chunks and synchronize device to avoid
+        # L1 memory state from the previous chunk affecting stop logits.
         if generator is not None:
             generator._reset_kv_caches()
+        ttnn.synchronize_device(device)
 
-        # Scale max_steps by token count: ~3 mel frames per input token.
-        # This avoids truncation for long chunks while not over-allocating for short ones.
-        # Capped at MAX_KV_STEPS (the pre-allocated KV cache size).
         chunk_token_count = processor(text=chunk, return_tensors="pt")["input_ids"].shape[1]
-        chunk_max_steps = min(max(max_steps, chunk_token_count * 3), MAX_KV_STEPS)
+        chunk_max_steps = min(max_steps, MAX_KV_STEPS)
 
         # Generate mel for this chunk (skip vocoder)
         mel, chunk_stats = generate_speech_fp32(
@@ -731,6 +779,9 @@ def main():
         # Default text if none provided
         texts = ["Hello world! This is a test of the hybrid FP32+BF16 SDPA decoder."]
         single_text_mode = True
+
+    # Normalize numbers to words so SpeechT5 pronounces them correctly
+    texts = [normalize_text_for_tts(t) for t in texts]
 
     print("=" * 80)
     print("TTNN SpeechT5 TTS Demo - Hybrid FP32+BF16 SDPA Edition")
@@ -874,14 +925,16 @@ def main():
     warmup_start_time = time.time()
 
     # Synthetic texts: chosen so that tokenized length lands in each encoder bucket.
-    # With chunk sizes up to 256 chars, real inputs land in [32, 64, 128, 256].
+    # With chunk sizes up to 256 chars, real inputs land in [32, 64, 128, 160, 192, 256].
     # This mirrors the LLM approach (simple_text_demo / warmup_model_prefill) of sweeping
     # all canonical padded lengths with synthetic inputs, making warm-up input-independent.
     warmup_texts_per_size = {
-        32: "Hi.",  # ~5 tokens  -> pads to 32
-        64: "A " * 17,  # ~35 tokens -> pads to 64
-        128: "A " * 35,  # ~71 tokens -> pads to 128
-        256: "A " * 65,  # ~131 tokens -> pads to 256
+        32: "A " * 15,  # ~31 tokens -> pads to 32
+        64: "A " * 31,  # ~63 tokens -> pads to 64
+        128: "A " * 63,  # ~127 tokens -> pads to 128
+        160: "A " * 79,  # ~159 tokens -> pads to 160
+        192: "A " * 95,  # ~191 tokens -> pads to 192
+        256: "A " * 127,  # ~255 tokens -> pads to 256
     }
 
     for enc_size in DEMO_WARMUP_SIZES:
@@ -909,7 +962,7 @@ def main():
 
     warmup_duration = time.time() - warmup_start_time
     print(f"✅ Initial warm-up completed in {warmup_duration:.1f}s")
-    print("   Encoder sizes [32, 64, 128, 256] compiled — consistent performance for any input text!")
+    print("   Encoder sizes [32, 64, 128, 160, 192, 256] compiled — consistent performance for any input text!")
 
     print(f"\n🔧 Capturing traces for encoder sizes: {DEMO_WARMUP_SIZES}...")
     generator.capture_all_traces(batch_size=1, sizes=DEMO_WARMUP_SIZES)

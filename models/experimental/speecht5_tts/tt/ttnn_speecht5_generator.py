@@ -29,7 +29,7 @@ from loguru import logger
 # 32 and 64 cover short texts (< ~20 and < ~50 tokens respectively).
 # 128 and 256 cover typical chunked inputs up to 256 characters.
 # Note: 384 causes L1 OOM on N150 due to encoder attention memory requirements.
-SUPPORTED_ENCODER_SEQ_LENS = [32, 64, 128, 256]
+SUPPORTED_ENCODER_SEQ_LENS = [32, 64, 128, 160, 192, 256]
 
 # Command queue IDs for 2CQ mode (overlapping I/O with compute)
 CQ_OPS = 0  # Model operations, trace execution

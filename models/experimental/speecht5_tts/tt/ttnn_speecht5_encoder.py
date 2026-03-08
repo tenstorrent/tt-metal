@@ -37,38 +37,10 @@ SHARDING_THRESHOLD = 384
 # ============================================================================
 
 
-def _layernorm_core_grid(hidden_size: int, device) -> ttnn.CoreGrid:
-    """
-    Compute the core grid used for width-sharded LayerNorm.
-
-    The grid is chosen so that:
-    - total cores  == hidden_size // TILE_SIZE  (one tile-column per core)
-    - x            <= device compute-grid x      (stays inside the physical grid)
-
-    For hidden_size=768: num_cores=24, preferred x=8 (fits Wormhole 8×7 and
-    Blackhole 11×10), giving CoreGrid(y=3, x=8).
-    """
-    num_cores = hidden_size // ttnn.TILE_SIZE
-    device_x = device.compute_with_storage_grid_size().x
-    if num_cores % 8 == 0 and 8 <= device_x:
-        x = 8
-    else:
-        # fall back: largest x that divides num_cores and fits the device grid
-        x = 1
-        for candidate in range(min(num_cores, device_x), 0, -1):
-            if num_cores % candidate == 0:
-                x = candidate
-                break
-    return ttnn.CoreGrid(y=num_cores // x, x=x)
-
-
-def l1_width_sharded_memory(hidden_states, device=None):
+def l1_width_sharded_memory(hidden_states):
     """
     Convert tensor to L1 width sharded memory config.
     Matches decoder implementation for consistent sharding.
-
-    When *device* is supplied the core grid is chosen to fit within the
-    physical compute grid (required for Blackhole whose grid is 11×10).
     """
     # Calculate shard dimensions for width sharding
     if len(hidden_states.shape) == 4:
@@ -78,15 +50,12 @@ def l1_width_sharded_memory(hidden_states, device=None):
     else:
         raise ValueError(f"Unsupported shape: {hidden_states.shape}")
 
-    if device is not None:
-        core_grid = _layernorm_core_grid(hidden_size, device)
-    else:
-        num_cores = hidden_size // ttnn.TILE_SIZE
-        if num_cores % 8 == 0:
-            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
-        else:
-            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+    num_cores = hidden_size // ttnn.TILE_SIZE
 
+    if num_cores % 8 == 0:
+        core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
+    else:
+        core_grid = ttnn.CoreGrid(y=1, x=num_cores)
     num_cores = core_grid.x * core_grid.y
     shard_width = (hidden_size + num_cores - 1) // num_cores  # Divide width across cores
 
@@ -261,9 +230,7 @@ class TTNNSpeechT5Attention:
 
         # Pre-compute specialized configs for Q/K/V/out projections
         # Shape: [seq_len, 768] @ [768, 768] -> [seq_len, 768]
-        # Use the same core grid as the LayerNorm width sharding so that width-sharded
-        # input tensors (output of the previous block's LayerNorm) are compatible.
-        self.core_grid = _layernorm_core_grid(config.hidden_size, device)
+        self.core_grid = get_encoder_core_grid(device)
         self.linear_compute_config = get_high_perf_compute_config(device)
 
         # Attention matmul config (Q@K^T, attn@V)
@@ -272,13 +239,17 @@ class TTNNSpeechT5Attention:
             device, M=1, K=self.head_dim, N=1  # Placeholder, actual shapes vary
         )
 
-    def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor, attention_mask: ttnn.Tensor = None
+    ) -> ttnn.Tensor:
         """
         Forward pass with relative position bias.
 
         Args:
             hidden_states: [batch, seq_len, hidden_size]
             position_bias: [seq_len, seq_len, 64]
+            attention_mask: Optional [1, 1, seq_len] mask with 0 for real and -1e9 for pad positions.
+                           Broadcasts over [batch*heads, seq_len, seq_len] to mask pad key positions.
 
         Returns:
             output: [batch, seq_len, hidden_size]
@@ -374,6 +345,12 @@ class TTNNSpeechT5Attention:
             # Op 12: Add to attention weights
             attn_weights = ttnn.add(attn_weights, rel_pos_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # Apply encoder self-attention mask to prevent pad tokens from corrupting
+        # real token representations. Mask shape [1, 1, seq_len] broadcasts over
+        # [batch*heads, seq_len, seq_len], zeroing out attention to pad key positions.
+        if attention_mask is not None:
+            attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         # Op 13: Softmax
         attn_weights = ttnn.softmax(attn_weights, dim=-1)
 
@@ -452,8 +429,7 @@ class TTNNSpeechT5EncoderBlock:
     def _get_layernorm_program_config(self, hidden_states):
         """
         Create LayerNorm program config for sharded execution.
-        Uses _layernorm_core_grid so the grid is always within the device bounds
-        (e.g. 11×10 on Blackhole vs 8×7 on Wormhole).
+        Matches decoder implementation for consistent sharding.
         """
         # Handle both 3D [B, S, H] and 4D [B, 1, S, H] tensors
         shape = hidden_states.shape
@@ -462,14 +438,19 @@ class TTNNSpeechT5EncoderBlock:
         else:
             batch_size, seq_len, hidden_size = shape
 
-        core_grid = _layernorm_core_grid(hidden_size, self.device)
+        num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores for 768
+        if num_cores % 8 == 0:
+            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
+        else:
+            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
 
         actual_seq_len = seq_len * batch_size
         per_core_M = math.ceil(actual_seq_len / ttnn.TILE_SIZE)
 
+        # For width sharding, each core gets a portion of the width
         K_tiles = hidden_size // ttnn.TILE_SIZE
         total_cores = core_grid.x * core_grid.y
-        block_w = K_tiles // total_cores
+        block_w = K_tiles // total_cores  # 24 / 24 = 1
 
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -479,13 +460,16 @@ class TTNNSpeechT5EncoderBlock:
             inplace=False,
         )
 
-    def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor, attention_mask: ttnn.Tensor = None
+    ) -> ttnn.Tensor:
         """
         Encoder block with comprehensive L1 memory management.
 
         Args:
             hidden_states: [batch, seq_len, hidden_size]
             position_bias: [seq_len, seq_len, 64]
+            attention_mask: Optional [1, 1, seq_len] mask for padding positions
 
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
@@ -495,7 +479,7 @@ class TTNNSpeechT5EncoderBlock:
         residual = hidden_states
 
         # Attention - rely on internal L1 memory configs
-        hidden_states = self.attention(hidden_states, position_bias=position_bias)
+        hidden_states = self.attention(hidden_states, position_bias=position_bias, attention_mask=attention_mask)
 
         # Dropout intentionally omitted in this TTNN encoder implementation
 
@@ -503,7 +487,7 @@ class TTNNSpeechT5EncoderBlock:
         hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Convert to width sharded for layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states, self.device)
+        hidden_states = l1_width_sharded_memory(hidden_states)
 
         # Get LayerNorm program config for sharded execution
         layernorm_program_config = self._get_layernorm_program_config(hidden_states)
@@ -532,7 +516,7 @@ class TTNNSpeechT5EncoderBlock:
         hidden_states = ttnn.add(residual_ffn, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Convert to width sharded for final layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states, self.device)
+        hidden_states = l1_width_sharded_memory(hidden_states)
 
         # Final layer norm with sharding
         hidden_states = ttnn.layer_norm(
@@ -597,7 +581,7 @@ class TTNNSpeechT5Encoder:
     def _get_layernorm_program_config(self, hidden_states):
         """
         Create LayerNorm program config for sharded execution.
-        Uses _layernorm_core_grid so the grid is always within the device bounds.
+        Matches decoder implementation for consistent sharding.
         """
         # Handle both 3D [B, S, H] and 4D [B, 1, S, H] tensors
         shape = hidden_states.shape
@@ -606,14 +590,19 @@ class TTNNSpeechT5Encoder:
         else:
             batch_size, seq_len, hidden_size = shape
 
-        core_grid = _layernorm_core_grid(hidden_size, self.device)
+        num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores for 768
+        if num_cores % 8 == 0:
+            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
+        else:
+            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
 
         actual_seq_len = seq_len * batch_size
         per_core_M = math.ceil(actual_seq_len / ttnn.TILE_SIZE)
 
+        # For width sharding, each core gets a portion of the width
         K_tiles = hidden_size // ttnn.TILE_SIZE
         total_cores = core_grid.x * core_grid.y
-        block_w = K_tiles // total_cores
+        block_w = K_tiles // total_cores  # 24 / 24 = 1
 
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -623,12 +612,15 @@ class TTNNSpeechT5Encoder:
             inplace=False,
         )
 
-    def __call__(self, input_ids: ttnn.Tensor) -> Tuple[ttnn.Tensor]:
+    def __call__(self, input_ids: ttnn.Tensor, attention_mask: ttnn.Tensor = None) -> Tuple[ttnn.Tensor]:
         """
         Forward pass with optimized L1 memory management.
 
         Args:
             input_ids: [batch, seq_len] - token IDs
+            attention_mask: Optional [1, 1, seq_len] mask with 0 for real positions
+                           and -1e9 for pad positions. Prevents pad tokens from
+                           corrupting real token representations via self-attention.
 
         Returns:
             tuple: (hidden_states,) where hidden_states is [batch, seq_len, hidden_size]
@@ -648,7 +640,7 @@ class TTNNSpeechT5Encoder:
         hidden_states = hidden_states + self.parameters["encode_positions_alpha"] * pe_slice
 
         # Convert to width sharded for pre-encoder layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states, self.device)
+        hidden_states = l1_width_sharded_memory(hidden_states)
 
         # Get LayerNorm program config for sharded execution
         layernorm_program_config = self._get_layernorm_program_config(hidden_states)
@@ -668,7 +660,7 @@ class TTNNSpeechT5Encoder:
         # Op 3: Encoder blocks
         position_bias = self._compute_position_bias(seq_len)
         for block in self.layers:
-            hidden_states = block(hidden_states, position_bias=position_bias)
+            hidden_states = block(hidden_states, position_bias=position_bias, attention_mask=attention_mask)
 
         return (hidden_states,)
 
