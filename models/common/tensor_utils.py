@@ -153,13 +153,21 @@ def program_config_to_str(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAM
     return serialize_config(cfg)
 
 
-def program_config_to_dict(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
-    return {
-        "in0_block_w": program_config.in0_block_w,
-        "per_core_M": program_config.per_core_M,
-        "per_core_N": program_config.per_core_N,
-        "fused_activation": str(program_config.fused_activation),
-    }
+def program_config_to_dict(program_config):
+    if hasattr(program_config, "to_json"):
+        d = json.loads(program_config.to_json())
+        d["type"] = type(program_config).__name__
+        return d
+    elif isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
+        return {
+            "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+            "in0_block_w": program_config.in0_block_w,
+            "per_core_M": program_config.per_core_M,
+            "per_core_N": program_config.per_core_N,
+            "fused_activation": str(program_config.fused_activation),
+        }
+    else:
+        return {"type": type(program_config).__name__, "repr": repr(program_config)}
 
 
 def serialize_config(cfg_dict: dict, fmt: str = "json") -> str:
