@@ -26,6 +26,7 @@ on:
 jobs:
   ttnn:
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    timeout-minutes: 240
     runs-on: >-
       ${{
         (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
