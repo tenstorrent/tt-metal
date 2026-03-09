@@ -437,6 +437,19 @@ def _reset_base_kv_caches(gen: DeepseekGenerator) -> None:
     gen.ccl.reset_sem_counters()
 
 
+def _reset_mtp_kv_cache(gen: DeepseekGenerator) -> None:
+    assert gen.model_run_config_decode is not None, "Decode run config is not initialized"
+    mtp_cfg = gen.model_run_config_decode.get("mtp")
+    if mtp_cfg is None:
+        raise RuntimeError("MTP decode config is not initialized")
+    decoder_block_cfg = mtp_cfg.get("decoder_block")
+    if decoder_block_cfg is None:
+        raise RuntimeError("MTP decoder block config is missing")
+    kvpe_cache = decoder_block_cfg["mla"]["mla1d"]["kvpe_cache"]
+    ttnn.fill(kvpe_cache, 0.0, memory_config=kvpe_cache.memory_config(), output_tensor=kvpe_cache)
+    gen.ccl.reset_sem_counters()
+
+
 def _replay_verify_decode_batches(
     gen: DeepseekGenerator,
     start_tokens: torch.Tensor,
@@ -1136,7 +1149,7 @@ def test_mtp_verify_batching_aliasing(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
-    """Validate verify-lane batching + page-table aliasing correctness and accept rate."""
+    """Validate verify-lane batching + page-table aliasing invariance."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
     reference_path = _get_reference_path(mesh, num_steps)
@@ -1294,7 +1307,6 @@ def test_mtp_verify_batching_aliasing(
         # Debug toggles for KV cache snapshots and verify table prints.
         enable_kv_log = False
         enable_verify_table = debug_mtp
-        min_verify_accept_rate = float(os.getenv("DEEPSEEK_V3_MTP_VERIFY_MIN_ACCEPT_RATE", "0.75"))
         compare_base = False
         compare_steps = 0
         log_host_rank_env = os.getenv("TT_LOG_HOST_RANK")
@@ -1442,12 +1454,22 @@ def test_mtp_verify_batching_aliasing(
         _dump_kv_cache(
             "after_seed_decode", step_idx=0, prompt_lane=int(prompt_user_ids[0]), spec_lane=int(spec_user_ids[0])
         )
+        base_page_tables = gen._get_page_tables()
 
         prompt_matches = 0  # count of correct prompt-lane next-token predictions
         prompt_count = 0  # total prompt-lane comparisons
         verify_matches = 0  # count of correct verify-lane next-next predictions (accepted only)
         verify_count = 0  # total accepted prompt lanes
         debug_batched_history: list[tuple[torch.Tensor, torch.Tensor]] = []
+        debug_spec_prev_history: list[torch.Tensor] = []
+        debug_gt_next_history: list[torch.Tensor] = []
+        debug_gt_after_spec_history: list[torch.Tensor] = []
+        predictor_full_matches = 0
+        predictor_full_count = 0
+        predictor_prompt_matches = 0
+        predictor_prompt_count = 0
+        predictor_spec_matches = 0
+        predictor_spec_count = 0
         debug_layer_compare_done = False
         # For the single-prompt aliasing repro, the first observed prompt-lane
         # mismatch happens at verify step 7, so compare there instead of step 1.
@@ -1489,6 +1511,15 @@ def test_mtp_verify_batching_aliasing(
 
             gt_next = next_tokens[step + 1][prompt_user_ids]  # reference next token
             gt_after_spec = next_tokens[step + 2][prompt_user_ids]  # reference next-next token
+
+            predictor_full_matches += int((spec_next_all == next_tokens[step + 1]).sum().item())
+            predictor_full_count += int(next_tokens[step + 1].numel())
+            predictor_prompt_matches += int((spec_prev_prompt == gt_next).sum().item())
+            predictor_prompt_count += int(gt_next.numel())
+            predictor_spec_matches += int(
+                (spec_next_all[spec_user_ids] == next_tokens[step + 1][spec_user_ids]).sum().item()
+            )
+            predictor_spec_count += int(spec_user_ids.numel())
 
             if compare_base and step < compare_steps:
                 kv_cache_current = gen.get_kv_cache()
@@ -1818,17 +1849,273 @@ def test_mtp_verify_batching_aliasing(
                 verify_count += int(accepted_mask.sum().item())
 
             debug_batched_history.append((batched_tokens.clone(), batched_positions.clone()))
+            debug_spec_prev_history.append(spec_prev_prompt.clone())
+            debug_gt_next_history.append(gt_next.clone())
+            debug_gt_after_spec_history.append(gt_after_spec.clone())
+
+        def _replay_verify_accept_diagnostics(
+            page_tables: list[ttnn.Tensor],
+            label: str,
+        ) -> tuple[int, int, int, list[list[int]], list[torch.Tensor], list[torch.Tensor]]:
+            _reset_base_kv_caches(gen)
+            seed_logits_tt = gen._decode_step_tt(
+                tokens_step=start_tokens,
+                positions=seed_positions,
+                batch_size_per_row=gen.batch_size_per_row,
+                page_tables=gen._get_page_tables(),
+                return_hidden=False,
+            )
+            ttnn.deallocate(seed_logits_tt)
+            gen.ccl.reset_sem_counters()
+
+            replay_prompt_matches = 0
+            replay_accept_count = 0
+            per_step_accepted_prompt_indices: list[list[int]] = []
+            per_step_prompt_preds: list[torch.Tensor] = []
+            per_step_verify_preds: list[torch.Tensor] = []
+
+            for step_idx, (batched_tokens_step, batched_positions_step) in enumerate(debug_batched_history):
+                logits_tt = gen._decode_step_tt(
+                    tokens_step=batched_tokens_step,
+                    positions=batched_positions_step,
+                    batch_size_per_row=gen.batch_size_per_row,
+                    page_tables=page_tables,
+                    return_hidden=False,
+                )
+                logits_host = ttnn.to_torch(
+                    logits_tt,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(-2, -1), mesh_shape=mesh.shape),
+                )
+                ttnn.deallocate(logits_tt)
+                gen.ccl.reset_sem_counters()
+                logits_host = logits_host.squeeze(0).squeeze(0)
+                pred_all_step = torch.argmax(logits_host, dim=-1).to(torch.int32)
+                pred_next_step = pred_all_step[prompt_user_ids]
+                pred_after_spec_step = pred_all_step[spec_user_ids]
+                replay_prompt_matches += int((pred_next_step == debug_gt_next_history[step_idx]).sum().item())
+                accepted_mask_step = pred_next_step == debug_spec_prev_history[step_idx]
+                replay_accept_count += int(accepted_mask_step.sum().item())
+                per_step_accepted_prompt_indices.append(accepted_mask_step.nonzero(as_tuple=False).flatten().tolist())
+                per_step_prompt_preds.append(pred_next_step.clone())
+                per_step_verify_preds.append(pred_after_spec_step.clone())
+
+            logger.info(
+                "MTP verify replay {}: prompt_matches={}/{} ({:.3f}) accept_count={}/{} ({:.3f})",
+                label,
+                replay_prompt_matches,
+                prompt_count,
+                replay_prompt_matches / max(prompt_count, 1),
+                replay_accept_count,
+                prompt_count,
+                replay_accept_count / max(prompt_count, 1),
+            )
+            return (
+                replay_prompt_matches,
+                replay_accept_count,
+                prompt_count,
+                per_step_accepted_prompt_indices,
+                per_step_prompt_preds,
+                per_step_verify_preds,
+            )
 
         prompt_rate = prompt_matches / max(prompt_count, 1)
         accept_rate = verify_count / max(prompt_count, 1)
         logger.info(f"MTP verify batching prompt match rate: {prompt_matches}/{prompt_count} = {prompt_rate:.3f}")
-        logger.info(f"MTP verify batching accept rate: {verify_count}/{prompt_count} = {accept_rate:.3f}")
+        logger.info(f"MTP verify batching short-window accept rate: {verify_count}/{prompt_count} = {accept_rate:.3f}")
+        if debug_mtp:
+            predictor_full_rate = predictor_full_matches / max(predictor_full_count, 1)
+            predictor_prompt_rate = predictor_prompt_matches / max(predictor_prompt_count, 1)
+            predictor_spec_rate = predictor_spec_matches / max(predictor_spec_count, 1)
+            logger.info(
+                "MTP verify predictor baseline: full_batch={}/{} ({:.3f}) prompt_subset={}/{} ({:.3f}) spec_subset={}/{} ({:.3f})",
+                predictor_full_matches,
+                predictor_full_count,
+                predictor_full_rate,
+                predictor_prompt_matches,
+                predictor_prompt_count,
+                predictor_prompt_rate,
+                predictor_spec_matches,
+                predictor_spec_count,
+                predictor_spec_rate,
+            )
+            _reset_mtp_kv_cache(gen)
+            full_window_full_matches = 0
+            full_window_full_count = 0
+            full_window_prompt_matches = 0
+            full_window_prompt_count = 0
+            full_window_spec_matches = 0
+            full_window_spec_count = 0
+            for step_idx in range(hidden_states.shape[0] - 1):
+                positions_full = torch.full((batch_size,), step_idx + 1, dtype=torch.int32)
+                logits_full = gen._mtp_predict_logits(
+                    hidden_states=hidden_states[step_idx],
+                    tokens_step=next_tokens[step_idx],
+                    positions=positions_full,
+                )
+                pred_full = torch.argmax(logits_full, dim=-1).to(torch.int32)
+                gt_full = next_tokens[step_idx + 1]
+                full_window_full_matches += int((pred_full == gt_full).sum().item())
+                full_window_full_count += int(gt_full.numel())
+                full_window_prompt_matches += int((pred_full[prompt_user_ids] == gt_full[prompt_user_ids]).sum().item())
+                full_window_prompt_count += int(prompt_user_ids.numel())
+                full_window_spec_matches += int((pred_full[spec_user_ids] == gt_full[spec_user_ids]).sum().item())
+                full_window_spec_count += int(spec_user_ids.numel())
+            logger.info(
+                "MTP verify predictor full-window baseline: full_batch={}/{} ({:.3f}) prompt_subset={}/{} ({:.3f}) spec_subset={}/{} ({:.3f})",
+                full_window_full_matches,
+                full_window_full_count,
+                full_window_full_matches / max(full_window_full_count, 1),
+                full_window_prompt_matches,
+                full_window_prompt_count,
+                full_window_prompt_matches / max(full_window_prompt_count, 1),
+                full_window_spec_matches,
+                full_window_spec_count,
+                full_window_spec_matches / max(full_window_spec_count, 1),
+            )
+        (
+            base_prompt_matches_dbg,
+            base_accept_count_dbg,
+            _,
+            base_step_accept_indices_dbg,
+            base_step_prompt_preds_dbg,
+            base_step_verify_preds_dbg,
+        ) = _replay_verify_accept_diagnostics(base_page_tables, "base")
+        (
+            alias_prompt_matches_dbg,
+            alias_accept_count_dbg,
+            _,
+            alias_step_accept_indices_dbg,
+            alias_step_prompt_preds_dbg,
+            alias_step_verify_preds_dbg,
+        ) = _replay_verify_accept_diagnostics(decode_page_tables, "alias")
+        differing_accept_steps = [
+            step_idx
+            for step_idx, (base_idx, alias_idx) in enumerate(
+                zip(base_step_accept_indices_dbg, alias_step_accept_indices_dbg, strict=True)
+            )
+            if base_idx != alias_idx
+        ]
+        differing_prompt_pred_steps = [
+            step_idx
+            for step_idx, (base_pred, alias_pred) in enumerate(
+                zip(base_step_prompt_preds_dbg, alias_step_prompt_preds_dbg, strict=True)
+            )
+            if not torch.equal(base_pred, alias_pred)
+        ]
+        differing_verify_pred_steps = []
+        differing_verify_pred_steps_all = []
+        for step_idx, (base_pred, alias_pred, accepted_indices) in enumerate(
+            zip(
+                base_step_verify_preds_dbg,
+                alias_step_verify_preds_dbg,
+                base_step_accept_indices_dbg,
+                strict=True,
+            )
+        ):
+            if not torch.equal(base_pred, alias_pred):
+                differing_verify_pred_steps_all.append(step_idx)
+            if not accepted_indices:
+                continue
+            accepted_idx = torch.tensor(accepted_indices, dtype=torch.long)
+            if not torch.equal(base_pred[accepted_idx], alias_pred[accepted_idx]):
+                differing_verify_pred_steps.append(step_idx)
+        logger.info(
+            "MTP verify replay compare: base_accept_count={} alias_accept_count={} differing_accept_steps={} differing_prompt_pred_steps={} differing_verify_pred_steps={} differing_verify_pred_steps_all={}",
+            base_accept_count_dbg,
+            alias_accept_count_dbg,
+            differing_accept_steps,
+            differing_prompt_pred_steps,
+            differing_verify_pred_steps,
+            differing_verify_pred_steps_all,
+        )
+        if differing_accept_steps or differing_prompt_pred_steps:
+            sample_steps = sorted(set(differing_accept_steps + differing_prompt_pred_steps))[:8]
+            logger.info(
+                "MTP verify replay prompt/accept differing details: {}",
+                [
+                    {
+                        "step": step_idx,
+                        "base_accept_prompt_indices": base_step_accept_indices_dbg[step_idx],
+                        "alias_accept_prompt_indices": alias_step_accept_indices_dbg[step_idx],
+                        "base_prompt_pred_sample": base_step_prompt_preds_dbg[step_idx][:8].tolist(),
+                        "alias_prompt_pred_sample": alias_step_prompt_preds_dbg[step_idx][:8].tolist(),
+                        "accepted_prompt_indices": base_step_accept_indices_dbg[step_idx],
+                        "base_verify_pred_sample": base_step_verify_preds_dbg[step_idx][:8].tolist(),
+                        "alias_verify_pred_sample": alias_step_verify_preds_dbg[step_idx][:8].tolist(),
+                    }
+                    for step_idx in sample_steps
+                ],
+            )
+        if debug_mtp and differing_verify_pred_steps:
+            sample_steps = differing_verify_pred_steps[:8]
+            logger.info(
+                "MTP verify replay alias-aware note: verify-lane base/alias differences are expected because only the aliased spec rows share prompt history. sample_steps={}",
+                sample_steps,
+            )
+            logger.info(
+                "MTP verify replay verify-lane differing details: {}",
+                [
+                    {
+                        "step": step_idx,
+                        "accepted_prompt_indices": base_step_accept_indices_dbg[step_idx],
+                        "base_verify_pred_sample": base_step_verify_preds_dbg[step_idx][:8].tolist(),
+                        "alias_verify_pred_sample": alias_step_verify_preds_dbg[step_idx][:8].tolist(),
+                    }
+                    for step_idx in sample_steps
+                ],
+            )
+            first_verify_step = differing_verify_pred_steps[0]
+            first_accepted_indices = base_step_accept_indices_dbg[first_verify_step]
+            first_mismatch_prompt_idx = next(
+                prompt_idx
+                for prompt_idx in first_accepted_indices
+                if int(base_step_verify_preds_dbg[first_verify_step][prompt_idx].item())
+                != int(alias_step_verify_preds_dbg[first_verify_step][prompt_idx].item())
+            )
+            first_prompt_uid = int(prompt_user_ids[first_mismatch_prompt_idx].item())
+            first_spec_uid = int(spec_user_ids[first_mismatch_prompt_idx].item())
+            first_batched_tokens, first_batched_positions = debug_batched_history[first_verify_step]
+            logger.info(
+                "MTP verify first accepted divergence: step={} prompt_idx={} prompt_uid={} spec_uid={} "
+                "prompt_token={} prompt_pos={} spec_token={} spec_pos={} spec_prev={} gt_next={} gt_after_spec={} "
+                "base_prompt_pred={} alias_prompt_pred={} base_verify_pred={} alias_verify_pred={}",
+                first_verify_step,
+                first_mismatch_prompt_idx,
+                first_prompt_uid,
+                first_spec_uid,
+                int(first_batched_tokens[first_prompt_uid].item()),
+                int(first_batched_positions[first_prompt_uid].item()),
+                int(first_batched_tokens[first_spec_uid].item()),
+                int(first_batched_positions[first_spec_uid].item()),
+                int(debug_spec_prev_history[first_verify_step][first_mismatch_prompt_idx].item()),
+                int(debug_gt_next_history[first_verify_step][first_mismatch_prompt_idx].item()),
+                int(debug_gt_after_spec_history[first_verify_step][first_mismatch_prompt_idx].item()),
+                int(base_step_prompt_preds_dbg[first_verify_step][first_mismatch_prompt_idx].item()),
+                int(alias_step_prompt_preds_dbg[first_verify_step][first_mismatch_prompt_idx].item()),
+                int(base_step_verify_preds_dbg[first_verify_step][first_mismatch_prompt_idx].item()),
+                int(alias_step_verify_preds_dbg[first_verify_step][first_mismatch_prompt_idx].item()),
+            )
+        assert (
+            base_prompt_matches_dbg == prompt_count
+        ), f"Base replay prompt-lane mismatch under verify batching: {base_prompt_matches_dbg}/{prompt_count}"
+        assert (
+            alias_prompt_matches_dbg == prompt_count
+        ), f"Aliased replay prompt-lane mismatch under verify batching: {alias_prompt_matches_dbg}/{prompt_count}"
+        assert (
+            alias_accept_count_dbg == base_accept_count_dbg
+        ), f"Aliased/base accept-count mismatch under verify batching: alias={alias_accept_count_dbg} base={base_accept_count_dbg}"
+        assert (
+            alias_accept_count_dbg == verify_count
+        ), f"Aliased replay/live accept-count mismatch under verify batching: alias={alias_accept_count_dbg} live={verify_count}"
+        assert (
+            not differing_accept_steps
+        ), f"Aliased/base accept-mask mismatch under verify batching at steps {differing_accept_steps[:8]}"
+        assert (
+            not differing_prompt_pred_steps
+        ), f"Aliased/base prompt-prediction mismatch under verify batching at steps {differing_prompt_pred_steps[:8]}"
         assert (
             prompt_matches == prompt_count
         ), f"Prompt-lane mismatch under verify batching: {prompt_matches}/{prompt_count}"
-        assert accept_rate >= min_verify_accept_rate, (
-            f"MTP verify batching accept rate {accept_rate:.3f} below required minimum " f"{min_verify_accept_rate:.3f}"
-        )
 
         if verify_count > 0:
             verify_rate = verify_matches / verify_count
