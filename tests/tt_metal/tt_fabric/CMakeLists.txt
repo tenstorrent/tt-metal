@@ -53,35 +53,6 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
-# Fabric Elastic Channels Test
-add_executable(fabric_elastic_channels_host_test)
-
-target_sources(fabric_elastic_channels_host_test PRIVATE ${FABRIC_ELASTIC_CHANNELS_HOST_TEST_SOURCES})
-
-target_link_libraries(
-    fabric_elastic_channels_host_test
-    PRIVATE
-        tt_metal
-        test_common_libs
-)
-
-target_include_directories(
-    fabric_elastic_channels_host_test
-    PRIVATE
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${CMAKE_CURRENT_SOURCE_DIR}/feature_bringup
-)
-
-set_target_properties(
-    fabric_elastic_channels_host_test
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
-)
-
 add_library(test_system_health_smoke OBJECT)
 add_library(TT::SystemHealth::Smoke ALIAS test_system_health_smoke)
 

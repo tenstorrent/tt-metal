@@ -139,7 +139,8 @@ struct SdpaReduceForwarder {
                 r2_sent_mask = process_ready_slots(r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection);
 
             } while (r1_sent_mask != CT::all_sent_mask || r2_sent_mask != CT::all_sent_mask);
-
+            noc_semaphore_set(r1_sem_ptr, 0);
+            noc_semaphore_set(r2_sem_ptr, 0);
             fabric_connection.close();
 
             noc_async_full_barrier();
