@@ -30,6 +30,7 @@ static bool run_test(
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
     uint32_t transfer_size = 1024;
+    uint32_t transfer_count = 1;
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
@@ -55,6 +56,7 @@ static bool run_test(
         .compile_args =
             {
                 transfer_size,
+                transfer_count,
                 send_l1_address,
                 recv_l1_address,
             },
@@ -81,6 +83,7 @@ static bool run_test(
         .compile_args =
             {
                 transfer_size,
+                transfer_count,
             },
     };
     eth_test_common::set_arch_specific_eth_config(recv_eth_config);
