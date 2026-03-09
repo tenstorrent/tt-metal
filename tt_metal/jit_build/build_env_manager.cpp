@@ -170,7 +170,6 @@ void BuildEnvManager::add_build_env(
     if (precompiled_dir.has_value()) {
         dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
         dev_build_env.firmware_precompiled = true;
-        log_info(tt::LogBuildKernels, "Using pre-compiled firmware from: {}", *precompiled_dir);
     } else {
         dev_build_env.firmware_precompiled = false;
         log_debug(tt::LogBuildKernels, "No pre-compiled firmware found for build key: {}", build_key);
@@ -245,6 +244,10 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
     if (!ignore_precompiled && build_env.firmware_precompiled) {
+        log_info(
+            tt::LogBuildKernels,
+            "Using pre-compiled firmware from: {}",
+            build_env.build_env.get_firmware_binary_root());
         return;
     }
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
