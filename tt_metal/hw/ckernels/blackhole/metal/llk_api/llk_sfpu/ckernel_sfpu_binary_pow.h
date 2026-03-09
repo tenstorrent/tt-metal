@@ -7,6 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -148,99 +150,78 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat pow) {
+sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
     // 2) Compute base**pow = 2**(pow * log2(base))
 
-    // Step 1: Compute log2(base)
+    // Step 1: Compute log2(base) using improved log
     // Normalize base to calculation range
-    sfpi::vFloat abs_base = sfpi::abs(base);        // set base as positive
-    sfpi::vFloat x = sfpi::setexp(abs_base, 127);   // set exp to exp bias (put base in range of 1-2)
+    sfpi::vFloat abs_base = sfpi::abs(base);
+    sfpi::vFloat m = sfpi::setexp(abs_base, 127);
+    sfpi::vInt exp = sfpi::exexp(abs_base);
 
-    // 5th degree polynomial approx - REMEZ algorithm over [1,2]
-    sfpi::vFloat series_result =
-        x * (x * (x * (x * (x * 0.03101577f - 0.28807408f) + 1.1286426f) - 2.45830873f) + 3.5271965f) - 1.94046315f;
-
-    // Convert exponent to float
-    sfpi::vInt exp = sfpi::exexp(base);
-    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
+    // Range reduction: ensure m in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
+    constexpr float SQRT2 = 1.4142135381698608f;
+    // If m >= sqrt(2), divide by 2 and increment exponent
+    v_if(m >= SQRT2) {
+        // m = m * 0.5f;  // Divide by 2
+        m = m * 0.5f;
+        exp = exp + 1;
+    }
     v_endif;
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
 
-    // De-normalize to original range
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
-    sfpi::vFloat log2_result = exp_f32 + series_result * vConst1Ln2;  // exp correction: ln(1+x) + exp*ln(2)
+    // Transform to z = (m - 1) / (m + 1)
+    sfpi::vFloat m_plus_1 = m + sfpi::vConst1;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
+    sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
+    // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
+    // t*y).
+    sfpi::vFloat recip = sfpi::vConst1 - 0.2426406871192851f * m_plus_1;
+    recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
+    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
+    sfpi::vFloat z = m_minus_1 * recip;
 
-    // Step 2: Compute base**pow = 2**(pow * log2(base))
-    // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then output should be 0
-    // However, intermediary values can overflow, which leads to output increasing again instead of
-    // staying at 0.
-    // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
+    // Compute z**2 for polynomial evaluation
+    sfpi::vFloat z2 = z * z;
+    // Polynomial approximation using odd powers
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        z2, sfpi::vConst1, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
+    sfpi::vFloat ln_m = 2.0f * (z * p);
+
+    sfpi::vInt sign_bit = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(exp) >> 31);  // 0 or 1
+    sfpi::vInt exp_sign = sfpi::vInt(0) - sign_bit;    // 0 or 0xFFFFFFFF (arithmetic right shift equivalent)
+    sfpi::vInt exp_abs = (exp ^ exp_sign) - exp_sign;  // Take two's complement if negative exponent
+    // setsgn reads sign from bit 31, so use exp_sign directly (0 or 0xFFFFFFFF) not (exp_sign & 1)
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(sfpi::setsgn(exp_abs, exp_sign), 0);
+
+    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
+    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
+
+    // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
+    // 0**+inf, N**-inf).
     sfpi::vFloat z_f32 = pow * log2_result;
     const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
 
-    // The paper relies on the following formula (c.f. Sections 1 and 5):
-    // z = (bias + x * log2(a)) * N_m; where:
-    // N_m = 2**23
-    // bias = 0x3f800000
+    // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
+    constexpr float LN2 = 0.693147180559945309f;
+    sfpi::vFloat y = _sfpu_exp_f32_accurate_(z_f32 * LN2);
 
-    // In this case, we transform the formula to:
-    // z = (bias) * N_m + (x * log2(a)) * N_m
-    // where (bias + N_m) = 0x3f800000
-    // and (x * log2(a)) * N_m = addexp(z_f32, 23)
-
-    // Notes:
-    // - N_m being a power of 2 ensures equivalent results
-    // - addexp(z_f32, 23) is used because it translates to a single-cycle SFPDIVP2
-    //   instruction with immediate operand (i.e. no extra register used).
-    //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
-
-    z_f32 = sfpi::addexp(z_f32, 23);  // equal to multiplying by 2**23
-    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
-
-    sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
-
-    // 61f
-    // Normalize mantissa field into a fractional value in [0,1)
-    sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
-
-    // Evaluate degree-6 polynomial coefficients using Horner’s rule
-    // Note: Unlike exp_21f, in exp_61f all polynomial coefficients are floating-point values.
-    // In exp_21f, the paper mixes integer and float constants to perform bit-level manipulation of the exponent and
-    // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
-    // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
-    // purely mathematical without integer-based operations.
-    sfpi::vFloat poly =
-        ((((((0.0002170391f * frac) + 0.001243946f) * frac + 0.0096788315f) * frac + 0.055483369f) * frac +
-          0.24022982f) *
-             frac +
-         0.69314699f) *
-            frac +
-        1.0000000018f;
-
-    // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
-
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
-
-    // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
-    // Check valid base range
-    sfpi::vInt pow_int =
-        sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
-
-    // Division by 0 when base is 0 and pow is negative => set to NaN
+    // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     v_if((abs_base == 0.f) && pow < 0.f) {
         y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
     }
     v_endif;
 
     v_if(base < 0.0f) {  // negative base
+        // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
+        // Check valid base range
+        sfpi::vInt pow_int =
+            sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
+        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
@@ -269,7 +250,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFl
 // is_fp32_dest_acc_en == true
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_61f_(base, pow);
+    return _sfpu_binary_power_f32_(base, pow);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
