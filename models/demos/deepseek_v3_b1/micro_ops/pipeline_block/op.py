@@ -88,7 +88,24 @@ class PipelineBlock:
 
         token_size_bytes = 64
 
-        token_size_bytes = 64  # Hardcode for now - don't expect this to change
+        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        if initialize_loopback:
+            assert len(pipeline_config) == self.num_procs + 1
+
+        self.is_pipeline_start = self.my_mesh_id == 0
+        self.is_last_stage = self.my_mesh_id == self.num_procs - 1
+        self.has_exit = not self.is_last_stage or initialize_loopback
+        self.has_d2h = (self.is_last_stage and not initialize_loopback) or (
+            self.is_pipeline_start and initialize_loopback
+        )
+
+        self.host_io = None
+        self.h2d_socket = None
+        self.d2h_socket = None
+        self.entry_socket_interface = None
+        self.exit_socket_interface = None
+
+        token_size_bytes = 64
 
         if self.is_pipeline_start:
             self._init_first_stage(

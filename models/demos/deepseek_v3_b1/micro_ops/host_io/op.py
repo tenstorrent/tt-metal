@@ -39,10 +39,10 @@ from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 class HostInterface:
     def __init__(
         self,
+        h2d_socket,
+        d2h_socket,
         h2d_page_size,
         d2h_page_size,
-        h2d_socket=None,
-        d2h_socket=None,
         core_to_core_socket_buffer_size=1024,
         h2d_downstream_core=None,
         d2h_upstream_core=None,
@@ -70,12 +70,12 @@ class HostInterface:
         self.core_to_core_socket_buffer_size = core_to_core_socket_buffer_size
         self.embedding_tensor = embedding_tensor
 
-        if h2d_downstream_core is not None:
-            assert (
-                self.h2d_socket is not None
-            ), "Expected H2D Socket to be provided when H2D Downstream Core is provided"
-        if d2h_upstream_core is not None:
-            assert self.d2h_socket is not None, "Expected D2H Socket to be provided when D2H Upstream Core is provided"
+        # if h2d_downstream_core is not None:
+        #     assert (
+        #         self.h2d_socket is not None
+        #     ), "Expected H2D Socket to be provided when H2D Downstream Core is provided"
+        # if d2h_upstream_core is not None:
+        #     assert self.d2h_socket is not None, "Expected D2H Socket to be provided when D2H Upstream Core is provided"
 
         self.h2d_downstream_core = h2d_downstream_core
         self.d2h_upstream_core = d2h_upstream_core
@@ -165,8 +165,8 @@ class HostInterface:
                 and self.embedding_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
                 and self.embedding_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
-            # Tensor is DRAM interleaved, and row major. Page size is inner dim (2D: shape[1], 4D: shape[3]).
-            self.embedding_page_size = self.embedding_tensor.shape[-1] * dtype_size(self.embedding_tensor.dtype)
+            # Tensor is DRAM interleaved, and row major. Page size is inner dim stride.
+            self.embedding_page_size = self.embedding_tensor.shape[3] * dtype_size(self.embedding_tensor.dtype)
             self.embedding_cb_index = 2 if embedding_cb_index is None else embedding_cb_index
 
         self.fabric_packet_header_cb_index = (
