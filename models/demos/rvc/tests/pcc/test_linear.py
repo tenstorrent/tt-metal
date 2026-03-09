@@ -11,7 +11,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_linear(device):
+@pytest.mark.parametrize("activation", [None, "relu"])
+def test_linear(device, activation):
     torch.manual_seed(0)
 
     batch_size = 1
@@ -23,12 +24,15 @@ def test_linear(device):
 
     torch_input = torch.randn(batch_size, input_length, in_features, dtype=torch.float32)
     torch_output = torch_linear(torch_input)
+    if activation == "relu":
+        torch_output = torch.relu(torch_output)
 
     tt_linear = Linear(
         device=device,
         in_features=in_features,
         out_features=out_features,
         dtype=ttnn.bfloat16,
+        activation=activation,
     )
     parameters = {
         "proj.linear.weight": torch_linear.weight,

@@ -22,6 +22,7 @@ class Linear:
         dtype: ttnn.DataType | None = None,
         memory_config: ttnn.MemoryConfig | None = None,
         compute_config: ttnn.DeviceComputeKernelConfig | None = None,
+        activation: str | ttnn.UnaryWithParam | None = None,
     ) -> None:
         self.device = device
         self.in_features = in_features
@@ -31,6 +32,7 @@ class Linear:
         self.dtype = dtype
         self.memory_config = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
         self.compute_config = compute_config
+        self.activation = activation
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], key: str, prefix: str = "") -> None:
         base_key = f"{prefix}{key}" if prefix else key
@@ -77,6 +79,7 @@ class Linear:
             bias=bias,
             # memory_config=self.memory_config,
             dtype=self.dtype,
+            activation=self.activation,
             compute_kernel_config=self.compute_config,
         )
         _w = self.weight_tensor

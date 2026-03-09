@@ -111,6 +111,7 @@ class Encoder:
         kernel_size: int = 1,
         window_size: int = 10,
     ) -> None:
+        print(f"kernel_size: {kernel_size}, window_size: {window_size}")
         self.n_layers = int(n_layers)
         self.attn_layers = [
             MultiHeadAttention(
@@ -404,7 +405,9 @@ class SourceModuleHnNSF:
     ) -> None:
         self.device = device
         self.l_sin_gen = SineGen(device, sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod)
-        self.l_linear = Linear(device=device, in_features=harmonic_num + 1, out_features=1, dtype=ttnn.bfloat16)
+        self.l_linear = Linear(
+            device=device, in_features=harmonic_num + 1, out_features=1, dtype=ttnn.bfloat16, activation="tanh"
+        )
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.l_linear.load_parameters(parameters=parameters, key="l_linear", prefix=prefix)
@@ -412,9 +415,7 @@ class SourceModuleHnNSF:
     def __call__(self, x: ttnn.Tensor, upp: int = 1) -> ttnn.Tensor:
         sine_wavs = self.l_sin_gen(x, upp)
         tt_linear = self.l_linear(sine_wavs)
-        tt_linear0 = ttnn.to_layout(tt_linear, ttnn.TILE_LAYOUT)
-        tt_tanh = ttnn.tanh(tt_linear0)
-        return ttnn.to_layout(tt_tanh, ttnn.ROW_MAJOR_LAYOUT)
+        return tt_linear
 
 
 class GeneratorNSF:
