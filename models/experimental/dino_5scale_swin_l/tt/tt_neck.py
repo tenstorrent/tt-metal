@@ -19,7 +19,6 @@ P6 conv uses BLOCK_SHARDED to avoid NOC burst size limit with 1536 in_channels.
 
 import math
 
-import torch
 import ttnn
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
@@ -122,19 +121,33 @@ class TtDINONeck:
                 torch_recip = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, self.gn_core_grid)
                 inner_dim = torch_recip.shape[1]
                 page_bytes = inner_dim * 4
+                n_rows = torch_recip.shape[0]
                 if page_bytes % 64 != 0:
                     aligned_inner = ((page_bytes + 63) // 64 * 64) // 4
-                    padded = torch.zeros(torch_recip.shape[0], aligned_inner, dtype=torch.float32)
-                    padded[:, :inner_dim] = torch_recip
-                    torch_recip = padded
-
-                recip_tt = ttnn.from_torch(
-                    torch_recip,
-                    dtype=ttnn.DataType.FLOAT32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                    recip_tt = ttnn.from_torch(
+                        torch_recip,
+                        dtype=ttnn.DataType.FLOAT32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    zeros_tt = ttnn.zeros(
+                        (n_rows, aligned_inner - inner_dim),
+                        dtype=ttnn.DataType.FLOAT32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    recip_tt = ttnn.concat([recip_tt, zeros_tt], dim=1)
+                    ttnn.deallocate(zeros_tt)
+                else:
+                    recip_tt = ttnn.from_torch(
+                        torch_recip,
+                        dtype=ttnn.DataType.FLOAT32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
                 shard_cfg = ttnn.create_sharded_memory_config(
                     shape=list(recip_tt.shape),
                     core_grid=self.gn_core_grid,
