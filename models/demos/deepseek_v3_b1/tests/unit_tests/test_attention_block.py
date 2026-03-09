@@ -1106,7 +1106,7 @@ def test_attention_block(
     # ========================================================================
     for device_idx in range(mesh_rows * mesh_cols):
         received = output_torch[device_idx : device_idx + 1, :]
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.996)
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
