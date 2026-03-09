@@ -553,7 +553,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base")>;
+                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
+                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization

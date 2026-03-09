@@ -286,8 +286,7 @@ def test_bcast_moe_reduce_pipeline(
 
         # Reduce output tensor (single-core sharded)
         compute_grid = mesh_device.compute_with_storage_grid_size()
-        reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
         reduce_output_shard_spec = ttnn.ShardSpec(
             reduce_output_shard_grid,
             (1, final_output_total_width),
@@ -782,8 +781,7 @@ def test_persistent_mode_pipeline(
                 reduce_intermediate_tensors.append(intermediate_tensor)
 
             compute_grid = mesh_device.compute_with_storage_grid_size()
-            reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-            reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+            reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
             reduce_output_shard_spec = ttnn.ShardSpec(
                 reduce_output_shard_grid,
                 (1, final_output_total_width),
