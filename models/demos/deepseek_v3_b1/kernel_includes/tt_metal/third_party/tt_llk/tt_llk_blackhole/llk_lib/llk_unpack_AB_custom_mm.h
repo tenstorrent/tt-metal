@@ -28,7 +28,7 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1) {
     if (post1) {
-        // This nop is not actually used, it just ensures both tunings are of the same length when recoding
+        // This nop is not actually used, it just ensures both tunings are of the same length when recording
         // When playing back the replay it is omitted
         TTI_NOP;
     }
@@ -200,8 +200,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
+    const std::uint32_t kt_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -252,5 +251,5 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);
 }
