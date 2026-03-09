@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterleavedProgramFactory::create(
+TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultProgramFactory::create(
     const ttnn::prim::TilizeParams& operation_attributes,
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
@@ -75,7 +75,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-        "reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "reader_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
@@ -181,7 +181,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
-void TilizeMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+void TilizeMultiCoreDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::TilizeParams& /*operation_attributes*/,
     const ttnn::prim::TilizeInputs& tensor_args,

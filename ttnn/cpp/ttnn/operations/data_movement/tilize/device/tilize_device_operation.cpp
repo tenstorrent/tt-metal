@@ -4,7 +4,7 @@
 
 #include "tilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
@@ -24,7 +24,7 @@ bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    if (input_tensor.memory_config().nd_shard_spec().has_value()) {
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         return false;
     }
 
@@ -150,24 +150,19 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
                            (operation_attributes.sub_core_grids.has_value() &&
                             (operation_attributes.sub_core_grids.value().num_cores() < 2));
     if (use_single_core) {
-        log_info(tt::LogOp, "[DEVICE] Using single core program factory");
         return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
             if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-                log_info(tt::LogOp, "[DEVICE] Using multi core width sharded program factory");
                 return ttnn::prim::TilizeMultiCoreWidthShardedProgramFactory{};
             }
-            log_info(tt::LogOp, "[DEVICE] Using multi core sharded program factory");
             return ttnn::prim::TilizeMultiCoreShardedProgramFactory{};
         }
-        log_info(tt::LogOp, "[DEVICE] Using multi core interleaved program factory");
-        return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
+        return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        log_info(tt::LogOp, "[DEVICE] Using multi core block program factory");
         return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
@@ -195,12 +190,10 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            log_info(tt::LogOp, "[DEVICE] Using multi core block program factory");
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }
-    log_info(tt::LogOp, "[DEVICE] Using multi core interleaved program factory");
-    return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
+    return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
 }
 
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
