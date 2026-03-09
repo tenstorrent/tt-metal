@@ -59,6 +59,12 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
 
+    if (fp32_dest_acc_en) {
+        TT_FATAL(
+            out_subblock_h * out_subblock_w <= 4,
+            "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+    }
+
     uint32_t B = get_batch_size(ashape);
     uint32_t M = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
     uint32_t K = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
@@ -67,6 +73,11 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     const auto ashape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = transpose_a ? 0 : ashape_logical[-1] % in0_tile.get_width();
     const auto in0_last_ktile_h = transpose_a ? ashape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     // ---- Derived parameters ----
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
@@ -164,6 +175,8 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
+    uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
+    TT_FATAL(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
 
     // ---- Build ProgramDescriptor ----
     ProgramDescriptor desc;

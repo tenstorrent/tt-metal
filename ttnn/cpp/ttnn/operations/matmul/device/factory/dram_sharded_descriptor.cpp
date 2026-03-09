@@ -137,12 +137,20 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "packer_l1_acc: {}", packer_l1_acc);
+
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = 1;
     uint32_t K = ashape[-1] / in0_tile_shape[1];
     uint32_t N = bshape[-1] / in1_tile_shape[1];
     uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile_shape[1];
+
+    log_debug(tt::LogOp, "K: {}, N: {}", K, N);
+    log_debug(tt::LogOp, "per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
 
     TT_FATAL(K % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
 
@@ -240,6 +248,14 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
         per_core_N_compute = out_subblock_w * num_subblock_w_per_core_N;
     }
 
+    log_debug(
+        tt::LogOp,
+        "per_core_M: {}, per_core_N_compute: {}, per_core_N_in1_sender: {}",
+        per_core_M,
+        per_core_N_compute,
+        per_core_N_in1_sender);
+    log_debug(tt::LogOp, "out_subblock_h: {}, out_subblock_w: {}", out_subblock_h, out_subblock_w);
+
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
@@ -326,14 +342,26 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     CoreRangeSet mcast_senders = CoreRangeSet(input_all_storage_cores_set);
     CoreRangeSet mcast_receivers = CoreRangeSet(all_worker_cores_set);
 
+    for ([[maybe_unused]] auto core : corerange_to_cores(mcast_senders)) {
+        log_debug(tt::LogOp, "mcast_senders: {}", core);
+    }
+    for ([[maybe_unused]] auto core : corerange_to_cores(mcast_receivers)) {
+        log_debug(tt::LogOp, "mcast_receivers: {}", core);
+    }
+
     // All cores = senders ∪ receivers
     std::set<CoreRange> all_cores_set;
     all_cores_set.insert(mcast_senders.ranges().begin(), mcast_senders.ranges().end());
     all_cores_set.insert(mcast_receivers.ranges().begin(), mcast_receivers.ranges().end());
     CoreRangeSet all_cores = CoreRangeSet(all_cores_set);
 
+    for ([[maybe_unused]] auto core : corerange_to_cores(all_cores)) {
+        log_debug(tt::LogOp, "all_cores: {}", core);
+    }
+
     // Grid bounding box
     CoreRange bounding_box = all_cores.bounding_box();
+    log_debug(tt::LogOp, "bounding_box: {}", bounding_box);
     std::set<CoreRange> bounding_box_set;
     bounding_box_set.insert(bounding_box);
     CoreRangeSet all_cores_in_rect_grid(bounding_box_set);
@@ -364,6 +392,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
     uint32_t num_blocks_per_shard = num_blocks / input_all_storage_cores_vec.size();
+    log_debug(tt::LogOp, "num_blocks_per_shard: {}", num_blocks_per_shard);
     if (per_core_M > 1) {
         TT_FATAL(
             num_blocks_per_shard == 1,
@@ -481,6 +510,8 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     }
 
     // -- Circular Buffers --
+    log_debug(tt::LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
+
     // CB0: src0 (in0)
     {
         CBDescriptor cb;
@@ -492,6 +523,13 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             .page_size = in0_single_tile_size,
             .tile = TileDescriptor(in0_tile),
         });
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            tt::CBIndex::c_0,
+            in0_single_tile_size,
+            in0_CB_size / in0_single_tile_size,
+            in0_CB_size);
         desc.cbs.push_back(std::move(cb));
     }
     // CB1: src1 (in1)
@@ -505,6 +543,13 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             .page_size = in1_single_tile_size,
             .tile = TileDescriptor(in1_tile),
         });
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            tt::CBIndex::c_1,
+            in1_single_tile_size,
+            in1_CB_size / in1_single_tile_size,
+            in1_CB_size);
         desc.cbs.push_back(std::move(cb));
     }
     // CB2: sharded in0 (backed by in0_buffer)
@@ -519,6 +564,13 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             .tile = TileDescriptor(in0_tile),
         });
         cb.buffer = in0_buffer;
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            tt::CBIndex::c_2,
+            in0_single_tile_size,
+            in2_CB_size / in0_single_tile_size,
+            in2_CB_size);
         desc.cbs.push_back(std::move(cb));
     }
     // CB4 & CB5: output and interm0
@@ -552,7 +604,15 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
                 });
                 desc.cbs.push_back(std::move(cb));
             }
+            log_debug(
+                tt::LogOp,
+                "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+                interm0_cb_index,
+                interm0_single_tile_size,
+                interm0_CB_size / interm0_single_tile_size,
+                interm0_CB_size);
         } else {
+            log_debug(tt::LogOp, "inplace interm and output cb");
             // Shared buffer for output and interm0
             CBDescriptor cb;
             cb.total_size = out_CB_size;
@@ -571,6 +631,13 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             });
             desc.cbs.push_back(std::move(cb));
         }
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            output_cb_index,
+            output_single_tile_size,
+            out_CB_size / output_single_tile_size,
+            out_CB_size);
     }
     // CB6: output reshard (backed by out_buffer)
     {
@@ -597,6 +664,13 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             .page_size = bias_single_tile_size,
             .tile = TileDescriptor(bias_tile),
         });
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+            tt::CBIndex::c_3,
+            bias_single_tile_size,
+            in3_CB_size / bias_single_tile_size,
+            in3_CB_size);
         desc.cbs.push_back(std::move(cb));
     }
 
@@ -762,6 +836,8 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
     uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
+    log_debug(tt::LogOp, "per_core_N_storage: {}", per_core_N_storage);
+    log_debug(tt::LogOp, "num_cores_written_back: {}", num_cores_written_back);
     uint32_t total_tensor_width_written_back = 0;
 
     // in1 sender/writer: worker core runtime args (complex resharding logic)

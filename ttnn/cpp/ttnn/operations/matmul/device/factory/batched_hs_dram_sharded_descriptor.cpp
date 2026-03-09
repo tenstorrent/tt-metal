@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -157,6 +158,10 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
         N);
     TT_FATAL(K % in0_block_w == 0, "K ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
 
+    log_debug(tt::LogOp, "Batch-sharded DRAM matmul");
+    log_debug(tt::LogOp, "B: {}, M: {}, K: {}, N: {}", B, M, K, N);
+    log_debug(tt::LogOp, "per_core_M: {}, per_core_N: {}, in0_block_w: {}", per_core_M, per_core_N, in0_block_w);
+
     // ========================================================================
     // Core setup and parameter computation
     // ========================================================================
@@ -178,6 +183,37 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     uint32_t num_workers = all_worker_cores_ordered.size();
     uint32_t num_input_storage_cores = input_storage_cores_ordered.size();
     uint32_t num_output_storage_cores = output_storage_cores_ordered.size();
+
+    log_debug(tt::LogOp, "=== Worker cores (optimal DRAM readers) ===");
+    for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
+        log_debug(
+            tt::LogOp,
+            "  Worker/DRAM bank {} -> core ({}, {})",
+            i,
+            all_worker_cores_ordered[i].x,
+            all_worker_cores_ordered[i].y);
+    }
+    log_debug(tt::LogOp, "=== Input storage cores (in0 L1 shards) ===");
+    for (uint32_t i = 0; i < input_storage_cores_ordered.size(); ++i) {
+        log_debug(
+            tt::LogOp,
+            "  Input shard {} -> core ({}, {})",
+            i,
+            input_storage_cores_ordered[i].x,
+            input_storage_cores_ordered[i].y);
+    }
+    log_debug(tt::LogOp, "=== Output storage cores (output L1 shards) ===");
+    for (uint32_t i = 0; i < output_storage_cores_ordered.size(); ++i) {
+        log_debug(
+            tt::LogOp,
+            "  Output shard {} -> core ({}, {})",
+            i,
+            output_storage_cores_ordered[i].x,
+            output_storage_cores_ordered[i].y);
+    }
+    log_debug(tt::LogOp, "num_workers (DRAM banks): {}", num_workers);
+    log_debug(tt::LogOp, "num_input_storage_cores: {}", num_input_storage_cores);
+    log_debug(tt::LogOp, "num_output_storage_cores: {}", num_output_storage_cores);
 
     // Currently, both input and output storage cores must match the number of workers (DRAM banks).
     // This is because the factory uses a 1:1 mapping: worker[i] reads from input_storage[i] and
@@ -253,6 +289,13 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     CoreRangeSet all_cores(all_cores_set);
     CoreRange bounding_box = all_cores.bounding_box();
     CoreRangeSet all_cores_in_rect_grid({bounding_box});
+    log_debug(
+        tt::LogOp,
+        "Bounding box: ({}, {}) to ({}, {})",
+        bounding_box.start_coord.x,
+        bounding_box.start_coord.y,
+        bounding_box.end_coord.x,
+        bounding_box.end_coord.y);
 
     uint32_t num_cores = num_workers;
     uint32_t num_dram_banks = device->num_dram_channels();
@@ -263,6 +306,13 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
         "Number of worker cores ({}) cannot exceed number of DRAM banks ({})",
         num_cores,
         num_dram_banks);
+
+    log_debug(
+        tt::LogOp,
+        "num_cores: {}, num_dram_banks: {}, batches_per_core: {}",
+        num_cores,
+        num_dram_banks,
+        batches_per_core);
 
     // Subblock parameters
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
@@ -327,6 +377,13 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     uint32_t in0_batch_stride_bytes = per_core_M * K * in0_single_tile_size;
     uint32_t in1_batch_stride_bytes = K * per_core_N * in1_single_tile_size;
     uint32_t out_batch_stride_bytes = per_core_M * per_core_N * output_single_tile_size;
+
+    log_debug(
+        tt::LogOp,
+        "in0_batch_stride_bytes: {}, in1_batch_stride_bytes: {}, out_batch_stride_bytes: {}",
+        in0_batch_stride_bytes,
+        in1_batch_stride_bytes,
+        out_batch_stride_bytes);
 
     // ========================================================================
     // Build ProgramDescriptor

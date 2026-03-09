@@ -346,6 +346,13 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
+    TT_FATAL(
+        out_block_h % out_subblock_h == 0 and out_block_h >= out_subblock_h,
+        "out_block_h must be multiple of out_subblock_h");
+    TT_FATAL(
+        out_block_w % out_subblock_w == 0 and out_block_w >= out_subblock_w,
+        "out_block_w must be multiple of out_subblock_w");
+
     uint32_t num_dram_banks = 0;
     uint32_t per_core_N_storage = 0;
     uint32_t batches_per_bank = 0;
