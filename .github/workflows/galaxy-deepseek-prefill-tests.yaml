@@ -1,18 +1,17 @@
 name: "(Galaxy) DeepSeek Prefill tests"
 
 on:
-  push:
-    branches:
-      - ddjekic/deepseek_moe_gate_prefill
+  # push:
+  #   branches:
+  #     - ddjekic/deepseek_moe_gate_prefill
   workflow_dispatch:
     inputs:
       test-type:
         description: 'Select which tests to run'
-        required: false
+        required: true
         type: choice
         options:
           - all
-          - unit
           - module
         default: 'all'
       platform:
