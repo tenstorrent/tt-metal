@@ -80,7 +80,7 @@ public:
      *
      * @param graph_name Name to identify this graph in the output
      */
-    void print_adjacency_map(const std::string& graph_name = "Graph") const;
+    void print_adjacency_map(const std::string& graph_name = "Graph", bool quiet_mode = false) const;
 
 private:
     AdjacencyMap adj_map_;
