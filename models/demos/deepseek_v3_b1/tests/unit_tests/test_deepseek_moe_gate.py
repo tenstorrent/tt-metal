@@ -14,10 +14,7 @@ from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekM
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
 def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
-    """
-    Test TTNN Deepseek Moe Gate operation on a 32x32 tile
-    In the initial op, the tile size is 16x16, but to
-    """
+    """Test TTNN Deepseek Moe Gate operation on a 32x32 tile"""
 
     # Tensor dimensions - full 32x32 tile
     input_shape = (batch_size, 8, 32)
