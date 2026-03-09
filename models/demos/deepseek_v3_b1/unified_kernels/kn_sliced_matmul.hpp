@@ -110,16 +110,19 @@ struct KNSlicedMatmul {
             reconfig_data_format<false, true>(args.weights_cb, args.act_cb);
             pack_reconfig_data_format<true>(args.out_cb);
 
+            if (args.weights_address_override > 0) {
+                UNPACK(({ DPRINT << "ADDR" << args.weights_address_override << ENDL(); }));
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.weights_cb, args.weights_address_override); }));
+                UNPACK(({ DPRINT << "OVERRIDDEN" << get_local_cb_interface(args.weights_cb).fifo_rd_ptr << ENDL(); }));
+            } else {
+                cb_wait_front(args.weights_cb, args.k_per_core);
+            }
+
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                 args.act_cb, args.weights_cb, args.out_cb, out_w);
 
             // Wait for all activation tiles and weight tiles
             cb_wait_front(args.act_cb, args.act_total_tiles);
-            if (args.weights_address_override > 0) {
-                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.weights_cb, args.weights_address_override); }));
-            } else {
-                cb_wait_front(args.weights_cb, args.k_per_core);
-            }
 
             // Reserve output tile
             cb_reserve_back(args.out_cb, out_w);

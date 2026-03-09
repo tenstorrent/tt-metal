@@ -350,17 +350,17 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
         }
-        if constexpr (Core::Shared::is_compute_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("shared_gu_weights_cb"),
-                get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
-        }
-        if constexpr (Core::Shared::is_mcast_receiver_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("shared_down_matmul_in1"),
-                get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles") *
-                    get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core"));
-        }
+        // if constexpr (Core::Shared::is_compute_core) {
+        //     unified_kernels::setup_sharded_buffer(
+        //         get_named_compile_time_arg_val("shared_gu_weights_cb"),
+        //         get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
+        // }
+        // if constexpr (Core::Shared::is_mcast_receiver_core) {
+        //     unified_kernels::setup_sharded_buffer(
+        //         get_named_compile_time_arg_val("shared_down_matmul_in1"),
+        //         get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles") *
+        //             get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core"));
+        // }
     };
 #ifndef RECONFIG_MOE_CBS
     setup_all_sharded_buffers();
@@ -822,6 +822,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gu_k_offset"),
                 get_named_compile_time_arg_val("shared_gu_k_per_core"),
                 get_named_compile_time_arg_val("shared_gu_act_total_tiles"),
+                get_named_compile_time_arg_val("shared_gu_weights_cb_addr"),
             };
 
             // Gather (compute — no-op for TRISC)
@@ -851,6 +852,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_down_matmul_in1"),
                 get_named_compile_time_arg_val("shared_down_matmul_out"),
                 get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles"),
+                get_named_compile_time_arg_val("shared_down_matmul_weights_cb_addr"),
             };
 
             // Residual Add (compute)

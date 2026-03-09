@@ -1953,16 +1953,13 @@ class MoeSharedExpertOp:
         act_total_tiles = num_tiles_k
         weights_num_pages = k_per_core
 
-        cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
-        print("Check")
-        print(ttnn.get_cb_address(cb_weights_descriptor))
-        print(weights_tensor.buffer_address())
+        # cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
 
         return {
             "k_per_core": k_per_core,
             "act_total_tiles": act_total_tiles,
             "weights_num_pages": weights_num_pages,
-            "cb_weights_descriptor": cb_weights_descriptor,
+            "cb_weights_descriptor": None,
             "weights_cb_addr": weights_tensor.buffer_address(),
             "cb_out_descriptor": None,
         }
@@ -2268,11 +2265,15 @@ class MoeSharedExpertOp:
 
         # Tensor-backed CBs (format from weight tensors)
         shared_gate_up_weights_tensor = shared_gate_weights_overlapped.fused_tensor
-        shared_gu_weights_cb = cb_id_context.get_cb_id(
-            shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
-        )
+        # shared_gu_weights_cb = cb_id_context.get_cb_id(
+        #     shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
+        # )
         shared_down_matmul_in1_cb = cb_id_context.get_cb_id(
             shared_down_weights_tensor.dtype, ttnn.TileDescriptor(shared_down_weights_tensor.get_tile())
+        )
+        shared_gu_weights_cb = shared_down_matmul_in1_cb
+        shared_weights_core_ranges = shared_gate_up_weights_tensor.memory_config().shard_spec.grid.merge(
+            shared_gate_up_weights_tensor.memory_config().shard_spec.grid
         )
 
         # ==================================================================
@@ -2386,6 +2387,7 @@ class MoeSharedExpertOp:
             out_cb=shared_down_matmul_out_cb,
             weights_overlapped=shared_down_weights_tensor,
             k_num_tiles=n_parallel,
+            weights_core_ranges_override=shared_weights_core_ranges,
         )
 
         # ==================================================================
@@ -2589,6 +2591,7 @@ class MoeSharedExpertOp:
             # Gate/Up matmul
             ("shared_gu_act_cb", rmsnorm_mcast_dst_cb),
             ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+            ("shared_gu_weights_cb_addr", shared_ctx.gu_matmul_params["weights_cb_addr"]),
             ("shared_gu_out_cb", shared_ctx.gu_out_cb),
             ("shared_gu_k_per_core", shared_ctx.gu_matmul_params["k_per_core"]),
             ("shared_gu_act_total_tiles", shared_ctx.gu_matmul_params["act_total_tiles"]),
@@ -2605,6 +2608,7 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_out", shared_ctx.down_matmul_params["out_cb"]),
             ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
             ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
+            ("shared_down_matmul_weights_cb_addr", shared_ctx.down_matmul_params["weights_cb_addr"]),
             # Residual add
             ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
             ("shared_residual_add_in1", shared_ctx.residual_cb),  # residual (pre-loaded bias)
@@ -2618,7 +2622,7 @@ class MoeSharedExpertOp:
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
         return [
-            shared_ctx.gu_matmul_params["cb_weights_descriptor"],
+            # shared_ctx.gu_matmul_params["cb_weights_descriptor"],
             shared_ctx.gu_matmul_params["cb_out_descriptor"],
             shared_ctx.gated_reduce_params["cb_group1_descriptor"],
             shared_ctx.gated_reduce_params["cb_group2_descriptor"],
@@ -2934,6 +2938,7 @@ class MoeOp:
         output_tensor=None,
         k_num_tiles=0,
         fused_activation=0,
+        weights_core_ranges_override=None,
     ):
         """
         Set up parameters for an SRAM matmul operation.
@@ -2961,6 +2966,8 @@ class MoeOp:
             weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
                 in1_cb, weights_overlapped, fused_tensor_device0
             )
+            if weights_core_ranges_override is not None:
+                weights_cb_descriptor.core_ranges = weights_core_ranges_override
         else:
             weights_device0 = ttnn.get_device_tensors(weights_overlapped)[0]
             tile = weights_device0.get_tile()
@@ -2968,7 +2975,8 @@ class MoeOp:
             out_w = shard_shape[1] // tile.tile_shape[1]
             core_grid = weights_overlapped.memory_config().shard_spec.grid
             weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_device0)
-
+            if weights_core_ranges_override is not None:
+                weights_cb_descriptor.core_ranges = weights_core_ranges_override
         output_cb_descriptor = None
         if output_tensor is not None:
             output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
@@ -2983,6 +2991,7 @@ class MoeOp:
             "core_grid": core_grid,
             "num_cores": core_grid.num_cores(),
             "weights_cb_descriptor": weights_cb_descriptor,
+            "weights_cb_addr": ttnn.get_cb_address(weights_cb_descriptor),
             "output_cb_descriptor": output_cb_descriptor,
         }
 
