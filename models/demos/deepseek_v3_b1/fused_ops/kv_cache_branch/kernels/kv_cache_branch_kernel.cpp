@@ -81,7 +81,6 @@ void kernel_main() {
         .cos_tensor_address = cos_tensor_address,
         .sin_tensor_address = sin_tensor_address,
         .position_ids_tensor_address = position_ids_tensor_address,
-        .trans_mat_cb = trans_mat_cb,
     };
 
 // ============================================================================

@@ -22,7 +22,7 @@ class CircularBufferIdManager:
     cross-context equality comparisons are between the same object type.
     """
 
-    NUM_CIRCULAR_BUFFERS = 64
+    NUM_CIRCULAR_BUFFERS = 128
 
     def __init__(self):
         self._id_to_format: dict[int, tuple] = {}
@@ -42,6 +42,7 @@ class CircularBufferIdManager:
 
         for cb_id, fmt_key in self._id_to_format.items():
             if fmt_key == key and cb_id not in exclude:
+                print(f"Reusing CB ID {cb_id} for data format {data_format} and tile {tile}")
                 return cb_id
 
         cb_id = self._next_id
@@ -50,6 +51,7 @@ class CircularBufferIdManager:
         self._next_id += 1
         # Make a copy of the tile descriptor to avoid dependencies
         self._id_to_format[cb_id] = (data_format, ttnn.TileDescriptor(tile))
+        print(f"Allocated CB ID {cb_id}")
         return cb_id
 
     class Context:
@@ -64,6 +66,7 @@ class CircularBufferIdManager:
             self._used_ids: set[int] = set()
 
         def get_cb_id(self, data_format: ttnn.DataType, tile: ttnn.TileDescriptor) -> int:
+            print(f"Getting CB ID for data format {data_format} and tile {tile.height}x{tile.width} {tile.transpose}")
             cb_id = self._manager._allocate_id(data_format, tile, self._used_ids)
             self._used_ids.add(cb_id)
             return cb_id
@@ -135,6 +138,7 @@ def cb_descriptor_from_overlapped_tensors(
     cb_index: int,
     overlapped_list: list[OverlappedTensor],
     fused_tensor_device: ttnn.Tensor,
+    core_ranges: ttnn.CoreRangeSet = None,
 ) -> ttnn.CBDescriptor:
     """Create a single CBDescriptor spanning multiple OverlappedTensors in the same fused buffer.
 
@@ -144,16 +148,17 @@ def cb_descriptor_from_overlapped_tensors(
     assert len(overlapped_list) > 0
 
     first = overlapped_list[0]
-    merged_core_ranges = first.core_range_set
-    for ot in overlapped_list[1:]:
-        assert ot.dtype == first.dtype
-        assert ot.tile_shape == first.tile_shape
-        merged_core_ranges = merged_core_ranges.merge(ot.core_range_set)
+    if core_ranges is None:
+        core_ranges = first.core_range_set
+        for ot in overlapped_list[1:]:
+            assert ot.dtype == first.dtype
+            assert ot.tile_shape == first.tile_shape
+            core_ranges = core_ranges.merge(ot.core_range_set)
 
     cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
         cb_index,
         fused_tensor_device,
-        core_ranges=merged_core_ranges,
+        core_ranges=core_ranges,
     )
     tile = ttnn.Tile(first.tile_shape)
     cb_desc.format_descriptors = [

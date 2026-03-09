@@ -179,6 +179,7 @@ void kernel_main() {
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
         .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
     };
 
     // NCRISC: Sender args for QNOPE/QROPE cores
@@ -254,6 +255,7 @@ void kernel_main() {
         .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
         .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
     };
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
@@ -924,7 +926,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul3_in1"),
         get_named_compile_time_arg_val("matmul3_out"),
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
-        get_common_arg_val<uint32_t>(11),  // matmul3_weights_addr
     };
 
     // Qrope CTArgs type alias
@@ -1058,7 +1059,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul4_in1"),
         get_named_compile_time_arg_val("matmul4_out"),
         get_named_compile_time_arg_val("matmul4_k_num_tiles"),
-        get_common_arg_val<uint32_t>(12),  // matmul4_weights_addr
     };
 
     // Gather2 compute args (no-op)
@@ -1075,7 +1075,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul5_in1"),
         get_named_compile_time_arg_val("matmul5_out"),
         get_named_compile_time_arg_val("matmul5_k_num_tiles"),
-        get_common_arg_val<uint32_t>(13),  // matmul5_weights_addr
     };
 
     // Gather3 compute args (no-op)
@@ -1144,15 +1143,15 @@ void kernel_main() {
             constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
             unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
         }
-        // if constexpr (Core::is_qnope_core) {
-        //     // Matmul3 CB indices and parameters from named compile-time args
-        //     constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
-        //     constexpr uint32_t matmul3_k_num_tiles = get_named_compile_time_arg_val("matmul3_k_num_tiles");
-        //     constexpr uint32_t matmul3_out_w_per_core = get_named_compile_time_arg_val("matmul3_out_w_per_core");
+        if constexpr (Core::is_qnope_core) {
+            // Matmul3 CB indices and parameters from named compile-time args
+            constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
+            constexpr uint32_t matmul3_k_num_tiles = get_named_compile_time_arg_val("matmul3_k_num_tiles");
+            constexpr uint32_t matmul3_out_w_per_core = get_named_compile_time_arg_val("matmul3_out_w_per_core");
 
-        //     // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
-        //     unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
-        // }
+            // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
+            unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
+        }
 
         if constexpr (Core::is_qrope_core) {
             constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
@@ -1171,19 +1170,19 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
         }
 
-        // if constexpr (Core::is_matmul4_core) {
-        //     constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
-        //     constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
-        //     constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
-        //     unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
-        // }
+        if constexpr (Core::is_matmul4_core) {
+            constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
+            constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
+            constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
+            unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
+        }
 
-        // if constexpr (Core::is_matmul5_core) {
-        //     constexpr uint32_t matmul5_in1 = get_named_compile_time_arg_val("matmul5_in1");
-        //     constexpr uint32_t matmul5_k_num_tiles = get_named_compile_time_arg_val("matmul5_k_num_tiles");
-        //     constexpr uint32_t matmul5_out_w_per_core = get_named_compile_time_arg_val("matmul5_out_w_per_core");
-        //     unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
-        // }
+        if constexpr (Core::is_matmul5_core) {
+            constexpr uint32_t matmul5_in1 = get_named_compile_time_arg_val("matmul5_in1");
+            constexpr uint32_t matmul5_k_num_tiles = get_named_compile_time_arg_val("matmul5_k_num_tiles");
+            constexpr uint32_t matmul5_out_w_per_core = get_named_compile_time_arg_val("matmul5_out_w_per_core");
+            unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
+        }
 #endif
     };
 

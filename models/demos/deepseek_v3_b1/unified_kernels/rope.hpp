@@ -73,7 +73,6 @@ struct Rope {
         uint32_t cos_tensor_address;
         uint32_t sin_tensor_address;
         uint32_t position_ids_tensor_address;
-        uint32_t trans_mat_cb;
     };
 
     // Writer args (BRISC): none
@@ -89,6 +88,7 @@ struct Rope {
         uint32_t cos_interm_cb;
         uint32_t sin_interm_cb;
         uint32_t out_cb;
+        uint32_t trans_mat_address_override = 0;  // byte address; overrides trans_mat read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -155,7 +155,11 @@ struct Rope {
             // ================================================================
             // Wait for sharded CBs (signaled by NCRISC)
             // ================================================================
-            cb_wait_front(args.trans_mat_cb, 1);  // Trans_mat: 1 tile, reused for all heads
+            if (args.trans_mat_address_override > 0) {
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.trans_mat_cb, args.trans_mat_address_override); }));
+            } else {
+                cb_wait_front(args.trans_mat_cb, 1);  // Trans_mat: 1 tile, reused for all heads
+            }
             cb_wait_front(args.sin_cb, Wt);       // Sin: Wt tiles (reused for all heads)
             cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles (reused for all heads)
 

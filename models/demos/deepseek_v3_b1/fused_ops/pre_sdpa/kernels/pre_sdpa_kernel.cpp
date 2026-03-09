@@ -189,7 +189,6 @@ uint32_t per_core_rta_arg_idx = 0;
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
         .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
-        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
     };
 
     // NCRISC: Sender args for QNOPE/QROPE cores
@@ -265,7 +264,6 @@ uint32_t per_core_rta_arg_idx = 0;
         .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
         .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
-        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
     };
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};

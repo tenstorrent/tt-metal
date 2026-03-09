@@ -425,17 +425,22 @@ def test_attention_block(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
     torch_sdpa_output = torch.zeros(sdpa_input_output_shape, dtype=torch.bfloat16)
-    # torch_sdpa_output = torch.zeros(shape, dtype=torch.bfloat16)
-    ttnn_output = ttnn.from_torch(
-        torch_sdpa_output,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=sdpa_mem_config,
-        tile=sdpa_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
 
+    # If True, validate the local FlashMLA output before SDPA AllReduce
+    # Need to uncomment and use ttnn_output_tensor as the backing buffer for mla_out_o_cb
+    validate_local_flash_mla = False
+    if validate_local_flash_mla:
+        ttnn_output = ttnn.from_torch(
+            torch_sdpa_output,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=sdpa_mem_config,
+            tile=sdpa_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        )
+    else:
+        ttnn_output = None
     # RoPE tensors
     qrope_grid = ttnn.CoreRange(
         ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
@@ -869,7 +874,6 @@ def test_attention_block(
             dkv_matmul_weights_overlapped,
             dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
-            position_id,
             ttnn_position_ids,
             scale,
             ttnn_output,
@@ -904,10 +908,6 @@ def test_attention_block(
     ttnn.synchronize_device(submesh)
 
     kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-
-    # If True, validate the local FlashMLA output before SDPA AllReduce
-    # Need to uncomment and use ttnn_output_tensor as the backing buffer for mla_out_o_cb
-    validate_local_flash_mla = False
 
     # Read back the FlashMLA output (pre-post-SDPA) for validation
     if validate_local_flash_mla:
