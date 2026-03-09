@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_ring_common.h"
-
 #include "api/debug/dprint_pages.h"
 
 void print_tile_rows(
@@ -146,8 +145,12 @@ void kernel_main() {
     // Size of each transfer in bytes
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
 
-    // Split into 2 packets
-    constexpr uint32_t a2a_packet_size = a2a_xfer_bytes_per_step / 2;
+    // Split into packets that respect NOC_MAX_BURST_SIZE (4096 bytes)
+    // TG Galaxy: 2 packets of 6144 bytes each
+    // T3K: 3 packets of 4096 bytes each (respects NOC hardware limit)
+    constexpr uint32_t num_packets_per_step = 3;
+    constexpr uint32_t a2a_packet_size = a2a_xfer_bytes_per_step / num_packets_per_step;
+    DPRINT << "A2A: " << num_packets_per_step << " packets of " << a2a_packet_size << " bytes each" << ENDL();
 
     // Source and destination addresses for the all2all
     const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
@@ -238,14 +241,16 @@ void kernel_main() {
                     cb_reserve_back(cb_w2c_rdy, 1);
                     cb_push_back(cb_w2c_rdy, 1);
 
-                    // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
-                    // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
+                    // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+                    // Buffer offset: alternate between steps (wrap around at step 11)
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
                     const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
 
-                    noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-                    noc_async_write_one_packet_with_state</*posted=*/true>(
-                        local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+                    // Send data in num_packets_per_step packets to respect NoC hardware limits
+                    for (uint32_t pkt = 0; pkt < num_packets_per_step; ++pkt) {
+                        noc_async_write_one_packet_with_state</*posted=*/true>(
+                            local_src_addr + pkt * a2a_packet_size, neighbor_dst_addr + pkt * a2a_packet_size);
+                    }
 
                     // Signal neighbor that data is ready (increment their semaphore value)
                     noc_inline_dw_write_with_state<
