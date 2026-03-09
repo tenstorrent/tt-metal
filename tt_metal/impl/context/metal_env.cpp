@@ -127,8 +127,9 @@ uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alig
 uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
 uint32_t MetalEnv::get_arch_num_circular_buffers() const { return impl_->get_hal().get_arch_num_circular_buffers(); }
 uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
-    return impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) -
-           impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                    impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return l1_end - impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
 }
 float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
