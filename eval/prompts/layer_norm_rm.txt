@@ -13,7 +13,22 @@ computed. That sum multiplies all of the relevant centralized values in order
 to do standardization. It takes in a tensor that is at least two dimensional,
 and the output tensor should have the same dimensions as the input tensor.
 
-Then it applies affine transformations gamma and beta, with both of them also being a row major input tensor. Required dimensions for it are (1, 1, 1, W), where W is the width. Basically, it performs
+Optionally, the operation applies affine transformations using gamma (scale) and
+beta (shift) parameters. Both gamma and beta are optional row-major input
+tensors with shape (1, 1, 1, W), where W is the input width. When gamma and/or
+beta are not provided (i.e., None), the operation returns the pure normalized
+output without the affine transform. The function signature must support these
+call patterns:
+  - layer_norm_rm(input)                           # pure normalization
+  - layer_norm_rm(input, gamma)                    # scale only
+  - layer_norm_rm(input, gamma, beta)              # full affine
+  - layer_norm_rm(input, gamma, beta, epsilon=X)   # custom epsilon
+
+Epsilon should default to 1e-5 and must be a keyword-only argument.
+
+The operation should validate inputs on the Python side and raise ValueError or
+RuntimeError for: non-bfloat16 input dtype, tile-layout input, gamma/beta shape
+width mismatch with input width.
 
 Inputs should be bfloat16, with the final 2 dimensions being tile aligned to 32. Do not heavily rely on the bfloat16 datatype and instead implement "as if" you had to implement for other dtypes as well.
 

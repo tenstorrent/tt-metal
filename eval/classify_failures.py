@@ -4,6 +4,7 @@ Categories (checked in priority order):
   hang        - operation timeout / dispatch timeout
   OOM         - L1 or DRAM allocation failure
   compilation - kernel build or link failure
+  signature   - wrong function signature / missing parameters / import errors
   numerical   - allclose / PCC / tolerance mismatch
   other       - anything else
 """
@@ -49,6 +50,18 @@ PATTERNS = [
             r"CQ Compile",
             r"linking failed",
             r"compile_program_with_kernel",
+        ],
+    ),
+    (
+        "signature",
+        [
+            r"TypeError:.*takes \d+ positional argument",
+            r"TypeError:.*missing \d+ required",
+            r"TypeError:.*got an unexpected keyword argument",
+            r"TypeError:.*got multiple values for argument",
+            r"ImportError: cannot import name",
+            r"ModuleNotFoundError: No module named",
+            r"AttributeError:.*has no attribute",
         ],
     ),
     (

@@ -11,9 +11,22 @@ The operation normalizes each row of the input tensor through the following step
 5. Compute the reciprocal square root of (variance + epsilon)
 6. Multiply centered values by this reciprocal square root to produce standardized output
 
-After standardization, apply learnable affine parameters gamma (scale) and
-beta (shift). Both gamma and beta are row-major tensors with shape (1, 1, 1, W)
-where W matches the input width.
+Optionally, apply learnable affine parameters gamma (scale) and beta (shift).
+Both gamma and beta are optional row-major tensors with shape (1, 1, 1, W) where
+W matches the input width. When gamma and/or beta are not provided (None), the
+operation returns purely normalized output. The function signature must be:
+
+    layer_norm_rm(input_tensor, gamma=None, beta=None, *, epsilon=1e-5)
+
+This supports these call patterns:
+  - layer_norm_rm(input)                           # pure normalization
+  - layer_norm_rm(input, gamma)                    # scale only
+  - layer_norm_rm(input, gamma, beta)              # full affine
+  - layer_norm_rm(input, gamma, beta, epsilon=X)   # custom epsilon
+
+The operation must validate inputs on the Python side and raise ValueError or
+RuntimeError for: non-bfloat16 input dtype, tile-layout input, gamma/beta shape
+width mismatch with input width.
 
 The input tensor must be at least 2D, and the output retains identical dimensions.
 Input dtype is bfloat16 with the last two dimensions aligned to tile size (32),

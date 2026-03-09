@@ -43,6 +43,24 @@ fi
 
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
 
+# --- Pre-flight: validate API contract (no device needed) ---
+CONTRACT_FILE="${TEST_DIR}/api_contract.md"
+if [[ -f "$CONTRACT_FILE" ]]; then
+    echo "EVAL_RUNNER: Validating API contract..." >&2
+    CONTRACT_RESULT="${OUTPUT_DIR}/contract_validation.json"
+    python3 -m eval.validate_contract "${TEST_DIR}" > "$CONTRACT_RESULT" 2>&1
+    CONTRACT_EXIT=$?
+    if [[ $CONTRACT_EXIT -ne 0 ]]; then
+        echo "EVAL_RUNNER: API CONTRACT VALIDATION FAILED" >&2
+        cat "$CONTRACT_RESULT" >&2
+        echo "EVAL_RUNNER: Fix the operation signature before running device tests" >&2
+        # Still continue to run tests — they'll fail with ImportError/TypeError
+        # but the contract report gives a clearer diagnosis
+    else
+        echo "EVAL_RUNNER: API contract validated OK" >&2
+    fi
+fi
+
 # --- Acquire device lock ---
 exec 9>"$LOCK_FILE"
 echo "EVAL_RUNNER: Waiting for device lock..." >&2
