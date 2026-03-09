@@ -619,6 +619,8 @@ class Model:
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batch_size=1,
+        user_id=0,
         batched_prefill=False,
     ):
         """Prepare inputs for prefill mode
