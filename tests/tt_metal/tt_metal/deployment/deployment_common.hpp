@@ -17,11 +17,11 @@ struct l1_allocator {
 static inline struct l1_allocator new_tensix_allocator() {
     using namespace tt::tt_metal;
 
-    uint32_t start =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    uint32_t start = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     uint32_t end = start + MetalContext::instance().hal().get_dev_size(
-                               HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+                               HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     return (struct l1_allocator){
         .start = ROUND_UP(start, ALIGNMENT),
