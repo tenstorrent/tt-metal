@@ -461,6 +461,126 @@ void write_rank_bindings_yaml(
 }
 
 /**
+ * @brief Gather mock cluster descriptor paths from all MPI ranks to rank 0.
+ *
+ * When TT_METAL_MOCK_CLUSTER_DESC_PATH is set (mock mode), each rank has its own descriptor.
+ * This collects rank -> path for use when writing phase2_mock_mapping.yaml.
+ *
+ * @param distributed_context MPI distributed context
+ * @param mpi_rank_to_path Output map (populated only on rank 0): MPI rank -> absolute path
+ */
+void gather_mock_cluster_desc_paths(
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& distributed_context,
+    std::map<int, std::string>& mpi_rank_to_path) {
+    using namespace tt::tt_metal::distributed::multihost;
+    constexpr int root_rank = 0;
+    auto my_rank = *distributed_context->rank();
+    auto world_size = *distributed_context->size();
+
+    const char* my_path_env = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (!my_path_env || std::strlen(my_path_env) == 0) {
+        return;
+    }
+    std::string my_path(my_path_env);
+    // Resolve to absolute path for consistent usage
+    try {
+        my_path = std::filesystem::absolute(std::filesystem::path(my_path)).string();
+    } catch (...) {
+        // Keep original if resolution fails
+    }
+
+    if (world_size == 1) {
+        mpi_rank_to_path[0] = my_path;
+        return;
+    }
+
+    if (my_rank == root_rank) {
+        mpi_rank_to_path[root_rank] = my_path;
+        for (int r = 1; r < static_cast<int>(world_size); ++r) {
+            std::size_t path_size = 0;
+            distributed_context->recv(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
+                Rank{r},
+                Tag{100});  // Use distinct tag for mock path gather
+            std::vector<char> path_buf(path_size);
+            if (path_size > 0) {
+                distributed_context->recv(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(reinterpret_cast<uint8_t*>(path_buf.data()), path_buf.size())),
+                    Rank{r},
+                    Tag{100});
+            }
+            mpi_rank_to_path[r] = std::string(path_buf.data(), path_buf.size());
+        }
+    } else {
+        std::size_t path_size = my_path.size();
+        distributed_context->send(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
+            Rank{root_rank},
+            Tag{100});
+        std::vector<uint8_t> path_bytes(my_path.begin(), my_path.end());
+        distributed_context->send(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
+            Rank{root_rank},
+            Tag{100});
+    }
+    distributed_context->barrier();
+}
+
+/**
+ * @brief Write phase2_mock_mapping.yaml for Phase 2 mock cluster descriptor binding.
+ *
+ * Maps each output rank (from rank_bindings) to the cluster descriptor path used during
+ * allocation. The mapping is derived from PSD host_to_rank and the gathered mpi_rank paths.
+ */
+void write_phase2_mock_mapping_yaml(
+    const std::vector<RankBindingConfig>& rank_bindings,
+    const PhysicalSystemDescriptor& psd,
+    const std::map<int, std::string>& mpi_rank_to_path,
+    const std::string& output_file) {
+    if (mpi_rank_to_path.empty()) {
+        return;
+    }
+
+    YAML::Node root;
+    YAML::Node rank_to_desc_node;
+
+    for (const auto& binding : rank_bindings) {
+        if (!psd.get_host_to_rank_map().contains(binding.hostname)) {
+            log_warning(
+                tt::LogFabric,
+                "Hostname {} for output rank {} not in host_to_rank_map, skipping phase2 mock mapping",
+                binding.hostname,
+                binding.rank);
+            continue;
+        }
+        uint32_t mpi_rank = psd.get_rank_for_hostname(binding.hostname);
+        if (!mpi_rank_to_path.contains(static_cast<int>(mpi_rank))) {
+            log_warning(
+                tt::LogFabric,
+                "MPI rank {} for output rank {} has no cluster descriptor path, skipping",
+                mpi_rank,
+                binding.rank);
+            continue;
+        }
+        rank_to_desc_node[std::to_string(binding.rank)] = mpi_rank_to_path.at(static_cast<int>(mpi_rank));
+    }
+
+    if (rank_to_desc_node.size() == 0) {
+        return;
+    }
+
+    root["rank_to_cluster_mock_cluster_desc"] = rank_to_desc_node;
+
+    std::ofstream out_file(output_file);
+    if (!out_file.is_open()) {
+        throw std::runtime_error("Failed to open output file for phase2 mock mapping: " + output_file);
+    }
+    out_file << root << std::endl;
+    out_file.close();
+}
+
+/**
  * @brief Write MPI rankfile (OpenMPI format)
  *
  * Format: rank N=hostname slot=X
@@ -559,6 +679,10 @@ int main(int argc, char** argv) {
         PhysicalSystemDescriptor psd = run_psd_discovery();
         log_info(tt::LogFabric, "PSD discovery complete");
 
+        // Gather mock cluster descriptor paths from all ranks (when TT_METAL_MOCK_CLUSTER_DESC_PATH is set)
+        std::map<int, std::string> mpi_rank_to_cluster_desc_path;
+        gather_mock_cluster_desc_paths(context, mpi_rank_to_cluster_desc_path);
+
         // Stage: Load Mesh Graph Descriptor
         std::filesystem::path mgd_path(args.mesh_graph_descriptor_path);
         log_info(tt::LogFabric, "Stage: Loading Mesh Graph Descriptor from: {}", mgd_path.string());
@@ -609,6 +733,16 @@ int main(int argc, char** argv) {
             std::filesystem::path rankfile_path = output_dir / "rankfile";
             write_rankfile(rank_bindings, rankfile_path.string());
             log_info(tt::LogFabric, "Successfully wrote: {}", rankfile_path.string());
+
+            if (!mpi_rank_to_cluster_desc_path.empty()) {
+                std::filesystem::path phase2_mock_path = output_dir / "phase2_mock_mapping.yaml";
+                write_phase2_mock_mapping_yaml(
+                    rank_bindings, psd, mpi_rank_to_cluster_desc_path, phase2_mock_path.string());
+                log_info(
+                    tt::LogFabric,
+                    "Successfully wrote: {} (cluster descriptors used during allocation)",
+                    phase2_mock_path.string());
+            }
 
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {
