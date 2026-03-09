@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
@@ -1054,7 +1055,6 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_workers_per_link=1,
-            use_broadcast=True,
         )
         wq_kv_a_r_config = {
             "dims": [1],
