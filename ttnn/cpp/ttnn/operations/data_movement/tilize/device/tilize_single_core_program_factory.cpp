@@ -30,7 +30,7 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
     // This should allocate a DRAM buffer on the device
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -111,7 +111,7 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-        "reader_unary_stick_layout_split_rows_singlecore.cpp",
+        "reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -127,12 +127,18 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
         num_tiles_per_block               // per_core_block_tile_cnt
     };
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         core,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_args,
         });
 
