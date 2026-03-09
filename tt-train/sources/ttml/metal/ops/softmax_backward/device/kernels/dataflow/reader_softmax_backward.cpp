@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t mask_w = get_compile_time_arg_val(5);           // padding mask width (0 if no padding)
     // Set up tensor accessors
     constexpr auto softmax_output_args = TensorAccessorArgs<6>();
-    constexpr auto upstream_grad_args = TensorAccessorArgs<7>();
+    constexpr auto upstream_grad_args = TensorAccessorArgs<softmax_output_args.next_compile_time_args_offset()>();
 
     // Common runtime args (shared across all cores)
     const uint32_t softmax_output_addr = get_common_arg_val<uint32_t>(0);
