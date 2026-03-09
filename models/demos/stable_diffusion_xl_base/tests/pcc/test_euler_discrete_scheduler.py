@@ -7,6 +7,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from tests.ttnn.utils_for_testing import assert_with_pcc

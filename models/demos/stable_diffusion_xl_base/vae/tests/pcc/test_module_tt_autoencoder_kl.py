@@ -9,7 +9,7 @@ from diffusers import AutoencoderKL
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
