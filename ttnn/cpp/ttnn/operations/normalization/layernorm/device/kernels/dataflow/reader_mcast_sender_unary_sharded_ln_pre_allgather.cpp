@@ -126,7 +126,7 @@ void kernel_main() {
                 }
                 uint32_t write_offset = 0;
                 for (uint32_t i = 0; i < num_tiles_per_worker; ++i) {
-                    cb_external_obj.reserve_back(num_blocks_first_stage);
+                    cb_external_obj.reserve_back(num_tiles_per_partial_result * num_blocks_first_stage);
                     write_offset = 0;
                     for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
                         for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
@@ -153,6 +153,7 @@ void kernel_main() {
                         }
 
                         uint32_t curr_block_index = block_index_stride;
+                        cb_external_obj.reserve_back(num_tiles_per_partial_result * (num_blocks_second_stage - 1));
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
