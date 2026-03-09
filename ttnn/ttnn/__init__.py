@@ -412,12 +412,6 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
-from ttnn.operations.normalization import (
-    SoftmaxProgramConfig,
-    SoftmaxDefaultProgramConfig,
-    SoftmaxShardedMultiCoreProgramConfig,
-)
-
 from ttnn.operations.embedding import (
     EmbeddingsType,
 )
