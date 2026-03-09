@@ -153,7 +153,7 @@ void kernel_main() {
     uint32_t pos_addr = get_common_arg_val<uint32_t>(0);
 #endif
 
-    deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, true, false> op;
+    deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, true> op;
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
     op.set_local_cur_pos(args, pos_ptr[0]);
     op(args);

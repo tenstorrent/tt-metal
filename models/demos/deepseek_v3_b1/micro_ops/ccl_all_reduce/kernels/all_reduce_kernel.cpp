@@ -52,7 +52,6 @@ void kernel_main() {
         using Receiver = deepseek_b1_ops::AllReduceReceiver;
 
         using ReaderCTArgs = Receiver::ReaderCTArgs<
-            get_named_compile_time_arg_val("packet_header_cb_id"),
             get_named_compile_time_arg_val("cb_in1"),
             get_named_compile_time_arg_val("l1_alignment"),
             get_named_compile_time_arg_val("cb_in2"),
@@ -113,7 +112,7 @@ void kernel_main() {
         using Receiver = deepseek_b1_ops::AllReduceReceiver;
 
         // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-        using ReaderCTArgs = Receiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using ReaderCTArgs = Receiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         using ComputeCTArgs = Receiver::ComputeCTArgs<
             get_named_compile_time_arg_val("cb_in0"),
