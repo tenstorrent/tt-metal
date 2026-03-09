@@ -133,11 +133,16 @@ def test_tt_mochi_pipeline(
     vae_sp_axis: int,
     vae_tp_axis: int,
     num_links: int,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """
     Test that creates the modified TT MochiPipeline and runs it on a prompt.
     This uses the TT transformer instead of the diffusers one.
     """
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
     try:
         from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
         from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
@@ -182,6 +187,7 @@ def test_tt_mochi_pipeline(
         num_links=num_links,
         use_reference_vae=False,
         model_name="genmo/mochi-1-preview",
+        reload_dit_model=mesh_device.get_num_devices() <= 8,
     )
 
     # Define test prompt (same as the diffusers test)
