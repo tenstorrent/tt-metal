@@ -299,9 +299,10 @@ class TtDINONeck:
         """
         assert len(features) == 4, f"Expected 4 backbone features, got {len(features)}"
 
+        feat3_copy = ttnn.clone(features[3], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         outputs = []
 
-        # P2-P5: 1x1 conv + GN on each backbone level
         for i in range(4):
             out = self._conv1x1_gn(
                 features[i],
@@ -311,9 +312,8 @@ class TtDINONeck:
             )
             outputs.append(out)
 
-        # P6: 3x3 stride-2 conv + GN on last backbone feature
         p6 = self._conv3x3_s2_gn(
-            features[3],
+            feat3_copy,
             conv_params=self.parameters["extra_convs"][0]["conv"],
             in_ch=self.in_channels[3],
             level_idx=4,
