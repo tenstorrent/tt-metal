@@ -58,6 +58,8 @@ enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED 
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
+enum class NoCTopologyType : uint8_t { MESH = 0, TORUS = 1 };
+
 // A set of processors distinguishing programmable core type and index within that core type.
 // See get_processor_index and get_processor_class_and_type_from_index.
 class HalProcessorSet {
@@ -332,6 +334,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     uint32_t operand_start_stream_{};
     bool has_stream_registers_{};
+    NoCTopologyType noc_topology_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
@@ -378,6 +381,9 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     tt::ARCH get_arch() const { return arch_; }
+
+    // Returns the NoC topology type (MESH or TORUS)
+    NoCTopologyType get_noc_topology() const { return noc_topology_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }

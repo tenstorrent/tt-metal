@@ -14,8 +14,9 @@
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -34,11 +35,9 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-    return tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 }
 
 // Helper to check that a node's neighbors match expected (order-independent)

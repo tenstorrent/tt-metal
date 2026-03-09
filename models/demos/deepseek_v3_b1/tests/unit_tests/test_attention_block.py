@@ -23,9 +23,11 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     BlitzDecodeWeights,
 )
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
+from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
+from models.demos.deepseek_v3_b1.utils import generate_mm_weights
 
 
 def create_fabric_router_config(max_payload_size):
@@ -283,7 +285,7 @@ def test_attention_block(
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
-    torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
+    torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
@@ -292,16 +294,18 @@ def test_attention_block(
     total_qrope_heads = num_tp * NUM_QROPE_HEADS
     total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
     total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
-    torch_matmul2_weights_full_unshuffled = torch.randn(
+    torch_matmul2_weights_full_unshuffled = generate_mm_weights(
         (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
     # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # Each TP slice of 64 heads is height-sharded on 64 cores per device.
-    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    torch_matmul3_weights = generate_mm_weights(
+        (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
+    )
 
     # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+    torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
     torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
@@ -365,12 +369,10 @@ def test_attention_block(
         mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
-    # Weights are shared across all devices (replicated per TP slice)
-    torch_weights1 = torch.randn((K1, post_sdpa_intermediate), dtype=torch.bfloat16)
-    torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
-
-    torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
-    torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
+    # kv_b2_proj: [K1, intermediate * num_tp] — full TP width, split along output dim per column
+    torch_kv_b2_proj_weights = generate_mm_weights((K1, post_sdpa_intermediate * num_tp), dtype=torch.bfloat16)
+    # o_proj: [K2 * num_tp, output_size] — full TP height, split along input dim per column
+    torch_o_proj_weights = generate_mm_weights((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
     # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
@@ -565,7 +567,7 @@ def test_attention_block(
     dcs = program_config.device_chunk_size
     num_sp = mesh_rows
 
-    torch_kv_cache = torch.full(cache_shape, float("-inf"), dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
     torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
 
@@ -717,67 +719,8 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create gather output tensors
-    # ========================================================================
-
-    single_device = ttnn.get_device_tensors(input_tensor_mesh)[0].device()
-    gather1_output_shard_shape = (M, post_sdpa_intermediate)
-    gather1_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, gather1_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    gather1_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather1_output_shard_spec
-    )
-    ttnn_gather1_output = ttnn.from_torch(
-        torch.zeros((M, post_sdpa_intermediate), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=single_device,
-        memory_config=gather1_output_mem_config,
-        tile=a_tile,
-    )
-
-    gather2_output_shard_shape = (M, output_size)
-    gather2_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, gather2_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    gather2_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather2_output_shard_spec
-    )
-    mesh_gather2_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
-    ttnn_gather2_output = ttnn.from_torch(
-        mesh_gather2_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=gather2_output_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ========================================================================
     # Create CCL tensors and semaphores
     # ========================================================================
-    ccl_intermediate_shape = [M, output_size]
-    ccl_intermediate_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, tuple(ccl_intermediate_shape), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    ccl_intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ccl_intermediate_shard_spec
-    )
-    mesh_ccl_intermediate_torch = torch.cat(
-        [torch.zeros(ccl_intermediate_shape, dtype=torch.bfloat16)] * num_devices, dim=0
-    )
-    ttnn_ccl_intermediate = ttnn.from_torch(
-        mesh_ccl_intermediate_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=ccl_intermediate_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -907,7 +850,6 @@ def test_attention_block(
     # Run pre-SDPA operation
     # ========================================================================
     logger.info(f"Running attention block operation with position_id={position_id}...")
-
     for i in range(num_iters):
         ttnn_output_result = AttentionBlock.op(
             input_tensor_mesh,
@@ -934,16 +876,13 @@ def test_attention_block(
             # Post-SDPA parameters
             kv_b2_overlapped,
             o_proj_overlapped,
-            ttnn_gather1_output,
-            ttnn_gather2_output,
-            ttnn_ccl_intermediate,
             #            ttnn_residual,
             ttnn_sdpa_input_l,
             ttnn_sdpa_input_ms,
             ttnn_sdpa_output_l,
             ttnn_sdpa_intermediate_recv,
             ttnn_sdpa_forwarder_scratch,
-            0,  # sdpa_per_device_chunk_size
+            program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
             attention_block_semaphores,
@@ -962,8 +901,13 @@ def test_attention_block(
 
     kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
-    # Read back the FlashMLA output (pre-post-SDPA) for SDPA validation
-    sdpa_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    # If True, validate the local FlashMLA output before SDPA AllReduce
+    # Need to uncomment and use ttnn_output_tensor as the backing buffer for mla_out_o_cb
+    validate_local_flash_mla = False
+
+    # Read back the FlashMLA output (pre-post-SDPA) for validation
+    if validate_local_flash_mla:
+        sdpa_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
@@ -994,6 +938,8 @@ def test_attention_block(
         torch_dkv_rmsnorm_gamma,
         torch_kv_cache,
         scale,
+        torch_kv_b2_proj_weights,
+        torch_o_proj_weights,
         epsilon=epsilon,
         num_qnope_heads=total_qnope_heads,
         num_qrope_heads=total_qrope_heads,
@@ -1016,6 +962,71 @@ def test_attention_block(
         dev_contrib = max(0, min(remainder, dev_end) - dev_start)
         return num_full_blocks * device_chunk_size + dev_contrib
 
+    if validate_local_flash_mla:
+        # ========================================================================
+        # Compute per-SP golden for pre-SDPA output (before post-SDPA reduce)
+        # ========================================================================
+        def build_local_kv_cache(sp_idx):
+            """Extract sp_idx's local KV cache from torch_kv_cache_shuffled."""
+            sp_block = device_chunk_size * num_sp
+            num_full_blocks = position_id // sp_block
+            remainder = position_id % sp_block
+            dev_start = sp_idx * device_chunk_size
+            dev_end = dev_start + device_chunk_size
+            dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+            local_len = num_full_blocks * device_chunk_size + dev_contrib
+            if local_len == 0:
+                return None, 0
+            shard_offset = sp_idx * per_device_max_seq_len
+            local_kv = torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
+            return local_kv, local_len
+
+        pre_sdpa_golden_args = dict(
+            input_tensor=torch_input,
+            gamma_tensor=torch_gamma,
+            matmul_weights_tensor=torch_matmul_weights,
+            rmsnorm2_gamma_tensor=torch_rmsnorm2_gamma,
+            matmul2_weights_tensor=torch_matmul2_weights_full_unshuffled,
+            matmul3_weights_tensor=torch_matmul3_weights,
+            sin_tensor=torch_sin,
+            cos_tensor=torch_cos,
+            dkv_matmul_weights_tensor=torch_dkv_matmul_weights,
+            dkv_rmsnorm_gamma_tensor=torch_dkv_rmsnorm_gamma,
+            scale=scale,
+            epsilon=epsilon,
+            num_qnope_heads=total_qnope_heads,
+            num_qrope_heads=total_qrope_heads,
+            qnope_head_dim=QNOPE_HEAD_DIM,
+            qrope_head_dim=QROPE_HEAD_DIM,
+            heads_per_row=HEADS_PER_ROW,
+            nope_dim=KNOPE_DIM,
+            rope_dim=KROPE_DIM,
+        )
+
+        golden_per_sp = {}
+        for sp_idx in range(num_sp):
+            local_kv, local_seq_len = build_local_kv_cache(sp_idx)
+            is_owner = sp_idx == owning_sp_device
+            if local_kv is None:
+                if is_owner:
+                    local_kv = torch.zeros(1, 1, 0, kvpe_dim, dtype=torch.bfloat16)
+                else:
+                    continue
+            local_pos = torch.tensor([local_seq_len if is_owner else local_seq_len - 1])
+            _, _, mla_output = PreSDPA.golden(
+                **pre_sdpa_golden_args,
+                local_position_ids=local_pos,
+                global_position_ids=torch.tensor([position_id]),
+                kv_cache_tensor=local_kv,
+                kv_cache_update=is_owner,
+            )
+            golden_per_sp[sp_idx] = mla_output
+
+        logger.info(
+            f"Per-SP golden computed for {len(golden_per_sp)} SP devices "
+            f"(owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})"
+        )
+
     # ========================================================================
     # Validate KV cache outputs (per SP device)
     # ========================================================================
@@ -1023,7 +1034,7 @@ def test_attention_block(
         sp_group = device_idx // mesh_cols
         local_seq_len = get_local_seq_len(sp_group)
 
-        if local_seq_len == 0:
+        if local_seq_len == 0 and sp_group != owning_sp_device:
             logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
             continue
 
@@ -1051,24 +1062,56 @@ def test_attention_block(
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
 
     # ========================================================================
-    # Validate SDPA output (global golden: full KV cache, global position_id)
-    # Post-SDPA reduces all local FlashMLA outputs across SP devices, so the
-    # final MLA output corresponds to running attention over the full KV cache.
+    # Validate pre-SDPA output (per-SP golden: local KV cache per device)
+    # This is the FlashMLA output before post-SDPA reduce across SP devices.
     # ========================================================================
-    slice_size = sdpa_input_output_shape[0]  # 64 heads per device
+    if validate_local_flash_mla:
+        slice_size = sdpa_input_output_shape[0]  # 64 heads per device
+        for device_idx in range(mesh_rows * mesh_cols):
+            tp_group = device_idx % mesh_cols
+            sp_group = device_idx // mesh_cols
+
+            if sp_group not in golden_per_sp:
+                logger.info(f"Device {device_idx} (SP={sp_group}) no work, skipped")
+                continue
+
+            golden_mla_output = golden_per_sp[sp_group]
+
+            start = device_idx * slice_size
+            end = start + slice_size
+            received = sdpa_output_torch[start:end, :]
+
+            tp_start = tp_group * slice_size
+            tp_end = tp_start + slice_size
+            expected = golden_mla_output[tp_start:tp_end, :]
+
+            if received.shape != expected.shape:
+                logger.error(
+                    f"Device {device_idx} (TP={tp_group}, SP={sp_group}) output shape mismatch: "
+                    f"got {received.shape}, expected {expected.shape}"
+                )
+                continue
+
+            passing, pcc = comp_pcc(expected, received, 0.99)  # TODO: Might need to tweak if too high
+            logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {pcc}")
+            assert passing, f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {pcc}"
+
+    # ========================================================================
+    # Validate attention block output (full pipeline: SDPA -> kv_b2 -> o_proj -> all-reduce + residual)
+    # ========================================================================
     for device_idx in range(mesh_rows * mesh_cols):
-        tp_group = device_idx % mesh_cols
-        start = device_idx * slice_size
-        end = start + slice_size
-        received = sdpa_output_torch[start:end, :]
+        received = output_torch[device_idx : device_idx + 1, :]
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
+        logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
+        assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
-        tp_start = tp_group * slice_size
-        tp_end = tp_start + slice_size
-        expected = torch_output_expected[tp_start:tp_end, :]
-
-        passing, pcc = comp_pcc(expected, received, 0.84)
-        logger.info(f"Device {device_idx} (TP={tp_group}) SDPA Output PCC: {pcc}")
-        assert passing, f"Device {device_idx} (TP={tp_group}) SDPA Output PCC check failed: {pcc}"
+    # Verify cur_pos was incremented by 1 on every core of every device
+    cur_pos_torch = ttnn.to_torch(ttnn_position_ids, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    expected_pos = position_id + 1
+    assert (
+        cur_pos_torch == expected_pos
+    ).all(), f"cur_pos not incremented correctly: expected {expected_pos}, got unique values {cur_pos_torch.unique().tolist()}"
+    logger.info(f"✓ cur_pos correctly incremented to {expected_pos}")
 
     logger.info("✓ Attention Block mesh test passed!")
 
