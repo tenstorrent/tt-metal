@@ -34,17 +34,16 @@ runs:
       env:
         DIRECTORY: ${{ inputs.directory }}
       run: |
-        DIRECTORY="${{ inputs.directory }}"
-        if [[ ! "$DIRECTORY" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-          echo "Error: directory contains invalid characters. Only alphanumeric, dots, underscores, hyphens, and slashes allowed."
-          exit 1
-        fi
         if [[ "$DIRECTORY" == *".."* ]]; then
           echo "Error: directory cannot contain path traversal sequences"
           exit 1
         fi
         if [[ "$DIRECTORY" =~ [;\|\&\$\`] ]]; then
           echo "Error: directory contains shell metacharacters"
+          exit 1
+        fi
+        if [[ ! "$DIRECTORY" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+          echo "Error: directory contains invalid characters. Only alphanumeric, dots, underscores, hyphens, and slashes allowed."
           exit 1
         fi
 
