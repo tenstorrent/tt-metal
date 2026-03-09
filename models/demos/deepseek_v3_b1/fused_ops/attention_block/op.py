@@ -989,9 +989,6 @@ class AttentionBlock:
         ccl_residual_cb = input_cb
         ccl_temp_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL temp for compute (receiver core)
         ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL output (receiver core)
-        ccl_packet_header_cb = cb_id_context.get_cb_id(
-            ttnn.uint32, TD_32x32
-        )  # CCL packet headers (sender + receiver cores)
         _debug_checkpoint("finished CB id allocation")
 
         attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
@@ -1812,7 +1809,6 @@ class AttentionBlock:
             ("ccl_sender_noc_x", ccl_sender_noc_core.x),
             ("ccl_sender_noc_y", ccl_sender_noc_core.y),
             # CCL sender (BRISC sends via fabric)
-            ("ccl_sender_packet_header_cb_id", ccl_packet_header_cb),
             ("ccl_sender_packet_cb_id", ccl_sender_in_cb),
             ("ccl_sender_l1_alignment", l1_alignment),
             ("ccl_sender_input_num_tiles", ccl_num_pages),
@@ -2875,23 +2871,6 @@ class AttentionBlock:
         attention_block_output_cb_descriptor.core_ranges = full_device_grid
         attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
-
-        # CB 13: CCL packet headers
-        ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=ccl_packet_header_cb,
-            data_format=ttnn.uint32,
-            page_size=ccl_packet_header_size_bytes,
-        )
-        ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ccl_packet_header_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=2 * ccl_packet_header_size_bytes,
-            core_ranges=full_device_grid,
-        )
-        ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
-        sdpa_forwarder_scratch_running_offset += ccl_packet_header_cb_descriptor.total_size
-        post_sdpa_cb_list.append(ccl_packet_header_cb_descriptor)
 
         # Get from fused
         # CB 14: SDPA local L (aliased to input tensor)
