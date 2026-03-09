@@ -569,7 +569,6 @@ class PostSDPA:
                     ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
                     ("ccl_sender_gather3_completion_semaphore_id", gather3_completion_semaphore_id),
                     # CCL receiver (NCRISC waits for remote data)
-                    ("ccl_receiver_packet_header_cb_id", ccl_packet_header_cb),
                     ("ccl_receiver_cb_in1", ccl_remote_data_cb),
                     ("ccl_receiver_l1_alignment", l1_alignment),
                     ("ccl_receiver_cb_in2", gather3_dst_cb),  # Local data from gather3
