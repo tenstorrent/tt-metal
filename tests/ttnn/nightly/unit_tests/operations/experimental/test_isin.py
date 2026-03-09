@@ -66,9 +66,10 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
 
     # Assert - Compare results
     torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    torch_result_mask = torch_result_from_ttnn != 0
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
-    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
+    assert torch_isin_result.count_nonzero() == torch_result_mask.count_nonzero()
+    assert torch.equal(torch_isin_result != 0, torch_result_mask)
 
 
 @pytest.mark.parametrize(
@@ -99,9 +100,10 @@ def test_isin_random_data(elements_shape, test_elements_shape, invert, device):
 
     # Assert - Compare results
     torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    torch_result_mask = torch_result_from_ttnn != 0
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
-    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
+    assert torch_isin_result.count_nonzero() == torch_result_mask.count_nonzero()
+    assert torch.equal(torch_isin_result != 0, torch_result_mask)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +135,8 @@ def test_isin_program_cache_and_random_data(
 
     # Assert - Compare results
     torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    torch_result_mask = torch_result_from_ttnn != 0
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
-    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
+    assert torch_isin_result.count_nonzero() == torch_result_mask.count_nonzero()
+    assert torch.equal(torch_isin_result != 0, torch_result_mask)
     assert device.num_program_cache_entries() == expected_num_program_cache_entries
