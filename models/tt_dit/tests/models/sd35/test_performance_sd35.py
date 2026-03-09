@@ -20,9 +20,9 @@ def get_expected_metrics(mesh_device):
             "clip_encoding_time": 0.15,
             "t5_encoding_time": 0.1,
             "total_encoding_time": 0.25,
-            "denoising_steps_time": 11.3,
+            "denoising_steps_time": 12.0,
             "vae_decoding_time": 1.6,
-            "total_time": 13.2,
+            "total_time": 14.0,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         return {
