@@ -21,10 +21,10 @@ inline void _calculate_sigmoid_regs_(const std::uint32_t src_reg, const std::uin
 {
     // ALthough SFPMUL/SFPADD are 2 cycle instructions, we don't need a TTI_NOP
     // because the hardware implicitly stalls if the next instruction depends on results
-    TTI_SFPMUL(src_reg, p_sfpu::LCONST_neg1, p_sfpu::LCONST_0, work_reg, 0); // Multiply src_reg * -1, store result in work_reg, takes 2 cycles
-    TTI_SFPNONLINEAR(work_reg, dest_reg, p_sfpnonlinear::EXP_MODE);          // Read value from work_reg, take exponential, load back into dest_reg
-    TTI_SFPADD(p_sfpu::LCONST_1, dest_reg, p_sfpu::LCONST_1, work_reg, 0);   // Add 1 to dest_reg, store in work_reg, takes 2 cycles
-    TTI_SFPNONLINEAR(work_reg, dest_reg, p_sfpnonlinear::RECIP_MODE);        // Read value from work_reg, approximate recip, load back into dest_reg
+    TTI_SFPMOV(src_reg, work_reg, 1);                                      // Copy src_reg to work_reg and invert sign bit (take negative of input)
+    TTI_SFPNONLINEAR(work_reg, dest_reg, p_sfpnonlinear::EXP_MODE);        // Read value from work_reg, take exponential, load back into dest_reg
+    TTI_SFPADD(p_sfpu::LCONST_1, dest_reg, p_sfpu::LCONST_1, work_reg, 0); // Add 1 to dest_reg, store in work_reg, takes 2 cycles
+    TTI_SFPNONLINEAR(work_reg, dest_reg, p_sfpnonlinear::RECIP_MODE);      // Read value from work_reg, approximate recip, load back into dest_reg
 }
 
 // Calculates SIGMOID for number of rows of output SFPU ops (Quasar = 2 rows)
