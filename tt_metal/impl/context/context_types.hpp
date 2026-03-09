@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <tt_stl/strong_type.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,6 +25,8 @@ constexpr size_t MAX_CONTEXT_COUNT = 32;
 
 // Helper function to extract the context ID from the public API device type by casting it to the concrete type
 // The IDevice does not have a get_context_id() method because Context ID is an internal concept.
-ContextId extract_context_id(IDevice* device);
+ContextId extract_context_id(const IDevice* device);
+
+ContextId extract_context_id(const distributed::MeshDevice* mesh_device);
 
 }  // namespace tt::tt_metal

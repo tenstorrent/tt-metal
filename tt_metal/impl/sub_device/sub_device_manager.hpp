@@ -19,6 +19,7 @@
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
+#include <impl/context/context_types.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -88,6 +89,7 @@ private:
     std::vector<SubDeviceId> sub_device_ids_;
     std::vector<SubDeviceId> sub_device_stall_group_;
     IDevice* device_;
+    tt::tt_metal::ContextId context_id_;
 
     DeviceAddr local_l1_size_;
     std::vector<std::unique_ptr<AllocatorImpl>> sub_device_allocators_;

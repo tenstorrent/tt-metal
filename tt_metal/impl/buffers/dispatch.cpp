@@ -14,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -1383,14 +1384,16 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
-    // Mock devices don't have real hardware to read from, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
-    }
-
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+
+    // Mock devices don't have real hardware to read from, skip actual dispatch
+    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().get_target_device_type() ==
+        tt::TargetDevice::Mock) {
+        return;
+    }
+
     uint32_t num_worker_counters = sub_device_ids.size();
 
     // Precompute whether pinned direct write is feasible, and derive dst noc params
