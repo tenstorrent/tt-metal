@@ -40,7 +40,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp

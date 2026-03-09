@@ -154,9 +154,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     auto q = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto k = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto v = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
-    auto q_tensor = ttml::autograd::create_tensor(q);
-    auto k_tensor = ttml::autograd::create_tensor(k);
-    auto v_tensor = ttml::autograd::create_tensor(v);
+    auto q_tensor = ttml::autograd::create_tensor(q, /* requires_grad */ true);
+    auto k_tensor = ttml::autograd::create_tensor(k, /* requires_grad */ true);
+    auto v_tensor = ttml::autograd::create_tensor(v, /* requires_grad */ true);
 
     auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
 

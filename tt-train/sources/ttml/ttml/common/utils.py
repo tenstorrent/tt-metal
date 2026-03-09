@@ -131,6 +131,84 @@ class PerformanceMeter:
         return samples_per_second, tokens_per_second
 
 
+def summary(model) -> None:
+    """Print a torchsummary-style overview of model parameters.
+
+    Parameters are grouped: trainable first, then non-trainable.
+    """
+    params = model.parameters()
+
+    trainable = []
+    frozen = []
+    for name, tensor in sorted(params.items()):
+        shape = tuple(tensor.shape())
+        n = 1
+        for d in shape:
+            n *= d
+        entry = (name, shape, n, tensor.get_requires_grad())
+        if entry[3]:
+            trainable.append(entry)
+        else:
+            frozen.append(entry)
+
+    entries = trainable + frozen
+
+    col_name = "Parameter"
+    col_shape = "Shape"
+    col_nparams = "# Params"
+    col_train = "Trainable"
+
+    name_w = (
+        max(len(col_name), *(len(e[0]) for e in entries)) if entries else len(col_name)
+    )
+    shape_w = (
+        max(len(col_shape), *(len(str(e[1])) for e in entries))
+        if entries
+        else len(col_shape)
+    )
+    nparams_w = (
+        max(len(col_nparams), *(len(f"{e[2]:,}") for e in entries))
+        if entries
+        else len(col_nparams)
+    )
+    train_w = len(col_train)
+
+    total_w = name_w + shape_w + nparams_w + train_w + 9  # 3 separators + padding
+
+    sep = "=" * total_w
+    thin_sep = "-" * total_w
+
+    header = (
+        f" {col_name:<{name_w}} | {col_shape:<{shape_w}} "
+        f"| {col_nparams:>{nparams_w}} | {col_train}"
+    )
+
+    lines = [sep, header, sep]
+
+    prev_trainable = None
+    for name, shape, n, is_train in entries:
+        if prev_trainable is not None and prev_trainable != is_train:
+            lines.append(thin_sep)
+        prev_trainable = is_train
+        mark = "Yes" if is_train else "No"
+        lines.append(
+            f" {name:<{name_w}} | {str(shape):<{shape_w}} "
+            f"| {n:>{nparams_w},} | {mark}"
+        )
+
+    total = sum(e[2] for e in entries)
+    total_train = sum(e[2] for e in trainable)
+    total_frozen = total - total_train
+
+    lines.append(sep)
+    lines.append(f"Total params:          {total:,}")
+    lines.append(f"Trainable params:      {total_train:,}")
+    lines.append(f"Non-trainable params:  {total_frozen:,}")
+    lines.append(thin_sep)
+
+    print("\n".join(lines))
+
+
 class no_grad:
     """Context manager and decorator to disable gradient computation.
 
