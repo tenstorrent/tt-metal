@@ -757,7 +757,7 @@ def main():
         "--output", type=str, default="speech_fp32.wav", help="Output audio file path (for single text)"
     )
     parser.add_argument("--output_dir", type=str, default=".", help="Output directory for multiple texts")
-    parser.add_argument("--max_steps", type=int, default=300, help="Maximum generation steps per chunk")
+    parser.add_argument("--max_steps", type=int, default=MAX_KV_STEPS, help="Maximum generation steps per chunk")
     parser.add_argument(
         "--max_chunk_size",
         type=int,
@@ -834,7 +834,7 @@ def main():
     # Initialize TTNN device
     print("Initializing TTNN device...")
     device = ttnn.open_device(
-        device_id=device_id, l1_small_size=300000, trace_region_size=10000000, num_command_queues=2
+        device_id=device_id, l1_small_size=300000, trace_region_size=15000000, num_command_queues=2
     )
     device.enable_program_cache()
 
