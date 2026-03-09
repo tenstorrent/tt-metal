@@ -17,8 +17,8 @@
 #include "device/device_impl.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/device_print_common.h"
-#include "hostdevcommon/device_print_structures.h"
+#include "hostdev/device_print_common.h"
+#include "hostdev/device_print_structures.h"
 
 namespace tt::tt_metal {
 

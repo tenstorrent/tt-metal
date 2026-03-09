@@ -29,7 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/device_print_common.h"
+#include "hostdev/device_print_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that

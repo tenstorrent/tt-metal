@@ -4,7 +4,7 @@
 
 #include "debug_tools_fixture.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include "hostdevcommon/device_print_structures.h"
+#include "hostdev/device_print_structures.h"
 
 using namespace tt;
 using namespace tt::tt_metal;

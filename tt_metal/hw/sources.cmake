@@ -133,6 +133,8 @@ set(HW_JIT_API_HEADERS
     inc/experimental/core_local_mem.h
     inc/experimental/tensor.h
     inc/hostdev/dev_msgs.h
+    inc/hostdev/device_print_common.h
+    inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
