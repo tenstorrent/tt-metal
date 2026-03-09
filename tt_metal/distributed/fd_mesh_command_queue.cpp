@@ -578,7 +578,6 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> pinned_memory) {
-    ZoneScopedN("FDMeshCommandQueue::write_shard_to_device");
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return false;
     }

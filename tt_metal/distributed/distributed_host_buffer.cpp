@@ -17,8 +17,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
-#include "tracy/Tracy.hpp"
-
 namespace tt::tt_metal {
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
@@ -109,7 +107,6 @@ bool DistributedHostBuffer::is_local(const distributed::MeshCoordinate& coord) c
 
 DistributedHostBuffer DistributedHostBuffer::transform(
     const TransformFn& fn, ProcessShardExecutionPolicy policy) const {
-    ZoneScopedN("tt::tt_metal::DistributedHostBuffer::transform");
     const std::vector<size_t> indices_to_process = get_populated_shard_indices();
     const auto& shards = shards_.values();
     std::vector<distributed::MaybeRemote<Shard>> transformed_shards(
