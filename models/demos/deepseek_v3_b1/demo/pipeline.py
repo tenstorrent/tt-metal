@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     DenseDecoderStage,
     EmbeddingStage,
     LMHeadStage,
+    MoEComputeStage,
     MoEDecoderStage,
     PassthroughPayload,
     PassthroughStage,
@@ -67,6 +68,7 @@ def create_single_pod_pipeline_configuration(
     *,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
+    moe_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
@@ -86,12 +88,14 @@ def create_single_pod_pipeline_configuration(
             lm_head_persistent_mode=lm_head_persistent_mode,
         )
 
-    # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
     def _dense_stage(layer_id: int):
         return lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
 
     def _moe_stage(layer_id: int):
-        return lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
+        return lambda d: MoEComputeStage(
+            weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            persistent_mode=moe_persistent_mode,
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -163,6 +167,7 @@ def create_pipeline_configuration_from_num_procs(
     *,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
+    moe_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
@@ -178,6 +183,7 @@ def create_pipeline_configuration_from_num_procs(
             weight_provider,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
+            moe_persistent_mode=moe_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
@@ -211,8 +217,14 @@ class PipelineConfiguration:
 
     def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
         """Create a Pipeline for this process's stage (determined by mesh_id)."""
+        import sys
+
         my_mesh_id = mesh_device.get_system_mesh_id()
+        print(f"[rank {my_mesh_id}] build_pipeline: creating stage (loading weights)", flush=True)
+        sys.stdout.flush()
         stage = self._stage_factories[my_mesh_id](mesh_device)
+        print(f"[rank {my_mesh_id}] build_pipeline: stage created", flush=True)
+        sys.stdout.flush()
         return Pipeline(mesh_device, stage, self.input_rank, self.output_rank)
 
 
@@ -275,10 +287,26 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+        import sys
+
+        print(f"[rank {self._my_mesh_id}] phase 1: configure_block", flush=True)
+        sys.stdout.flush()
         self.configure_block()
+
+        print(f"[rank {self._my_mesh_id}] phase 2: setup", flush=True)
+        sys.stdout.flush()
         self.setup()
+
+        print(f"[rank {self._my_mesh_id}] phase 3: start_pipeline", flush=True)
+        sys.stdout.flush()
         self.start_pipeline()
+
+        print(f"[rank {self._my_mesh_id}] phase 4: start_compute", flush=True)
+        sys.stdout.flush()
         self.start_compute()
+
+        print(f"[rank {self._my_mesh_id}] setup_and_run complete", flush=True)
+        sys.stdout.flush()
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         if self._pipeline_block is None:
