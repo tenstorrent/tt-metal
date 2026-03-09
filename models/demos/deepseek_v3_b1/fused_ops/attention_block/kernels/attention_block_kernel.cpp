@@ -1601,14 +1601,6 @@ void kernel_main() {
         mla_body();
     }
 
-#if defined(COMPILE_FOR_BRISC)
-    // Update cur position tensor on all cores
-    // We will eventually pass user id and position tensor as socket inputs
-    // The kernel shouldn't manage/modify cur position
-    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
-    pos_ptr[0]++;
-#endif
-
     // ====================================================================
     // Mcast: Teardown persistent mcast
     // ====================================================================
