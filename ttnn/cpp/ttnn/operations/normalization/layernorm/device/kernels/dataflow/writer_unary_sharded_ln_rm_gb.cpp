@@ -7,6 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/tensor.h"
 #include "experimental/endpoints.h"
 #include "reshard_writer.hpp"
 

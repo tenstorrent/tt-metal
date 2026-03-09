@@ -8,6 +8,7 @@
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
