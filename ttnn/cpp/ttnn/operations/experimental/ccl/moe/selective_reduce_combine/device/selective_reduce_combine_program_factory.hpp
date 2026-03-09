@@ -63,14 +63,16 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& output_tensor,
     const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore);
+    const GlobalSemaphore& cross_device_semaphore,
+    const uint32_t metadata_sync_semaphore_id,
+    const uint32_t compute_sync_semaphore_id);
 
 // Runtime argument override function
 void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& sender_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& output_tensor,
     const GlobalSemaphore& init_semaphore,

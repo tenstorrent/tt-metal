@@ -44,7 +44,7 @@ struct MoEComputeMeshWorkloadFactory {
 
     static cached_mesh_workload_t create_mesh_workload(
         const MoEComputeParams& args,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
         const MoEComputeInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
@@ -53,7 +53,9 @@ struct MoEComputeMeshWorkloadFactory {
         const ttnn::MeshCoordinate& mesh_coordinate,
         const MoEComputeInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+        const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
+        const GlobalSemaphore& init_barrier_semaphore,
+        const GlobalSemaphore& final_barrier_semaphore);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,

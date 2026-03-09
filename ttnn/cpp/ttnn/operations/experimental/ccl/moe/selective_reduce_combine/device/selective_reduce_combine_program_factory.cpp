@@ -62,6 +62,9 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
+    const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
+    const uint32_t metadata_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
+    const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
     auto artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
         program,
         operation_attributes,
@@ -70,7 +73,9 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         tensor_args,
         tensor_return_value,
         init_semaphore,
-        cross_device_semaphore);
+        cross_device_semaphore,
+        metadata_sync_semaphore_id,
+        compute_sync_semaphore_id);
     return {std::move(program), std::move(artifacts)};
 }
 
@@ -211,7 +216,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& output_tensor,
     const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
+    const GlobalSemaphore& cross_device_semaphore,
+    const uint32_t metadata_sync_semaphore_id,
+    const uint32_t compute_sync_semaphore_id) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -335,9 +342,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
-    // semaphore will be used for syncing with selective tilize
-    const auto sync_semaphore_id = CreateSemaphore(program, needed_worker_core_range_set, 1);
-
     const auto start_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
     const auto end_coord =
@@ -353,7 +357,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
         {"select_experts_k", select_experts_k},
-        {"sync_semaphore_id", sync_semaphore_id},
+        {"sync_semaphore_id", metadata_sync_semaphore_id},
         {"noc_x_start", start_coord.x},
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},
@@ -380,6 +384,11 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
     const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
                                     !operation_attributes.optional_cross_device_semaphore.has_value();
+
+    // Writer compute sync: when used from MoE, use matmul's data-ready semaphore; else create local (standalone).
+    const uint32_t writer_compute_sync_semaphore_id = compute_sync_semaphore_id;
+    const uint32_t writer_compute_cores_per_combine_core = operation_attributes.compute_cores_per_combine_core;
+
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -404,7 +413,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
-        {"num_mux_workers", num_links * neighbors.size()}};
+        {"num_mux_workers", num_links * neighbors.size()},
+        {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
+        {"compute_cores_per_combine_core", writer_compute_cores_per_combine_core},
+    };
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
