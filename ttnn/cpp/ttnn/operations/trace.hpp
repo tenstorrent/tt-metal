@@ -21,6 +21,9 @@ MeshTraceId begin_trace_capture(MeshDevice* device, std::optional<QueueId> cq_id
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id);
 void execute_trace(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking);
 void release_trace(MeshDevice* device, MeshTraceId trace_id);
+void mark_allocations_safe(MeshDevice* device);
+void mark_allocations_unsafe(MeshDevice* device);
+bool allocations_unsafe(MeshDevice* device);
 
 }  // namespace operations::trace
 

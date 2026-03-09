@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <mutex>
+#include <cstdlib>
 
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
@@ -101,6 +102,15 @@ void AllocatorImpl::verify_safe_allocation() const {
     // have a lifetime that ends before the trace is executed.
     // Print the warning once per device, to ensure that user output is not clobbered.
     thread_local static bool warning_generated = false;
+    if (allocations_unsafe_) {
+        const char* throw_on_unsafe_alloc = std::getenv("TT_METAL_THROW_ON_UNSAFE_TRACE_ALLOCATION");
+        if (throw_on_unsafe_alloc != nullptr && throw_on_unsafe_alloc[0] == '1') {
+            TT_THROW(
+                "Unsafe device buffer allocation attempted while a trace is active. "
+                "This may corrupt buffers on trace replay. "
+                "Unset TT_METAL_THROW_ON_UNSAFE_TRACE_ALLOCATION to downgrade this to a warning.");
+        }
+    }
     if (allocations_unsafe_ and not warning_generated) {
         log_warning(
             tt::LogMetal,
@@ -358,6 +368,11 @@ void AllocatorImpl::mark_allocations_unsafe() {
 void AllocatorImpl::mark_allocations_safe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = false;
+}
+
+bool AllocatorImpl::allocations_unsafe() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocations_unsafe_;
 }
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {

@@ -73,6 +73,7 @@ public:
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
+    bool allocations_unsafe() const;
 
     // High water mark tracking for DRAM allocations during trace capture
     // Delegates to BankManager to account for banking properly
