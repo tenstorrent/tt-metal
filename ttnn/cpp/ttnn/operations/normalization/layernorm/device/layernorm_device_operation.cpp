@@ -39,10 +39,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
     if (a.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
-            a.logical_shape()[-1] % TILE_WIDTH == 0,
-            "ROW_MAJOR input requires W ({}) to be a multiple of TILE_WIDTH ({})",
+            a.logical_shape()[-1] % tile_width == 0,
+            "ROW_MAJOR input requires W ({}) to be a multiple of tile width ({})",
             a.logical_shape()[-1],
-            TILE_WIDTH);
+            tile_width);
     }
     TT_FATAL(
         a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
