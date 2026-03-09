@@ -649,26 +649,27 @@ def test_optimized_moe_decode_block(
 
     # Merge the weight tensors that belong to different experts on the same device
     # Then reorder the merged weights into their sharded format
-    torch_w0_w1_reordered_tensors = [None] * 128
-    torch_w2_reordered_tensors = [None] * 128
-    for i in range(0, experts, 2):
-        torch_w0 = torch.cat([torch_w0_tensors[i], torch_w0_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
-        torch_w1 = torch.cat([torch_w1_tensors[i], torch_w1_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
-        torch_w2 = torch.cat([torch_w2_tensors[i], torch_w2_tensors[i + 1]], dim=1)  # (L, 1, N, H) -> (L, E/D, N, H)
+    # Finally, order merged weights in accordance to linearized_mesh_coord ordering
+    torch_w0_w1_reordered_tensors = [None] * num_devices
+    torch_w2_reordered_tensors = [None] * num_devices
+    for e in range(0, experts, 2):
+        torch_w0 = torch.cat([torch_w0_tensors[e], torch_w0_tensors[e + 1]], dim=1)  # [L, 1, H, N] -> [L, E/D, H, N]
+        torch_w1 = torch.cat([torch_w1_tensors[e], torch_w1_tensors[e + 1]], dim=1)  # [L, 1, H, N] -> [L, E/D, H, N]
+        torch_w2 = torch.cat([torch_w2_tensors[e], torch_w2_tensors[e + 1]], dim=1)  # [L, 1, N, H] -> [L, E/D, N, H]
 
         torch_w0_w1_reordered, torch_w2_reordered = create_torch_prepared_compute_matmul_weight_tensors(
             torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, matmul_N, ring2cores
         )
 
-        # TODO: (GR)
-        iteration = i // 2
-        mapped_index = (iteration % 16) * 8 + (iteration // 16)
-        torch_w0_w1_reordered_tensors[mapped_index] = torch_w0_w1_reordered
-        torch_w2_reordered_tensors[mapped_index] = torch_w2_reordered
+        linearized_mesh_coord = get_linearized_mesh_coord(
+            num_replicated_devices, cluster_axis, e, experts_per_cluster, experts_per_device
+        )
+        torch_w0_w1_reordered_tensors[linearized_mesh_coord] = torch_w0_w1_reordered
+        torch_w2_reordered_tensors[linearized_mesh_coord] = torch_w2_reordered
 
     # concat before sending to device
-    torch_w0_w1_reordered_tensor = torch.cat(torch_w0_w1_reordered_tensors, dim=0)  # torch_w0_w1_reordered_tensors[0]
-    torch_w2_reordered_tensor = torch.cat(torch_w2_reordered_tensors, dim=0)  # torch_w2_reordered_tensors[0]
+    torch_w0_w1_reordered_tensor = torch.cat(torch_w0_w1_reordered_tensors, dim=0)
+    torch_w2_reordered_tensor = torch.cat(torch_w2_reordered_tensors, dim=0)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
