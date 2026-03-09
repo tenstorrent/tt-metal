@@ -75,7 +75,7 @@ class MoEGatePrefill:
         global_onehot_experts = ttnn.zeros(
             shape=[self.seq_len_per_chip, self.n_routed_experts],
             dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=global_expert_indices.device(),
         )
         global_updates = ttnn.ones_like(global_onehot_experts)
