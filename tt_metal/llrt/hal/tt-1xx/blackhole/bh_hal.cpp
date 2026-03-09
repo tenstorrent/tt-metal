@@ -198,6 +198,11 @@ public:
             enable_2_erisc_mode_) {
             cflags += "-Werror=stack-usage=1912 ";
         }
+        // We need to disable -mtt-fix-wh-bh-ebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-wh-bh-ebreak ";
+        }
         return cflags;
     }
 
