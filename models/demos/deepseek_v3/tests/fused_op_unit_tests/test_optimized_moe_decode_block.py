@@ -130,10 +130,10 @@ def create_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
     for _ in range(batch):
         for _ in range(seq):
             tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) - 0.5)
-    res = torch.cat(tokens, dim=0)
+    result = torch.cat(tokens, dim=0)
 
     # [batch, 1, seq, hidden_size]
-    return res.reshape(batch, 1, seq, hidden_size)
+    return result.reshape(batch, 1, seq, hidden_size)
 
 
 def create_torch_dispatch_input_expert_indices_tensor(
@@ -418,24 +418,34 @@ def gen_combine_golden(
     return torch_combine_ref_tensor
 
 
-def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_combine_golden):
+def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden):
     PCC_THRESHOLD = 0.988
     ATOL_THRESHOLD = 625.0
 
-    # TODO: (GR) remove hardcoding
-    tt_combine_tensor = ttnn.reshape(tt_combine_tensor, [8, 1, 32, 7168])
-    torch_combine_output = ttnn.to_torch(
-        tt_combine_tensor,
-        dtype=torch.bfloat16,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)),
-    )
-    torch_combine_output = torch_combine_output.reshape(8, 4096, 7168)
+    # factors in linearized_mesh_coord
+    if cluster_axis == 0:
+        device_tensors = ttnn.get_device_tensors(ttnn.from_device(tt_combine_tensor))
+        host_tensors = [ttnn.to_torch(t) for t in device_tensors]
 
+        torch_combine_output = []
+        for m1 in range(mesh_shape[1]):
+            for m0 in range(mesh_shape[0]):
+                torch_combine_output.append(host_tensors[m0 * mesh_shape[1] + m1])
+
+        torch_combine_output = torch.cat(torch_combine_output, dim=1)
+
+    else:
+        torch_combine_output = ttnn.to_torch(
+            tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+        )
+
+    # check pcc
     pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
 
+    # check allclose
     allclose_passed, allclose_output = comp_allclose(
         torch_combine_golden, torch_combine_output, atol=ATOL_THRESHOLD, rtol=0
     )
@@ -487,7 +497,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     ATOL_THRESHOLD = 1670.0
 
     # bring to host
-    # (1, 1, 32, 896) -> (1, 1, 512, 7168)
+    # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
     tt_output_tensor = ttnn.to_torch(
         tt_output_tensor,
         dtype=torch.bfloat16,
@@ -495,15 +505,16 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     )
 
     # reshape for comparison with golden
-    # (1, 1, 512, 7168) -> (512, 1, 1, 7168)
+    # [1, 1, batch, hidden_size] -> [batch, 1, 1, hidden_size]
     tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
 
-    # compare output
+    # check pcc
     pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=PCC_THRESHOLD)
     logger.info(f"Final Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - PCC: {pcc_output}")
 
+    # check allclose
     allclose_passed, allclose_output = comp_allclose(
         output_reference_tensor, tt_output_tensor, atol=ATOL_THRESHOLD, rtol=0
     )
@@ -1144,7 +1155,12 @@ def test_optimized_moe_decode_block(
         logger.info(f"Validating iteration: {iteration}")
 
         if not verify_combine(
-            iteration, mesh_device, mesh_shape, tt_combine_tensors[iteration], torch_combine_goldens[iteration]
+            iteration,
+            mesh_device,
+            mesh_shape,
+            cluster_axis,
+            tt_combine_tensors[iteration],
+            torch_combine_goldens[iteration],
         ):
             all_iterations_passed = False
 
