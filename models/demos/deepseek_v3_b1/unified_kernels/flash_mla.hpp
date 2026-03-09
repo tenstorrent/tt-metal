@@ -181,7 +181,7 @@ struct FlashMLADecode {
     // ========================================================================
     // Op - templated on CTArgs (compile-time args) and IsActiveCore
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool IsKVCacheUpdateCore>
+    template <typename CTArgs, bool IsActiveCore>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -275,11 +275,7 @@ struct FlashMLADecode {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             // Wait for KV cache cur pos ready
-            if constexpr (IsKVCacheUpdateCore) {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value - 1);
-            } else {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-            }
+            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
@@ -608,8 +604,6 @@ struct FlashMLADecode {
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
 
-            MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
-            PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);

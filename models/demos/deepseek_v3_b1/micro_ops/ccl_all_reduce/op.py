@@ -247,7 +247,6 @@ class DeepseekMinimalAllReduce:
 
                 # Receiver kernel: NCRISC (reader) + TRISC (compute)
                 receiver_ncrisc_ct_args = [
-                    ("packet_header_cb_id", packet_header_cb_id),
                     ("cb_in1", compute_cb_in1),
                     ("l1_alignment", l1_alignment),
                     ("cb_in2", compute_cb_in2),
