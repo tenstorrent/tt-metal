@@ -1,0 +1,1 @@
+{"ts":"2026-03-09T10:02:43+00:00","event":"start","agent":"ttnn-operation-analyzer","operation":"softmax_w_small","input_files":["ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_program_factory_general_w_small.cpp"]}
