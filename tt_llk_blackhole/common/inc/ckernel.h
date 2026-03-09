@@ -7,7 +7,6 @@
 #include <cstring>
 #include <utility>
 
-#include "ckernel.h"
 #include "ckernel_common_ops.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
@@ -21,8 +20,6 @@
 // This header is included on non-trisc builds, for reasons
 // unknown. lltt is only available on trisc
 #if defined(COMPILE_FOR_TRISC)
-#include <utility>
-
 #include "lltt.h"
 #endif
 

@@ -76,18 +76,42 @@ INVALID_CORE = -1
 
 
 class RiscCore(IntEnum):
-    BRISC = INVALID_CORE if get_chip_architecture() == ChipArchitecture.QUASAR else 11
-    TRISC0 = 11 if get_chip_architecture() == ChipArchitecture.QUASAR else 12
-    TRISC1 = 12 if get_chip_architecture() == ChipArchitecture.QUASAR else 13
-    TRISC2 = 13 if get_chip_architecture() == ChipArchitecture.QUASAR else 14
-    TRISC3 = 14 if get_chip_architecture() == ChipArchitecture.QUASAR else INVALID_CORE
+    # These are now just internal identifiers, not the hardware IDs
+    BRISC = 0
+    TRISC0 = 1
+    TRISC1 = 2
+    TRISC2 = 3
+    TRISC3 = 4
 
-    def __str__(self):
-        return self.name.lower()
+    @property
+    def value(self):
+        """Overrides the standard .value to be chip-dependent and lazy."""
+        arch = get_chip_architecture()
+        is_quasar = arch == ChipArchitecture.QUASAR
+
+        mapping = {
+            RiscCore.BRISC: -1 if is_quasar else 11,
+            RiscCore.TRISC0: 11 if is_quasar else 12,
+            RiscCore.TRISC1: 12 if is_quasar else 13,
+            RiscCore.TRISC2: 13 if is_quasar else 14,
+            RiscCore.TRISC3: 14 if is_quasar else -1,
+        }
+        return mapping[self]
+
+    def __repr__(self):
+        # This forces the print output to use your lazy .value property
+        return f"<{self.__class__.__name__}.{self.name}: {self.value}>"
+
+
+def get_all_cores():
+    arch = get_chip_architecture()
+    if arch == ChipArchitecture.QUASAR:
+        return [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2, RiscCore.TRISC3]
+    return [RiscCore.BRISC, RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2]
 
 
 # Constant - list of all valid cores on the chip
-ALL_CORES = [core for core in RiscCore if core != INVALID_CORE]
+ALL_CORES = get_all_cores()
 
 
 def get_register_store(location="0,0", device_id=0, neo_id=0):
@@ -212,10 +236,9 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
 
 
 def handle_if_assert_hit(elfs: list[str], core_loc="0,0", device_id=0):
-    trisc_cores = [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2]
     assertion_hits = []
     temp_stack_traces = ""
-    for core in trisc_cores:
+    for core in [RiscCore.TRISC0.name, RiscCore.TRISC1.name, RiscCore.TRISC2.name]:
         risc_name = str(core)
         if is_assert_hit(risc_name, core_loc=core_loc, device_id=device_id):
             temp_stack_traces += _print_callstack(
