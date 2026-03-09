@@ -76,7 +76,8 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
-    constexpr uint32_t num_mux_workers = get_named_compile_time_arg_val("num_mux_workers");
+    constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
+    constexpr uint32_t num_links = get_named_compile_time_arg_val("num_links");
 
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
@@ -255,7 +256,7 @@ void kernel_main() {
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
-        noc_semaphore_wait(termination_sync_semaphore_ptr, (num_token_parallel_cores * num_data_parallel_cores) - 1);
+        noc_semaphore_wait(termination_sync_semaphore_ptr, num_data_parallel_cores - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
@@ -265,7 +266,7 @@ void kernel_main() {
             mesh_rows,
             mesh_cols,
             replicate_axis,
-            true>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
+            false>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
@@ -276,11 +277,10 @@ void kernel_main() {
             Num_Directions,
             fabric_mux_num_buffers_per_channel,
             fabric_mux_termination_signal_address,
-            num_mux_workers>(directions, fabric_connections, true, rt_arg_count);
+            num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
 
-        noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+        noc_semaphore_wait(semaphore_ptr, replicate_group_devices - 1);
         noc_semaphore_set(semaphore_ptr, 0);
-
     } else {
         // get sync core semaphore noc address
         close_direction_connections<
@@ -288,7 +288,7 @@ void kernel_main() {
             fabric_mux_num_buffers_per_channel,
             fabric_mux_termination_signal_address>(directions, fabric_connections, false);
 
-        uint64_t safe_termination_sync_address = safe_get_noc_addr(
+        const uint64_t safe_termination_sync_address = safe_get_noc_addr(
             sync_args.termination_master_noc_x,
             sync_args.termination_master_noc_y,
             sync_args.termination_sync_address,
