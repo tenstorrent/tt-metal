@@ -218,7 +218,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
-    const ttnn::Tensor& combine_output_tensor = tensor_return_value.at(4);
+    // const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(4);
+    ttnn::Tensor& output_tensor = tensor_return_value.at(5);
 
     [[maybe_unused]] const auto& tilize_per_expert_total_tokens_output_shape =
         tilize_per_expert_total_tokens_output_tensor.tensor_spec().logical_shape();
@@ -1028,55 +1029,6 @@ MoEComputeMeshWorkloadFactory::create_at(
             .named_compile_args = matmul_named_compile_time_args});
 
     //-------------------------------------------------------------------------
-    // Combine stage
-    //-------------------------------------------------------------------------
-
-    // Combine parameters
-    uint32_t compute_cores_per_combine_core = 3;
-    TT_FATAL(args.combine_num_links > 0, "num_links must be greater than 0");
-    TT_FATAL(args.cluster_axis < 2, "cluster_axis must be 0 or 1");
-    TT_FATAL(compute_cores_per_combine_core > 0, "compute_cores_per_combine_core must be greater than 0");
-    ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
-        .hidden_size = hidden_size,
-        .total_tokens = tokens,
-        .select_experts_k = selected_experts_k,
-        .experts = experts,
-        .num_links = args.combine_num_links.value_or(4),
-        .cluster_axis = args.cluster_axis.value_or(1),
-        .topology = args.combine_topology,
-        .num_token_parallel_cores = args.combine_token_parallel_core_dim.value_or(4),
-        .num_data_parallel_cores = args.combine_data_parallel_core_dim.value_or(4),
-        .worker_cores = combine_cores,
-        .mux_core_range_set = args.mux_core_range_set,
-        .compute_cores_per_combine_core = compute_cores_per_combine_core,
-        .output_memory_config = args.output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
-        .optional_cross_device_semaphore = args.optional_cross_device_semaphore,
-    };
-    ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
-        .dense_input_tensor = tilize_output_tensor,
-        .dense_metadata_tensor = tilize_expert_activation_output_tensor,
-        .dense_token_maps_tensor = tilize_e_t_output_tensor,
-        .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
-        .optional_output_tensor = combine_output_tensor,
-    };
-    auto selective_reduce_combine_artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
-        program,
-        combine_params,
-        mesh_coordinate,
-        mesh_coordinates.coords(),
-        combine_tensor_args,
-        combine_output_tensor,
-        init_barrier_semaphore,
-        final_barrier_semaphore,
-        tilize_combine_sync_semaphore_id,
-        matmul_combine_sync_semaphore_id);
-
-    auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
-    auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;
-    auto combine_init_semaphore = selective_reduce_combine_artifacts.init_semaphore;
-    auto combine_cross_device_semaphore = selective_reduce_combine_artifacts.cross_device_semaphore;
-
-    //-------------------------------------------------------------------------
     // ring ordering
     //-------------------------------------------------------------------------
 
@@ -1157,6 +1109,58 @@ MoEComputeMeshWorkloadFactory::create_at(
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
 
+    //-------------------------------------------------------------------------
+    // Combine stage
+    //-------------------------------------------------------------------------
+
+    // Combine parameters
+    uint32_t compute_cores_per_combine_core = 3;
+    TT_FATAL(args.combine_num_links > 0, "num_links must be greater than 0");
+    TT_FATAL(args.cluster_axis < 2, "cluster_axis must be 0 or 1");
+    TT_FATAL(compute_cores_per_combine_core > 0, "compute_cores_per_combine_core must be greater than 0");
+
+    ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
+        .hidden_size = hidden_size,
+        .total_tokens = tokens,
+        .select_experts_k = selected_experts_k,
+        .experts = experts,
+        .num_links = args.combine_num_links.value_or(4),
+        .cluster_axis = args.cluster_axis.value_or(1),
+        .topology = args.combine_topology,
+        .num_token_parallel_cores = args.combine_token_parallel_core_dim.value_or(4),
+        .num_data_parallel_cores = args.combine_data_parallel_core_dim.value_or(4),
+        .worker_cores = combine_cores,
+        .mux_core_range_set = args.mux_core_range_set,
+        .compute_cores_per_combine_core = compute_cores_per_combine_core,
+        .output_memory_config = args.output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        .optional_cross_device_semaphore = args.optional_cross_device_semaphore,
+    };
+    // MoE compute op does not have an optional output tensor in its API; combine writes to the
+    // tensor we create (output_tensor) passed explicitly to build_selective_reduce_combine_program_artifacts.
+    ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
+        .dense_input_tensor = tilize_output_tensor,
+        .dense_metadata_tensor = tilize_expert_activation_output_tensor,
+        .dense_token_maps_tensor = tilize_e_t_output_tensor,
+        .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor
+        //.optional_output_tensor = std::nullopt,
+    };
+    auto selective_reduce_combine_artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
+        program,
+        combine_params,
+        mesh_coordinate,
+        mesh_coordinates.coords(),
+        combine_tensor_args,
+        output_tensor,
+        init_barrier_semaphore,
+        final_barrier_semaphore,
+        tilize_combine_sync_semaphore_id,
+        matmul_combine_sync_semaphore_id);
+
+    auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
+    auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;
+    auto combine_init_semaphore = selective_reduce_combine_artifacts.init_semaphore;
+    auto combine_cross_device_semaphore = selective_reduce_combine_artifacts.cross_device_semaphore;
+
     //    if (combine_dm1_kernel_handle_opt.has_value() && combine_semaphore_id_opt.has_value()) {
     //        const std::vector<uint32_t> combine_runtime_args = {*combine_semaphore_id_opt};
     //        for (const auto& core : combine_cores) {
@@ -1177,8 +1181,8 @@ MoEComputeMeshWorkloadFactory::create_at(
          .sharded_output_cb_handle = sharded_output_cb_handle,
          .matmul_writer_cb_handle = matmul_writer_cb_handle,
          .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
-         .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore},
-         .combine_cores = combine_cores}};
+         .combine_cores = combine_cores,
+         .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore}}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
@@ -1191,7 +1195,8 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
-    ttnn::Tensor& combine_output_tensor = tensor_return_value.at(4);
+    // const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(4);
+    ttnn::Tensor& output_tensor = tensor_return_value.at(5);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
@@ -1253,12 +1258,13 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
             auto init_semaphore = shared_variables.combine_global_semaphores.at(0);
             auto cross_device_semaphore = shared_variables.combine_global_semaphores.at(1);
 
+            // MoE compute op does not have an optional output tensor; do not pass it in tensor_args.
             ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
                 .dense_input_tensor = tilize_output_tensor,
                 .dense_metadata_tensor = tilize_expert_activation_output_tensor,
                 .dense_token_maps_tensor = tilize_e_t_output_tensor,
                 .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
-                .optional_output_tensor = combine_output_tensor,
+                .optional_output_tensor = std::nullopt,
             };
             ttnn::selective_reduce_combine_helper_override_runtime_arguments(
                 program,
@@ -1266,7 +1272,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 writer_kernel_id,
                 cores,
                 combine_tensor_args,
-                combine_output_tensor,
+                output_tensor,
                 init_semaphore,
                 cross_device_semaphore,
                 args.optional_cross_device_semaphore);

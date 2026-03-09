@@ -22,14 +22,14 @@ struct MoEComputeParams {
     uint32_t layer_id;
     uint32_t output_height_shard_dim;
     uint32_t output_width_shard_dim;
-    std::optional<uint32_t> cluster_axis;
+    CoreRangeSet mux_core_range_set{};
     // a2a combine  attributes
+    std::optional<uint32_t> cluster_axis;
     std::optional<uint32_t> combine_num_links;
     std::optional<uint32_t> combine_token_parallel_core_dim;
     std::optional<uint32_t> combine_data_parallel_core_dim;
     tt::tt_fabric::Topology combine_topology = tt::tt_fabric::Topology::Ring;
-    CoreRangeSet mux_core_range_set{};
-    std::optional<MemoryConfig> output_memory_config;
+    std::optional<tt::tt_metal::MemoryConfig> output_memory_config;
     std::optional<GlobalSemaphore> optional_cross_device_semaphore;
 
     auto attributes() const {

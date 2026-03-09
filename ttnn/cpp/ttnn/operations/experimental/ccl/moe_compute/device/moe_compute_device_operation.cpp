@@ -33,7 +33,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
@@ -51,6 +51,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
+    uint32_t hidden_size = tilize_input_shape[-1];
 
     //-------------------------------------------------------------------------
     // Tilize outputs
@@ -129,11 +130,35 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
      */
 
     const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
-    const tt::tt_metal::TensorLayout output_layout(
+    const tt::tt_metal::TensorLayout matmul_output_layout(
         tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
-    const auto output_spec = TensorSpec(tilize_output_shape, output_layout);
+    const auto matmul_output_spec = TensorSpec(tilize_output_shape, matmul_output_layout);
 
-    return {tilize_per_expert_total_tokens_spec, tilize_expert_activation_spec, tilize_e_t_spec, tilize_output_spec, output_spec};
+    //-------------------------------------------------------------------------
+    // a2a combine output
+    //-------------------------------------------------------------------------
+    using namespace tt::tt_metal;
+
+    const auto& axis = args.cluster_axis;
+    const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    const uint32_t total_tokens_per_device = total_tokens / num_devices_cluster;
+    const uint32_t experts_per_cluster = experts / num_clusters;
+
+    auto output_shape = ttnn::Shape({experts_per_cluster, total_tokens_per_device, hidden_size});
+    auto mem_config = args.output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto output_spec = TensorSpec(
+        Shape(output_shape),
+        TensorLayout(tilize_output_layout.get_data_type(), PageConfig(Layout::ROW_MAJOR), mem_config));
+
+    return {
+        tilize_per_expert_total_tokens_spec,
+        tilize_expert_activation_spec,
+        tilize_e_t_spec,
+        tilize_output_spec,
+        matmul_output_spec,
+        output_spec};
 }
 
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
@@ -146,14 +171,15 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
     const auto& output_storage = tilize_output_tensor.device_storage();
     const auto& output_spec = output_specs[4];
     const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor output_tensor(output_storage,output_spec,output_topology);
+    const ttnn::Tensor matmul_output_tensor(output_storage, output_spec, output_topology);
 
     return {
         create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[1], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[2], tensor_args.tilize_input_tensor.device()),
         tilize_output_tensor,
-        output_tensor};
+        matmul_output_tensor,
+        create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device())};
 }
 
 }  // namespace ttnn::experimental::prim
