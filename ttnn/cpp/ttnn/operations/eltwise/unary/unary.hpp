@@ -31,7 +31,7 @@ Tensor unary_impl(
 
 }  // namespace operations::unary
 
-#define UNARY_OP(op_name, op_type)                                                                     \
+#define REGISTER_UNARY_OPERATION(op_name, op_type)                                                     \
     inline Tensor op_name(                                                                             \
         const Tensor& t,                                                                               \
         const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,                             \
@@ -41,7 +41,7 @@ Tensor unary_impl(
             t, {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type}}, m, o, s); \
     }
 
-#define UNARY_OP_FAST_APPROX(op_name, op_type)                                                                   \
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(op_name, op_type)                                \
     inline Tensor op_name(                                                                                       \
         const Tensor& t,                                                                                         \
         bool p = false,                                                                                          \
@@ -56,7 +56,7 @@ Tensor unary_impl(
             s);                                                                                                  \
     }
 
-#define UNARY_OP_FLOAT_PARAM(op_name, op_type)                                                                   \
+#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(op_name, op_type)                                          \
     inline Tensor op_name(                                                                                       \
         const Tensor& t,                                                                                         \
         float p,                                                                                                 \
@@ -92,71 +92,74 @@ Tensor unary_impl(
 // Functions defined with macros
 // -----------------------------------------------------------------------------
 
-UNARY_OP(acos, ACOS)
-UNARY_OP(asin, ASIN)
-UNARY_OP(asinh, ASINH)
-UNARY_OP(atan, ATAN)
-UNARY_OP(atanh, ATANH)
-UNARY_OP(cos, COS)
-UNARY_OP(acosh, ACOSH)
-UNARY_OP(cosh, COSH)
-UNARY_OP(sinh, SINH)
-UNARY_OP(erfinv, ERFINV)
-UNARY_OP(exp2, EXP2)
-UNARY_OP(expm1, EXPM1)
-UNARY_OP(gez, GEZ)
-UNARY_OP(gtz, GTZ)
-UNARY_OP(i0, I0)
-UNARY_OP(i1, I1)
-UNARY_OP(isfinite, ISFINITE)
-UNARY_OP(isinf, ISINF)
-UNARY_OP(isnan, ISNAN)
-UNARY_OP(isneginf, ISNEGINF)
-UNARY_OP(isposinf, ISPOSINF)
-UNARY_OP(lez, LEZ)
-UNARY_OP(logical_not, LOGICAL_NOT_UNARY)
-UNARY_OP(ltz, LTZ)
-UNARY_OP(neg, NEG)
-UNARY_OP(nez, NEZ)
-UNARY_OP(reciprocal, RECIP)
-UNARY_OP(relu, RELU)
-UNARY_OP(relu6, RELU6)
-UNARY_OP(sign, SIGN)
-UNARY_OP(signbit, SIGNBIT)
-UNARY_OP(silu, SILU)
-UNARY_OP(sin, SIN)
-UNARY_OP(square, SQUARE)
-UNARY_OP(tan, TAN)
-UNARY_OP(tiled_prod, TILED_PROD)
-UNARY_OP(bitwise_not, BITWISE_NOT)
-UNARY_OP(alt_complex_rotate90, ALT_COMPLEX_ROTATE90)
-UNARY_OP(floor, FLOOR)
-UNARY_OP(ceil, CEIL)
-UNARY_OP(trunc, TRUNC)
-UNARY_OP(frac, FRAC)
-UNARY_OP(hardsigmoid, HARDSIGMOID)
-UNARY_OP(hardswish, HARDSWISH)
-UNARY_OP(softsign, SOFTSIGN)
-UNARY_OP(cbrt, CBRT)
+REGISTER_UNARY_OPERATION(acos, ACOS)
+REGISTER_UNARY_OPERATION(asin, ASIN)
+REGISTER_UNARY_OPERATION(asinh, ASINH)
+REGISTER_UNARY_OPERATION(atan, ATAN)
+REGISTER_UNARY_OPERATION(atanh, ATANH)
+REGISTER_UNARY_OPERATION(cos, COS)
+REGISTER_UNARY_OPERATION(acosh, ACOSH)
+REGISTER_UNARY_OPERATION(cosh, COSH)
+REGISTER_UNARY_OPERATION(sinh, SINH)
+REGISTER_UNARY_OPERATION(erfinv, ERFINV)
+REGISTER_UNARY_OPERATION(exp2, EXP2)
+REGISTER_UNARY_OPERATION(expm1, EXPM1)
+REGISTER_UNARY_OPERATION(gez, GEZ)
+REGISTER_UNARY_OPERATION(gtz, GTZ)
+REGISTER_UNARY_OPERATION(i0, I0)
+REGISTER_UNARY_OPERATION(i1, I1)
+REGISTER_UNARY_OPERATION(isfinite, ISFINITE)
+REGISTER_UNARY_OPERATION(isinf, ISINF)
+REGISTER_UNARY_OPERATION(isnan, ISNAN)
+REGISTER_UNARY_OPERATION(isneginf, ISNEGINF)
+REGISTER_UNARY_OPERATION(isposinf, ISPOSINF)
+REGISTER_UNARY_OPERATION(lez, LEZ)
+REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY)
+REGISTER_UNARY_OPERATION(ltz, LTZ)
+REGISTER_UNARY_OPERATION(neg, NEG)
+REGISTER_UNARY_OPERATION(nez, NEZ)
+REGISTER_UNARY_OPERATION(reciprocal, RECIP)
+REGISTER_UNARY_OPERATION(relu, RELU)
+REGISTER_UNARY_OPERATION(relu6, RELU6)
+REGISTER_UNARY_OPERATION(sign, SIGN)
+REGISTER_UNARY_OPERATION(signbit, SIGNBIT)
+REGISTER_UNARY_OPERATION(silu, SILU)
+REGISTER_UNARY_OPERATION(sin, SIN)
+REGISTER_UNARY_OPERATION(square, SQUARE)
+REGISTER_UNARY_OPERATION(tan, TAN)
+REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD)
+REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT)
+REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90)
+REGISTER_UNARY_OPERATION(floor, FLOOR)
+REGISTER_UNARY_OPERATION(ceil, CEIL)
+REGISTER_UNARY_OPERATION(trunc, TRUNC)
+REGISTER_UNARY_OPERATION(frac, FRAC)
+REGISTER_UNARY_OPERATION(hardsigmoid, HARDSIGMOID)
+REGISTER_UNARY_OPERATION(hardswish, HARDSWISH)
+REGISTER_UNARY_OPERATION(softsign, SOFTSIGN)
+REGISTER_UNARY_OPERATION(cbrt, CBRT)
 
-UNARY_OP_FAST_APPROX(exp, EXP)
-UNARY_OP_FAST_APPROX(erf, ERF)
-UNARY_OP_FAST_APPROX(erfc, ERFC)
-UNARY_OP_FAST_APPROX(gelu, GELU)
-UNARY_OP_FAST_APPROX(log, LOG)
-UNARY_OP_FAST_APPROX(log10, LOG10)
-UNARY_OP_FAST_APPROX(log2, LOG2)
-UNARY_OP_FAST_APPROX(log1p, LOG1P)
-UNARY_OP_FAST_APPROX(rsqrt, RSQRT)
-UNARY_OP_FAST_APPROX(sqrt, SQRT)
+// Unaries with fast_and_approximate_mode
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 
-UNARY_OP_FLOAT_PARAM(heaviside, HEAVISIDE)
-UNARY_OP_FLOAT_PARAM(leaky_relu, LEAKY_RELU)
-UNARY_OP_FLOAT_PARAM(relu_max, RELU_MAX)
-UNARY_OP_FLOAT_PARAM(relu_min, RELU_MIN)
-UNARY_OP_FLOAT_PARAM(unary_remainder, REMAINDER)
-UNARY_OP_FLOAT_PARAM(celu, CELU)
-UNARY_OP_FLOAT_PARAM(rpow, RPOW)
+// Unaries with float parameter
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_min, RELU_MIN)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_remainder, REMAINDER)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW)
 
 UNARY_OP_SCALAR_VARIANT(minimum, MINIMUM)
 UNARY_OP_SCALAR_VARIANT(maximum, MAXIMUM)
@@ -246,14 +249,6 @@ inline Tensor eqz(
     const std::optional<Tensor>& o = std::nullopt) {
     return operations::unary::detail::unary_impl(
         t, {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::EQZ}}, m, o);
-}
-
-inline Tensor mish(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt) {
-    return operations::unary::detail::unary_impl(
-        t, {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::MISH}}, m, o);
 }
 
 inline Tensor hardmish(

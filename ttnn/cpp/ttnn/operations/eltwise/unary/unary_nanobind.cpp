@@ -1859,11 +1859,6 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_3param<"mish", &ttnn::mish>(
-        mod,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
-        "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_3param<"hardmish", &ttnn::hardmish>(
         mod,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
