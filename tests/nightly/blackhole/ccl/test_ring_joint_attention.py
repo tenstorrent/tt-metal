@@ -67,8 +67,12 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
 
 @pytest.mark.parametrize(
     "dtype, pcc_threshold",
-    [(ttnn.bfloat16, 0.994)],
-    ids=["bf16"],
+    [
+        (ttnn.bfloat16, 0.994),
+        (ttnn.bfloat8_b, 0.994),
+        (ttnn.bfloat4_b, 0.8),
+    ],
+    ids=["bf16", "bf8_b", "bf4_b"],
 )
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
