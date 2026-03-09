@@ -19,6 +19,31 @@ from loguru import logger
 from models.common.utility_functions import torch_random
 
 
+# Helper function that calls topk with preallocated output tensors, whose shapes are
+# determined by the ttnn_result obtained from a previous run of topk without preallocated output tensors.
+def _run_topk_with_preallocated(ttnn_tensor, k, dim, device, ttnn_result):
+    """Re-runs topk with preallocated output tensors and returns (values, indices) as torch tensors."""
+    prealloc_values = ttnn.empty(
+        list(ttnn_result[0].shape),
+        dtype=ttnn_result[0].dtype,
+        layout=ttnn_result[0].layout,
+        device=device,
+        memory_config=ttnn_result[0].memory_config(),
+    )
+    prealloc_indices = ttnn.empty(
+        list(ttnn_result[1].shape),
+        dtype=ttnn_result[1].dtype,
+        layout=ttnn_result[1].layout,
+        device=device,
+        memory_config=ttnn_result[1].memory_config(),
+    )
+    ttnn_result_prealloc = ttnn.topk(ttnn_tensor, k, dim=dim, output_tensor=(prealloc_values, prealloc_indices))
+    return (
+        ttnn.to_torch(ttnn.from_device(ttnn_result_prealloc[0])),
+        ttnn.to_torch(ttnn.from_device(ttnn_result_prealloc[1])),
+    )
+
+
 # Test a 0D, 1D, 5D, and a 0-volume tensor
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0])
@@ -151,6 +176,17 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
         assert (
             torch_indices.shape == ttnn_indices.shape
         ), f"Shape mismatch on indices: torch: {torch_indices.shape}, ttnn: {ttnn_indices.shape}"
+
+        # Repeat the test with preallocated output tensors.
+        prealloc_values, prealloc_indices = _run_topk_with_preallocated(ttnn_tensor, k, dim, device, ttnn_result)
+        # The two methods should produce identical results.
+        assert torch.equal(
+            prealloc_values, ttnn_values
+        ), f"Preallocated values differ from non-preallocated: {prealloc_values} vs {ttnn_values}"
+        assert torch.equal(
+            prealloc_indices, ttnn_indices
+        ), f"Preallocated indices differ from non-preallocated: {prealloc_indices} vs {ttnn_indices}"
+
         # Other checks are not meaningful for empty tensors.
         return
 
@@ -159,15 +195,15 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     passing, output_pcc = comp_allclose_and_pcc(torch_values, ttnn_values, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"Values: {output_pcc}, torch: {torch_values}, ttnn: {ttnn_values}"
 
-    ttnn_indices = ttnn_indices.to(torch.int32)
+    ttnn_indices_adjusted = ttnn_indices.to(torch.int32)
     # Indices can come back as negative values from ttnn (stored as unsigned in bfloat16).
     # This is fixed by adding 2^16 to negative values.
-    ttnn_indices = torch.where(ttnn_indices < 0, ttnn_indices + 65536, ttnn_indices)
+    ttnn_indices_adjusted = torch.where(ttnn_indices_adjusted < 0, ttnn_indices_adjusted + 65536, ttnn_indices_adjusted)
 
     cosine_sim_target = 0.99
     # Use ttnn's returned indices to gather values from the original input tensor.
     # The result is "the values that ttnn thinks are the top-k."
-    ttnn_gather_from_indices = torch.gather(torch_tensor, dim, ttnn_indices.to(torch.int64))
+    ttnn_gather_from_indices = torch.gather(torch_tensor, dim, ttnn_indices_adjusted.to(torch.int64))
     cosine = torch.nn.CosineSimilarity(dim=dim)
     # Comparing indices directly may not be a good measure because when there are ties
     # (duplicate values), both implementations may return different but equally valid
@@ -179,6 +215,17 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     assert (
         cosine_sim >= cosine_sim_target
     ), f"Cosine similarity between topk values and gather from indices is {cosine_sim} which is less than {cosine_sim_target}"
+
+    # Repeat the test with preallocated output tensors.
+    prealloc_values, prealloc_indices = _run_topk_with_preallocated(ttnn_tensor, k, dim, device, ttnn_result)
+
+    # The two methods should produce identical results.
+    assert torch.equal(
+        prealloc_values, ttnn_values
+    ), f"Preallocated values differ from non-preallocated: {prealloc_values} vs {ttnn_values}"
+    assert torch.equal(
+        prealloc_indices, ttnn_indices
+    ), f"Preallocated indices differ from non-preallocated: {prealloc_indices} vs {ttnn_indices}"
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
