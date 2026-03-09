@@ -11,6 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def fa_rand(*shape):
@@ -628,6 +629,7 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_unpacker_AB_configured_correctly.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])
