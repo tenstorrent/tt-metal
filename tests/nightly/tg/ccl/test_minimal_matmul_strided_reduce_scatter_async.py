@@ -257,9 +257,17 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "device_params, topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": _make_fabric_router_config(8192),
+                "trace_region_size": 1531456,
+            },
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_ring_8kib_payload"],
 )
 def test_minimal_matmul_strided_reduce_scatter_async(
     mesh_device,
@@ -319,9 +327,21 @@ def test_minimal_matmul_strided_reduce_scatter_async(
 
 
 # Blackhole-specific test: large-packet fabric router config (8 KiB payloads).
-# Grid 12x8 with subblocks h=32,w=16 and 2 links, 5 workers/link.
+# Grid 12x8, 2 links, 5 workers/link. Sweeps subblock_h x subblock_w.
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
-@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0", "axis_1"])
+@pytest.mark.parametrize("cluster_axis", [0], ids=["axis_0"])
+@pytest.mark.parametrize(
+    "subblock_h, subblock_w",
+    [
+        (1, 1),
+        (2, 1),
+        (1, 2),
+        (2, 2),
+        (4, 1),
+        (1, 4),
+    ],
+    ids=["sh1_sw1", "sh2_sw1", "sh1_sw2", "sh2_sw2", "sh4_sw1", "sh1_sw4"],
+)
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_mm, mem_config_rs",
     [
@@ -336,6 +356,7 @@ def test_minimal_matmul_strided_reduce_scatter_async(
 @pytest.mark.parametrize(
     "device_params, topology",
     [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -346,10 +367,12 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring_8kib_payload"],
+    ids=["fabric_ring", "fabric_ring_8kib_payload"],
 )
 def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
     mesh_device,
+    subblock_h,
+    subblock_w,
     mem_config_input,
     mem_config_mm,
     mem_config_rs,
@@ -381,8 +404,8 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
         mm_block_m=256,
         mm_block_k=128,
         mm_block_n=256,
-        subblock_h=1,
-        subblock_w=1,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
         mm_core_grid=ttnn.CoreCoord(12, 8),
         chunk_width_in_mm_blocks=1,
         rs_core_grid_offset=ttnn.CoreCoord(0, 8),
