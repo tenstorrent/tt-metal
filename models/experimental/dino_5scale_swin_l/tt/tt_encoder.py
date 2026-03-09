@@ -15,7 +15,7 @@ import torch
 import ttnn
 from loguru import logger
 
-UPLOAD_CHUNK_QUERIES = 64
+UPLOAD_CHUNK_QUERIES = 512
 
 
 def compute_sampling_locations_and_attention_weights(
@@ -88,27 +88,10 @@ def compute_sampling_locations_and_attention_weights(
     return sampling_locations, aw_tt
 
 
-def multi_scale_deformable_attn_ttnn(
-    value_tt,
-    value_spatial_shapes,
-    sampling_locations_tt,
-    attention_weights_tt,
-    device,
-    num_heads,
-    head_dim,
-):
-    """
-    Multi-scale deformable attention for a single query chunk. Chunk size 1024.
-    Only small intermediates fit L1: grid (~128KB), attn_tt (~64KB), attn_p (~16KB). Rest in DRAM.
-    """
-    bs = sampling_locations_tt.shape[0]
-    chunk_Q = sampling_locations_tt.shape[1]
-    num_levels = sampling_locations_tt.shape[3]
-    num_points = sampling_locations_tt.shape[4]
-
+def split_value_into_levels(value_tt, value_spatial_shapes, num_heads, head_dim):
+    bs = value_tt.shape[0]
     split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
     value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
-
     value_l_tts = []
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         H_, W_ = int(H_), int(W_)
@@ -116,6 +99,21 @@ def multi_scale_deformable_attn_ttnn(
         val_l = ttnn.permute(val_l, (0, 2, 1, 3))
         val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
         value_l_tts.append(val_l)
+    return value_l_tts
+
+
+def multi_scale_deformable_attn_ttnn(
+    value_l_tts,
+    sampling_locations_tt,
+    attention_weights_tt,
+    device,
+    num_heads,
+    head_dim,
+):
+    bs = sampling_locations_tt.shape[0]
+    chunk_Q = sampling_locations_tt.shape[1]
+    num_levels = sampling_locations_tt.shape[3]
+    num_points = sampling_locations_tt.shape[4]
 
     sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -166,8 +164,6 @@ def multi_scale_deformable_attn_ttnn(
             ttnn.deallocate(level_out)
 
     ttnn.deallocate(sampling_grids)
-    for vl in value_l_tts:
-        ttnn.deallocate(vl)
 
     output = ttnn.permute(chunk_accum, (1, 0, 2))
     output = ttnn.reshape(output, (bs, chunk_Q, num_heads * head_dim))
@@ -389,12 +385,14 @@ class TtMSDeformAttn:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+            value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
+
             num_upload_chunks = (num_queries + UPLOAD_CHUNK_QUERIES - 1) // UPLOAD_CHUNK_QUERIES
             logger.info(
                 f"  MSDeformAttn: {num_upload_chunks} chunks (chunk={UPLOAD_CHUNK_QUERIES}), "
                 f"grid+attention on device ({num_queries} queries)..."
             )
-            output_chunks = []
+            output_chunks_host = []
             for q_start in range(0, num_queries, UPLOAD_CHUNK_QUERIES):
                 q_end = min(q_start + UPLOAD_CHUNK_QUERIES, num_queries)
                 loc_chunk_tt = ttnn.slice(
@@ -411,8 +409,7 @@ class TtMSDeformAttn:
                 )
 
                 chunk_out = multi_scale_deformable_attn_ttnn(
-                    value_tt=value,
-                    value_spatial_shapes=spatial_shapes,
+                    value_l_tts=value_l_tts,
                     sampling_locations_tt=loc_chunk_tt,
                     attention_weights_tt=aw_chunk_tt,
                     device=self.device,
@@ -421,17 +418,21 @@ class TtMSDeformAttn:
                 )
                 ttnn.deallocate(loc_chunk_tt)
                 ttnn.deallocate(aw_chunk_tt)
-                output_chunks.append(chunk_out)
+                output_chunks_host.append(ttnn.to_torch(chunk_out))
+                ttnn.deallocate(chunk_out)
 
             ttnn.deallocate(sampling_locations_tt)
             ttnn.deallocate(attention_weights_tt)
+            for vl in value_l_tts:
+                ttnn.deallocate(vl)
 
-            if len(output_chunks) == 1:
-                output = output_chunks[0]
-            else:
-                output = ttnn.concat(output_chunks, dim=1)
-                for c in output_chunks:
-                    ttnn.deallocate(c)
+            output_cat = torch.cat(output_chunks_host, dim=1)
+            output = ttnn.from_torch(
+                output_cat,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         logger.info("  MSDeformAttn: output projection on device...")
         output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
 
@@ -646,7 +647,7 @@ class TtDINOEncoder:
                 valid_ratios=valid_ratios,
                 reference_points=reference_points,
             )
+            ttnn.synchronize_device(self.device)
             ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Encoder layer {i} done.")
-
         return query
