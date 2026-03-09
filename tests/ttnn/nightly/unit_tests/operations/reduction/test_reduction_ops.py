@@ -63,9 +63,6 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     torch.manual_seed(0)
     rank = len(tensor_shape)
 
-    if dim is not None and (dim < -rank or dim > rank - 1):
-        pytest.skip("Dimension not applicable for input shape")
-
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
@@ -93,8 +90,10 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     ttnn_errored = False
     try:
         ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
+        if not torch_errored:
+            logger.error(f"torch passed, but ttnn raised exception: {e}")
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 
@@ -147,10 +146,10 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     ttnn_errored = False
     try:
         ttnn_result = ttnn.topk(ttnn_tensor, k, dim=dim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
-        if ttnn_errored and not torch_errored:
-            raise
+        if not torch_errored:
+            logger.error(f"torch passed, but ttnn raised exception: {e}")
 
     if torch_errored and ttnn_errored:
         logger.info(f"Both PyTorch and TTNN errored")
@@ -267,8 +266,10 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
     ttnn_errored = False
     try:
         ttnn_result = ttnn.argmax(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
+        if not torch_errored:
+            logger.error(f"torch passed, but ttnn raised exception: {e}")
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 
@@ -363,8 +364,10 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     ttnn_errored = False
     try:
         ttnn_result = ttnn_op(ttnn_tensor, dim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
+        if not torch_errored:
+            logger.error(f"torch passed, but ttnn raised exception: {e}")
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 

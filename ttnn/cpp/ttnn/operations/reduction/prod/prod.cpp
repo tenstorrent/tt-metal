@@ -81,10 +81,10 @@ Tensor prod_impl(
     const int old_rank = static_cast<int>(rank_st);
 
     TT_FATAL(
-        !dim.has_value() || (*dim >= -old_rank && *dim <= old_rank - 1),
+        !dim.has_value() || (*dim >= -old_rank && *dim <= old_rank - 1) || (old_rank == 0 && (*dim == 0 || *dim == -1)),
         "Dimension for prod is out of range (expected to be in range of [{}, {}])",
-        -old_rank,
-        old_rank - 1);
+        (old_rank == 0) ? -1 : -old_rank,
+        (old_rank == 0) ? 0 : (old_rank - 1));
 
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
