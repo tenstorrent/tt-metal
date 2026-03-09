@@ -6,7 +6,6 @@ import pytest
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_prefill_impl
-from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.mark.parametrize(
