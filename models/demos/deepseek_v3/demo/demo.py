@@ -150,7 +150,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Enable on-device sampling (default: host-side sampling).",
     )
     p.add_argument(
+        "--force-recalculate",
         "--recalculate-weights",
+        dest="force_recalculate",
         action="store_true",
         default=False,
         help="Force regeneration of cached TTNN weight files and config.",
@@ -480,7 +482,7 @@ def main() -> None:
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
-        force_recalculate=bool(args.recalculate_weights),
+        force_recalculate=bool(args.force_recalculate),
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
