@@ -46,7 +46,7 @@ uint32_t _start() {
     do_thread_crt1(__tdata_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        // noc_local_state_init(NOC_INDEX); //TODO revisit this
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
