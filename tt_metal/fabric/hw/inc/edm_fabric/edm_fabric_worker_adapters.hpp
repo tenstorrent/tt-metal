@@ -259,9 +259,9 @@ struct WorkerToFabricEdmSenderImpl {
     template <size_t num_slots = 1>
     FORCE_INLINE bool edm_has_space_for_packet() const {
         /*
-        Without this l1 invalidation `FlowControlAllToAllMeshLowLatency_size_1024_ntype_atomic_inc_ftype_mcast` fabric test hangs, 
-        while sending packets, waiting for space in the EDM buffer. 
-        This is despite disabling the use of the l1 data cache. More investigation is needed to discover the underlying issue.
+        Without this l1 invalidation `FlowControlAllToAllMeshLowLatency_size_1024_ntype_atomic_inc_ftype_mcast` fabric
+        test hangs, while sending packets, waiting for space in the EDM buffer. This is despite disabling the use of the
+        l1 data cache. More investigation is needed to discover the underlying issue.
         */
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
@@ -464,12 +464,16 @@ struct WorkerToFabricEdmSenderImpl {
             invalidate_l1_cache();
         }
         WAYPOINT("FCFD");
+
+        DPRINT << "wait for writ barrier" << ENDL();
         noc_async_write_barrier(get_fabric_worker_noc());
         *(this->worker_teardown_addr) = 0;
+        DPRINT << "done closing finish" << ENDL();
     }
 
     void close() {
         close_start();
+        DPRINT << "about to close finish" << ENDL();
         close_finish();
     }
 
@@ -518,7 +522,7 @@ struct WorkerToFabricEdmSenderImpl {
                     this->sync_noc_cmd_buf,
                     noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, false, false, false, InlineWriteDst::REG>(
+                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
                     this->sync_noc_cmd_buf,

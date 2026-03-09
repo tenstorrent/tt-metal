@@ -600,6 +600,7 @@ struct FabricConnectionArray {
     }
 
     FORCE_INLINE void close_all() {
+        DPRINT << "NUM CONNECITON" << (uint32_t)num_connections << ENDL();
         for (uint8_t i = 0; i < num_connections; i++) {
             if (is_mux[i]) {
                 get_mux_connection(i).close();
@@ -1037,8 +1038,10 @@ struct SenderKernelTrafficConfig {
         // Phase 1: Warmup — send actual headers to fill all buffer slots
         const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
         for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
+            DPRINT << "start warming up" << ENDL();
             traffic_config->template send_one_packet<BENCHMARK_MODE, false>();
         }
+        DPRINT << "done warming up" << ENDL();
 
         conn->setup_credit_update_noc_state();
 
