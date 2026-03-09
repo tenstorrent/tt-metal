@@ -1044,9 +1044,7 @@ def is_watcher_enabled():
 
 def is_llk_assert_enabled():
     llk_assert = os.environ.get("TT_METAL_LLK_ASSERTS")
-    watcher = os.environ.get("TT_METAL_WATCHER")
-    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
-    return ((watcher is not None and watcher != "") or lightweight_asserts == "1") and llk_assert == "1"
+    return llk_assert == "1"
 
 
 def is_n300():
