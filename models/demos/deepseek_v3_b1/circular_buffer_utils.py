@@ -81,8 +81,8 @@ class CircularBufferIdManager:
         """
         descs = []
         for cb_id, (data_format, tile_desc) in self._id_to_format.items():
-            tile = ttnn.Tile([tile_desc.height, tile_desc.width])
-            page_size = tile.get_tile_size(data_format)
+            # Minimal page size for dummy descriptors
+            page_size = 1
 
             fmt = ttnn.CBFormatDescriptor(
                 buffer_index=cb_id,
@@ -183,6 +183,8 @@ def record_cb_metadata(cb_descriptors):
         for fmt in desc.format_descriptors:
             cb_id = fmt.buffer_index
             addr = ttnn.get_cb_address(desc)
+            # TODO: We should allow for non-backed CBs, and reserve their ID to prevent them from being reused.
+            assert addr != 0, f"CB {cb_id} has address 0, which means it's not backed by a tensor"
             total_size = desc.total_size
             page_size = fmt.page_size
             num_pages = total_size // page_size

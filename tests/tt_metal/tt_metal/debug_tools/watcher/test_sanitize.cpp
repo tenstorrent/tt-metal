@@ -229,14 +229,26 @@ void RunTestOnCore(
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
-            // Use actual Tensix worker cores with an invalid multicast range (start > end for NOC0).
+            // Use invalid multicast range with actual DRAM cores: start > end
+            // Wrap-around is only allowed for Tensix cores, not DRAM
             use_multicast_semaphore_inc = true;
-            auto grid_size = device->compute_with_storage_grid_size();
-            CoreCoord mcast_start = device->worker_core_from_logical_core({grid_size.x - 1, grid_size.y - 1});
-            CoreCoord mcast_end = device->worker_core_from_logical_core({0, 0});
-            output_buf_noc_xy = mcast_start;
-            mcast_dst_end_x = mcast_end.x;
-            mcast_dst_end_y = mcast_end.y;
+
+            // Get actual DRAM NOC coordinates
+            auto dram_logical_0 = device->logical_core_from_dram_channel(0);
+            auto dram_logical_1 = device->logical_core_from_dram_channel(1);
+            auto dram_noc_0 = device->virtual_core_from_logical_core(dram_logical_0, CoreType::DRAM);
+            auto dram_noc_1 = device->virtual_core_from_logical_core(dram_logical_1, CoreType::DRAM);
+
+            // Ensure start > end to trigger wrap-around check (which should fail for DRAM)
+            if (dram_noc_0.x > dram_noc_1.x || dram_noc_0.y > dram_noc_1.y) {
+                output_buf_noc_xy = dram_noc_0;
+                mcast_dst_end_x = dram_noc_1.x;
+                mcast_dst_end_y = dram_noc_1.y;
+            } else {
+                output_buf_noc_xy = dram_noc_1;
+                mcast_dst_end_x = dram_noc_0.x;
+                mcast_dst_end_y = dram_noc_0.y;
+            }
             break;
         }
         default:
@@ -453,8 +465,8 @@ void RunTestOnCore(
         case SanitizeNOCMulticastInvalidRange: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
-                "bytes from local L1[{:#08x}] to Tensix core range w/ virtual coords (x={},y={})-(x={},y={}) "
-                "L1[addr=0x{:08x}] (multicast invalid range).",
+                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "DRAM[addr=0x{:08x}] (multicast invalid range).",
                 device->id(),
                 (is_eth_core) ? "acteth" : "worker",
                 core.x,
