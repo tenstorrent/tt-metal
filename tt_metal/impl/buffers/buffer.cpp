@@ -214,7 +214,7 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
 bool is_sharded(const TensorMemoryLayout& layout) {
     return (
         layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        layout == TensorMemoryLayout::BLOCK_SHARDED);
+        layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::ND_SHARDED);
 }
 
 UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
