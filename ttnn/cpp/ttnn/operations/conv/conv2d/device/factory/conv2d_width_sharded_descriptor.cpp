@@ -47,13 +47,14 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t num_cores_nhw,
     uint32_t act_block_h_ntiles) {
-    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;
-    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     auto output_shape = sliding_window_config.get_output_shape();
     uint32_t batch_size = output_shape[0];
     uint32_t conv_output_h = output_shape[1];
     uint32_t conv_output_w = output_shape[2];
 
+    // pad height
     uint32_t num_rows = (uint32_t)batch_size * conv_output_h * conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
     uint32_t num_rows_padded = tt::round_up(num_rows, num_cores_nhw * act_block_h_datums);
@@ -219,8 +220,8 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
 
-    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;
-    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;
+    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
     const uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
@@ -727,6 +728,9 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
             activation_kernel_compile_args.push_back(config_tensor_buffer->page_size());
             tt::tt_metal::TensorAccessorArgs(config_tensor_buffer).append_to(activation_kernel_compile_args);
         } else {
+            // Defensive fallback: push 4 zeros to match DRAM path
+            // (address + page_size + 2 TensorAccessorArgs).
+            activation_kernel_compile_args.push_back(0);
             activation_kernel_compile_args.push_back(0);
             activation_kernel_compile_args.push_back(0);
             activation_kernel_compile_args.push_back(0);
@@ -856,6 +860,14 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+void Conv2dWidthShardedDescriptorFactory::post_create_validation(
+    tt::tt_metal::Program& program,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output) {
+    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output);
 }
 
 }  // namespace ttnn::prim::conv2d_detail

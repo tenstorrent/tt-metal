@@ -728,7 +728,8 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             std::find(mcast_receiver_coords.begin(), mcast_receiver_coords.end(), core) ==
                 mcast_receiver_coords.end()) {
             // idle core - 0
-            in0_sender_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{(std::uint32_t)0});
+            in0_sender_desc.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{static_cast<uint32_t>(0)});
         }
     }
 
@@ -737,11 +738,12 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
         if (std::find(all_worker_cores.ranges().begin(), all_worker_cores.ranges().end(), core) ==
             all_worker_cores.ranges().end()) {
             // not a worker core
-            in1_sender_writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{(std::uint32_t)0});
-            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{(std::uint32_t)0});
+            in1_sender_writer_desc.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{static_cast<uint32_t>(0)});
+            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{static_cast<uint32_t>(0)});
         } else {
             // worker core - compute gets is_worker_core=1
-            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{(std::uint32_t)1});
+            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{static_cast<uint32_t>(1)});
         }
     }
 

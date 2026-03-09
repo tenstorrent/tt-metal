@@ -1085,6 +1085,9 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
             reader_compile_time_args.push_back(config_tensor_buffer->page_size());
             tt::tt_metal::TensorAccessorArgs(config_tensor_buffer).append_to(reader_compile_time_args);
         } else {
+            // Defensive fallback: push 4 zeros to match DRAM path
+            // (address + page_size + 2 TensorAccessorArgs).
+            reader_compile_time_args.push_back(0);
             reader_compile_time_args.push_back(0);
             reader_compile_time_args.push_back(0);
             reader_compile_time_args.push_back(0);
@@ -1654,6 +1657,14 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+void Conv2dShardedDescriptorFactory::post_create_validation(
+    tt::tt_metal::Program& program,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output) {
+    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output);
 }
 
 }  // namespace ttnn::prim::conv2d_detail

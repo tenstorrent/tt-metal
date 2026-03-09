@@ -176,6 +176,11 @@ struct MeshDeviceOperationAdapter {
     //           (e.g. random seeds).  Called AFTER the framework auto-patches
     //           buffer addresses on every cache hit.
     //
+    //   4. post_create_validation(Program&, attrs, tensor_args, output)  [OPTIONAL]
+    //        -- Called once on cache miss after the Program is constructed from the
+    //           descriptor.  Use for sanity checks that require the materialized
+    //           Program (e.g. verifying CB sizes match expected L1 usage).
+    //
     // The framework handles everything else: address slot scanning, dynamic
     // CB patching, cache-hit dispatch, and determinism verification.
     // -----------------------------------------------------------------------
@@ -229,6 +234,15 @@ struct MeshDeviceOperationAdapter {
             const operation_attributes_t& a,
             const tensor_args_t& t,
             tensor_return_value_t& r) { DescriptorFactory::override_runtime_arguments(p, a, t, r); };
+
+        // Detect post_create_validation: called once on cache miss after the Program
+        // is constructed from the descriptor.  Use for sanity checks that require
+        // the materialized Program (e.g. CB size verification).
+        static constexpr bool has_post_create_validation = requires(
+            tt::tt_metal::Program& p,
+            const operation_attributes_t& a,
+            const tensor_args_t& t,
+            tensor_return_value_t& r) { DescriptorFactory::post_create_validation(p, a, t, r); };
 
         struct shared_variables_t {
             std::vector<AddressSlot> address_slots;
@@ -355,6 +369,11 @@ struct MeshDeviceOperationAdapter {
                 }
 
                 tt::tt_metal::Program program{desc};
+
+                // --- Optional post-creation validation ---
+                if constexpr (has_post_create_validation) {
+                    DescriptorFactory::post_create_validation(program, attrs, tensor_args, tensor_return_value);
+                }
 
                 // --- Dynamic circular buffer slots ---
                 std::vector<CBSlot> cb_slots;

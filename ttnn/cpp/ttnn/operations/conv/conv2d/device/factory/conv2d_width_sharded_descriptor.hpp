@@ -29,6 +29,14 @@ struct Conv2dWidthShardedDescriptorFactory {
         const Conv2dInputs& tensor_args,
         Tensor& output,
         tt::tt_metal::DeviceStorage& resources);
+
+    // Validates the materialized Program (CB sizes, L1 allocation).
+    // Called once on cache miss after Program construction.
+    static void post_create_validation(
+        tt::tt_metal::Program& program,
+        const Conv2dParams& operation_attributes,
+        const Conv2dInputs& tensor_args,
+        Tensor& output);
 };
 
 }  // namespace ttnn::prim::conv2d_detail
