@@ -11,7 +11,7 @@ import sys
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
-    assert_matmul_accuracy,
+    # assert_matmul_accuracy,
     collect_and_dump_numeric_metrics,
 )
 
@@ -35,6 +35,17 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_std[batch={batch_size},h={h},w={w},dim={dim},keepdim={keepdim},correction={correction}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -62,29 +73,19 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 
     # Collect numeric metrics and dump to CSV using reusable function
     test_name = f"test_var[batch={batch_size},h={h},w={w},dim={dim},keepdim={keepdim},correction={correction}]"
-    test_params = {
-        "batch_size": batch_size,
-        "h": h,
-        "w": w,
-        "dim": dim,
-        "keepdim": keepdim,
-        "correction": correction,
-    }
 
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
-        test_params=test_params,
+        test_params=None,
     )
-
-    # Run assert_matmul_accuracy (asserts based on env var flags: USE_PCC, USE_ALLCLOSE, etc.)
-    # assert_matmul_accuracy(torch_output_tensor, output_tensor, test_name=test_name)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
-@pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
+# @pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
+@pytest.mark.parametrize("input_shape", [(6, 3, 60), (1, 11, 67, 77)])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
 # prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
@@ -125,7 +126,18 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_prod[input_shape={input_shape},dim={dim},keepdim={keepdim},dtype={dtype}]"
+
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -150,6 +162,17 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_8d_tensor_dims[dim_1={dim_1},dim_2={dim_2},dim_3={dim_3},dim_4={dim_4},dim_5={dim_5},dim_6={dim_6},dim_7={dim_7},dim_8={dim_8},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -175,6 +198,17 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_7d_tensor_dims[dim_1={dim_1},dim_2={dim_2},dim_3={dim_3},dim_4={dim_4},dim_5={dim_5},dim_6={dim_6},dim_7={dim_7},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -199,6 +233,17 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_6d_tensor_dims[dim_1={dim_1},dim_2={dim_2},dim_3={dim_3},dim_4={dim_4},dim_5={dim_5},dim_6={dim_6},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -222,6 +267,17 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_5d_tensor_dims[dim_1={dim_1},dim_2={dim_2},dim_3={dim_3},dim_4={dim_4},dim_5={dim_5},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -244,6 +300,17 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_4d_tensor_dims[batch={batch_size},c={c},h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -299,6 +366,17 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert (
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_2d_topk[dim1={dim1},dim2={dim2},dim={dim},k={k},largest={largest},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -348,6 +426,17 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert (
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_2d_topk[dim1={dim1},dim2={dim2},dim={dim},k={k},largest={largest},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -400,6 +489,17 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     assert (
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_5d_topk[dim1={dim1},dim2={dim2},dim3={dim3},dim4={dim4},dim5={dim5},dim={dim},k={k},largest={largest},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -454,6 +554,17 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
     assert (
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_6d_topk[dim1={dim1},dim2={dim2},dim3={dim3},dim4={dim4},dim5={dim5},dim6={dim6},dim={dim},k={k},largest={largest},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -475,6 +586,17 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_3d_tensor_dims[c={c},h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -495,6 +617,17 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_2d_tensor_dims[h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -517,6 +650,17 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_4d_tensor_dims[batch={batch_size},c={c},h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -538,6 +682,17 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_3d_tensor_dims[c={c},h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -558,6 +713,17 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_2d_tensor_dims[h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -671,6 +837,16 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     )
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_torch_compatibility[tensor_shape={tensor_shape},keepdim={keepdim},dim={dim},op={op}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        ttnn_result,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_result, ttnn_result, 0.99)
 

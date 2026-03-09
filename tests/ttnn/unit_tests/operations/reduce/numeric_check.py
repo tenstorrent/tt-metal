@@ -24,96 +24,96 @@ ALLCLOSE_ATOL = 1e-08  # Absolute tolerance for allclose
 ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
-
+NEAR_ZERO_THRESHOLD = 0.01
 # # Padding validation configuration
 # USE_FILL_PAD = False  # Enable fill_implicit_tile_padding with TEST_PADDING_VALUE for validation
 # TEST_PADDING_VALUE = 0  # Value to fill implicit tile padding for validation
 
 
-def assert_matmul_accuracy(
-    expected,
-    actual,
-    test_name="",
-    allclose_atol=ALLCLOSE_ATOL,
-    allclose_rtol=ALLCLOSE_RTOL,
-    frobenius_threshold=FROBENIUS_THRESHOLD,
-    ulp_threshold=ULP_THRESHOLD,
-):
-    """
-    Apply configured accuracy metrics to matmul test results.
-    Filters out near-zero values in expected for allclose and ULP to avoid division issues.
-    Uses ATOL threshold to determine what counts as "near-zero".
+# def assert_matmul_accuracy(
+#     expected,
+#     actual,
+#     test_name="",
+#     allclose_atol=ALLCLOSE_ATOL,
+#     allclose_rtol=ALLCLOSE_RTOL,
+#     frobenius_threshold=FROBENIUS_THRESHOLD,
+#     ulp_threshold=ULP_THRESHOLD,
+# ):
+#     """
+#     Apply configured accuracy metrics to matmul test results.
+#     Filters out near-zero values in expected for allclose and ULP to avoid division issues.
+#     Uses ATOL threshold to determine what counts as "near-zero".
 
-    Args:
-        expected: Expected tensor (PyTorch or TTNN)
-        actual: Actual tensor (PyTorch or TTNN)
-        test_name: Optional test name for logging
-        allclose_atol: Absolute tolerance for allclose (default: ALLCLOSE_ATOL)
-        allclose_rtol: Relative tolerance for allclose (default: ALLCLOSE_RTOL)
-        frobenius_threshold: Threshold for relative Frobenius (default: FROBENIUS_THRESHOLD)
-        ulp_threshold: ULP threshold (default: ULP_THRESHOLD)
-    """
-    # Normalize tensors
-    expected = _normalize_tensor(expected)
-    actual = _normalize_tensor(actual)
+#     Args:
+#         expected: Expected tensor (PyTorch or TTNN)
+#         actual: Actual tensor (PyTorch or TTNN)
+#         test_name: Optional test name for logging
+#         allclose_atol: Absolute tolerance for allclose (default: ALLCLOSE_ATOL)
+#         allclose_rtol: Relative tolerance for allclose (default: ALLCLOSE_RTOL)
+#         frobenius_threshold: Threshold for relative Frobenius (default: FROBENIUS_THRESHOLD)
+#         ulp_threshold: ULP threshold (default: ULP_THRESHOLD)
+#     """
+#     # Normalize tensors
+#     expected = _normalize_tensor(expected)
+#     actual = _normalize_tensor(actual)
 
-    # Calculate statistics for near-zero values
-    # Use ATOL as threshold: if |expected| < ATOL, it's effectively zero for RTOL/ULP purposes
-    total_elements = expected.numel()
-    near_zero_threshold = allclose_atol
-    near_zero_mask_expected = torch.abs(expected) < near_zero_threshold
-    near_zero_count_expected = near_zero_mask_expected.sum().item()
-    near_zero_percentage = (near_zero_count_expected / total_elements * 100) if total_elements > 0 else 0
+#     # Calculate statistics for near-zero values
+#     # Use ATOL as threshold: if |expected| < ATOL, it's effectively zero for RTOL/ULP purposes
+#     total_elements = expected.numel()
+#     near_zero_threshold = allclose_atol
+#     near_zero_mask_expected = torch.abs(expected) < near_zero_threshold
+#     near_zero_count_expected = near_zero_mask_expected.sum().item()
+#     near_zero_percentage = (near_zero_count_expected / total_elements * 100) if total_elements > 0 else 0
 
-    if near_zero_percentage > 0:
-        logger.info(f"{test_name}: {near_zero_percentage:.2f}% of values have |expected| < {near_zero_threshold}")
+#     if near_zero_percentage > 0:
+#         logger.info(f"{test_name}: {near_zero_percentage:.2f}% of values have |expected| < {near_zero_threshold}")
 
-    # Apply PCC (if enabled) - works with all values including zeros
-    if USE_PCC:
-        assert_with_pcc(expected, actual, 0.999)
+#     # Apply PCC (if enabled) - works with all values including zeros
+#     if USE_PCC:
+#         assert_with_pcc(expected, actual, 0.999)
 
-    # Apply allclose (if enabled) - filter out positions where expected is near-zero
-    if USE_ALLCLOSE:
-        # Filter out positions where |expected| < ATOL (to avoid huge RTOL errors from small expected values)
-        non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+#     # Apply allclose (if enabled) - filter out positions where expected is near-zero
+#     if USE_ALLCLOSE:
+#         # Filter out positions where |expected| < ATOL (to avoid huge RTOL errors from small expected values)
+#         non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
 
-        if non_near_zero_mask.any():
-            expected_non_near_zero = expected[non_near_zero_mask]
-            actual_non_near_zero = actual[non_near_zero_mask]
-            assert_allclose(expected_non_near_zero, actual_non_near_zero, atol=allclose_atol, rtol=allclose_rtol)
+#         if non_near_zero_mask.any():
+#             expected_non_near_zero = expected[non_near_zero_mask]
+#             actual_non_near_zero = actual[non_near_zero_mask]
+#             assert_allclose(expected_non_near_zero, actual_non_near_zero, atol=allclose_atol, rtol=allclose_rtol)
 
-        # For positions where expected is near-zero, check using ATOL only
-        if near_zero_mask_expected.any():
-            expected_near_zero = expected[near_zero_mask_expected]
-            actual_near_zero = actual[near_zero_mask_expected]
-            # Check if actual is close to expected using ATOL
-            abs_diff = torch.abs(actual_near_zero - expected_near_zero)
-            max_atol_for_near_zeros = torch.max(abs_diff).item()
-            if max_atol_for_near_zeros > allclose_atol:
-                raise AssertionError(
-                    f"{test_name}: For positions where |expected| < {near_zero_threshold}, "
-                    f"actual values exceed ATOL. Max |actual - expected|: {max_atol_for_near_zeros} > {allclose_atol}"
-                )
+#         # For positions where expected is near-zero, check using ATOL only
+#         if near_zero_mask_expected.any():
+#             expected_near_zero = expected[near_zero_mask_expected]
+#             actual_near_zero = actual[near_zero_mask_expected]
+#             # Check if actual is close to expected using ATOL
+#             abs_diff = torch.abs(actual_near_zero - expected_near_zero)
+#             max_atol_for_near_zeros = torch.max(abs_diff).item()
+#             if max_atol_for_near_zeros > allclose_atol:
+#                 raise AssertionError(
+#                     f"{test_name}: For positions where |expected| < {near_zero_threshold}, "
+#                     f"actual values exceed ATOL. Max |actual - expected|: {max_atol_for_near_zeros} > {allclose_atol}"
+#                 )
 
-    # Apply relative Frobenius (if enabled) - handles zeros automatically
-    if USE_RELATIVE_FROBENIUS:
-        assert_relative_frobenius(expected, actual, threshold=frobenius_threshold)
+#     # Apply relative Frobenius (if enabled) - handles zeros automatically
+#     if USE_RELATIVE_FROBENIUS:
+#         assert_relative_frobenius(expected, actual, threshold=frobenius_threshold)
 
-    # Apply ULP (if enabled) - filter out positions where expected is near-zero
-    if USE_ULP:
-        # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
-        non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+#     # Apply ULP (if enabled) - filter out positions where expected is near-zero
+#     if USE_ULP:
+#         # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
+#         non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
 
-        if non_near_zero_mask.any():
-            expected_non_near_zero = expected[non_near_zero_mask]
-            actual_non_near_zero = actual[non_near_zero_mask]
-            assert_with_ulp(expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold)
+#         if non_near_zero_mask.any():
+#             expected_non_near_zero = expected[non_near_zero_mask]
+#             actual_non_near_zero = actual[non_near_zero_mask]
+#             assert_with_ulp(expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold)
 
-        # For positions where expected is near-zero, ULP doesn't make sense, skip
-        if near_zero_mask_expected.any():
-            logger.info(
-                f"{test_name}: Skipping ULP check for {near_zero_count_expected} positions where |expected| < {near_zero_threshold}"
-            )
+#         # For positions where expected is near-zero, ULP doesn't make sense, skip
+#         if near_zero_mask_expected.any():
+#             logger.info(
+#                 f"{test_name}: Skipping ULP check for {near_zero_count_expected} positions where |expected| < {near_zero_threshold}"
+#             )
 
 
 def collect_and_dump_numeric_metrics(
@@ -155,47 +155,70 @@ def collect_and_dump_numeric_metrics(
     # PCC
     pcc_passed, pcc_val = comp_pcc(expected, actual, pcc_threshold)
 
+    ###################
     # Allclose (using existing comp_allclose_custom function)
+
     expected_allclose = _normalize_tensor(expected)
     actual_allclose = _normalize_tensor(actual)
-    allclose_passed, allclose_message = comp_allclose_custom(
-        expected_allclose, actual_allclose, rtol=allclose_rtol, atol=allclose_atol
-    )
-    # Parse values from message: "Max ATOL Delta: {max_atol}, Mean ATOL Delta: {mean_atol}, Max RTOL Delta: {max_rtol}, Mean RTOL Delta: {mean_rtol}"
-    max_atol = float(allclose_message.split("Max ATOL Delta: ")[1].split(",")[0])
-    mean_atol = float(allclose_message.split("Mean ATOL Delta: ")[1].split(",")[0])
-    max_rtol = float(allclose_message.split("Max RTOL Delta: ")[1].split(",")[0])
-    mean_rtol = float(allclose_message.split("Mean RTOL Delta: ")[1])
+
+    # Remove the elements where either expected or actual is 0
+    # mask_nonzero = expected_allclose != 0 & actual_allclose != 0
+    # expected_allclose = expected_allclose[mask_nonzero]
+    # actual_allclose = actual_allclose[mask_nonzero]
+
+    near_zero_threshold = allclose_atol
+    non_near_zero_mask = torch.abs(expected_allclose) >= near_zero_threshold
+    if non_near_zero_mask.any():
+        expected_allclose = expected_allclose[non_near_zero_mask]
+        actual_allclose = actual_allclose[non_near_zero_mask]
+
+    if expected_allclose.numel() > 0 and actual_allclose.numel() > 0:
+        allclose_passed, allclose_message = comp_allclose_custom(
+            expected_allclose, actual_allclose, rtol=allclose_rtol, atol=allclose_atol
+        )
+        # Parse values from message: "Max ATOL Delta: {max_atol}, Mean ATOL Delta: {mean_atol}, Max RTOL Delta: {max_rtol}, Mean RTOL Delta: {mean_rtol}"
+        max_atol = float(allclose_message.split("Max ATOL Delta: ")[1].split(",")[0])
+        mean_atol = float(allclose_message.split("Mean ATOL Delta: ")[1].split(",")[0])
+        max_rtol = float(allclose_message.split("Max RTOL Delta: ")[1].split(",")[0])
+        mean_rtol = float(allclose_message.split("Mean RTOL Delta: ")[1])
+    else:
+        allclose_passed = False
+        allclose_message = "Both tensors are empty"
+        max_atol = 0
+        mean_atol = 0
+        max_rtol = 0
+        mean_rtol = 0
 
     # Relative Frobenius
     frob_val, frob_expected_zero = comp_relative_frobenius(expected, actual)
 
-    if 0:
-        # ULP (filtered: skip near-zero expected values to avoid division issues)
-        near_zero_threshold = allclose_atol
-        non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
-        total_elems = expected.numel()
-        near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
-        near_zero_pct = (near_zero_count / total_elems * 100) if total_elems > 0 else 0
-        # near_zero_pct =7
-        max_ulp = float("nan")
-        ulp_passed = None
-        if non_near_zero_mask.any():
-            ulp_passed_val, ulp_msg = comp_ulp(expected[non_near_zero_mask], actual[non_near_zero_mask], ulp_threshold)
-            ulp_passed = bool(ulp_passed_val)
-            # Extract numeric value from "Max ULP Delta: tensor(X.Y)" or "Max ULP Delta: X.Y"
-            if "Max ULP Delta:" in ulp_msg:
-                ulp_str = ulp_msg.split("Max ULP Delta: ")[1].split(" ")[0]
-                # Handle tensor(...) format
-                if ulp_str.startswith("tensor("):
-                    ulp_str = ulp_str[len("tensor(") :].rstrip(")")
-                try:
-                    max_ulp = float(ulp_str)
-                except ValueError:
-                    max_ulp = float("nan")
-    else:
+    # if 0:
+    #     # ULP (filtered: skip near-zero expected values to avoid division issues)
+    #     near_zero_threshold = allclose_atol
+    #     non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+    #     total_elems = expected.numel()
+    #     near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
+    #     near_zero_pct = (near_zero_count / total_elems * 100) if total_elems > 0 else 0
+    #     # near_zero_pct =7
+    #     max_ulp = float("nan")
+    #     ulp_passed = None
+    #     if non_near_zero_mask.any():
+    #         ulp_passed_val, ulp_msg = comp_ulp(expected[non_near_zero_mask], actual[non_near_zero_mask], ulp_threshold)
+    #         ulp_passed = bool(ulp_passed_val)
+    #         # Extract numeric value from "Max ULP Delta: tensor(X.Y)" or "Max ULP Delta: X.Y"
+    #         if "Max ULP Delta:" in ulp_msg:
+    #             ulp_str = ulp_msg.split("Max ULP Delta: ")[1].split(" ")[0]
+    #             # Handle tensor(...) format
+    #             if ulp_str.startswith("tensor("):
+    #                 ulp_str = ulp_str[len("tensor(") :].rstrip(")")
+    #             try:
+    #                 max_ulp = float(ulp_str)
+    #             except ValueError:
+    #                 max_ulp = float("nan")
+    # else:
+    if 1:
         # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
-        near_zero_threshold = allclose_atol
+        near_zero_threshold = NEAR_ZERO_THRESHOLD
         non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
         total_elems = expected.numel()
         near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
@@ -219,6 +242,19 @@ def collect_and_dump_numeric_metrics(
                     max_ulp = float(ulp_str)
                 except ValueError:
                     max_ulp = float("nan")
+
+            if "Avg ulp Delta:" in ulp_message:
+                avg_ulp = float(ulp_message.split("Avg ulp Delta: ")[1].split(",")[0])
+                # if avg_ulp.startswith("tensor("):
+                #     avg_ulp = ulp_str[len("tensor(") :].rstrip(")")
+                try:
+                    avg_ulp = float(ulp_str)
+                except ValueError:
+                    avg_ulp = float("nan")
+        else:
+            avg_ulp = 0
+            max_ulp = 0
+            ulp_passed = False
             # near_zero_pct=5
         # # # For positions where expected is near-zero, ULP doesn't make sense, skip
         # if near_zero_mask_expected.any():
@@ -239,6 +275,7 @@ def collect_and_dump_numeric_metrics(
         "frobenius_expected_zero": frob_expected_zero,
         "ulp_passed": ulp_passed,
         "max_ulp": max_ulp,
+        "avg_ulp": avg_ulp,
         "near_zero_pct": near_zero_pct,
     }
     # print(metrics)
@@ -283,6 +320,7 @@ def collect_and_dump_numeric_metrics(
                         "frobenius_expected_zero",
                         "ulp_passed",
                         "max_ulp",
+                        "avg_ulp",
                         "near_zero_pct",
                     ]
                 )
@@ -307,6 +345,7 @@ def collect_and_dump_numeric_metrics(
                     frob_expected_zero,
                     ulp_passed,
                     f"{max_ulp:.1f}" if not math.isnan(max_ulp) else "N/A",
+                    f"{avg_ulp:.1f}" if not math.isnan(avg_ulp) else "N/A",
                     f"{near_zero_pct:.2f}",
                 ]
             )
