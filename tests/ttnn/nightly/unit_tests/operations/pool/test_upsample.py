@@ -43,12 +43,11 @@ def test_upsample_nearest_interleaved(
     torch.manual_seed(0)
 
     if dtype_torch == torch.float32:
-        torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.float32)
+        torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.float32)
     else:
-        torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
-    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
+        torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
-        tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=dtype_ttnn
+        torch_input_nhwc, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=dtype_ttnn
     )
 
     if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
@@ -57,15 +56,10 @@ def test_upsample_nearest_interleaved(
     scale_factor = (scale_h, scale_w)
 
     torch_result = golden_upsample(
-        input_tensor=torch_input,
-        batch_size=batch_size,
-        input_h=height,
-        input_w=width,
-        channels=num_channels,
+        input_tensor=torch_input_nhwc,
         scale_factor=scale_factor,
         mode="nearest",
     )
-    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels)
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
 
@@ -117,21 +111,15 @@ def test_bilinear_interleaved_memory(
 
     from ttnn.operations.pool import golden_upsample
 
-    torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
-    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
-    input_tensor = ttnn.from_torch(tt_input, device=device)
+    torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_nhwc, device=device)
     scale_factor = (scale_h, scale_w)
 
     torch_result = golden_upsample(
-        input_tensor=torch_input,
-        batch_size=batch_size,
-        input_h=height,
-        input_w=width,
-        channels=num_channels,
+        input_tensor=torch_input_nhwc,
         scale_factor=scale_factor,
         mode=mode,
     )
-    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels)
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=math_fidelity,

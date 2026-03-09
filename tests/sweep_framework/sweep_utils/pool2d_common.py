@@ -203,6 +203,16 @@ def validate_maxpool2d_indices(
             value_differences += 1
 
     # Indices are valid if there are no actual errors
+    num_mismatches = len(mismatch_positions)
+    assert num_mismatches == (
+        tie_breaking_differences + actual_errors
+    ), "Total mismatches should equal sum of tie-breaking differences and actual errors"
+    if actual_errors > 0:
+        assert actual_errors == (
+            value_differences + window_violations
+        ), "Actual errors should equal sum of value differences and window violations"
+    else:
+        assert actual_errors == 0 and value_differences == 0 and window_violations == 0, "No errors should be present"
     return (actual_errors == 0), tie_breaking_differences, actual_errors, value_differences, window_violations
 
 
@@ -257,6 +267,12 @@ def run_max_pool2d_with_indices(
     tensor_shape = (in_n, in_c, in_h, in_w)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    # torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    # for n in range(in_n):
+    #     for c in range(in_c):
+    #         for h in range(in_h):
+    #             for w in range(in_w):
+    #                 torch_input[n, c, h, w] = h * in_w + w
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
