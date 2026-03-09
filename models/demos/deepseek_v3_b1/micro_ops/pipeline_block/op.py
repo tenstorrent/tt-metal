@@ -9,16 +9,30 @@ Provides a PipelineBlock class that encapsulates a single stage of a multi-host
 pipeline. Each PipelineBlock manages the setup and lifecycle of D2D socket
 interfaces for forwarding data between pipeline stages across hosts.
 
-The first pipeline stage (mesh_id == 0) additionally manages:
-- A HostInterface for H2D/D2H communication with the host
-- An embedding tensor lookup on incoming tokens
-- Loopback connectivity from the last pipeline stage back to the host
-
-Intermediate stages forward data from their entry node to their exit node
-via upstream and downstream D2D socket interfaces.
-
 Pipeline topology is determined by generate_blitz_decode_pipeline(), which
 maps physical ASIC locations to logical mesh coordinates for each stage.
+
+There are four distinct stage configurations:
+
+  1. First stage (mesh_id == 0):
+     H2D socket receives tokens from host, looks up embedding in DRAM,
+     forwards embedding rows downstream via exit D2D socket.
+     If loopback is enabled, also receives results from the last stage
+     via entry D2D socket and sends them back to host via D2H socket.
+
+  2. Middle stage (0 < mesh_id < num_procs - 1):
+     Entry D2D socket receives data from previous stage, exit D2D socket
+     forwards it to the next stage. Pure passthrough.
+
+  3. Last stage with loopback (mesh_id == num_procs - 1, loopback enabled):
+     Entry D2D receives from previous stage, exit D2D sends back to
+     stage 0's loopback entry.
+
+  4. Last stage without loopback (mesh_id == num_procs - 1, loopback disabled):
+     Entry D2D receives from previous stage, D2H socket sends results
+     directly to the host on this process. The entry D2D's downstream
+     socket is wired to the D2H kernel's upstream socket so data flows
+     through a single shared socket pair.
 """
 
 import ttnn
@@ -42,6 +56,7 @@ class PipelineBlock:
         entry_node_downstream=None,
         exit_node_upstream=None,
         embedding_tensor=None,
+        initialize_loopback=True,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -51,150 +66,248 @@ class PipelineBlock:
         ), "Downstream D2D Socket FIFO Size must be greater than or equal to downstream D2D Socket Page Size"
 
         self.my_mesh_id = mesh_device.get_system_mesh_id()
-        self.is_pipeline_start = self.my_mesh_id == 0
-        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         self.num_procs = int(ttnn.distributed_context_get_size())
-        num_procs = self.num_procs
-        # assert len(pipeline_config) == num_procs + 1
+        self.initialize_loopback = initialize_loopback
 
-        token_size_bytes = 64  # Hardcode for now - don't expect this to change
+        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        if initialize_loopback:
+            assert len(pipeline_config) == self.num_procs + 1
+
+        self.is_pipeline_start = self.my_mesh_id == 0
+        self.is_last_stage = self.my_mesh_id == self.num_procs - 1
+        self.has_exit = not self.is_last_stage or initialize_loopback
+        self.has_d2h = (self.is_last_stage and not initialize_loopback) or (
+            self.is_pipeline_start and initialize_loopback
+        )
+
+        self.host_io = None
+        self.h2d_socket = None
+        self.d2h_socket = None
+        self.entry_socket_interface = None
+        self.exit_socket_interface = None
+
+        token_size_bytes = 64
 
         if self.is_pipeline_start:
-            assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
-            assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
-            assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to first pipeline stage"
-            assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
-
-            h2d_device_coord = pipeline_config[self.my_mesh_id].entry_node_coord
-            # d2h_device_coord = pipeline_config[num_procs].exit_node_coord
-
-            assert (
-                h2d_socket_fifo_size >= token_size_bytes
-            ), "H2D Socket FIFO Size must be greater than or equal to token size"
-            assert (
-                d2h_socket_fifo_size >= d2h_socket_page_size
-            ), "D2H Socket FIFO Size must be greater than or equal to D2H Socket Page Size"
-
-            # Embedding can be 2D (vocab_size, hidden_size) or 4D (..., hidden_size); page = last dim
-            embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
-
-            # Exit D2D Socket forwards embedding rows to first decoder. Granularity of socket transfer is set to embedding size.
-            assert (
-                downstream_d2d_socket_page_size == embedding_size_bytes
-            ), "Expected downstream D2D Socket Page size to be equal to embedding size"
-            # Logic here is that the loopback connection on the first pipeline stage simply
-            # forwards data from the final stage back to host. Page sizes must be equal.
-            assert (
-                upstream_d2d_socket_page_size == d2h_socket_page_size
-            ), "Expected upstream D2D Socket Page Size to be equal to D2H Socket Page Size on first pipeline stage"
-
-            self.h2d_socket = ttnn.H2DSocket(
+            self._init_first_stage(
                 mesh_device,
-                ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
-                ttnn.BufferType.L1,
-                h2d_socket_fifo_size,
-                ttnn.H2DMode.HOST_PUSH,  # Host Push is faster than Device Pull for small page sizes
-            )
-            self.host_io = HostInterface(
+                pipeline_config,
+                pipeline_core_coord,
                 token_size_bytes,
-                d2h_socket_page_size,
-                h2d_socket=self.h2d_socket,
-                core_to_core_socket_buffer_size=downstream_d2d_socket_page_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(
-                    pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
-                ),
-                embedding_tensor=embedding_tensor,
-            )
-
-            self.exit_socket_interface = SocketInterface(
-                downstream_d2d_socket_page_size,
+                upstream_d2d_socket_fifo_size,
                 downstream_d2d_socket_fifo_size,
+                upstream_d2d_socket_page_size,
                 downstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
-                upstream_socket=self.host_io.get_downstream_socket(),
-                sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
+                h2d_socket_fifo_size,
+                d2h_socket_fifo_size,
+                d2h_socket_page_size,
+                embedding_tensor,
+            )
+        elif self.is_last_stage and not initialize_loopback:
+            self._init_last_stage_with_d2h(
+                mesh_device,
+                pipeline_config,
+                pipeline_core_coord,
+                token_size_bytes,
+                upstream_d2d_socket_fifo_size,
+                upstream_d2d_socket_page_size,
+                downstream_d2d_socket_page_size,
+                d2h_socket_fifo_size,
+                d2h_socket_page_size,
+                exit_node_upstream,
+            )
+        else:
+            self._init_forwarding_stage(
+                mesh_device,
+                pipeline_config,
+                pipeline_core_coord,
+                upstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_fifo_size,
+                upstream_d2d_socket_page_size,
+                downstream_d2d_socket_page_size,
+                entry_node_downstream,
+                exit_node_upstream,
             )
 
-            # self.entry_socket_interface = SocketInterface(
-            #     upstream_d2d_socket_page_size,  # Entry node page size needs to be configurable
-            #     upstream_d2d_socket_fifo_size,
-            #     upstream_d2d_socket_page_size,
-            #     ttnn.MeshCoreCoord(pipeline_config[num_procs - 1].exit_node_coord, pipeline_core_coord),
-            #     ttnn.MeshCoreCoord(pipeline_config[num_procs].entry_node_coord, pipeline_core_coord),
-            #     downstream_socket=self.host_io.get_upstream_socket(),
-            #     sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
-            #     receiver_mesh=MeshWrapper(mesh_device),
-            # )
+    def _init_first_stage(
+        self,
+        mesh_device,
+        pipeline_config,
+        pipeline_core_coord,
+        token_size_bytes,
+        upstream_d2d_socket_fifo_size,
+        downstream_d2d_socket_fifo_size,
+        upstream_d2d_socket_page_size,
+        downstream_d2d_socket_page_size,
+        h2d_socket_fifo_size,
+        d2h_socket_fifo_size,
+        d2h_socket_page_size,
+        embedding_tensor,
+    ):
+        assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
+        assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
+        assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to first pipeline stage"
+        assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
 
-        else:
-            if self.my_mesh_id == num_procs - 1:
-                assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to last pipeline stage"
-                assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to last pipeline stage"
+        h2d_device_coord = pipeline_config[self.my_mesh_id].entry_node_coord
+        d2h_device_coord = pipeline_config[self.num_procs].exit_node_coord
 
-                d2h_device_coord = pipeline_config[num_procs - 1].exit_node_coord
-                self.d2h_socket = ttnn.D2HSocket(
-                    mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
-                )
-                self.host_io = HostInterface(
-                    token_size_bytes,
-                    d2h_socket_page_size,
-                    d2h_socket=self.d2h_socket,
-                    core_to_core_socket_buffer_size=downstream_d2d_socket_page_size,
-                    d2h_upstream_core=exit_node_upstream
-                    if exit_node_upstream
-                    else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].entry_node_coord, pipeline_core_coord),
-                )
-                self.entry_socket_interface = SocketInterface(
-                    upstream_d2d_socket_page_size,
-                    upstream_d2d_socket_fifo_size,
-                    upstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id - 1].exit_node_coord, pipeline_core_coord),
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].entry_node_coord, pipeline_core_coord),
-                    downstream_core_coord=entry_node_downstream,
-                    downstream_socket=self.host_io.get_upstream_socket() if not entry_node_downstream else None,
-                    sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
-                    receiver_mesh=MeshWrapper(mesh_device),
-                )
-            else:
-                self.entry_socket_interface = SocketInterface(
-                    upstream_d2d_socket_page_size,
-                    upstream_d2d_socket_fifo_size,
-                    upstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id - 1].exit_node_coord, pipeline_core_coord),
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].entry_node_coord, pipeline_core_coord),
-                    downstream_core_coord=entry_node_downstream
-                    if entry_node_downstream
-                    else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
-                    sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
-                    receiver_mesh=MeshWrapper(mesh_device),
-                )
-                self.exit_socket_interface = SocketInterface(
-                    downstream_d2d_socket_page_size,
-                    downstream_d2d_socket_fifo_size,
-                    downstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
-                    upstream_core_coord=exit_node_upstream,
-                    upstream_socket=self.entry_socket_interface.get_downstream_socket()
-                    if not exit_node_upstream
-                    else None,
-                    sender_mesh=MeshWrapper(mesh_device),
-                    receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
-                )
+        embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
+
+        assert h2d_socket_fifo_size >= token_size_bytes
+        assert d2h_socket_fifo_size >= d2h_socket_page_size
+        assert downstream_d2d_socket_page_size == embedding_size_bytes
+        assert upstream_d2d_socket_page_size == d2h_socket_page_size
+
+        self.h2d_socket = ttnn.H2DSocket(
+            mesh_device,
+            ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
+            ttnn.BufferType.L1,
+            h2d_socket_fifo_size,
+            ttnn.H2DMode.HOST_PUSH,
+        )
+
+        if self.initialize_loopback:
+            self.d2h_socket = ttnn.D2HSocket(
+                mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
+            )
+
+        self.host_io = HostInterface(
+            self.h2d_socket,
+            self.d2h_socket,
+            token_size_bytes,
+            d2h_socket_page_size,
+            core_to_core_socket_buffer_size=downstream_d2d_socket_page_size,
+            h2d_downstream_core=ttnn.MeshCoreCoord(
+                pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
+            ),
+            d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
+            embedding_tensor=embedding_tensor,
+        )
+
+        self.exit_socket_interface = SocketInterface(
+            downstream_d2d_socket_page_size,
+            downstream_d2d_socket_fifo_size,
+            downstream_d2d_socket_page_size,
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+            upstream_socket=self.host_io.get_downstream_socket(),
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
+        )
+
+        if self.initialize_loopback:
+            self.entry_socket_interface = SocketInterface(
+                upstream_d2d_socket_page_size,
+                upstream_d2d_socket_fifo_size,
+                upstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.num_procs - 1].exit_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
+                downstream_socket=self.host_io.get_upstream_socket(),
+                sender_mesh=MeshWrapper(mesh_id=self.num_procs - 1),
+                receiver_mesh=MeshWrapper(mesh_device),
+            )
+
+    def _init_last_stage_with_d2h(
+        self,
+        mesh_device,
+        pipeline_config,
+        pipeline_core_coord,
+        token_size_bytes,
+        upstream_d2d_socket_fifo_size,
+        upstream_d2d_socket_page_size,
+        downstream_d2d_socket_page_size,
+        d2h_socket_fifo_size,
+        d2h_socket_page_size,
+        exit_node_upstream,
+    ):
+        assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to last pipeline stage"
+        assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to last pipeline stage"
+
+        d2h_device_coord = pipeline_config[self.num_procs - 1].exit_node_coord
+        d2h_upstream_core = (
+            exit_node_upstream
+            if exit_node_upstream
+            else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].entry_node_coord, pipeline_core_coord)
+        )
+
+        self.d2h_socket = ttnn.D2HSocket(
+            mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
+        )
+
+        # HostInterface creates an upstream_socket_pair (entry_core → exit_core) for its D2H
+        # kernel. We then wire the entry_socket_interface's downstream to the same pair so that
+        # the D2D exchange kernel pushes into the socket the D2H kernel reads from.
+        self.host_io = HostInterface(
+            None,
+            self.d2h_socket,
+            token_size_bytes,
+            d2h_socket_page_size,
+            core_to_core_socket_buffer_size=downstream_d2d_socket_page_size,
+            d2h_upstream_core=d2h_upstream_core,
+        )
+
+        self.entry_socket_interface = SocketInterface(
+            upstream_d2d_socket_page_size,
+            upstream_d2d_socket_fifo_size,
+            upstream_d2d_socket_page_size,
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id - 1].exit_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].entry_node_coord, pipeline_core_coord),
+            downstream_socket=self.host_io.get_upstream_socket(),
+            sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
+    def _init_forwarding_stage(
+        self,
+        mesh_device,
+        pipeline_config,
+        pipeline_core_coord,
+        upstream_d2d_socket_fifo_size,
+        downstream_d2d_socket_fifo_size,
+        upstream_d2d_socket_page_size,
+        downstream_d2d_socket_page_size,
+        entry_node_downstream,
+        exit_node_upstream,
+    ):
+        self.entry_socket_interface = SocketInterface(
+            upstream_d2d_socket_page_size,
+            upstream_d2d_socket_fifo_size,
+            upstream_d2d_socket_page_size,
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id - 1].exit_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].entry_node_coord, pipeline_core_coord),
+            downstream_core_coord=entry_node_downstream
+            if entry_node_downstream
+            else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+            sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
+        next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
+        self.exit_socket_interface = SocketInterface(
+            downstream_d2d_socket_page_size,
+            downstream_d2d_socket_fifo_size,
+            downstream_d2d_socket_page_size,
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+            upstream_core_coord=exit_node_upstream,
+            upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+        )
 
     def run(self):
         if self.is_pipeline_start:
             self.host_io.run()
             self.exit_socket_interface.run()
-            # self.entry_socket_interface.run()
+            if self.initialize_loopback:
+                self.entry_socket_interface.run()
         else:
-            if self.my_mesh_id == self.num_procs - 1:
-                self.host_io.run()
-            else:
-                self.exit_socket_interface.run()
             self.entry_socket_interface.run()
+            if self.has_exit:
+                self.exit_socket_interface.run()
+            if self.host_io is not None:
+                self.host_io.run()
 
     def terminate(self):
         # Multi-Process barrier here that all outstanding requests issued to pipeline block
@@ -202,14 +315,15 @@ class PipelineBlock:
         ttnn.distributed_context_barrier()
         if self.is_pipeline_start:
             self.host_io.terminate(False)
-            # self.entry_socket_interface.terminate(False)
+            if self.initialize_loopback:
+                self.entry_socket_interface.terminate(False)
             self.exit_socket_interface.terminate(True)
         else:
-            if self.my_mesh_id == self.num_procs - 1:
-                self.host_io.terminate(False)
-            else:
-                self.exit_socket_interface.terminate(False)
-            self.entry_socket_interface.terminate(True)
+            self.entry_socket_interface.terminate(False)
+            if self.has_exit:
+                self.exit_socket_interface.terminate(not self.has_d2h)
+            if self.host_io is not None:
+                self.host_io.terminate(True)
 
     def is_first_pipeline_stage(self):
         return self.is_pipeline_start
@@ -219,13 +333,13 @@ class PipelineBlock:
         self.h2d_socket.write_tensor(token_tensor)
 
     def read_output(self, output_tensor):
-        # assert self.is_first_pipeline_stage(), "Output can only be read from the first pipeline stage"
+        assert (
+            self.d2h_socket is not None
+        ), "read_output requires a D2H socket: valid on stage 0 with loopback, or last stage without loopback"
         self.d2h_socket.read_tensor(output_tensor)
 
-    # Returns sender socket feeding exit node
     def get_upstream_socket(self):
         return self.exit_socket_interface.get_upstream_socket()
 
-    # Returns receiver socket draining entry node
     def get_downstream_socket(self):
         return self.entry_socket_interface.get_downstream_socket()

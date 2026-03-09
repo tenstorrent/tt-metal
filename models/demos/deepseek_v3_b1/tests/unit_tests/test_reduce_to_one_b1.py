@@ -90,12 +90,13 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
         )
         intermediate_tensors.append(intermediate_tensor)
 
-    # Create output tensor sharded on a single core (bottom-right of compute grid)
-    compute_grid = submesh_device.compute_with_storage_grid_size()
-    output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-    logger.info(f"Compute grid: {compute_grid}, output core: {output_core}")
-    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(output_core, output_core)})
-    output_shard_shape = tensor_shape  # Full tensor on single core
+    # Output tensor sharded on the first worker core (aggregator core)
+    shard_cores_list = ttnn.corerange_to_cores(shard_grid, row_wise=True)
+    aggregator_core = shard_cores_list[0]
+    logger.info(f"Aggregator core (first worker core): {aggregator_core}")
+
+    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
+    output_shard_shape = tensor_shape
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
         output_shard_shape,
@@ -116,9 +117,8 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
         memory_config=output_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    logger.info(f"Created output tensor sharded on single core: {output_core}")
+    logger.info(f"Created output tensor sharded on aggregator core: {aggregator_core}")
 
-    # Generate test data
     data_per_device = []
     torch.manual_seed(42)
     for _ in range(num_devices):
@@ -143,6 +143,7 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
     ref_output = ReduceToOneB1.golden(data_per_device)
 
     # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
+    compute_grid = submesh_device.compute_with_storage_grid_size()
     num_cores = compute_grid.x * compute_grid.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
     ttnn.synchronize_device(submesh_device)
@@ -157,7 +158,7 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
         "ref_output": ref_output,
         "root_coord": root_coord,
         "exit_coord": exit_coord,
-        "output_core": output_core,
+        "output_core": aggregator_core,
         "semaphores": semaphores,
     }
 
@@ -210,7 +211,7 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     return match
 
 
-def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coord=(0, 1)):
+def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coord=(0, 1), is_torus=False):
     """Run reduce_to_one test."""
     print(f"\n=== Testing reduce_to_one (num_iterations={num_iterations}) ===")
 
@@ -226,6 +227,7 @@ def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coo
         ttnn.MeshCoordinate(config["root_coord"]),
         ttnn.MeshCoordinate(config["exit_coord"]),
         num_iterations=num_iterations,
+        is_torus=is_torus,
     )
     ttnn.synchronize_device(config["submesh_device"])
 
