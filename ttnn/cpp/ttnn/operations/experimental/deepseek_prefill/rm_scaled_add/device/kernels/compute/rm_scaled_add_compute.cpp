@@ -28,23 +28,33 @@ void kernel_main() {
     // Reserve space for all output tiles
     cb_reserve_back(cb_out0, n_tiles);
 
-    // Process each tile
-    for (uint32_t i = 0; i < n_tiles; i++) {
+    // Process tiles in chunks of 8 (max DST registers available in hardware)
+    constexpr uint32_t DST_BATCH_SIZE = 8;
+
+    for (uint32_t tile_offset = 0; tile_offset < n_tiles; tile_offset += DST_BATCH_SIZE) {
+        uint32_t batch_size = (n_tiles - tile_offset < DST_BATCH_SIZE) ? (n_tiles - tile_offset) : DST_BATCH_SIZE;
+
         tile_regs_acquire();
 
-        // Step 1: B[i] * scalar -> DST[0]
+        // Step 1: B[i] * scalar -> DST[j] for this batch
         mul_tiles_bcast_scalar_init_short(cb_in1, cb_scalar);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_in1, cb_scalar, i, 0, 0);
+        for (uint32_t j = 0; j < batch_size; j++) {
+            mul_tiles_bcast<BroadcastType::SCALAR>(cb_in1, cb_scalar, tile_offset + j, 0, j);
+        }
 
-        // Step 2: A[i] + DST[0] -> DST[0]
+        // Step 2: A[i] + DST[j] -> DST[j] for this batch
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_in0);
-        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_in0, i, 0);
+        for (uint32_t j = 0; j < batch_size; j++) {
+            binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_in0, tile_offset + j, j);
+        }
 
         tile_regs_commit();
         tile_regs_wait();
 
-        // Pack result to output position i
-        pack_tile(0, cb_out0, i);
+        // Step 3: Pack DST[j] -> output[tile_offset + j]
+        for (uint32_t j = 0; j < batch_size; j++) {
+            pack_tile(j, cb_out0, tile_offset + j);
+        }
 
         tile_regs_release();
     }

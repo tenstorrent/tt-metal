@@ -82,13 +82,6 @@ RmScaledAddProgramFactory::cached_program_t RmScaledAddProgramFactory::create(
             .set_page_size(cb_out0_index, tile_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range, cb_out0_config);
 
-    // Intermediate CB for B * scalar result (not used currently)
-    uint32_t cb_intermed_index = tt::CBIndex::c_24;
-    tt::tt_metal::CircularBufferConfig cb_intermed_config =
-        tt::tt_metal::CircularBufferConfig(tile_size_bytes, {{cb_intermed_index, data_format}})
-            .set_page_size(cb_intermed_index, tile_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, cb_intermed_config);
-
     // Pack scalar as bfloat16
     bfloat16 scalar_bf16(operation_attributes.scale);
     uint32_t packed_scalar = pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});

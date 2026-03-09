@@ -6,14 +6,16 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from tracy import signpost
 from models.common.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize(
     "shape",
     [
-        (1, 7168),  # Target use case
+        (1, 7168),  # Target use case (7 tiles)
         (1, 1024),  # Single tile
+        (1, 15360),  # 15 tiles - tests chunked processing beyond 8 DSTs
     ],
 )
 @pytest.mark.parametrize(
@@ -60,8 +62,10 @@ def test_rm_scaled_add(device, shape, scale):
         device=device,
     )
 
-    # Run the operation
+    # Run the operation with signposts for Tracy profiling
+    signpost(f"rm_scaled_add_{shape[0]}x{shape[1]}_scale{scale}_start")
     ttnn_output = ttnn.experimental.rm_scaled_add(ttnn_a, ttnn_b, scale)
+    signpost(f"rm_scaled_add_{shape[0]}x{shape[1]}_scale{scale}_stop")
 
     # Convert back to torch
     output = ttnn.to_torch(ttnn_output)
@@ -114,9 +118,11 @@ def test_scaled_add_with_ttnn_ops(device, scale):
         device=device,
     )
 
-    # A = A + B * scale using standard ttnn ops
+    # A = A + B * scale using standard ttnn ops with signposts for Tracy profiling
+    signpost(f"ttnn_ops_scaled_add_32x224_scale{scale}_start")
     ttnn_scaled_b = ttnn.multiply(ttnn_b, scale)
     ttnn_output = ttnn.add(ttnn_a, ttnn_scaled_b)
+    signpost(f"ttnn_ops_scaled_add_32x224_scale{scale}_stop")
 
     output = ttnn.to_torch(ttnn_output)
 
