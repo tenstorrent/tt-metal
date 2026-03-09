@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
 #include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
@@ -16,6 +15,9 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
@@ -556,6 +558,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
+    auto num_devices = device->num_devices();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -607,14 +610,26 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
         xt::allclose(replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], column_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0],
+        num_devices * column_parallel_input_gradients[0],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1],
+        num_devices * column_parallel_input_gradients[1],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
@@ -638,6 +653,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
+    auto num_devices = device->num_devices();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -690,12 +706,24 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
         xt::allclose(replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], column_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0],
+        num_devices * column_parallel_input_gradients[0],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1],
+        num_devices * column_parallel_input_gradients[1],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 };

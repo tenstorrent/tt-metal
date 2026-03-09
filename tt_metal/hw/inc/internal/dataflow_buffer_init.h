@@ -69,7 +69,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_and_init.num_tcs_to_rr;
             // DPRINT << "num_tcs_to_rr: " << static_cast<uint32_t>(dfb_interface.num_tcs_to_rr) << ENDL();
 
-            // Copy per-risc fields into tc_slots
+            // Address fields are in bytes on host; convert to 16B units on TRISC (cb_addr_shift=4), keep bytes on DM
+            // (cb_addr_shift=0)
             for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
                 uint32_t base = per_risc_ptr->base_addr[i] >> cb_addr_shift;
                 dfb_interface.tc_slots[i].base_addr = base;
@@ -80,7 +81,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             }
             dfb_interface.entry_size = init_ptr->entry_size;
             // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
-            dfb_interface.stride_size = init_ptr->stride_size;
+            dfb_interface.stride_size = init_ptr->stride_size >> cb_addr_shift;
             // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
 
             dfb_interface.rd_entry_idx = 0;

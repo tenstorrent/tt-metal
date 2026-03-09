@@ -266,6 +266,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
+        0,      // arg 20: lightweight mask (unused in ring distributed)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -299,8 +300,10 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_union.u,
-        0,  //(uint32_t)sliding_window_size,
-        0,  //(std::uint32_t)use_attention_sink,
+        0,          //(uint32_t)sliding_window_size,
+        0,          //(std::uint32_t)use_attention_sink,
+        0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
+        valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
