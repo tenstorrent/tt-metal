@@ -27,6 +27,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "experimental/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
 
@@ -62,11 +63,23 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
 #endif
+    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
     constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
+    experimental::CircularBuffer cb_eps_obj(cb_eps);
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_inb_obj(cb_inb);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
+    experimental::CircularBuffer cb_beta_obj(cb_beta);
+    experimental::CircularBuffer cb_ex_obj(cb_ex);
+    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
+    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);
+    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    experimental::CircularBuffer cb_fusion_obj(cb_fusion);
 
     constexpr auto cb_in_rm = tt::CBIndex::c_27;  // input row-major (if row-major input, otherwise unused)
 
@@ -84,6 +97,7 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_x = cb_in;
 #endif
+    experimental::CircularBuffer cb_x_obj(cb_x);
 
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in_rm, cb_in_rm, cb_in);
@@ -95,9 +109,10 @@ void kernel_main() {
     binary_op_init_common(cb_x, cb_scaler, cb_ex);
 #endif
 
-    cb_wait_front(cb_eps, 1);     // comes from the reader
+    cb_eps_obj.wait_front(1);  // comes from the reader
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
+    experimental::CircularBuffer cb_im_or_out_obj(cb_im_or_out);
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
@@ -128,17 +143,17 @@ void kernel_main() {
             // synced on full block size. Keep cb_x aligned
             // to full block size as well so pre-add/no-pre-add
             // can be handled the same way.
-            cb_wait_front(cb_in, block.full_block_size());
-            cb_wait_front(cb_inb, block.full_block_size());
-            cb_reserve_back(cb_x, block.full_block_size());
+            cb_in_obj.wait_front(block.full_block_size());
+            cb_inb_obj.wait_front(block.full_block_size());
+            cb_x_obj.reserve_back(block.full_block_size());
             for (auto i : block.local()) {
                 add_tiles(cb_in, cb_inb, i, i, i);
                 pack_tile(i, cb_x);
             }
             REL();
-            cb_push_back(cb_x, block.full_block_size());  // push the sum into the same buffer
-            cb_pop_front(cb_in, block.full_block_size());
-            cb_pop_front(cb_inb, block.full_block_size());
+            cb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
+            cb_in_obj.pop_front(block.full_block_size());
+            cb_inb_obj.pop_front(block.full_block_size());
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -160,7 +175,7 @@ void kernel_main() {
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
-        cb_reserve_back(cb_xmm, total_buffer_size);
+        cb_xmm_obj.reserve_back(total_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (auto block : generic::blocks(Wt, block_size)) {
             ACQ();
@@ -168,11 +183,11 @@ void kernel_main() {
                 sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
                 pack_tile(i, cb_xmm);
             }
-            cb_push_back(cb_xmm, block.full_block_size());
-            cb_pop_front(cb_x, block.full_block_size());
+            cb_xmm_obj.push_back(block.full_block_size());
+            cb_x_obj.pop_front(block.full_block_size());
             REL();
         }
-        cb_pop_front(cb_ex, 1);
+        cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
         reconfig_data_format_srca(cb_x, cb_xmm);
@@ -185,18 +200,18 @@ void kernel_main() {
         mul_tiles_init(cb_xmm, cb_xmm);
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
-            cb_wait_front(cb_xmm, block.start() + block.size());
+            cb_xmm_obj.wait_front(block.start() + block.size());
 #else
-            cb_wait_front(cb_xmm, block.start() + block.full_block_size());
+            cb_xmm_obj.wait_front(block.start() + block.full_block_size());
 #endif
-            cb_reserve_back(cb_xmm2, block.full_block_size());
+            cb_xmm2_obj.reserve_back(block.full_block_size());
             ACQ();
             for (auto i : block.local()) {
                 const auto global_i = block.to_global(i);
                 mul_tiles(cb_xmm, cb_xmm, global_i, global_i, i);
                 pack_tile(i, cb_xmm2);
             }
-            cb_push_back(cb_xmm2, block.full_block_size());
+            cb_xmm2_obj.push_back(block.full_block_size());
             REL();
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
@@ -208,23 +223,23 @@ void kernel_main() {
             cb_xmm2, cb_scaler, cb_ex2, W, Wt, block_size);
 
         // Var[x] + eps
-        cb_wait_front(cb_ex2, 1);
+        cb_ex2_obj.wait_front(1);
         reconfig_data_format(cb_ex2, cb_eps);
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        cb_reserve_back(cb_ex2pe, 1);  // 1
+        cb_ex2pe_obj.reserve_back(1);  // 1
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(dst0);
         pack_reconfig_data_format(cb_ex2pe);
         pack_tile(dst0, cb_ex2pe);
-        cb_push_back(cb_ex2pe, 1);
+        cb_ex2pe_obj.push_back(1);
         REL();
-        cb_pop_front(cb_ex2, 1);
+        cb_ex2_obj.pop_front(1);
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
-        cb_wait_front(cb_ex2pe, 1);
+        cb_ex2pe_obj.wait_front(1);
         for (auto block : generic::blocks(Wt, block_size)) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
@@ -232,7 +247,7 @@ void kernel_main() {
             } else {
                 pack_reconfig_data_format(cb_fusion);
             }
-            cb_reserve_back(cb_im_or_out, block.full_block_size());
+            cb_im_or_out_obj.reserve_back(block.full_block_size());
 #if defined RMSNORM and not defined FUSE_PRE_ADD
             reconfig_data_format_srca(cb_fusion, cb_xmm);
 #endif
@@ -251,8 +266,7 @@ void kernel_main() {
 #endif
                 pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
-            cb_push_back(
-                cb_im_or_out,
+            cb_im_or_out_obj.push_back(
                 block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
             REL();
 
@@ -269,11 +283,12 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
+                experimental::CircularBuffer cb_outg_obj(cb_outg);
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_reserve_back(cb_outg, block.full_block_size());
-                cb_wait_front(
-                    cb_gamma, block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
-                cb_wait_front(cb_fusion, block.full_block_size());
+                cb_outg_obj.reserve_back(block.full_block_size());
+                cb_gamma_obj.wait_front(
+                    block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                cb_fusion_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -287,9 +302,9 @@ void kernel_main() {
 #endif
                     pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
-                cb_pop_front(cb_fusion, block.full_block_size());
+                cb_fusion_obj.pop_front(block.full_block_size());
                 // we don't pop gamma
-                cb_push_back(cb_outg, block.full_block_size());
+                cb_outg_obj.push_back(block.full_block_size());
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 REL();
             }
@@ -302,10 +317,10 @@ void kernel_main() {
                 }
                 ACQ();
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_reserve_back(cb_out, block.full_block_size());
-                cb_wait_front(
-                    cb_beta, block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
-                cb_wait_front(cb_fusion, block.full_block_size());
+                cb_out_obj.reserve_back(block.full_block_size());
+                cb_beta_obj.wait_front(
+                    block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
+                cb_fusion_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -314,14 +329,14 @@ void kernel_main() {
 #endif
                     pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
-                cb_pop_front(cb_fusion, block.full_block_size());
+                cb_fusion_obj.pop_front(block.full_block_size());
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
-                cb_push_back(cb_out, block.full_block_size());
+                cb_out_obj.push_back(block.full_block_size());
                 REL();
             }
         }
-        cb_pop_front(cb_ex2pe, 1);
-        cb_pop_front(cb_xmm, total_buffer_size);
+        cb_ex2pe_obj.pop_front(1);
+        cb_xmm_obj.pop_front(total_buffer_size);
 
 #ifdef UNTILIZE_OUT
         constexpr auto cb_out_rm = tt::CBIndex::c_28;
