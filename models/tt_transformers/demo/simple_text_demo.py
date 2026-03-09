@@ -856,6 +856,7 @@ def test_demo_text(
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")
+    is_device_perf_test = "device-perf" in test_id
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -1062,6 +1063,7 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                warmup_prefill=not is_device_perf_test,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1074,6 +1076,7 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                warmup_prefill=not is_device_perf_test,
             )
             if prefill_sampling_params is not None:
                 prefilled_token, prefill_log_probs = prefill_out
