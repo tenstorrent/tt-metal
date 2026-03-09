@@ -84,9 +84,10 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
-    torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
-    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
-    input_tensor = ttnn.from_torch(tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_nhwc, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
     if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
         pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
@@ -94,15 +95,10 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     scale_factor = (scale_h, scale_w)
 
     torch_result = golden_upsample(
-        input_tensor=torch_input,
-        batch_size=batch_size,
-        input_h=height,
-        input_w=width,
-        channels=num_channels,
+        input_tensor=torch_input_nhwc,
         scale_factor=scale_factor,
         mode="nearest",
     )
-    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels)
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
 
@@ -135,7 +131,7 @@ def upsample_multicore_common(
 
     from ttnn.operations.pool import golden_upsample
 
-    torch_input = torch.randn((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch.randn((batch_size, height, width, num_channels), dtype=torch.bfloat16)
 
     ## golden reference using golden function
     scale_factor = (scale_h, scale_w)
@@ -143,18 +139,13 @@ def upsample_multicore_common(
     align_corners = False if mode == "bilinear" else None
 
     torch_result = golden_upsample(
-        input_tensor=torch_input,
-        batch_size=batch_size,
-        input_h=height,
-        input_w=width,
-        channels=num_channels,
+        input_tensor=torch_input_nhwc,
         scale_factor=scale_factor,
         mode=mode_str,
         align_corners=align_corners,
     )
-    torch_result = torch_result.reshape(batch_size, int(height * scale_h), int(width * scale_w), num_channels)
 
-    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
+    tt_input = torch_input_nhwc
 
     num_bytes = 2  ## only BFLOAT16 is supported
 
