@@ -227,6 +227,7 @@
   cmd: |
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
   skus:
     wh_llmbox:
       timeout: 5

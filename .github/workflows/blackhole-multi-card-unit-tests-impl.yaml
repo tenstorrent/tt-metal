@@ -107,6 +107,7 @@ jobs:
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
             timeout: 30
             test-type: loudbox
             owner_id: U08E1JCMAJF
