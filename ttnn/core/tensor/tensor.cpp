@@ -88,9 +88,8 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (device_storage().is_allocated()) {
-        const auto& buffer = device_storage().get_mesh_buffer();
-        mesh_device_ = buffer.device();
+    if (is_allocated()) {
+        mesh_device_ = mesh_buffer().device();
     }
 }
 
@@ -134,12 +133,7 @@ void Tensor::deallocate_impl(bool force) {
         std::visit(
             tt::stl::overloaded{
                 [](HostStorage&) {},
-                [this, force, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
-                        storage.deallocate_root_mesh_buffer();
-                    }
-                    storage.reset_root_mesh_buffer();
-                }},
+                [this, force, &can_deallocate](DeviceStorage& storage) { storage.deallocate_shared_memory(force); }},
             this->tensor_attributes->get_storage());
     }
     // GraphTracker::instance().track_function_end();
