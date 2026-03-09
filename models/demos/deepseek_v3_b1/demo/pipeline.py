@@ -258,14 +258,18 @@ class Pipeline:
 
         logger.info("Setting up")
         self.setup()
-        ttnn.distributed_context_barrier()
+        logger.info("Pipeline setup complete, waiting for all stages to complete...")
+        self.barrier()
 
         logger.info("Starting pipeline")
         self.start_pipeline()
-        ttnn.distributed_context_barrier()
+        logger.info("Pipeline started, waiting for all stages to complete...")
+        self.barrier()
 
         logger.info("Starting compute")
         self.start_compute()
+        logger.info("Compute started, waiting for all stages to complete...")
+        self.barrier()
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         if self._pipeline_block is None:

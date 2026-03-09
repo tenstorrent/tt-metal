@@ -131,7 +131,6 @@ def run_demo(
     logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
     with open_mesh_device() as mesh_device:
-        # Initialize model pipeline
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             cache_path=cache_path,
@@ -141,10 +140,6 @@ def run_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
-
-        logger.info("Waiting for all stages to be initialized...")
-        model_pipeline.barrier()  # Wait for all stages to be initialized
-        logger.info("All stages initialized")
 
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
