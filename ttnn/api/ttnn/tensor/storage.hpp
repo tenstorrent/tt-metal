@@ -58,18 +58,18 @@ public:
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
 
     // Begin internal functions:
+    //
+    // These functions allows the use of the get_mesh_buffer as a view.
+    // These are considered internal functions and are not part of the public API.
+    // They will be replaced with a new initiative as described in: #38093
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        std::vector<distributed::MeshCoordinate> coords_,
+        std::shared_ptr<distributed::MeshBuffer> root_buffer_);
 
-    /**
-     * Create a new DeviceStorage that is a view of the "other" DeviceStorage,
-     * where the "other" DeviceStorage manages the lifetime and underlying device memory,
-     * but the MeshBuffer is reinterpreted as it appears in the "surface_buffer".
-     *
-     * This will be replaced with a new initiative as described in: #38093
-     *
-     * pre-condition: other is allocated.
-     */
-    DeviceStorage(DeviceStorage other, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
-
+    const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
+    void deallocate_root_mesh_buffer();
+    void reset_root_mesh_buffer();
     // End internal functions.
 
     static constexpr auto attribute_names = std::forward_as_tuple();
@@ -94,12 +94,6 @@ public:
     // They are here to support distributed API.
     static DeviceStorage combine_to_multi_device_storage(
         std::span<std::reference_wrapper<const DeviceStorage>> storages);
-
-private:
-    // These are to support the view MeshBuffer associated with #38093.
-    const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
-    void deallocate_root_mesh_buffer();
-    void reset_root_mesh_buffer();
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage>;
