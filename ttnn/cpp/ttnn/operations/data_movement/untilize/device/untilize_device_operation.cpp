@@ -374,12 +374,11 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return UntilizeSingleCoreProgramFactory{};
     }
 
-    if (not input_is_sharded or input_tensor_a.shard_spec().has_value()) {
-        // default multi core implementation, non ND-sharded input
-        return UntilizeMultiCoreProgramFactory{};
+    if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        return UntilizeMultiCoreNDShardInputProgramFactory{};
     }
-    // Default ND shard multi core implementation
-    return UntilizeMultiCoreNDShardInputProgramFactory{};
+    // default multi core implementation, non ND-sharded input
+    return UntilizeMultiCoreProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
