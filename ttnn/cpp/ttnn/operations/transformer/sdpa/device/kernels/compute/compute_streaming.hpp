@@ -69,7 +69,7 @@ struct RingAccumulatorState {
  * Always uses pack_tile<true> at row-major positions in out_cb.
  */
 template <bool TRANSPOSE, uint32_t IN1_STRIDE, uint32_t OUT_NUM_COLS, bool blocked_pack = false>
-__attribute__((noinline, noclone)) void blocked_matmul_and_pack(
+void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
     uint32_t out_cb,
@@ -188,7 +188,7 @@ template <
     bool do_reduce,
     int vector_mode = (int)VectorMode::RC,
     bool blocked_pack = false>
-__attribute__((noinline, noclone)) void sub_exp_block_bcast_cols(
+void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
     uint32_t reduce_cb,
@@ -319,8 +319,7 @@ __attribute__((noinline, noclone)) void sub_exp_block_bcast_cols(
  * Operates on first-column subset of tiles.
  */
 template <bool PROFILING_ENABLED, uint32_t scale_fp32>
-__attribute__((noinline, noclone)) void sub_exp_first_col_blocks(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t SBH) {
+void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t SBH) {
     const uint32_t tiles_per_row = SBH;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -561,7 +560,7 @@ static inline void l1_acc_single_tile(uint32_t mask_cb, uint32_t tile_idx, uint3
  * and llk_pack_reconfig_l1_acc(0) after calling.
  */
 template <uint32_t num_cols>
-static __attribute__((noinline, noclone)) void apply_lightweight_mask_streaming(
+static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
     uint32_t q_subblock,
