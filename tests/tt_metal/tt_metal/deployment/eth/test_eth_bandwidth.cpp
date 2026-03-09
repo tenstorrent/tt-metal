@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/tt_metal/deployment/eth/common.hpp"
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
 
 #include <gtest/gtest.h>
@@ -37,111 +38,47 @@ static bool run_test_bandwidth(
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
-    std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
     struct l1_allocator send_allocator = new_erisc_allocator();
-    uint32_t send_delta_addr = l1_alloc(send_allocator, sizeof(uint64_t));
-    uint32_t send_l1_address = l1_alloc(send_allocator, transfer_size);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
-
     struct l1_allocator recv_allocator = new_erisc_allocator();
-    uint32_t recv_l1_address = l1_alloc(recv_allocator, transfer_size);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), all_zeros, recv_l1_address);
+
+    uint32_t recv_l1_address = 0;
+
+    tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
+    tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
+
+    prepare_receiver(
+        recv_device,
+        recv_core,
+        &recv_allocator,
+        transfer_size,
+        transfer_count,
+        inputs,
+        processor,
+        &recv_l1_address,
+        &recv_program);
+
+    uint32_t send_delta_addr = 0;
+    prepare_sender(
+        send_device,
+        send_core,
+        &send_allocator,
+        transfer_size,
+        transfer_count,
+        &send_delta_addr,
+        inputs,
+        processor,
+        num_bytes_per_send,
+        recv_l1_address,
+        &send_program);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload send_workload;
-    tt_metal::Program send_program = tt_metal::Program();
-
-    auto send_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor,
-        .compile_args =
-            {
-                num_bytes_per_send,
-                transfer_size,
-                transfer_count,
-                send_delta_addr,
-                send_l1_address,
-                recv_l1_address,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(send_eth_config);
-
-    auto send_kernel = tt_metal::CreateKernel(
-        send_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_simple_send_kernel.cpp",
-        send_core,
-        send_eth_config);
-
-    tt_metal::SetRuntimeArgs(send_program, send_kernel, send_core, {});
-
-    distributed::MeshWorkload recv_workload_;
-    tt_metal::Program recv_program_ = tt_metal::Program();
-
-    distributed::MeshWorkload& recv_workload = same_device ? send_workload : recv_workload_;
-    tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
-
-    auto recv_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor,
-        .compile_args =
-            {
-                transfer_size,
-                transfer_count,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(recv_eth_config);
-
-    auto recv_kernel = tt_metal::CreateKernel(
-        recv_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_simple_recv_kernel.cpp",
-        recv_core,
-        recv_eth_config);
-
-    tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, {});
-
-    send_workload.add_program(device_range, std::move(send_program));
-    if (!same_device) {
-        recv_workload.add_program(device_range, std::move(recv_program));
-    }
-
-    fixture->RunProgram(send_mesh_device, send_workload, true);
-    if (!same_device) {
-        fixture->RunProgram(recv_mesh_device, recv_workload, true);
-    }
-
-    fixture->FinishCommands(send_mesh_device);
-    if (!same_device) {
-        fixture->FinishCommands(recv_mesh_device);
-    }
-
-    auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), recv_l1_address, transfer_size);
-
-    uint64_t delta = read_l1_u64(send_device, send_core, send_delta_addr);
-    double deltas = delta / 1.35e9; /* Assuming fixed max frequency */
-    double bandwidth = 8 * total_transferred / 1e9 / deltas;
-    log_info(tt::LogTest, "      Bandwidth {:.3f} Gbps, {:.3f} ms", bandwidth, deltas * 1000);
+    wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
 
     bool pass = true;
-    if (bandwidth < BANDWIDTH_THRESHOLD) {
-        pass = false;
-        log_info(tt::LogTest, "      Expected at least: {} Gbps, got {:.2f} Gbps", BANDWIDTH_THRESHOLD, bandwidth);
-    }
-
-    if (readback_vec != inputs) {
-        pass = false;
-        for (int i = 0; i < inputs.size(); i++) {
-            if (inputs[i] != readback_vec[i]) {
-                log_info(tt::LogTest, "      Mismatch at index: {}", i);
-            }
-        }
-        log_info(tt::LogTest, "      Mismatch at Core: {}", recv_core);
-    }
-
+    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
+    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
     return pass;
 }
 
