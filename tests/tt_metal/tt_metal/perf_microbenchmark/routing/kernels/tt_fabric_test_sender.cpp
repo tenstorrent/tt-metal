@@ -68,14 +68,31 @@ void kernel_main() {
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
                                                          //
 
-    if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE){
-        
+    if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
-        auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_); 
-        const uint32_t num_packets = traffic_config->metadata.num_packets; 
+        auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_);
+        const uint32_t num_packets = traffic_config->metadata.num_packets;
         const uint32_t num_warmup = conn->num_buffers_per_channel;
 
         traffic_config->template send_packets_stateful<BENCHMARK_MODE>(traffic_config, conn, num_packets, num_warmup);
+
+        // CRITICAL FIX: Stateful writes use update_counter=false, leaving software counter out of sync
+        // Must wait for ALL in-flight writes to complete, then sync counter to hardware
+        const uint8_t noc = get_fabric_worker_noc();
+
+        // Poll hardware register until it stops changing (all writes acked)
+        uint32_t prev_hw = 0;
+        uint32_t curr_hw = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+        while (prev_hw != curr_hw) {
+            prev_hw = curr_hw;
+            curr_hw = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+        }
+
+        DPRINT << "After stateful: HW reg=" << curr_hw << " SW counter=" << noc_nonposted_writes_acked[noc] << ENDL();
+
+        // NOW sync - all stateful writes are complete
+        noc_nonposted_writes_acked[noc] = curr_hw;
+        DPRINT << "Synced SW counter to " << noc_nonposted_writes_acked[noc] << ENDL();
 
     } else {
         while (packets_left_to_send) {
