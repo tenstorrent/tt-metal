@@ -92,8 +92,7 @@
  *       cb_a, cb_b, cb_out, BinaryInputBlockShape::of(Ht, Wt));
  *
  *   // 9. Post-operation callback — apply rsqrt after multiply
- *   mul(cb_in, cb_in, cb_out, BinaryInputBlockShape::of(Ht, Wt), {},
- *       NoAccumulation{},
+ *   mul(cb_in, cb_in, cb_out, BinaryInputBlockShape::of(Ht, Wt),
  *       [](uint32_t dst_idx) {
  *           rsqrt_tile_init();
  *           rsqrt_tile(dst_idx);
@@ -186,10 +185,6 @@ struct BinaryInputBlockShape {
     static constexpr BinaryInputBlockShape col(uint32_t r) { return {r, 1}; }
 };
 
-struct BinaryTileLayout {
-    uint32_t row_major_a = 1, row_major_b = 1;
-};
-
 struct BinaryAccumulate {
     uint32_t cb_accumulator, dst_index = 0;
 };
@@ -249,9 +244,8 @@ ALWI void binary_exec(uint32_t icb_a, uint32_t icb_b, uint32_t itile_a, uint32_t
  * @param icb_b  Input circular buffer for operand B (same as icb_a for SQUARE)
  * @param ocb    Output circular buffer
  * @param shape  Tile grid dimensions — use BinaryInputBlockShape::of(Ht, Wt)
- * @param layout Tile layout configuration (default: {})
- * @param accum  Accumulation config (default: NoAccumulation)
  * @param post_op  Post-operation callback receiving dst_idx (default: NoOp)
+ * @param accum  Accumulation config (default: NoAccumulation)
  */
 template <
     BinaryOpType op_type,
@@ -261,16 +255,10 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename AccumT = NoAccumulation,
-    typename PostOp = NoOp>
+    typename PostOp = NoOp,
+    typename AccumT = NoAccumulation>
 ALWI void binary_op(
-    uint32_t icb_a,
-    uint32_t icb_b,
-    uint32_t ocb,
-    BinaryInputBlockShape shape,
-    BinaryTileLayout layout = {},
-    AccumT accum = {},
-    PostOp post_op = {});
+    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
 
 // =============================================================================
 // Convenience Aliases
@@ -284,16 +272,10 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename AccumT = NoAccumulation,
-    typename PostOp = NoOp>
+    typename PostOp = NoOp,
+    typename AccumT = NoAccumulation>
 ALWI void add(
-    uint32_t icb_a,
-    uint32_t icb_b,
-    uint32_t ocb,
-    BinaryInputBlockShape shape,
-    BinaryTileLayout layout = {},
-    AccumT accum = {},
-    PostOp post_op = {});
+    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
 
 /** @brief Element-wise subtraction: A - B. See binary_op() for full documentation. */
 template <
@@ -303,16 +285,10 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename AccumT = NoAccumulation,
-    typename PostOp = NoOp>
+    typename PostOp = NoOp,
+    typename AccumT = NoAccumulation>
 ALWI void sub(
-    uint32_t icb_a,
-    uint32_t icb_b,
-    uint32_t ocb,
-    BinaryInputBlockShape shape,
-    BinaryTileLayout layout = {},
-    AccumT accum = {},
-    PostOp post_op = {});
+    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
 
 /** @brief Element-wise multiplication: A * B. See binary_op() for full documentation. */
 template <
@@ -322,16 +298,10 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename AccumT = NoAccumulation,
-    typename PostOp = NoOp>
+    typename PostOp = NoOp,
+    typename AccumT = NoAccumulation>
 ALWI void mul(
-    uint32_t icb_a,
-    uint32_t icb_b,
-    uint32_t ocb,
-    BinaryInputBlockShape shape,
-    BinaryTileLayout layout = {},
-    AccumT accum = {},
-    PostOp post_op = {});
+    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
 
 /** @brief Element-wise square: A * A. Uses a single input CB. See binary_op() for full documentation. */
 template <
@@ -339,15 +309,9 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename AccumT = NoAccumulation,
-    typename PostOp = NoOp>
-ALWI void square(
-    uint32_t icb,
-    uint32_t ocb,
-    BinaryInputBlockShape shape,
-    BinaryTileLayout layout = {},
-    AccumT accum = {},
-    PostOp post_op = {});
+    typename PostOp = NoOp,
+    typename AccumT = NoAccumulation>
+ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
 
 }  // namespace compute_kernel_lib
 

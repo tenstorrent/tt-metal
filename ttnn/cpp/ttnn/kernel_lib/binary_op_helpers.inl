@@ -137,16 +137,15 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename AccumT,
-    typename PostOp>
+    typename PostOp,
+    typename AccumT>
 ALWI void binary_op(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryTileLayout layout,
-    AccumT accum,
-    PostOp post_op) {
+    PostOp post_op,
+    AccumT accum) {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
@@ -401,16 +400,15 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename AccumT,
-    typename PostOp>
+    typename PostOp,
+    typename AccumT>
 ALWI void add(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryTileLayout layout,
-    AccumT accum,
-    PostOp post_op) {
+    PostOp post_op,
+    AccumT accum) {
     binary_op<
         BinaryOpType::ADD,
         bcast_dim,
@@ -419,8 +417,8 @@ ALWI void add(
         output_policy,
         reconfig,
         init,
-        AccumT,
-        PostOp>(icb_a, icb_b, ocb, shape, layout, accum, post_op);
+        PostOp,
+        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum);
 }
 
 template <
@@ -430,16 +428,15 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename AccumT,
-    typename PostOp>
+    typename PostOp,
+    typename AccumT>
 ALWI void sub(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryTileLayout layout,
-    AccumT accum,
-    PostOp post_op) {
+    PostOp post_op,
+    AccumT accum) {
     binary_op<
         BinaryOpType::SUB,
         bcast_dim,
@@ -448,8 +445,8 @@ ALWI void sub(
         output_policy,
         reconfig,
         init,
-        AccumT,
-        PostOp>(icb_a, icb_b, ocb, shape, layout, accum, post_op);
+        PostOp,
+        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum);
 }
 
 template <
@@ -459,16 +456,15 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename AccumT,
-    typename PostOp>
+    typename PostOp,
+    typename AccumT>
 ALWI void mul(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryTileLayout layout,
-    AccumT accum,
-    PostOp post_op) {
+    PostOp post_op,
+    AccumT accum) {
     binary_op<
         BinaryOpType::MUL,
         bcast_dim,
@@ -477,8 +473,8 @@ ALWI void mul(
         output_policy,
         reconfig,
         init,
-        AccumT,
-        PostOp>(icb_a, icb_b, ocb, shape, layout, accum, post_op);
+        PostOp,
+        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum);
 }
 
 template <
@@ -486,15 +482,14 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename AccumT,
-    typename PostOp>
+    typename PostOp,
+    typename AccumT>
 ALWI void square(
     uint32_t icb,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryTileLayout layout,
-    AccumT accum,
-    PostOp post_op) {
+    PostOp post_op,
+    AccumT accum) {
     binary_op<
         BinaryOpType::SQUARE,
         BroadcastDim::NONE,
@@ -503,8 +498,8 @@ ALWI void square(
         output_policy,
         reconfig,
         init,
-        AccumT,
-        PostOp>(icb, icb, ocb, shape, layout, accum, post_op);
+        PostOp,
+        AccumT>(icb, icb, ocb, shape, post_op, accum);
 }
 
 }  // namespace compute_kernel_lib
