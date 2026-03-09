@@ -449,6 +449,15 @@ class ModelArgs:
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
     }
 
+    def _get_local_hf_params_path(self):
+        """Path to HF config for dummy weights; uses CKPT_DIR for Meta-Llama-3-8B, else LOCAL_HF_PARAMS."""
+        if self.model_name in ("Meta-Llama-3-8B", "Meta-Llama-3-8B-Instruct"):
+            return self.CKPT_DIR
+        path = self.LOCAL_HF_PARAMS.get(self.model_name)
+        if path is not None:
+            return path
+        raise KeyError(f"'{self.model_name}' not in LOCAL_HF_PARAMS.")
+
     MAX_QKV_MM_SEQ_LEN = 2048
 
     def __init__(
@@ -2351,7 +2360,7 @@ class ModelArgs:
             local_params = "LLAMA3_2_1B_PARAMS"
         elif "3.2-3B" in model_name:
             local_params = "LLAMA3_2_3B_PARAMS"
-        elif "3.1-8B" in model_name:
+        elif "3.1-8B" in model_name or "Meta-Llama-3-8B" in model_name:
             local_params = "LLAMA3_1_8B_PARAMS"
         elif "3.2-11B" in model_name:
             local_params = "LLAMA3_2_11B_PARAMS"
@@ -2719,10 +2728,9 @@ class ModelArgs:
         from transformers import AutoConfig
 
         if self.dummy_weights:
-            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
-            self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
+            local_path = self._get_local_hf_params_path()
+            logger.info(f"Loading state param for dummy {self.model_name} from {local_path}")
+            self.hf_config = AutoConfig.from_pretrained(local_path, trust_remote_code=self.trust_remote_code_hf)
         else:
             self.hf_config = AutoConfig.from_pretrained(
                 self.CKPT_DIR,
@@ -2875,7 +2883,7 @@ class ModelArgs:
             from transformers import AutoConfig
 
             config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                self._get_local_hf_params_path(), trust_remote_code=self.trust_remote_code_hf
             )
             if hasattr(config, "text_config"):
                 config.text_config.num_layers = self.n_layers
@@ -3443,7 +3451,7 @@ class ModelArgs:
         # so use that by preference unless we don't have a checkpoint
         if self.dummy_weights and not load_checkpoint:
             config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name],
+                self._get_local_hf_params_path(),
                 trust_remote_code=self.trust_remote_code_hf,
                 local_files_only=os.getenv("CI") == "true",
             )
@@ -3475,7 +3483,7 @@ class ModelArgs:
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(
-                    self.LOCAL_HF_PARAMS[self.model_name],
+                    self._get_local_hf_params_path(),
                     trust_remote_code=self.trust_remote_code_hf,
                     local_files_only=os.getenv("CI") == "true",
                 )
@@ -3559,7 +3567,7 @@ class ModelArgs:
         model_cls = self.get_hf_model_cls()
 
         if self.dummy_weights and not load_checkpoint:
-            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            config = AutoConfig.from_pretrained(self._get_local_hf_params_path())
             if hasattr(config, "text_config"):
                 config.text_config.num_layers = self.n_layers
                 config.text_config.num_hidden_layers = self.n_layers
