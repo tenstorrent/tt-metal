@@ -875,7 +875,7 @@ class AttentionBlock:
         matmul3_output_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Output CB for third matmul (Qnope final output)
-        qrope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for Qrope (RoPE output)
+        qrope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: qrope_grid cols 8-11, rows 0-7)
         create_q_heads_out_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
         )  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
@@ -893,14 +893,12 @@ class AttentionBlock:
         )  # Rotated input intermediate CB for RoPE
         qrope_cos_sin_interm_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos Sin intermediate CB for RoPE
         # KV cache branch
-        dkv_matmul_output_cb = cb_id_context.get_cb_id(
-            data_format, TD_1x32
-        )  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
-        kv_rmsnorm_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for KV Cache Branch RMSNorm
+        dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
+        kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_gamma_cb = rmsnorm2_gamma_cb
         # kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Gamma CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for KV Cache Branch RMSNorm
-        krope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for KV Cache Branch RoPE
+        kv_rmsnorm_output_cb = rmsnorm2_output_cb  # Reuse rmsnorm2 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
+        krope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: krope_grid col 8, rows 8-9)
         create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
         )  # Intermediate CB for CreateQHeads (row-major data before tilization)
@@ -2025,7 +2023,7 @@ class AttentionBlock:
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset,  # 14336 B
             total_size=matmul_output_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=matmul_weights_core_grid,
         )
         matmul_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2037,14 +2035,16 @@ class AttentionBlock:
         ]
         sdpa_out_interm_running_offset += matmul_output_cb_descriptor.total_size  # +64 B
 
-        # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
-        # at offset 64 B. This CB is consumed before SDPA runs.
+        # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
+        # at offset 14400 B. This CB is consumed before SDPA runs.
+        # Covers gather_reduce senders (matmul_weights_core_grid, rows 0-7) + receiver (rmsnorm_core_grid)
+        # kv_rmsnorm_input_cb shares this CB ID on dkv_gather_sender_grid + dkv receiver (rows 8-9)
         rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             rmsnorm2_input_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 14400 B
             total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=matmul_weights_core_grid.merge(rmsnorm_core_grid),
         )
         rmsnorm2_input_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2079,13 +2079,15 @@ class AttentionBlock:
         ]
         sdpa_kv_cache_running_offset_mcast_core += gather_reduce_half1_scratch_cb_descriptor.total_size  # +3072 B
 
-        # CB: RMSNorm2 output buffer (3 tiles)
+        # CB: RMSNorm2 output buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
+        # at offset 20544 B. This CB is consumed before SDPA runs.
+        # kv_rmsnorm_output_cb shares this CB ID on dkv_gather_receiver_core_grid (rows 8-9)
         rmsnorm2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             rmsnorm2_output_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 20544 B
             total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=rmsnorm_core_grid,
         )
         rmsnorm2_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2149,6 +2151,7 @@ class AttentionBlock:
 
         # CB 14: Matmul3 output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 12608 B. This CB is consumed before SDPA runs.
+        # qrope_output_cb (qrope_grid) and krope_output_cb (krope_grid) share this CB ID
         matmul3_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul3_output_page_size = TILE_1x32.get_tile_size(data_format)
         matmul3_output_total_size = matmul3_out_w * matmul3_output_page_size  # 16 tiles
@@ -2157,7 +2160,7 @@ class AttentionBlock:
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset,  # 26944 B
             total_size=matmul3_output_total_size,
-            core_ranges=full_device_grid,
+            core_ranges=qnope_grid,
         )
         matmul3_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2171,6 +2174,7 @@ class AttentionBlock:
 
         # CB 15: Qrope output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 13632 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with matmul3_output_cb (qnope_grid) and krope_output_cb (krope_grid)
         qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         qrope_output_page_size = TILE_1x32.get_tile_size(data_format)
         qrope_output_total_size = matmul2_out_w * qrope_output_page_size  # 4 tiles
@@ -2179,7 +2183,7 @@ class AttentionBlock:
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset_qrope,  # 27968 B
             total_size=qrope_output_total_size,
-            core_ranges=full_device_grid,
+            core_ranges=qrope_grid,
         )
         qrope_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2305,8 +2309,9 @@ class AttentionBlock:
         ]
         sdpa_forwarder_scratch_running_offset += create_q_heads_out_cb_descriptor.total_size
 
-        # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
-        # at offset 14272 B. This CB is consumed before SDPA runs.
+        # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
+        # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
+        # dkv_matmul_output_cb covers dkv_matmul_weights_core_grid (rows 8-9)
         dkv_matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         dkv_matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2314,7 +2319,7 @@ class AttentionBlock:
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 37824 B
             total_size=dkv_matmul_output_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=dkv_matmul_weights_core_grid,
         )
         dkv_matmul_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2326,8 +2331,13 @@ class AttentionBlock:
         ]
         sdpa_kv_cache_running_offset += dkv_matmul_output_cb_descriptor.total_size  # +64 B
 
-        # CB 25: KV RMSNorm input buffer — overlap with sdpa_out_interm L1 buffer
-        # at offset 14336 B. This CB is consumed before SDPA runs.
+        # CB 25: KV RMSNorm input buffer — overlap with sdpa_kv_cache L1 buffer
+        # at offset 37888 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with rmsnorm2_input_cb (disjoint grids: rows 0-7 vs rows 8-9)
+        # Covers dkv gather senders (dkv_gather_sender_grid, rows 8-9) + dkv receiver core
+        dkv_gather_receiver_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(dkv_gather_receiver_core, dkv_gather_receiver_core)]
+        )
         kv_rmsnorm_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
         kv_rmsnorm_page_size = TILE_16x32.get_tile_size(input_tensor_sample.dtype)
         kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2335,7 +2345,7 @@ class AttentionBlock:
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 37888 B
             total_size=1 * kv_rmsnorm_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=dkv_gather_sender_grid.merge(dkv_gather_receiver_core_grid),
         )
         kv_rmsnorm_input_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2354,14 +2364,15 @@ class AttentionBlock:
         # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
         # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
 
-        # CB 27: KV RMSNorm output buffer — overlap with sdpa_out_interm L1 buffer
-        # at offset 15360 B. This CB is consumed before SDPA runs.
+        # CB 27: KV RMSNorm output buffer — overlap with sdpa_kv_cache L1 buffer
+        # at offset 38912 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with rmsnorm2_output_cb (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_output_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 38912 B
             total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=dkv_gather_receiver_core_grid,  # Only the nope core (BRISC) reads kv_rmsnorm_output_cb
         )
         kv_rmsnorm_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2390,15 +2401,16 @@ class AttentionBlock:
         krope_cos_sin_cb_descriptor.format_descriptors = [krope_cos_sin_cb_format]
         sdpa_kv_cache_running_offset += krope_cos_sin_cb_descriptor.total_size
 
-        # CB 28: KRoPE output — overlap with sdpa_out_interm L1 buffer
-        # at offset 16384 B. This CB is consumed before SDPA runs.
+        # CB 28: KRoPE output — overlap with sdpa_kv_cache L1 buffer
+        # at offset 39936 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with matmul3_output_cb (qnope_grid) and qrope_output_cb (qrope_grid)
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             krope_output_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 39936 B
             total_size=1 * krope_tile_size,
-            core_ranges=full_device_grid,
+            core_ranges=krope_grid,
         )
         krope_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
