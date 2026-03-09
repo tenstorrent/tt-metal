@@ -98,7 +98,7 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     r = k * LN2_LO + r;
 
     // Degree-5 Taylor for exp(r)
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, C2, C3, C4, C5);
 
     // 2^k scaling via direct exponent bit manipulation (FREE)
     sfpi::vInt p_exp = sfpi::exexp_nodebias(poly);
