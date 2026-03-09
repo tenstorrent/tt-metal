@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from loguru import logger
+
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
     DenseDecoderStage,
@@ -251,9 +253,18 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+        logger.info("Configuring block")
         self.configure_block()
+
+        logger.info("Setting up")
         self.setup()
+        ttnn.distributed_context_barrier()
+
+        logger.info("Starting pipeline")
         self.start_pipeline()
+        ttnn.distributed_context_barrier()
+
+        logger.info("Starting compute")
         self.start_compute()
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
