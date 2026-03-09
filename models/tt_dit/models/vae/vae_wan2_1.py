@@ -346,11 +346,12 @@ class WanCausalConv3d(Module):
         # - SiLU — element-wise; no spatial mixing
         # - Residual add — element-wise; no spatial mixing
         # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
-        # - Attention — explicitly slices out padding rows before processing (line 155: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
         # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
-        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or LayerNorm
-        #   (which normalize across spatial dimensions), the post-conv mask would become
-        #   necessary again to prevent padding from contaminating normalization statistics.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
@@ -751,11 +752,12 @@ class WanConv2d(Module):
         # - SiLU — element-wise; no spatial mixing
         # - Residual add — element-wise; no spatial mixing
         # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
-        # - Attention — explicitly slices out padding rows before processing (line 155: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
         # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
-        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or LayerNorm
-        #   (which normalize across spatial dimensions), the post-conv mask would become
-        #   necessary again to prevent padding from contaminating normalization statistics.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
