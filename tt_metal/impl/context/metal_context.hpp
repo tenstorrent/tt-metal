@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt_stl/indestructible.hpp>
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
@@ -11,6 +12,8 @@
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
@@ -196,9 +199,11 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
-    llrt::RunTimeOptions rtoptions_;
-    std::unique_ptr<Cluster> cluster_;
-    std::unique_ptr<Hal> hal_;
+    // The MetalEnv is owned by the user
+    // For the legacy code, we will initialize it in the MetalContext constructor.
+    tt::tt_metal::MetalEnv* env_;
+    bool env_owned_ = false;
+
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
