@@ -138,3 +138,53 @@ def test_valid_html(conn):
     html = generate_html(conn)
     assert html.startswith("<!DOCTYPE html>")
     assert "</html>" in html
+
+
+def test_kernels_in_detail(conn):
+    rid = _make_run(conn)
+    db.insert_kernels(
+        conn,
+        rid,
+        [
+            {"filename": "reader.cpp", "source_code": '#include "dataflow_api.h"\nvoid kernel_main() {}'},
+            {"filename": "compute.cpp", "source_code": "namespace NAMESPACE {\nvoid MAIN {}\n}"},
+        ],
+    )
+    html = generate_html(conn)
+    assert "reader.cpp" in html
+    assert "compute.cpp" in html
+    assert "kernel_main" in html
+    assert "Kernels (2)" in html
+    assert "language-cpp" in html
+
+
+def test_self_reflection_in_detail(conn):
+    rid = _make_run(conn)
+    db.insert_artifact(conn, rid, "self_reflection", "## Summary\nAll stages passed.")
+    html = generate_html(conn)
+    assert "Self-Reflection" in html
+    assert "All stages passed" in html
+
+
+def test_kernel_code_escaped(conn):
+    """Kernel source with HTML-like content should be escaped."""
+    rid = _make_run(conn)
+    db.insert_kernels(
+        conn,
+        rid,
+        [{"filename": "test.cpp", "source_code": "int x = a<b && c>d; // template<T>"}],
+    )
+    html = generate_html(conn)
+    # The < and > should be escaped in the HTML
+    assert "a&lt;b" in html
+    assert "c&gt;d" in html
+
+
+def test_section_tabs_present(conn):
+    """When kernels and artifacts exist, section tabs should appear."""
+    rid = _make_run(conn)
+    db.insert_kernels(conn, rid, [{"filename": "k.cpp", "source_code": "code"}])
+    db.insert_artifact(conn, rid, "self_reflection", "content")
+    html = generate_html(conn)
+    assert "showSection" in html
+    assert "showKernel" in html

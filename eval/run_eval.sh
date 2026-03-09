@@ -324,6 +324,7 @@ WRAPPER
         --starting-branch "$BRANCH"
         --starting-commit "$STARTING_COMMIT"
         --created-branch "$run_branch"
+        --clone-dir "$clone_dir"
     )
     if [[ -f "${log_dir}/test_results.json" ]]; then
         ingest_args+=(--test-results "${log_dir}/test_results.json")
@@ -331,6 +332,12 @@ WRAPPER
     # Score JSON is optional — only present if score.py was run
     if [[ -f "${log_dir}/score.json" ]]; then
         ingest_args+=(--score-json "${log_dir}/score.json")
+    fi
+    # Pass op name for kernel/artifact collection
+    local golden_op_for_ingest
+    golden_op_for_ingest="$(grep -oP '^# golden: \K\S+' "$prompt_file" || true)"
+    if [[ -n "$golden_op_for_ingest" ]]; then
+        ingest_args+=(--op-name "$golden_op_for_ingest")
     fi
     python3 -m eval.ingest "${ingest_args[@]}" \
         >> "${log_dir}/ingest.log" 2>&1 || \

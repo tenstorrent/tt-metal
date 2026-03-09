@@ -77,6 +77,8 @@ def generate_html(conn) -> str:
         run_details[run["id"]] = {
             "tests": db.get_test_results(conn, run["id"]),
             "criteria": db.get_score_criteria(conn, run["id"]),
+            "kernels": db.get_kernels(conn, run["id"]),
+            "artifacts": db.get_artifacts(conn, run["id"]),
         }
 
     parts = [
@@ -146,7 +148,36 @@ def _html_head() -> str:
   .annotation { display: inline-block; }
   .stars { color: #f59e0b; }
   .no-data { color: #9ca3af; font-style: italic; padding: 20px; text-align: center; }
+
+  .section-tabs { display: flex; gap: 0; margin-top: 16px; border-bottom: 2px solid #e2e8f0; }
+  .section-tab { padding: 6px 16px; cursor: pointer; font-size: 0.85rem; font-weight: 600;
+                 color: #64748b; border-bottom: 2px solid transparent; margin-bottom: -2px;
+                 background: none; border-top: none; border-left: none; border-right: none; }
+  .section-tab.active { color: #1e293b; border-bottom-color: #2563eb; }
+  .section-tab:hover { color: #1e293b; }
+  .section-panel { display: none; padding-top: 12px; }
+  .section-panel.active { display: block; }
+
+  .kernel-tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .kernel-tab { padding: 3px 12px; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+                background: #e2e8f0; border-radius: 4px 4px 0 0; border: none; color: #475569; }
+  .kernel-tab.active { background: #1e293b; color: white; }
+  .kernel-panel { display: none; }
+  .kernel-panel.active { display: block; }
+  .kernel-code { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 0 6px 6px 6px;
+                 overflow-x: auto; font-size: 0.8rem; line-height: 1.5; max-height: 500px;
+                 overflow-y: auto; }
+  .kernel-code pre { margin: 0; }
+  .kernel-code code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+  .artifact-content { background: white; border: 1px solid #e2e8f0; border-radius: 6px;
+                      padding: 16px; font-size: 0.85rem; line-height: 1.6;
+                      max-height: 500px; overflow-y: auto; white-space: pre-wrap;
+                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
 </head>
 <body>
 <h1>Eval Dashboard</h1>
@@ -270,6 +301,8 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
 def _html_run_detail(rid: int, details: dict) -> str:
     tests = details.get("tests", [])
     criteria = details.get("criteria", [])
+    kernels = details.get("kernels", [])
+    artifacts = details.get("artifacts", [])
 
     parts = ['<div class="detail-content">']
 
@@ -287,20 +320,28 @@ def _html_run_detail(rid: int, details: dict) -> str:
                 parts.append(f'  <span class="cat-badge" style="background:{color}">{cat}: {count}</span>')
             parts.append("</div>")
 
-    # Score criteria table
-    if criteria:
-        parts.append('<table class="criteria">')
-        parts.append("<thead><tr><th>Criterion</th><th>Raw</th><th>Weight</th><th>Weighted</th></tr></thead>")
-        parts.append("<tbody>")
-        for c in criteria:
-            name = html.escape(c["criterion"].replace("_", " ").title())
-            parts.append(
-                f"<tr><td>{name}</td><td>{c['raw_score']:.1f}</td>"
-                f"<td>x{c['weight']:.2f}</td><td>{c['weighted_score']:.1f}</td></tr>"
-            )
-        parts.append("</tbody></table>")
+    # Section tabs (Tests, Kernels, Self-Reflection)
+    has_kernels = len(kernels) > 0
+    has_artifacts = len(artifacts) > 0
+    tab_id = f"run{rid}"
 
-    # Test results table
+    parts.append(f'<div class="section-tabs">')
+    parts.append(f"  <button class=\"section-tab active\" onclick=\"showSection('{tab_id}','tests')\">Tests</button>")
+    if criteria:
+        parts.append(f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','criteria')\">Score</button>")
+    if has_kernels:
+        parts.append(
+            f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','kernels')\">"
+            f"Kernels ({len(kernels)})</button>"
+        )
+    if has_artifacts:
+        parts.append(
+            f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','artifacts')\">Self-Reflection</button>"
+        )
+    parts.append("</div>")
+
+    # --- Tests panel ---
+    parts.append(f'<div class="section-panel active" id="{tab_id}-tests">')
     if tests:
         parts.append('<table class="tests">')
         parts.append(
@@ -322,6 +363,49 @@ def _html_run_detail(rid: int, details: dict) -> str:
         parts.append("</tbody></table>")
     else:
         parts.append('<div class="no-data">No test results.</div>')
+    parts.append("</div>")
+
+    # --- Score criteria panel ---
+    if criteria:
+        parts.append(f'<div class="section-panel" id="{tab_id}-criteria">')
+        parts.append('<table class="criteria">')
+        parts.append("<thead><tr><th>Criterion</th><th>Raw</th><th>Weight</th><th>Weighted</th></tr></thead>")
+        parts.append("<tbody>")
+        for c in criteria:
+            name = html.escape(c["criterion"].replace("_", " ").title())
+            parts.append(
+                f"<tr><td>{name}</td><td>{c['raw_score']:.1f}</td>"
+                f"<td>x{c['weight']:.2f}</td><td>{c['weighted_score']:.1f}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+        parts.append("</div>")
+
+    # --- Kernels panel ---
+    if has_kernels:
+        parts.append(f'<div class="section-panel" id="{tab_id}-kernels">')
+        kid = f"k{rid}"
+        parts.append('<div class="kernel-tabs">')
+        for i, k in enumerate(kernels):
+            active = " active" if i == 0 else ""
+            fname = html.escape(k["filename"])
+            parts.append(f'  <button class="kernel-tab{active}" onclick="showKernel(\'{kid}\',{i})">{fname}</button>')
+        parts.append("</div>")
+        for i, k in enumerate(kernels):
+            active = " active" if i == 0 else ""
+            escaped_code = html.escape(k["source_code"])
+            parts.append(f'<div class="kernel-panel{active}" id="{kid}-{i}">')
+            parts.append(
+                f'  <div class="kernel-code"><pre><code class="language-cpp">{escaped_code}</code></pre></div>'
+            )
+            parts.append("</div>")
+        parts.append("</div>")
+
+    # --- Artifacts panel (self-reflection) ---
+    if has_artifacts:
+        parts.append(f'<div class="section-panel" id="{tab_id}-artifacts">')
+        for a in artifacts:
+            parts.append(f'<div class="artifact-content">{html.escape(a["content"])}</div>')
+        parts.append("</div>")
 
     parts.append("</div>")
     return "\n".join(parts)
@@ -332,7 +416,43 @@ def _html_foot() -> str:
 <script>
 function toggleDetail(id) {
   var row = document.getElementById('detail-' + id);
-  if (row) row.classList.toggle('open');
+  if (row) {
+    row.classList.toggle('open');
+    // Highlight code blocks on first open
+    if (row.classList.contains('open')) {
+      row.querySelectorAll('pre code').forEach(function(block) {
+        if (!block.dataset.highlighted) {
+          hljs.highlightElement(block);
+          block.dataset.highlighted = 'true';
+        }
+      });
+    }
+  }
+}
+function showSection(runId, section) {
+  // Toggle section tabs
+  var container = document.getElementById(runId + '-' + section);
+  if (!container) return;
+  var parent = container.parentElement;
+  parent.querySelectorAll('.section-panel').forEach(function(p) { p.classList.remove('active'); });
+  parent.querySelectorAll('.section-tab').forEach(function(t) { t.classList.remove('active'); });
+  container.classList.add('active');
+  // Find and activate the clicked tab
+  event.target.classList.add('active');
+  // Highlight code blocks in newly shown section
+  container.querySelectorAll('pre code').forEach(function(block) {
+    if (!block.dataset.highlighted) {
+      hljs.highlightElement(block);
+      block.dataset.highlighted = 'true';
+    }
+  });
+}
+function showKernel(kernelGroupId, index) {
+  var parent = document.getElementById(kernelGroupId + '-' + index).parentElement;
+  parent.querySelectorAll('.kernel-panel').forEach(function(p) { p.classList.remove('active'); });
+  parent.querySelectorAll('.kernel-tab').forEach(function(t) { t.classList.remove('active'); });
+  document.getElementById(kernelGroupId + '-' + index).classList.add('active');
+  event.target.classList.add('active');
 }
 </script>
 </body>

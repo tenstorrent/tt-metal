@@ -187,3 +187,52 @@ def test_failure_summary_excludes_passed(conn):
     assert summary["hang"] == 1
     # passed tests should not appear
     assert None not in summary
+
+
+# --- kernels ---
+
+
+def test_insert_and_get_kernels(conn):
+    rid = _make_run(conn)
+    kernels = [
+        {"filename": "reader.cpp", "source_code": "#include <stdint.h>\nvoid kernel_main() {}"},
+        {"filename": "compute.cpp", "source_code": "namespace NAMESPACE {\nvoid MAIN { }\n}"},
+    ]
+    db.insert_kernels(conn, rid, kernels)
+
+    fetched = db.get_kernels(conn, rid)
+    assert len(fetched) == 2
+    assert fetched[0]["filename"] == "compute.cpp"  # sorted by filename
+    assert "kernel_main" in fetched[1]["source_code"]
+
+
+def test_empty_kernels(conn):
+    rid = _make_run(conn)
+    assert db.get_kernels(conn, rid) == []
+
+
+# --- artifacts ---
+
+
+def test_insert_and_get_artifact(conn):
+    rid = _make_run(conn)
+    db.insert_artifact(conn, rid, "self_reflection", "## Summary\nRun went well.")
+
+    fetched = db.get_artifacts(conn, rid)
+    assert len(fetched) == 1
+    assert fetched[0]["name"] == "self_reflection"
+    assert "Summary" in fetched[0]["content"]
+
+
+def test_multiple_artifacts(conn):
+    rid = _make_run(conn)
+    db.insert_artifact(conn, rid, "self_reflection", "reflection content")
+    db.insert_artifact(conn, rid, "design_doc", "design content")
+
+    fetched = db.get_artifacts(conn, rid)
+    assert len(fetched) == 2
+
+
+def test_empty_artifacts(conn):
+    rid = _make_run(conn)
+    assert db.get_artifacts(conn, rid) == []
