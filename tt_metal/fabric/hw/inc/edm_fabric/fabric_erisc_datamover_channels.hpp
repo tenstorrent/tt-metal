@@ -644,7 +644,7 @@ struct HeterogeneousEdmChannelWorkerInterfaceTuple {
     }
 
     template <size_t I>
-    decltype(auto) get() const {
+    FORCE_INLINE decltype(auto) get() const {
         return std::get<I>(channel_worker_interfaces);
     }
 };
