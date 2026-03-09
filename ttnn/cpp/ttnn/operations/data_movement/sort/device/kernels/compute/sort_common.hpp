@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-namespace NAMESPACE {
-
 /**
  * @brief Sorts Wt tiles from row-major order into a bitonic sequence using local sorting and transposition.
  *
@@ -253,4 +251,3 @@ void copy_tile_between_cbs(
     // Release tile registers
     tile_regs_release();
 }
-}  // namespace NAMESPACE
