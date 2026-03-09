@@ -243,9 +243,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_device_role"),
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
-                get_named_compile_time_arg_val("reduce_received_cb_r1"),
-                get_named_compile_time_arg_val("reduce_received_cb_r2"),
-                get_named_compile_time_arg_val("reduce_received_cb_r3"),
+                get_named_compile_time_arg_val("reduce_received_cb"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core")>;
 
             // Reader runtime args (common RT args at configurable base)
@@ -350,17 +348,17 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
         }
-        if constexpr (Core::Shared::is_compute_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("shared_gu_weights_cb"),
-                get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
-        }
-        if constexpr (Core::Shared::is_mcast_receiver_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("shared_down_matmul_in1"),
-                get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles") *
-                    get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core"));
-        }
+        // if constexpr (Core::Shared::is_compute_core) {
+        //     unified_kernels::setup_sharded_buffer(
+        //         get_named_compile_time_arg_val("shared_gu_weights_cb"),
+        //         get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
+        // }
+        // if constexpr (Core::Shared::is_mcast_receiver_core) {
+        //     unified_kernels::setup_sharded_buffer(
+        //         get_named_compile_time_arg_val("shared_down_matmul_in1"),
+        //         get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles") *
+        //             get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core"));
+        // }
     };
 #ifndef RECONFIG_MOE_CBS
     setup_all_sharded_buffers();
@@ -528,7 +526,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_scratch_cb"),
                 get_named_compile_time_arg_val("reduce_packet_cb"),
-                get_named_compile_time_arg_val("reduce_packet_header_cb"),
                 get_named_compile_time_arg_val("reduce_num_hops"),
                 get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
                 get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
@@ -801,9 +798,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_device_role"),
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
-                get_named_compile_time_arg_val("reduce_received_cb_r1"),
-                get_named_compile_time_arg_val("reduce_received_cb_r2"),
-                get_named_compile_time_arg_val("reduce_received_cb_r3"),
+                get_named_compile_time_arg_val("reduce_received_cb"),
                 get_named_compile_time_arg_val("reduce_output_cb"),
                 get_named_compile_time_arg_val("reduce_scratch_cb"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core")>;
@@ -823,6 +818,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gu_k_offset"),
                 get_named_compile_time_arg_val("shared_gu_k_per_core"),
                 get_named_compile_time_arg_val("shared_gu_act_total_tiles"),
+                get_named_compile_time_arg_val("shared_gu_weights_cb_addr"),
             };
 
             // Gather (compute — no-op for TRISC)
@@ -852,6 +848,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_down_matmul_in1"),
                 get_named_compile_time_arg_val("shared_down_matmul_out"),
                 get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles"),
+                get_named_compile_time_arg_val("shared_down_matmul_weights_cb_addr"),
             };
 
             // Residual Add (compute)
@@ -1127,10 +1124,21 @@ void kernel_main() {
         }
 
         // 11d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
+        //      When multi-device reduce is enabled, only the ROOT1 device performs
+        //      the actual add so the residual is counted exactly once after the
+        //      cross-device sum.  Non-root devices pass matmul output through.
         {
             DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
+#ifdef ENABLE_REDUCE_TO_ONE
+            constexpr bool skip_residual_add =
+                get_named_compile_time_arg_val("reduce_device_role") != deepseek_b1_ops::MESH_ROOT1;
+            deepseek_b1_ops::ResidualAdd::
+                Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core, skip_residual_add>
+                    shared_residual_add;
+#else
             deepseek_b1_ops::ResidualAdd::Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
                 shared_residual_add;
+#endif
             shared_residual_add(moe.shared.residual_add_args);
         }
 

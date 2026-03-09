@@ -27,6 +27,11 @@ _REF_HF_SHARED_GATE_UP = (2048, 7168)
 _REF_K = 7168
 
 
+def _scaled_randn(*shape, generator, dtype=torch.bfloat16):
+    """Generate random weights scaled by 1/sqrt(inner_dim), matching generate_mm_weights convention."""
+    return (torch.randn(*shape, generator=generator, dtype=torch.float32) / (shape[-2] ** 0.5)).to(dtype)
+
+
 def _reference_layer_state_dict(
     layer_idx: int,
     *,
@@ -37,20 +42,27 @@ def _reference_layer_state_dict(
     """Build one layer state_dict in HF key convention with deterministic random weights (Generator)."""
     g = torch.Generator().manual_seed(seed)
     state = {
-        f"model.layers.{layer_idx}.self_attn.q_a_proj.weight": torch.randn(
-            1536, _REF_K, generator=g, dtype=torch.bfloat16
+        f"model.layers.{layer_idx}.self_attn.q_a_proj.weight": _scaled_randn(
+            1536,
+            _REF_K,
+            generator=g,
         ),
-        f"model.layers.{layer_idx}.self_attn.q_b_proj.weight": torch.randn(
-            *_REF_HF_Q_B, generator=g, dtype=torch.bfloat16
+        f"model.layers.{layer_idx}.self_attn.q_b_proj.weight": _scaled_randn(
+            *_REF_HF_Q_B,
+            generator=g,
         ),
-        f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight": torch.randn(
-            576, _REF_K, generator=g, dtype=torch.bfloat16
+        f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight": _scaled_randn(
+            576,
+            _REF_K,
+            generator=g,
         ),
-        f"model.layers.{layer_idx}.self_attn.kv_b_proj.weight": torch.randn(
-            *_REF_HF_KV_B, generator=g, dtype=torch.bfloat16
+        f"model.layers.{layer_idx}.self_attn.kv_b_proj.weight": _scaled_randn(
+            *_REF_HF_KV_B,
+            generator=g,
         ),
-        f"model.layers.{layer_idx}.self_attn.o_proj.weight": torch.randn(
-            *_REF_HF_O_PROJ, generator=g, dtype=torch.bfloat16
+        f"model.layers.{layer_idx}.self_attn.o_proj.weight": _scaled_randn(
+            *_REF_HF_O_PROJ,
+            generator=g,
         ),
         f"model.layers.{layer_idx}.input_layernorm.weight": torch.randn(_REF_K, generator=g, dtype=torch.bfloat16),
         f"model.layers.{layer_idx}.self_attn.q_a_layernorm.weight": torch.randn(
@@ -64,20 +76,23 @@ def _reference_layer_state_dict(
         ),
     }
     if is_moe:
-        state[f"model.layers.{layer_idx}.mlp.gate.weight"] = torch.randn(256, _REF_K, generator=g, dtype=torch.bfloat16)
+        state[f"model.layers.{layer_idx}.mlp.gate.weight"] = _scaled_randn(256, _REF_K, generator=g)
         state[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"] = torch.randn(
             256, generator=g, dtype=torch.bfloat16
-        )
-        state[f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight"] = torch.randn(
-            *_REF_HF_SHARED_GATE_UP, generator=g, dtype=torch.bfloat16
-        )
-        state[f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight"] = torch.randn(
-            *_REF_HF_SHARED_GATE_UP, generator=g, dtype=torch.bfloat16
-        )
-        state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.randn(
-            7168, _REF_HF_SHARED_GATE_UP[0], generator=g, dtype=torch.bfloat16
-        )
-        # Expert weights: deterministic per-expert seeds (gate_seed, up_seed, down_seed) for golden parity
+        ).clamp(-2, 2)
+        state[f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight"] = _scaled_randn(
+            *_REF_HF_SHARED_GATE_UP,
+            generator=g,
+        ).clamp(-2, 2)
+        state[f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight"] = _scaled_randn(
+            *_REF_HF_SHARED_GATE_UP,
+            generator=g,
+        ).clamp(-2, 2)
+        state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = _scaled_randn(
+            7168,
+            _REF_HF_SHARED_GATE_UP[0],
+            generator=g,
+        ).clamp(-2, 2)
         gate_seed = seed + 0
         up_seed = seed + 256
         down_seed = seed + 512
@@ -85,24 +100,36 @@ def _reference_layer_state_dict(
             g_gate = torch.Generator().manual_seed(gate_seed + e)
             g_up = torch.Generator().manual_seed(up_seed + e)
             g_down = torch.Generator().manual_seed(down_seed + e)
-            state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(
-                2048, _REF_K, generator=g_gate, dtype=torch.bfloat16
+            state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = _scaled_randn(
+                2048,
+                _REF_K,
+                generator=g_gate,
             ).clamp(-2, 2)
-            state[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = torch.randn(
-                2048, _REF_K, generator=g_up, dtype=torch.bfloat16
+            state[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = _scaled_randn(
+                2048,
+                _REF_K,
+                generator=g_up,
             ).clamp(-2, 2)
-            state[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = torch.randn(
-                7168, 2048, generator=g_down, dtype=torch.bfloat16
+            state[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = _scaled_randn(
+                7168,
+                2048,
+                generator=g_down,
             ).clamp(-2, 2)
     else:
-        state[f"model.layers.{layer_idx}.mlp.gate_proj.weight"] = torch.randn(
-            18432, _REF_K, generator=g, dtype=torch.bfloat16
+        state[f"model.layers.{layer_idx}.mlp.gate_proj.weight"] = _scaled_randn(
+            18432,
+            _REF_K,
+            generator=g,
         )
-        state[f"model.layers.{layer_idx}.mlp.up_proj.weight"] = torch.randn(
-            18432, _REF_K, generator=g, dtype=torch.bfloat16
+        state[f"model.layers.{layer_idx}.mlp.up_proj.weight"] = _scaled_randn(
+            18432,
+            _REF_K,
+            generator=g,
         )
-        state[f"model.layers.{layer_idx}.mlp.down_proj.weight"] = torch.randn(
-            _REF_K, 18432, generator=g, dtype=torch.bfloat16
+        state[f"model.layers.{layer_idx}.mlp.down_proj.weight"] = _scaled_randn(
+            _REF_K,
+            18432,
+            generator=g,
         )
     return state
 

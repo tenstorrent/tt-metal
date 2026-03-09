@@ -52,7 +52,6 @@ struct AllReduceSender {
 
     // Writer CTArgs (BRISC)
     template <
-        uint32_t packetHeaderCbId,
         uint32_t packetCbId,
         uint32_t alignment,
         uint32_t inputNumTiles,
@@ -65,7 +64,6 @@ struct AllReduceSender {
         uint32_t dstNumHops,
         uint32_t numConnections>
     struct WriterCTArgs {
-        static constexpr uint32_t packet_header_cb_id = packetHeaderCbId;
         static constexpr uint32_t packet_cb_id = packetCbId;
         static constexpr uint32_t l1_alignment = alignment;
         static constexpr uint32_t input_num_tiles = inputNumTiles;
@@ -129,18 +127,14 @@ struct AllReduceSender {
             // ================================================================
             // BRISC (Writer) - sends data to remote device via fabric
             // ================================================================
-            constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
             size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
             open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
 
-            cb_reserve_back(WriterCT::packet_header_cb_id, 1);
-            uint32_t packet_header_addr = get_read_ptr(WriterCT::packet_header_cb_id);
-            cb_push_back(WriterCT::packet_header_cb_id, 1);
+            PacketHeaderPool::reset();
+            auto* packet_header_ptr = PacketHeaderPool::allocate_header(1);
 
-            auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
             fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
             packet_header_ptr->to_chip_unicast(WriterCT::dst_num_hops);
 
