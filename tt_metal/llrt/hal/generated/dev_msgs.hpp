@@ -15,9 +15,9 @@
 #include <cstdint>
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
-#include "llrt/struct_view_driver.hpp"
-#include <cstddef>
 #include <array>
+#include <cstddef>
+#include "llrt/struct_view_driver.hpp"
 namespace tt::tt_metal::dev_msgs {
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;

@@ -1897,7 +1897,9 @@ void kernel_main() {
         {
             DeviceZoneScopedN("CCL_BROADCAST");
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+            WAYPOINT("BCS");
             bcast(bcast_args);
+            WAYPOINT("BCD");
         }
     }
 
@@ -1939,32 +1941,32 @@ void kernel_main() {
             rmsnorm(rmsnorm_args);
         }
 
-        {
-            DeviceZoneScopedN("MCAST");
-            mcast(mcast_args);
-        }
+        // {
+        //     DeviceZoneScopedN("MCAST");
+        //     mcast(mcast_args);
+        // }
 
         // ========================================================================
         // Matmul operation
         // ========================================================================
-        {
-            DeviceZoneScopedN("MATMUL");
-            // pop_act = false (shared activation buffer), pop_weights = false (weights are persistent)
-            deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
-            matmul(matmul_args);
-        }
+        // {
+        //     DeviceZoneScopedN("MATMUL");
+        //     // pop_act = false (shared activation buffer), pop_weights = false (weights are persistent)
+        //     deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
+        //     matmul(matmul_args);
+        // }
 
-        // ========================================================================
-        // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
-        // NCRISC sends from matmul cores, BRISC receives on input core, TRISC reduces CB7 += CB8
-        // ========================================================================
-        {
-            DeviceZoneScopedN("GATHER");
-            // pop_src = true (matmul output is consumed after gather)
-            deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
-                gather_reduce;
-            gather_reduce(gather_reduce_args);
-        }
+        // // ========================================================================
+        // // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
+        // // NCRISC sends from matmul cores, BRISC receives on input core, TRISC reduces CB7 += CB8
+        // // ========================================================================
+        // {
+        //     DeviceZoneScopedN("GATHER");
+        //     // pop_src = true (matmul output is consumed after gather)
+        //     deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
+        //         gather_reduce;
+        //     gather_reduce(gather_reduce_args);
+        // }
 
         // ========================================================================
         // RMSNorm2: Apply RMSNorm to the gathered data (1536 elements = 3 tiles of 16x32)
@@ -1975,283 +1977,289 @@ void kernel_main() {
         //   - Gamma: rmsnorm2_gamma_cb (3 tiles)
         // ========================================================================
         // pop_input = true (gathered data is consumed after RMSNorm2)
-        {
-            DeviceZoneScopedN("RMSNORM2");
-            deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
-            rmsnorm2(rmsnorm2_args);
-        }
+        // {
+        //     DeviceZoneScopedN("RMSNORM2");
+        //     deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
+        //     rmsnorm2(rmsnorm2_args);
+        // }
 
-        // ========================================================================
-        // Mcast2: Broadcast rmsnorm2 output from input core to all matmul2 cores
-        // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
-        // Uses same grid and semaphores as first mcast
-        // ========================================================================
-        // pop_src = true (rmsnorm2 output is consumed after mcast)
-        {
-            DeviceZoneScopedN("MCAST2");
-            // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
-            deepseek_b1_ops::Mcast::
-                Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
-                    mcast2;
-            mcast2(mcast2_args);
-        }
+        // // ========================================================================
+        // // Mcast2: Broadcast rmsnorm2 output from input core to all matmul2 cores
+        // // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
+        // // Uses same grid and semaphores as first mcast
+        // // ========================================================================
+        // // pop_src = true (rmsnorm2 output is consumed after mcast)
+        // {
+        //     DeviceZoneScopedN("MCAST2");
+        //     // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
+        //     deepseek_b1_ops::Mcast::
+        //         Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
+        //             mcast2;
+        //     mcast2(mcast2_args);
+        // }
 
-        // ========================================================================
-        // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
-        // N = 12288 for P150 (96 cores * 4 tiles * 32) or 11264 for non-P150
-        // Each core computes 1x4 output tiles (4 1x32 tiles)
-        // ========================================================================
-        {
-            DeviceZoneScopedN("MATMUL2");
-            // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-            // On Qnope cores: output stays in matmul2_output_cb for matmul3 input
-            // On Qrope cores: output goes to matmul2_output_cb for RoPE input
-            deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
-            matmul2(matmul2_args);
-        }
+        // // ========================================================================
+        // // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
+        // // N = 12288 for P150 (96 cores * 4 tiles * 32) or 11264 for non-P150
+        // // Each core computes 1x4 output tiles (4 1x32 tiles)
+        // // ========================================================================
+        // {
+        //     DeviceZoneScopedN("MATMUL2");
+        //     // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+        //     // On Qnope cores: output stays in matmul2_output_cb for matmul3 input
+        //     // On Qrope cores: output goes to matmul2_output_cb for RoPE input
+        //     deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
+        //     matmul2(matmul2_args);
+        // }
 
-        {
-            DeviceZoneScopedN("Q_HEADS") static_assert(
-                !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
+        // {
+        //     DeviceZoneScopedN("Q_HEADS") static_assert(
+        //         !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
 
-            // ========================================================================
-            // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1, 512]
-            // 64 cores (8x8 grid) each compute 1x16 output tiles (16 1x32 tiles)
-            // ========================================================================
-            {
-                DeviceZoneScopedN("QNOPE/MATMUL3");
-                // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-                deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
-                matmul3(matmul3_args);
-            }
+        //     // ========================================================================
+        //     // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1,
+        //     512]
+        //     // 64 cores (8x8 grid) each compute 1x16 output tiles (16 1x32 tiles)
+        //     // ========================================================================
+        //     {
+        //         DeviceZoneScopedN("QNOPE/MATMUL3");
+        //         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+        //         deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+        //         matmul3(matmul3_args);
+        //     }
 
-            // ========================================================================
-            // RoPE (Qrope): Applies rotary position embedding to Qrope heads
-            // Reads from matmul2_output_cb, writes to qrope_output_cb
-            // ========================================================================
-            {
-                DeviceZoneScopedN("QROPE");
-                deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
-                rope(qrope_args);
-            }
+        //     // ========================================================================
+        //     // RoPE (Qrope): Applies rotary position embedding to Qrope heads
+        //     // Reads from matmul2_output_cb, writes to qrope_output_cb
+        //     // ========================================================================
+        //     {
+        //         DeviceZoneScopedN("QROPE");
+        //         deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+        //         rope(qrope_args);
+        //     }
 
-            // ========================================================================
-            // CreateQHeads: 3-phase QNOPE/QROPE -> SDPA transfer with tilization
-            // Phase 1: QNOPE first 256 elements → [8, 256] row-major → 8 tiles
-            // Phase 2: QNOPE second 256 elements → [8, 256] row-major → 8 tiles
-            // Phase 3: QROPE 64 elements per head → [8, 64] row-major → 2 tiles
-            // Senders write to intermediate CB, TRISC tilizes to output CB
-            // NCRISC sends from qnope/qrope cores, BRISC receives on sdpa input cores, TRISC no-op
-            // ========================================================================
-            {
-                DeviceZoneScopedN("CREATE_Q_HEADS");
-                // CreateQHeads Op configuration:
-                // - IsSenderCore: is_qnope_core || is_qrope_core
-                // - IsReceiverCore: is_sdpa_input_core
-                // - pop_src: true (pop source CB after sending)
-                constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
-                deepseek_b1_ops::CreateQHeads::
-                    Op<CreateQHeadsCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
-                        create_q_heads;
-                create_q_heads(create_q_heads_args);
-            }
-        }
+        //     // ========================================================================
+        //     // CreateQHeads: 3-phase QNOPE/QROPE -> SDPA transfer with tilization
+        //     // Phase 1: QNOPE first 256 elements → [8, 256] row-major → 8 tiles
+        //     // Phase 2: QNOPE second 256 elements → [8, 256] row-major → 8 tiles
+        //     // Phase 3: QROPE 64 elements per head → [8, 64] row-major → 2 tiles
+        //     // Senders write to intermediate CB, TRISC tilizes to output CB
+        //     // NCRISC sends from qnope/qrope cores, BRISC receives on sdpa input cores, TRISC no-op
+        //     // ========================================================================
+        //     {
+        //         DeviceZoneScopedN("CREATE_Q_HEADS");
+        //         // CreateQHeads Op configuration:
+        //         // - IsSenderCore: is_qnope_core || is_qrope_core
+        //         // - IsReceiverCore: is_sdpa_input_core
+        //         // - pop_src: true (pop source CB after sending)
+        //         constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
+        //         deepseek_b1_ops::CreateQHeads::
+        //             Op<CreateQHeadsCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
+        //                 create_q_heads;
+        //         create_q_heads(create_q_heads_args);
+        //     }
+        // }
 
-        // ====================================================================
-        // KV Cache Branch
-        // Non-owning SP devices skip the entire branch and just signal the
-        // KV-cache-ready semaphore so FlashMLA can proceed.
-        // ====================================================================
-        deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
-        kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
-        if (!skip_kv_cache_update) {
-            DeviceZoneScopedN("KV CACHE");
-            // ================================================================
-            // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
-            // ================================================================
-            {
-                DeviceZoneScopedN("DKV_MATMUL");
-                deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
-                dkv_matmul(dkv_matmul_args);
-            }
+        // // ====================================================================
+        // // KV Cache Branch
+        // // Non-owning SP devices skip the entire branch and just signal the
+        // // KV-cache-ready semaphore so FlashMLA can proceed.
+        // // ====================================================================
+        // deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+        // kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
+        // if (!skip_kv_cache_update) {
+        //     DeviceZoneScopedN("KV CACHE");
+        //     // ================================================================
+        //     // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
+        //     // ================================================================
+        //     {
+        //         DeviceZoneScopedN("DKV_MATMUL");
+        //         deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
+        //         dkv_matmul(dkv_matmul_args);
+        //     }
 
-            // ================================================================
-            // Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
-            // ================================================================
-            {
-                DeviceZoneScopedN("DKV_GATHER");
-                deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
-                dkv_gather(dkv_gather_args);
-            }
+        //     // ================================================================
+        //     // Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
+        //     // ================================================================
+        //     {
+        //         DeviceZoneScopedN("DKV_GATHER");
+        //         deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+        //         dkv_gather(dkv_gather_args);
+        //     }
 
-            // ================================================================
-            // RMSNorm: Apply RMSNorm to the gathered data
-            // ================================================================
-            {
-                DeviceZoneScopedN("KV_RMSNORM");
-                deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
-                kv_rmsnorm(kv_rmsnorm_args);
-            }
+        //     // ================================================================
+        //     // RMSNorm: Apply RMSNorm to the gathered data
+        //     // ================================================================
+        //     {
+        //         DeviceZoneScopedN("KV_RMSNORM");
+        //         deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
+        //         kv_rmsnorm(kv_rmsnorm_args);
+        //     }
 
-            // ================================================================
-            // RoPE
-            // ================================================================
-            {
-                DeviceZoneScopedN("K_ROPE");
-                deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
-                krope(krope_args);
-            }
+        //     // ================================================================
+        //     // RoPE
+        //     // ================================================================
+        //     {
+        //         DeviceZoneScopedN("K_ROPE");
+        //         deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
+        //         krope(krope_args);
+        //     }
 
-            // ================================================================
-            // KV Cache Update: Write results to DRAM interleaved tensor
-            // ================================================================
-            {
-                DeviceZoneScopedN("KV_CACHE_UPDATE");
-                kv_cache_update(kv_cache_update_args);
-            }
-        }
-        {
-            DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
-            kv_cache_update.signal_cache_ready(kv_cache_update_args);
-        }
+        //     // ================================================================
+        //     // KV Cache Update: Write results to DRAM interleaved tensor
+        //     // ================================================================
+        //     {
+        //         DeviceZoneScopedN("KV_CACHE_UPDATE");
+        //         kv_cache_update(kv_cache_update_args);
+        //     }
+        // }
+        // {
+        //     DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
+        //     kv_cache_update.signal_cache_ready(kv_cache_update_args);
+        // }
 
-        // ====================================================================
-        // Flash MLA: Compute
-        // ====================================================================
-        {
-            DeviceZoneScopedN("FLASH_MLA");
-            FlashMLAOp flash_mla;
-            flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
-            flash_mla(flash_mla_args);
-        }
+        // // ====================================================================
+        // // Flash MLA: Compute
+        // // ====================================================================
+        // {
+        //     DeviceZoneScopedN("FLASH_MLA");
+        //     FlashMLAOp flash_mla;
+        //     flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
+        //     flash_mla(flash_mla_args);
+        // }
     } else {
-        if constexpr (Core::is_sdpa_worker_core) {
-            FlashMLAOp::push_dummy_sdpa_inputs();
-        }
+        // if constexpr (Core::is_sdpa_worker_core) {
+        //     FlashMLAOp::push_dummy_sdpa_inputs();
+        // }
     }
     {
         // ========================================================================
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
-        {
-            DPRINT << " POST_SDPA" << ENDL();
-            DeviceZoneScopedN("POST_SDPA");
-            if constexpr (Core::is_sdpa_worker_core) {
-                deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
-                sdpa_reduce_worker(sdpa_reduce_worker_args);
-            }
-            if constexpr (Core::is_sdpa_forwarder_core) {
-                deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
-#if defined(COMPILE_FOR_NCRISC)
-                volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-                noc_semaphore_wait(sync_sem, 0);
-                noc_semaphore_set(sync_sem, 2);
-#elif defined(COMPILE_FOR_BRISC)
-                volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-                noc_semaphore_wait(sync_sem, 2);
-                noc_semaphore_set(sync_sem, 0);
-#endif
-                sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
-            }
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_matmul4_core) {
-                constexpr uint32_t scatter_arrival_semaphore_id =
-                    get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
-                volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
-                noc_semaphore_wait(scatter_arrival_sem_addr, 1);
-                noc_semaphore_set(scatter_arrival_sem_addr, 0);
-                constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
-                constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
-                unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
-            }
-#endif
-        }
-        {
-            DeviceZoneScopedN("MATMUL4");
-            deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
-            matmul4(matmul4_args);
-        }
-        {
-            DeviceZoneScopedN("GATHER2");
-            deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
-            gather2(gather2_args);
-        }
+        //         {
+        //             DPRINT << " POST_SDPA" << ENDL();
+        //             DeviceZoneScopedN("POST_SDPA");
+        //             if constexpr (Core::is_sdpa_worker_core) {
+        //                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
+        //                 sdpa_reduce_worker(sdpa_reduce_worker_args);
+        //             }
+        //             if constexpr (Core::is_sdpa_forwarder_core) {
+        //                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
+        // #if defined(COMPILE_FOR_NCRISC)
+        //                 volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        //                     get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+        //                 noc_semaphore_wait(sync_sem, 0);
+        //                 noc_semaphore_set(sync_sem, 2);
+        // #elif defined(COMPILE_FOR_BRISC)
+        //                 volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        //                     get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+        //                 noc_semaphore_wait(sync_sem, 2);
+        //                 noc_semaphore_set(sync_sem, 0);
+        // #endif
+        //                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
+        //             }
+        // #if defined(COMPILE_FOR_NCRISC)
+        //             if constexpr (Core::is_matmul4_core) {
+        //                 constexpr uint32_t scatter_arrival_semaphore_id =
+        //                     get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
+        //                 volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
+        //                     reinterpret_cast<volatile tt_l1_ptr
+        //                     uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
+        //                 noc_semaphore_wait(scatter_arrival_sem_addr, 1);
+        //                 noc_semaphore_set(scatter_arrival_sem_addr, 0);
+        //                 constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
+        //                 constexpr uint32_t matmul4_k_num_tiles =
+        //                 get_named_compile_time_arg_val("matmul4_k_num_tiles");
+        //                 unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
+        //             }
+        // #endif
+        //         }
+        //         {
+        //             DeviceZoneScopedN("MATMUL4");
+        //             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
+        //             matmul4(matmul4_args);
+        //         }
+        //         {
+        //             DeviceZoneScopedN("GATHER2");
+        //             deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true>
+        //             gather2; gather2(gather2_args);
+        //         }
 
-        deepseek_b1_ops::Mcast::
-            Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_matmul5_core, Core::is_matmul5_core, true>
-                mcast3;
-        {
-            DeviceZoneScopedN("MCAST3");
-            mcast3(mcast3_args);
-        }
+        //         deepseek_b1_ops::Mcast::
+        //             Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_matmul5_core, Core::is_matmul5_core,
+        //             true>
+        //                 mcast3;
+        //         {
+        //             DeviceZoneScopedN("MCAST3");
+        //             mcast3(mcast3_args);
+        //         }
 
-        {
-            DeviceZoneScopedN("MATMUL5");
-            deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
-            matmul5(matmul5_args);
-        }
-        {
-            DeviceZoneScopedN("GATHER3");
-            deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
-            gather3(gather3_args);
-        }
+        //         {
+        //             DeviceZoneScopedN("MATMUL5");
+        //             deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
+        //             matmul5(matmul5_args);
+        //         }
+        //         {
+        //             DeviceZoneScopedN("GATHER3");
+        //             deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true>
+        //             gather3; gather3(gather3_args);
+        //         }
 
-#if defined(COMPILE_FOR_BRISC)
-        // Signal CCL sender that gather3 is complete (gather receiver only)
-        if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
-            static_assert(noc_mode == DM_DYNAMIC_NOC, "CCL signal must be sent on dynamic NOC");
-            constexpr uint8_t CCL_SIGNAL_NOC = 0;
-            constexpr uint32_t gather3_completion_semaphore_id =
-                get_named_compile_time_arg_val("gather3_completion_semaphore_id");
-            constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
-            constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
-            uint64_t ccl_sender_semaphore_addr = get_noc_addr(
-                ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id), CCL_SIGNAL_NOC);
-            noc_semaphore_inc(ccl_sender_semaphore_addr, 1, CCL_SIGNAL_NOC);
-            noc_async_atomic_barrier(CCL_SIGNAL_NOC);
-        }
-#endif
+        // #if defined(COMPILE_FOR_BRISC)
+        //         // Signal CCL sender that gather3 is complete (gather receiver only)
+        //         if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
+        //             static_assert(noc_mode == DM_DYNAMIC_NOC, "CCL signal must be sent on dynamic NOC");
+        //             constexpr uint8_t CCL_SIGNAL_NOC = 0;
+        //             constexpr uint32_t gather3_completion_semaphore_id =
+        //                 get_named_compile_time_arg_val("gather3_completion_semaphore_id");
+        //             constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
+        //             constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
+        //             uint64_t ccl_sender_semaphore_addr = get_noc_addr(
+        //                 ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id),
+        //                 CCL_SIGNAL_NOC);
+        //             noc_semaphore_inc(ccl_sender_semaphore_addr, 1, CCL_SIGNAL_NOC);
+        //             noc_async_atomic_barrier(CCL_SIGNAL_NOC);
+        //         }
+        // #endif
 
-        if constexpr (Core::is_ccl_sender_core) {
-            DeviceZoneScopedN("CCL_SENDER_SEND");
-#if defined(COMPILE_FOR_NCRISC)
-            volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-            noc_semaphore_wait(sync_sem, 0);
-            noc_semaphore_set(sync_sem, 2);
+        //         if constexpr (Core::is_ccl_sender_core) {
+        //             DeviceZoneScopedN("CCL_SENDER_SEND");
+        // #if defined(COMPILE_FOR_NCRISC)
+        //             volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        //                 get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+        //             noc_semaphore_wait(sync_sem, 0);
+        //             noc_semaphore_set(sync_sem, 2);
 
-            constexpr uint32_t gather3_completion_semaphore_id =
-                get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
-            volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
-            noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
-            noc_semaphore_set(gather3_completion_semaphore_addr, 0);
+        //             constexpr uint32_t gather3_completion_semaphore_id =
+        //                 get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
+        //             volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
+        //                 reinterpret_cast<volatile tt_l1_ptr
+        //                 uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
+        //             noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
+        //             noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
-            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
-            ccl_sender_reader(ccl_sender_args);
-#elif defined(COMPILE_FOR_BRISC)
-            volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-            noc_semaphore_wait(sync_sem, 2);
-            noc_semaphore_set(sync_sem, 0);
-            deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-            ccl_sender_writer(ccl_sender_args);
-#endif
-        }
+        //             deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
+        //             ccl_sender_reader(ccl_sender_args);
+        // #elif defined(COMPILE_FOR_BRISC)
+        //             volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        //                 get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+        //             noc_semaphore_wait(sync_sem, 2);
+        //             noc_semaphore_set(sync_sem, 0);
+        //             deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
+        //             ccl_sender_writer(ccl_sender_args);
+        // #endif
+        //         }
 
-        if constexpr (Core::is_ccl_receiver_core) {
-            DeviceZoneScopedN("CCL_RECEIVER");
-#if defined(COMPILE_FOR_NCRISC)
-            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
-            ccl_receiver_reader(ccl_receiver_args);
-#elif defined(COMPILE_FOR_TRISC)
-            deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
-            ccl_receiver_compute(ccl_receiver_args);
-#endif
-        }
+        //         if constexpr (Core::is_ccl_receiver_core) {
+        //             DeviceZoneScopedN("CCL_RECEIVER");
+        // #if defined(COMPILE_FOR_NCRISC)
+        //             deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs>
+        //             ccl_receiver_reader; ccl_receiver_reader(ccl_receiver_args);
+        // #elif defined(COMPILE_FOR_TRISC)
+        //             deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
+        //             ccl_receiver_compute; ccl_receiver_compute(ccl_receiver_args);
+        // #endif
+        //         }
     }
 
     // ========================================================================
@@ -2290,222 +2298,227 @@ void kernel_main() {
 
     DPRINT << " STARTING MOE" << ENDL();
 
-    {
-        DeviceZoneScopedN("MOE_RESIDUAL_MCAST");
-        residual_mcast(moe.routed.residual_mcast_args);
-    }
+    // {
+    //     DeviceZoneScopedN("MOE_RESIDUAL_MCAST");
+    //     residual_mcast(moe.routed.residual_mcast_args);
+    // }
 
-    {
-        DeviceZoneScopedN("MOE_RMSNORM");
-        deepseek_b1_ops::RMSNorm::Op<Moe::Routed::RMSNormCTArgs, Core::is_sender_core, false> moe_rmsnorm;
-        moe_rmsnorm(moe.routed.rmsnorm_args);
-    }
+    // {
+    //     DeviceZoneScopedN("MOE_RMSNORM");
+    //     deepseek_b1_ops::RMSNorm::Op<Moe::Routed::RMSNormCTArgs, Core::is_sender_core, false> moe_rmsnorm;
+    //     moe_rmsnorm(moe.routed.rmsnorm_args);
+    // }
 
-    {
-        DeviceZoneScopedN("MOE_INPUT_MCAST");
-        moe_mcast(moe.routed.mcast_args);
-    }
+    // {
+    //     DeviceZoneScopedN("MOE_INPUT_MCAST");
+    //     moe_mcast(moe.routed.mcast_args);
+    // }
 
-#ifdef ENABLE_ROUTING
-    {
-        DeviceZoneScopedN("MOE_GATE_MATMUL");
-        deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false> gate_mm;
-        gate_mm(moe.routed.gate_mm_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_GATE_GATHER");
-        deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> moe_gather;
-        moe_gather(moe.routed.gather_args);
-    }
-#endif
+    // #ifdef ENABLE_ROUTING
+    //     {
+    //         DeviceZoneScopedN("MOE_GATE_MATMUL");
+    //         deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false>
+    //         gate_mm; gate_mm(moe.routed.gate_mm_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_GATE_GATHER");
+    //         deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> moe_gather;
+    //         moe_gather(moe.routed.gather_args);
+    //     }
+    // #endif
 
-    {
-        DeviceZoneScopedN("MOE_SHARED_GU_MATMUL");
-        deepseek_b1_ops::KNSlicedMatmul::
-            Op<Moe::Shared::GUMatmulCTArgs, Core::Shared::is_compute_core, !Core::Routed::is_gate_proj_core, false>
-                shared_gu_matmul;
-        shared_gu_matmul(moe.shared.gu_matmul_args);
-    }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_GU_MATMUL");
+    //         deepseek_b1_ops::KNSlicedMatmul::
+    //             Op<Moe::Shared::GUMatmulCTArgs, Core::Shared::is_compute_core, !Core::Routed::is_gate_proj_core,
+    //             false>
+    //                 shared_gu_matmul;
+    //         shared_gu_matmul(moe.shared.gu_matmul_args);
+    //     }
 
-#ifdef ENABLE_ROUTING
-    {
-        DeviceZoneScopedN("MOE_GATE");
-        deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
-        gate();
-    }
-    {
-        DeviceZoneScopedN("MOE_MCAST_INDEX");
-        deepseek_b1_ops::Mcast::Op<
-            Moe::Routed::McastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Routed::is_gate_proj_core,
-            true>
-            index_mcast;
-        index_mcast(moe.routed.index_mcast_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_MCAST_EXPERT_SCALE");
-        deepseek_b1_ops::Mcast::Op<
-            Moe::Routed::McastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Routed::is_gate_proj_core,
-            true>
-            expert_scale_mcast;
-        expert_scale_mcast(moe.routed.expert_scale_mcast_args);
-    }
-#endif
+    // #ifdef ENABLE_ROUTING
+    //     {
+    //         DeviceZoneScopedN("MOE_GATE");
+    //         deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
+    //         gate();
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_MCAST_INDEX");
+    //         deepseek_b1_ops::Mcast::Op<
+    //             Moe::Routed::McastCTArgs,
+    //             Core::is_sender_core,
+    //             Core::is_mcast_grid_core,
+    //             Core::Routed::is_gate_proj_core,
+    //             true>
+    //             index_mcast;
+    //         index_mcast(moe.routed.index_mcast_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_MCAST_EXPERT_SCALE");
+    //         deepseek_b1_ops::Mcast::Op<
+    //             Moe::Routed::McastCTArgs,
+    //             Core::is_sender_core,
+    //             Core::is_mcast_grid_core,
+    //             Core::Routed::is_gate_proj_core,
+    //             true>
+    //             expert_scale_mcast;
+    //         expert_scale_mcast(moe.routed.expert_scale_mcast_args);
+    //     }
+    // #endif
 
-    {
-        DeviceZoneScopedN("MOE_SHARED_GATE_GATHER");
-        deepseek_b1_ops::MoeGather::
-            Op<Core::Shared::is_gate_compute_core, Core::Shared::is_gated_reduce_core, true, true>
-                shared_gate_gather;
-        shared_gate_gather(moe.shared.ag_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_SHARED_UP_GATHER");
-        deepseek_b1_ops::MoeGather::Op<Core::Shared::is_up_compute_core, Core::Shared::is_gated_reduce_core, true, true>
-            shared_up_gather;
-        shared_up_gather(moe.shared.bg_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_SHARED_GATED_REDUCE");
-        deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
-            gated_reduce;
-        gated_reduce(moe.shared.gated_reduce_args);
-    }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_GATE_GATHER");
+    //         deepseek_b1_ops::MoeGather::
+    //             Op<Core::Shared::is_gate_compute_core, Core::Shared::is_gated_reduce_core, true, true>
+    //                 shared_gate_gather;
+    //         shared_gate_gather(moe.shared.ag_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_UP_GATHER");
+    //         deepseek_b1_ops::MoeGather::Op<Core::Shared::is_up_compute_core, Core::Shared::is_gated_reduce_core,
+    //         true, true>
+    //             shared_up_gather;
+    //         shared_up_gather(moe.shared.bg_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_GATED_REDUCE");
+    //         deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
+    //             gated_reduce;
+    //         gated_reduce(moe.shared.gated_reduce_args);
+    //     }
 
-    {
-        DPRINT << " MOE_GATE_PROJ" << ENDL();
-        DeviceZoneScopedN("MOE_GATE_PROJ");
-        constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
-                gate_proj_mm;
-        gate_proj_mm();
-    }
-    {
-        DeviceZoneScopedN("MOE_UP_PROJ");
-        constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr, false, true>
-                up_proj;
-        up_proj();
-    }
-    {
-        DeviceZoneScopedN("MOE_MUL");
-        deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
-        mul_op();
-    }
+    //     {
+    //         DPRINT << " MOE_GATE_PROJ" << ENDL();
+    //         DeviceZoneScopedN("MOE_GATE_PROJ");
+    //         constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+    //         deepseek_b1_ops::DRAMStreamingMatmul::
+    //             Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
+    //                 gate_proj_mm;
+    //         gate_proj_mm();
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_UP_PROJ");
+    //         constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+    //         deepseek_b1_ops::DRAMStreamingMatmul::
+    //             Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr, false, true>
+    //                 up_proj;
+    //         up_proj();
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_MUL");
+    //         deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
+    //         mul_op();
+    //     }
 
-    {
-        DeviceZoneScopedN("MOE_DOWN_PROJ_GATHER");
-        deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
-            down_proj_gather;
-        down_proj_gather(moe.routed.down_proj_gather_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_DOWN_PROJ_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Moe::Routed::McastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Routed::is_gate_proj_core,
-            true>
-            down_proj_mcast;
-        down_proj_mcast(moe.routed.down_proj_mcast_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_DOWN_PROJ");
-        constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true, down_proj_cb_in1_addr, true>
-                down_proj;
-        down_proj();
-    }
+    //     {
+    //         DeviceZoneScopedN("MOE_DOWN_PROJ_GATHER");
+    //         deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
+    //             down_proj_gather;
+    //         down_proj_gather(moe.routed.down_proj_gather_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_DOWN_PROJ_MCAST");
+    //         deepseek_b1_ops::Mcast::Op<
+    //             Moe::Routed::McastCTArgs,
+    //             Core::is_sender_core,
+    //             Core::is_mcast_grid_core,
+    //             Core::Routed::is_gate_proj_core,
+    //             true>
+    //             down_proj_mcast;
+    //         down_proj_mcast(moe.routed.down_proj_mcast_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_DOWN_PROJ");
+    //         constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+    //         deepseek_b1_ops::DRAMStreamingMatmul::
+    //             Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true, down_proj_cb_in1_addr,
+    //             true>
+    //                 down_proj;
+    //         down_proj();
+    //     }
 
-    {
-        DeviceZoneScopedN("MOE_SHARED_DOWN_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Moe::Shared::DownMcastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Shared::is_mcast_receiver_core,
-            true>
-            shared_down_mcast;
-        shared_down_mcast(moe.shared.down_mcast_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_SHARED_DOWN_MATMUL");
-        deepseek_b1_ops::Matmul::Op<Moe::Shared::DownMatmulCTArgs, Core::Shared::is_mcast_receiver_core, true, false>
-            shared_down_matmul;
-        shared_down_matmul(moe.shared.down_matmul_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_SHARED_RESIDUAL_ADD");
-        deepseek_b1_ops::ResidualAdd::Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
-            shared_residual_add;
-        shared_residual_add(moe.shared.residual_add_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_SHARED_OUTPUT_GATHER");
-        deepseek_b1_ops::MoeGather::Op<Core::Shared::is_mcast_receiver_core, Core::is_sender_core, true, true>
-            shared_output_gather;
-        shared_output_gather(moe.shared.og_args);
-    }
-    {
-        DeviceZoneScopedN("MOE_SHARED_OUTPUT_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Moe::Shared::OutputMcastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Routed::is_gate_proj_core,
-            true>
-            shared_output_mcast;
-        shared_output_mcast(moe.shared.output_mcast_args);
-    }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_DOWN_MCAST");
+    //         deepseek_b1_ops::Mcast::Op<
+    //             Moe::Shared::DownMcastCTArgs,
+    //             Core::is_sender_core,
+    //             Core::is_mcast_grid_core,
+    //             Core::Shared::is_mcast_receiver_core,
+    //             true>
+    //             shared_down_mcast;
+    //         shared_down_mcast(moe.shared.down_mcast_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_DOWN_MATMUL");
+    //         deepseek_b1_ops::Matmul::Op<Moe::Shared::DownMatmulCTArgs, Core::Shared::is_mcast_receiver_core, true,
+    //         false>
+    //             shared_down_matmul;
+    //         shared_down_matmul(moe.shared.down_matmul_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_RESIDUAL_ADD");
+    //         deepseek_b1_ops::ResidualAdd::Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
+    //             shared_residual_add;
+    //         shared_residual_add(moe.shared.residual_add_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_OUTPUT_GATHER");
+    //         deepseek_b1_ops::MoeGather::Op<Core::Shared::is_mcast_receiver_core, Core::is_sender_core, true, true>
+    //             shared_output_gather;
+    //         shared_output_gather(moe.shared.og_args);
+    //     }
+    //     {
+    //         DeviceZoneScopedN("MOE_SHARED_OUTPUT_MCAST");
+    //         deepseek_b1_ops::Mcast::Op<
+    //             Moe::Shared::OutputMcastCTArgs,
+    //             Core::is_sender_core,
+    //             Core::is_mcast_grid_core,
+    //             Core::Routed::is_gate_proj_core,
+    //             true>
+    //             shared_output_mcast;
+    //         shared_output_mcast(moe.shared.output_mcast_args);
+    //     }
 
-    {
-        DeviceZoneScopedN("MOE_ELTWISE_ADD");
-        constexpr bool add_pop_output =
-#ifdef ENABLE_REDUCE_TO_ONE
-            false;
-#else
-            true;
-#endif
-        deepseek_b1_ops::EltwiseAdd::Op<Moe::Routed::AddCTArgs, Core::Routed::is_gate_proj_core, true, add_pop_output>
-            add_op;
-        add_op();
-    }
+    //     {
+    //         DeviceZoneScopedN("MOE_ELTWISE_ADD");
+    //         constexpr bool add_pop_output =
+    // #ifdef ENABLE_REDUCE_TO_ONE
+    //             false;
+    // #else
+    //             true;
+    // #endif
+    //         deepseek_b1_ops::EltwiseAdd::Op<Moe::Routed::AddCTArgs, Core::Routed::is_gate_proj_core, true,
+    //         add_pop_output>
+    //             add_op;
+    //         add_op();
+    //     }
 
-#ifdef ENABLE_REDUCE_TO_ONE
-    {
-        DeviceZoneScopedN("MOE_REDUCE_TO_ONE");
-        constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
-        deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
-        reduce_op(moe.routed.reduce_rt_args);
-    }
+    // #ifdef ENABLE_REDUCE_TO_ONE
+    //     {
+    //         DeviceZoneScopedN("MOE_REDUCE_TO_ONE");
+    //         constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
+    //         deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
+    //         reduce_op(moe.routed.reduce_rt_args);
+    //     }
 
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_reduce_fabric_core) {
-        constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
-        constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("reduce_sync_noc_x");
-        constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("reduce_sync_noc_y");
-        uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
-        noc_semaphore_inc(sync_sem_noc_addr, 1);
-    }
-#elif defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_sender_core) {
-        constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
-        constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
-        volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
-        noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
-        noc_semaphore_set(sync_sem_ptr, 0);
-    }
-#endif
-#endif
+    // #if defined(COMPILE_FOR_BRISC)
+    //     if constexpr (Core::is_reduce_fabric_core) {
+    //         constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
+    //         constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("reduce_sync_noc_x");
+    //         constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("reduce_sync_noc_y");
+    //         uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
+    //         noc_semaphore_inc(sync_sem_noc_addr, 1);
+    //     }
+    // #elif defined(COMPILE_FOR_NCRISC)
+    //     if constexpr (Core::is_sender_core) {
+    //         constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
+    //         constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
+    //         volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr
+    //         uint32_t*>(sync_sem_addr); noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
+    //         noc_semaphore_set(sync_sem_ptr, 0);
+    //     }
+    // #endif
+    // #endif
 
     // ====================================================================
     // Mcast: Teardown persistent mcast

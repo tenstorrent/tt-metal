@@ -386,6 +386,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Dump worker cores
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord coord = {x, y};
@@ -558,16 +559,8 @@ void WatcherDeviceReader::Core::Dump() const {
     ValidateKernelIDs();
 
     // Whether or not watcher data is available depends on a flag set on the device.
-    if (mbox_data_.watcher().enable() != dev_msgs::WatcherEnabled and
-        mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
-        TT_THROW(
-            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
-            core_str_,
-            mbox_data_.watcher().enable(),
-            dev_msgs::WatcherEnabled,
-            dev_msgs::WatcherDisabled);
-    }
-    bool enabled = (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled);
+
+    bool enabled = true;  // (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled);
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
@@ -630,6 +623,67 @@ void WatcherDeviceReader::Core::Dump() const {
         if (!rtoptions.watcher_ring_buffer_disabled()) {
             DumpRingBuffer();
         }
+    }
+
+    if (mbox_data_.watcher().enable() != dev_msgs::WatcherEnabled and
+        mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
+        fprintf(
+            reader_.f,
+            "WARNING: invalid watcher.enable on %s. Read %d (from snapshot), valid values are %d and %d.\n",
+            core_str_.c_str(),
+            mbox_data_.watcher().enable(),
+            dev_msgs::WatcherEnabled,
+            dev_msgs::WatcherDisabled);
+
+        // Live re-read the full mailbox directly from the device
+        const auto& hal = MetalContext::instance().hal();
+        auto factory = hal.get_dev_msgs_factory(programmable_core_type_);
+        uint64_t mailbox_addr = hal.get_dev_addr(programmable_core_type_, HalL1MemAddrType::MAILBOX);
+        uint32_t full_size = factory.size_of<dev_msgs::mailboxes_t>();
+        std::vector<std::byte> live_buf(full_size);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            live_buf.data(), live_buf.size(), {static_cast<size_t>(reader_.device_id), virtual_coord_}, mailbox_addr);
+
+        auto live_mbox = factory.create_view<dev_msgs::mailboxes_t>(live_buf.data());
+
+        fprintf(reader_.f, "  Live mailbox re-read for %s:\n", core_str_.c_str());
+        fprintf(reader_.f, "    ncrisc_halt.resume_addr   = 0x%x\n", live_mbox.ncrisc_halt().resume_addr());
+        fprintf(reader_.f, "    ncrisc_halt.stack_save    = 0x%x\n", live_mbox.ncrisc_halt().stack_save());
+        fprintf(reader_.f, "    launch_msg_rd_ptr         = %u\n", live_mbox.launch_msg_rd_ptr());
+        for (uint32_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; i++) {
+            auto lm = live_mbox.launch()[i];
+            fprintf(reader_.f, "    launch[%u].mode            = %u\n", i, lm.kernel_config().mode());
+            fprintf(reader_.f, "    launch[%u].brisc_noc_id    = %u\n", i, lm.kernel_config().brisc_noc_id());
+            fprintf(reader_.f, "    launch[%u].enables         = 0x%x\n", i, lm.kernel_config().enables());
+        }
+        for (uint32_t i = 0; i < dev_msgs::go_message_num_entries; i++) {
+            fprintf(reader_.f, "    go_messages[%u].signal      = %u\n", i, live_mbox.go_messages()[i].signal());
+        }
+        fprintf(reader_.f, "    go_message_index          = %u\n", live_mbox.go_message_index());
+        fprintf(reader_.f, "    watcher.enable            = %d\n", live_mbox.watcher().enable());
+
+        const auto* raw = reinterpret_cast<const uint32_t*>(live_buf.data());
+        uint32_t num_words = full_size / sizeof(uint32_t);
+        fprintf(reader_.f, "  Raw mailbox (%u bytes / %u words):\n", full_size, num_words);
+        for (uint32_t i = 0; i < num_words; i++) {
+            if (i % 8 == 0) {
+                fprintf(reader_.f, "    [%04u] ", i);
+            }
+            fprintf(reader_.f, "%08x ", raw[i]);
+            if (i % 8 == 7) {
+                fprintf(reader_.f, "\n");
+            }
+        }
+        if (num_words % 8 != 0) {
+            fprintf(reader_.f, "\n");
+        }
+
+        TT_THROW(
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
+            core_str_,
+            mbox_data_.watcher().enable(),
+            dev_msgs::WatcherEnabled,
+            dev_msgs::WatcherDisabled);
     }
 
     fprintf(reader_.f, "\n");

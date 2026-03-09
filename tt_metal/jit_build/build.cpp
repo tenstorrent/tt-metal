@@ -162,7 +162,7 @@ void JitBuildEnv::init(
         "-Wno-deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "
-        "-Wno-unused-function ";
+        "-Wno-unused-function -Wno-unused-local-typedefs ";
 
     // Defines
     this->defines_ = "";
