@@ -233,6 +233,7 @@ void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_al
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
+bool MeshDeviceImpl::allocations_unsafe() const { return this->allocator_impl()->allocations_unsafe(); }
 
 MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -1465,6 +1466,9 @@ void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, b
     pimpl_->replay_mesh_trace(cq_id, trace_id, blocking);
 }
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { pimpl_->release_mesh_trace(trace_id); }
+void MeshDevice::mark_allocations_safe() { pimpl_->mark_allocations_safe(); }
+void MeshDevice::mark_allocations_unsafe() { pimpl_->mark_allocations_unsafe(); }
+bool MeshDevice::allocations_unsafe() const { return pimpl_->allocations_unsafe(); }
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return pimpl_->get_mesh_trace(trace_id);
 }
