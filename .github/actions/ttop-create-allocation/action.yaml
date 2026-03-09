@@ -1,23 +1,23 @@
 # Create allocation object in Kubernetes & wait
 
-name: 'Create Allocation'
-description: 'Composable action that creates Allocation object in Kubernetes'
+name: "Create Allocation"
+description: "Composable action that creates Allocation object in Kubernetes"
 
 inputs:
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
   spec:
-    description: 'Allocation spec'
+    description: "Allocation spec"
     required: false
-    default: ''
+    default: ""
   explicit:
-    description: 'List of explicit nodes (ignored when spec is provided)'
+    description: "List of explicit nodes (ignored when spec is provided)"
     required: false
-    default: ''
+    default: ""
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Construct allocation manifest (explicit)
       shell: bash

@@ -3,8 +3,8 @@ name: "Copilot Autofix ClangSA"
 on:
   schedule:
     # Run twice daily - 4 hours after analysis, then again 2 hours later
-    - cron: "0 6 * * *"   # 10 PM PST
-    - cron: "0 8 * * *"   # 12 AM PST
+    - cron: "0 6 * * *" # 10 PM PST
+    - cron: "0 8 * * *" # 12 AM PST
   workflow_dispatch:
 
 jobs:

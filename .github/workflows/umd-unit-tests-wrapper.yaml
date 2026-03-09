@@ -18,10 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N150 }, { arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}

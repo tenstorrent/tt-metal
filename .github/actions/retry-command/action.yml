@@ -17,40 +17,40 @@ inputs:
 runs:
   using: composite
   steps:
-  - name: Invoke command with retries
-    shell: bash
-    env:
-      COMMAND: ${{ inputs.command }}
-      TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
-      BACKOFF_SECONDS: ${{ inputs.backoff-seconds }}
-      MAX_RETRIES: ${{ inputs.max-retries }}
-    run: |
-      set +e
+    - name: Invoke command with retries
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        BACKOFF_SECONDS: ${{ inputs.backoff-seconds }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+      run: |
+        set +e
 
-      max_retries="$MAX_RETRIES"
-      count=0
+        max_retries="$MAX_RETRIES"
+        count=0
 
-      # Write command to script file to safely handle quotes and special characters
-      cat > /tmp/retry_command.sh << 'SCRIPT_EOF'
-      #!/bin/bash
-      set -euo pipefail
-      SCRIPT_EOF
-      printf '%s\n' "$COMMAND" >> /tmp/retry_command.sh
-      chmod +x /tmp/retry_command.sh
+        # Write command to script file to safely handle quotes and special characters
+        cat > /tmp/retry_command.sh << 'SCRIPT_EOF'
+        #!/bin/bash
+        set -euo pipefail
+        SCRIPT_EOF
+        printf '%s\n' "$COMMAND" >> /tmp/retry_command.sh
+        chmod +x /tmp/retry_command.sh
 
-      while (( count < max_retries )); do
-        echo "Attempt $((count + 1)) of $max_retries..."
+        while (( count < max_retries )); do
+          echo "Attempt $((count + 1)) of $max_retries..."
 
-        if timeout "$TIMEOUT_SECONDS" bash /tmp/retry_command.sh; then
-          echo "Command succeeded."
-          exit 0
-        else
-          echo "Command failed or timed out. Backing off..."
-          count=$((count + 1))
-        fi
+          if timeout "$TIMEOUT_SECONDS" bash /tmp/retry_command.sh; then
+            echo "Command succeeded."
+            exit 0
+          else
+            echo "Command failed or timed out. Backing off..."
+            count=$((count + 1))
+          fi
 
-        sleep "$BACKOFF_SECONDS"
-      done
+          sleep "$BACKOFF_SECONDS"
+        done
 
-      echo "Command failed after $max_retries attempts."
-      exit 1
+        echo "Command failed after $max_retries attempts."
+        exit 1

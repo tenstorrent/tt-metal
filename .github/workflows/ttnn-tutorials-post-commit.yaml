@@ -29,12 +29,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false

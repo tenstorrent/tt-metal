@@ -3,8 +3,8 @@ description: Install cpufrequtils if needed and set CPU governor for all cores
 inputs:
   governor:
     required: true
-    description: 'CPU governor to set (performance, ondemand, conservative, powersave, userspace, schedutil)'
-    default: 'performance'
+    description: "CPU governor to set (performance, ondemand, conservative, powersave, userspace, schedutil)"
+    default: "performance"
 runs:
   using: "composite"
   steps:

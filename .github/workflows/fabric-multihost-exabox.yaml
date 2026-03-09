@@ -14,7 +14,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: 'Ubuntu 22.04'
+      platform: "Ubuntu 22.04"
       skip-tt-train: false
       ref: ${{ github.sha }}
 
@@ -92,10 +92,10 @@ jobs:
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
-          environmentName:  ci-${{ github.run_id }}-metal
-          allocationName:  ci-${{ github.run_id }}-metal
+          environmentName: ci-${{ github.run_id }}-metal
+          allocationName: ci-${{ github.run_id }}-metal
           workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          sharedVolumeEnabled: 'true'
+          sharedVolumeEnabled: "true"
 
       - name: Setup tt-run
         uses: ./.github/actions/ttop-configure-tt-run
@@ -132,7 +132,7 @@ jobs:
       - name: Run Physical discovery test
         timeout-minutes: 10
         run: |
-            mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+          mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
 
       - name: Run Fabric Test
         run: |
@@ -170,9 +170,9 @@ jobs:
       - name: Delete environment
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-metal
+          environmentName: ci-${{ github.run_id }}-metal
 
       - name: Delete allocation
         uses: ./.github/actions/ttop-delete-allocation
         with:
-          allocationName:  ci-${{ github.run_id }}-metal
+          allocationName: ci-${{ github.run_id }}-metal

@@ -112,8 +112,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
-        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
+        PYTHONFAULTHANDLER: 1 # prints Python stack trace on segfault
+        PYTHONMALLOC: debug # adds checks, helps catch memory issues
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161

@@ -56,8 +56,6 @@ jobs:
           force-bump-type: ${{ inputs.force-bump-type }}
           ignore-commits: ${{ inputs.ignore-commits }}
 
-
-
       - name: Create tag
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1

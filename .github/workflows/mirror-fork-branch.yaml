@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       source:
-        description: 'Source in format <fork_owner>:<branch>'
+        description: "Source in format <fork_owner>:<branch>"
         required: true
         type: string
       target_branch:
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'Source in format <fork_owner>:<branch>'
+        description: "Source in format <fork_owner>:<branch>"
         required: true
       target_branch:
         description: >
@@ -142,4 +142,4 @@ jobs:
         with:
           issue: ${{ steps.pr.outputs.issue }}
           message: |
-           ✨ A mirror branch has been created/updated for this PR: [`${{ steps.create_branch.outputs.target_branch }}`](https://github.com/${{ github.repository }}/tree/${{ steps.create_branch.outputs.target_branch }})
+            ✨ A mirror branch has been created/updated for this PR: [`${{ steps.create_branch.outputs.target_branch }}`](https://github.com/${{ github.repository }}/tree/${{ steps.create_branch.outputs.target_branch }})

@@ -26,7 +26,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0  # Fetch all history and all branches / tags so 'origin/main' is available
+          fetch-depth: 0 # Fetch all history and all branches / tags so 'origin/main' is available
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -49,7 +49,6 @@ jobs:
       - name: Do Nothing
         run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
 
-
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
@@ -57,8 +56,8 @@ jobs:
       - name: Check SPDX licenses
         uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
         with:
-          ignore_config_file: '.github/spdx_ignore.yaml'
-          verbose: 'true'
+          ignore_config_file: ".github/spdx_ignore.yaml"
+          verbose: "true"
   check-metal-kernel-count:
     runs-on: ubuntu-latest
     steps:
@@ -78,7 +77,7 @@ jobs:
     needs: find-changed-files
     # We get rate-limited if we run too often; only run when it's useful
     # Issue 21637: Disable check-docs-links for now to unblock developers
-    if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
+    if: false # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -105,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0  # Fetch all history for git diff comparison
+          fetch-depth: 0 # Fetch all history for git diff comparison
       - name: Check for new InterleavedAddrGen usages in changed files
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -179,7 +178,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-python@v5.0.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
       - name: Check sweeps workflow option count against sweep file count
         run: |
           pip install pyyaml

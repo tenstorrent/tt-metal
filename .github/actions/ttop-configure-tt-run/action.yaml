@@ -10,157 +10,157 @@ inputs:
   mgd:
     description: MGD contents
     required: false
-    default: ''
+    default: ""
   mgdFile:
     description: MGD file path, for referring file from inside the worker container.
       Ignored when mgd spec is given
     required: false
-    default: ''
+    default: ""
   copyToWorkers:
     description: Whether to copy files to workers
     required: true
-    default: 'true'
+    default: "true"
   ranksData:
     description: Node-to-rank JSON mapping
     required: true
-    default: ''
+    default: ""
 runs:
   using: composite
   steps:
-  - name: Validate directory input
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-    run: |
-      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-      validate_path "$DIRECTORY" --allow-relative || exit 1
-  - name: Create directory
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-    run: |
-      echo "Creating directory for TT-Run configuration..."
-      sudo mkdir -p "$DIRECTORY"
-  - name: Create hostfile (parse ranks)
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-      RANKS_DATA: ${{ inputs.ranksData }}
-    run: |
-      echo "Creating OpenMPI hostfile from ranks mapping..."
+    - name: Validate directory input
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+      run: |
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_path "$DIRECTORY" --allow-relative || exit 1
+    - name: Create directory
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+      run: |
+        echo "Creating directory for TT-Run configuration..."
+        sudo mkdir -p "$DIRECTORY"
+    - name: Create hostfile (parse ranks)
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        RANKS_DATA: ${{ inputs.ranksData }}
+      run: |
+        echo "Creating OpenMPI hostfile from ranks mapping..."
 
-      # Parse the JSON and create ordered hostfile
-      printf '%s' "$RANKS_DATA" | jq -r 'to_entries | sort_by(.value | tonumber) | .[].key' | sudo tee "$DIRECTORY/hostfile"
+        # Parse the JSON and create ordered hostfile
+        printf '%s' "$RANKS_DATA" | jq -r 'to_entries | sort_by(.value | tonumber) | .[].key' | sudo tee "$DIRECTORY/hostfile"
 
-      # Create rankfile from ranksData object
-      printf '%s' "$RANKS_DATA" | jq -r 'to_entries | sort_by(.value | tonumber) | .[] | "rank \(.value)=\(.key) slot=0"' | sudo tee "$DIRECTORY/rankfile"
+        # Create rankfile from ranksData object
+        printf '%s' "$RANKS_DATA" | jq -r 'to_entries | sort_by(.value | tonumber) | .[] | "rank \(.value)=\(.key) slot=0"' | sudo tee "$DIRECTORY/rankfile"
 
-      echo "OpenMPI hostfile created:"
-      sudo cat "$DIRECTORY/hostfile"
-  - name: Create MGD spec file
-    shell: bash
-    id: mgd
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-      MGD_CONTENT: ${{ inputs.mgd }}
-      MGD_FILE: ${{ inputs.mgdFile }}
-    run: |
-      echo "Creating MGD spec file..."
-      printf "%s" "$MGD_CONTENT" | sudo tee "$DIRECTORY/mgd.textproto"
+        echo "OpenMPI hostfile created:"
+        sudo cat "$DIRECTORY/hostfile"
+    - name: Create MGD spec file
+      shell: bash
+      id: mgd
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        MGD_CONTENT: ${{ inputs.mgd }}
+        MGD_FILE: ${{ inputs.mgdFile }}
+      run: |
+        echo "Creating MGD spec file..."
+        printf "%s" "$MGD_CONTENT" | sudo tee "$DIRECTORY/mgd.textproto"
 
-      # If mgd is empty and mgdFile is not - assign the mgdFile to mesh_graph_desc_path
-      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-      if [ -z "$MGD_CONTENT" ] && [ -n "$MGD_FILE" ]; then
-        echo "No MGD spec provided but MGD file path given. Will use $MGD_FILE as mesh_graph_desc_path in rank_bindings.yaml"
-        set_github_output "mesh_graph_desc_path" "$MGD_FILE"
-      else
-        set_github_output "mesh_graph_desc_path" "$DIRECTORY/mgd.textproto"
-      fi
-  - name: Create rank bindings file
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-      MESH_GRAPH_DESC_PATH: ${{ steps.mgd.outputs.mesh_graph_desc_path }}
-    run: |
-      # Count entries in hostfile to determine number of rank bindings
-      # NOTE: This hardcodes ranks in 1 mesh (assumes we have allocated a big mesh - like quad or half)
-      if [ -f "$DIRECTORY/hostfile" ]; then
-        num_hosts=$(sudo cat "$DIRECTORY/hostfile" | wc -l)
-        echo "Generating rank bindings for $num_hosts hosts..."
-
-        # Generate rank_bindings.yaml
-        sudo tee "$DIRECTORY/rank_bindings.yaml" > /dev/null <<EOF
-      rank_bindings:
-      EOF
-
-        # Add rank binding entries (0-based indexing)
-        for i in $(seq 0 $((num_hosts - 1))); do
-          sudo tee -a "$DIRECTORY/rank_bindings.yaml" > /dev/null <<EOF
-        - rank: $i
-          mesh_id: 0
-          mesh_host_rank: $i
-
-      EOF
-        done
-
-        # Add mesh graph description path
-        sudo tee -a "$DIRECTORY/rank_bindings.yaml" > /dev/null <<EOF
-      mesh_graph_desc_path: "$MESH_GRAPH_DESC_PATH"
-      EOF
-
-        echo "Rank bindings file created:"
-        sudo cat "$DIRECTORY/rank_bindings.yaml"
-      else
-        echo "No hostfile found, skipping rank bindings generation"
-      fi
-  - name: Print generated files
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-    run: |
-      echo "Generated files:"
-      sudo ls -l "$DIRECTORY"
-      awk '{print FILENAME ":" $0}' "$DIRECTORY"/* || true
-  - name: Copy TT-Run data to workers
-    if: ${{ inputs.copyToWorkers == 'true' }}
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-    run: |
-      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-      echo "Copying files to all the workers..."
-      while IFS= read -r hostname; do
-        echo "Processing worker: $hostname"
-        if ! validate_hostname "$hostname"; then
-          validation_warning "Skipping invalid hostname: $hostname"
-          continue
+        # If mgd is empty and mgdFile is not - assign the mgdFile to mesh_graph_desc_path
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        if [ -z "$MGD_CONTENT" ] && [ -n "$MGD_FILE" ]; then
+          echo "No MGD spec provided but MGD file path given. Will use $MGD_FILE as mesh_graph_desc_path in rank_bindings.yaml"
+          set_github_output "mesh_graph_desc_path" "$MGD_FILE"
+        else
+          set_github_output "mesh_graph_desc_path" "$DIRECTORY/mgd.textproto"
         fi
-        # Create directory on worker
-        # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection)
-        ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mkdir -p '$DIRECTORY'"
+    - name: Create rank bindings file
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        MESH_GRAPH_DESC_PATH: ${{ steps.mgd.outputs.mesh_graph_desc_path }}
+      run: |
+        # Count entries in hostfile to determine number of rank bindings
+        # NOTE: This hardcodes ranks in 1 mesh (assumes we have allocated a big mesh - like quad or half)
+        if [ -f "$DIRECTORY/hostfile" ]; then
+          num_hosts=$(sudo cat "$DIRECTORY/hostfile" | wc -l)
+          echo "Generating rank bindings for $num_hosts hosts..."
 
-        # Copy mgd.textproto to worker. Always copy our generated one - empty or not.
-        scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/mgd.textproto" "$hostname":/tmp/mgd.textproto
-        ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/mgd.textproto '$DIRECTORY/mgd.textproto'"
+          # Generate rank_bindings.yaml
+          sudo tee "$DIRECTORY/rank_bindings.yaml" > /dev/null <<EOF
+        rank_bindings:
+        EOF
 
-        # Copy rank_bindings.yaml to worker
-        scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/rank_bindings.yaml" "$hostname":/tmp/rank_bindings.yaml
-        ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/rank_bindings.yaml '$DIRECTORY/rank_bindings.yaml'"
+          # Add rank binding entries (0-based indexing)
+          for i in $(seq 0 $((num_hosts - 1))); do
+            sudo tee -a "$DIRECTORY/rank_bindings.yaml" > /dev/null <<EOF
+          - rank: $i
+            mesh_id: 0
+            mesh_host_rank: $i
 
-        # Copy hostfile to worker
-        scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/hostfile" "$hostname":/tmp/hostfile
-        ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/hostfile '$DIRECTORY/hostfile'"
+        EOF
+          done
 
-      done < "$DIRECTORY/hostfile"
-      echo "TT-Run data copied to all the workers"
-  - name: Print summary
-    shell: bash
-    env:
-      DIRECTORY: ${{ inputs.directory }}
-      MESH_GRAPH_DESC_PATH: ${{ steps.mgd.outputs.mesh_graph_desc_path }}
-    run: |
-      echo "---\nGenerated files:\n---"
-      sudo ls -l "$DIRECTORY"
-      awk '{print FILENAME ":" $0}' "$DIRECTORY"/* || true
-      echo "---\nMGD:\n---"
-      awk '{print $0}' "$MESH_GRAPH_DESC_PATH" || true
+          # Add mesh graph description path
+          sudo tee -a "$DIRECTORY/rank_bindings.yaml" > /dev/null <<EOF
+        mesh_graph_desc_path: "$MESH_GRAPH_DESC_PATH"
+        EOF
+
+          echo "Rank bindings file created:"
+          sudo cat "$DIRECTORY/rank_bindings.yaml"
+        else
+          echo "No hostfile found, skipping rank bindings generation"
+        fi
+    - name: Print generated files
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+      run: |
+        echo "Generated files:"
+        sudo ls -l "$DIRECTORY"
+        awk '{print FILENAME ":" $0}' "$DIRECTORY"/* || true
+    - name: Copy TT-Run data to workers
+      if: ${{ inputs.copyToWorkers == 'true' }}
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+      run: |
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        echo "Copying files to all the workers..."
+        while IFS= read -r hostname; do
+          echo "Processing worker: $hostname"
+          if ! validate_hostname "$hostname"; then
+            validation_warning "Skipping invalid hostname: $hostname"
+            continue
+          fi
+          # Create directory on worker
+          # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection)
+          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mkdir -p '$DIRECTORY'"
+
+          # Copy mgd.textproto to worker. Always copy our generated one - empty or not.
+          scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/mgd.textproto" "$hostname":/tmp/mgd.textproto
+          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/mgd.textproto '$DIRECTORY/mgd.textproto'"
+
+          # Copy rank_bindings.yaml to worker
+          scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/rank_bindings.yaml" "$hostname":/tmp/rank_bindings.yaml
+          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/rank_bindings.yaml '$DIRECTORY/rank_bindings.yaml'"
+
+          # Copy hostfile to worker
+          scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/hostfile" "$hostname":/tmp/hostfile
+          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/hostfile '$DIRECTORY/hostfile'"
+
+        done < "$DIRECTORY/hostfile"
+        echo "TT-Run data copied to all the workers"
+    - name: Print summary
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        MESH_GRAPH_DESC_PATH: ${{ steps.mgd.outputs.mesh_graph_desc_path }}
+      run: |
+        echo "---\nGenerated files:\n---"
+        sudo ls -l "$DIRECTORY"
+        awk '{print FILENAME ":" $0}' "$DIRECTORY"/* || true
+        echo "---\nMGD:\n---"
+        awk '{print $0}' "$MESH_GRAPH_DESC_PATH" || true

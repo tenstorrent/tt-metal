@@ -28,15 +28,15 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         default: false
         type: boolean
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         default: false
         type: boolean
       ref:
@@ -78,7 +78,7 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
 

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       models-to-run:
-        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["common_models", "functional_unet"]. Default is ''all'''
         default: "all"
         type: string
       enable-ops-recording:
@@ -41,7 +41,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["common_models", "functional_unet"]. Default is ''all'''
       enable-ops-recording:
         required: false
         type: boolean

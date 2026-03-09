@@ -1,13 +1,13 @@
-name: 'Delete Allocation'
-description: 'A composable action to delete an allocation'
+name: "Delete Allocation"
+description: "A composable action to delete an allocation"
 
 inputs:
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Delete Allocation
       shell: bash

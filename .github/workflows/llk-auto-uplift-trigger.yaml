@@ -4,34 +4,34 @@ on:
   workflow_dispatch:
     inputs:
       workflow_timeout:
-        description: 'Timeout for workflows in minutes'
+        description: "Timeout for workflows in minutes"
         required: false
         type: number
         default: 720
       draft:
-        description: 'Create PR as draft'
+        description: "Create PR as draft"
         required: false
         type: boolean
         default: true
       recheck_tests:
-        description: 'Re-check latest test runs'
+        description: "Re-check latest test runs"
         required: false
         type: boolean
         default: false
   workflow_call:
     inputs:
       workflow_timeout:
-        description: 'Timeout for workflows in minutes'
+        description: "Timeout for workflows in minutes"
         required: false
         type: number
         default: 720
       draft:
-        description: 'Create PR as draft'
+        description: "Create PR as draft"
         required: false
         type: boolean
         default: true
       recheck_tests:
-        description: 'Re-check latest test runs'
+        description: "Re-check latest test runs"
         required: false
         type: boolean
         default: false

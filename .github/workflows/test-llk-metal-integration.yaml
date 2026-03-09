@@ -4,66 +4,66 @@ on:
   workflow_dispatch:
     inputs:
       mirrored_branch:
-        description: 'Mirrored branch name (e.g., mirror/branch-name)'
+        description: "Mirrored branch name (e.g., mirror/branch-name)"
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests'
+        description: "Run all post-commit tests"
         required: false
         type: boolean
         default: false
       run_blackhole_post_commit:
-        description: 'Run Blackhole post-commit tests'
+        description: "Run Blackhole post-commit tests"
         required: false
         type: boolean
         default: false
       workflow_timeout:
-        description: 'Timeout for workflows in minutes'
+        description: "Timeout for workflows in minutes"
         required: false
         type: number
         default: 720
   workflow_call:
     inputs:
       mirrored_branch:
-        description: 'Mirrored branch name (e.g., mirror/branch-name)'
+        description: "Mirrored branch name (e.g., mirror/branch-name)"
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests'
+        description: "Run all post-commit tests"
         required: false
         type: boolean
         default: false
       run_blackhole_post_commit:
-        description: 'Run Blackhole post-commit tests'
+        description: "Run Blackhole post-commit tests"
         required: false
         type: boolean
         default: false
       workflow_timeout:
-        description: 'Timeout for workflows in minutes'
+        description: "Timeout for workflows in minutes"
         required: false
         type: number
         default: 720
     outputs:
       run-tests-result:
-        description: 'Overall result of all test workflows (success/failure/cancelled)'
+        description: "Overall result of all test workflows (success/failure/cancelled)"
         value: ${{ jobs.run-tests.result }}
       branch-exists:
-        description: 'Whether the mirrored branch exists'
+        description: "Whether the mirrored branch exists"
         value: ${{ jobs.setup.outputs.branch-exists }}
       test-branch-name:
-        description: 'Name of the test branch created'
+        description: "Name of the test branch created"
         value: ${{ jobs.setup.outputs.test-branch-name }}
       all-post-commit-result:
-        description: 'Result of All post-commit tests (status:url format)'
+        description: "Result of All post-commit tests (status:url format)"
         value: ${{ jobs.run-tests.outputs.all-post-commit-result }}
       blackhole-result:
-        description: 'Result of Blackhole post-commit tests (status:url format)'
+        description: "Result of Blackhole post-commit tests (status:url format)"
         value: ${{ jobs.run-tests.outputs.blackhole-result }}
       tt-metal-l2-nightly-result:
-        description: 'Result of All post-commit C++ tests (status:url format)'
+        description: "Result of All post-commit C++ tests (status:url format)"
         value: ${{ jobs.run-tests.outputs.tt-metal-l2-nightly-result }}
       perf-device-models-result:
-        description: 'Result of Device perf regressions (status:url format)'
+        description: "Result of Device perf regressions (status:url format)"
         value: ${{ jobs.run-tests.outputs.perf-device-models-result }}
 
 # NOTE: Concurrency is intentionally NOT set here.
@@ -244,22 +244,22 @@ jobs:
             name: "All Post Commit Workflows"
             output-key: "all-post-commit-result"
             should-run: ${{ inputs.run_all_post_commit }}
-            arch: ""  # all-post-commit doesn't use architecture parameter
+            arch: "" # all-post-commit doesn't use architecture parameter
           - workflow: "blackhole-post-commit.yaml"
             name: "Blackhole Post Commit"
             output-key: "blackhole-result"
             should-run: ${{ inputs.run_blackhole_post_commit }}
-            arch: ""  # blackhole-post-commit doesn't use architecture parameter
+            arch: "" # blackhole-post-commit doesn't use architecture parameter
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly APC"
             output-key: "tt-metal-l2-nightly-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
-            arch: "dynamic"  # architecture determined at runtime based on enabled tests
+            arch: "dynamic" # architecture determined at runtime based on enabled tests
           - workflow: "perf-device-models.yaml"
             name: "Device Perf Regressions"
             output-key: "perf-device-models-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
-            arch: "dynamic"  # architecture determined at runtime based on enabled tests
+            arch: "dynamic" # architecture determined at runtime based on enabled tests
     outputs:
       all-post-commit-result: ${{ steps.monitor.outputs.all-post-commit-result }}
       blackhole-result: ${{ steps.monitor.outputs.blackhole-result }}

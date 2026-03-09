@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
@@ -42,7 +42,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 8 * * *"  # Every day at 8:00 UTC
+    - cron: "0 8 * * *" # Every day at 8:00 UTC
 
 jobs:
   build-artifact:

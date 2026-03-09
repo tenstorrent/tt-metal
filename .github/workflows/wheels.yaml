@@ -22,7 +22,7 @@ on:
         required: false
         type: string
         default: ""
-        description: 'Commit SHA to test (default: HEAD)'
+        description: "Commit SHA to test (default: HEAD)"
       enable-lto:
         required: false
         type: boolean
@@ -32,7 +32,6 @@ on:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
         value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.artifact_name }}
-
 
 jobs:
   build-wheel:
@@ -88,7 +87,7 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: false
         type: choice
         options:
@@ -13,7 +13,7 @@ on:
           - module
           - long-seq-module
           - final-op-unit
-        default: 'all'
+        default: "all"
       platform:
         required: false
         type: choice
@@ -39,7 +39,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       recreate_weights_cache:
-        description: 'Recreate weights cache in a new directory'
+        description: "Recreate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -47,10 +47,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache."
         required: false
         type: string
-        default: ''
+        default: ""
       enable-tracy:
         required: false
         type: boolean

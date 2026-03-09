@@ -1,20 +1,20 @@
-name: 'Prepare Tracy Reports'
-description: 'Cleans up intermediate Tracy files and renames CSV reports with model name'
+name: "Prepare Tracy Reports"
+description: "Cleans up intermediate Tracy files and renames CSV reports with model name"
 
 inputs:
   profiler-dir:
-    description: 'Path to the profiler directory'
+    description: "Path to the profiler directory"
     required: true
   model-name:
-    description: 'Model name to include in the report filename'
+    description: "Model name to include in the report filename"
     required: true
   card:
-    description: 'Card type (e.g., N150, N300)'
+    description: "Card type (e.g., N150, N300)"
     required: false
-    default: ''
+    default: ""
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Prepare Tracy reports
       shell: bash

@@ -1,11 +1,11 @@
 name: DeepSeek V3 Multi-Host Tests
 on:
   schedule:
-    - cron: '0 4 * * *'  # 11pm EST (4am UTC)
+    - cron: "0 4 * * *" # 11pm EST (4am UTC)
   workflow_dispatch:
     inputs:
       setup:
-        description: 'Galaxy setup to test'
+        description: "Galaxy setup to test"
         required: true
         type: choice
         default: both
@@ -14,32 +14,32 @@ on:
           - quad
           - both
       deepseekv3_unit_tests:
-        description: 'Run DeepSeek V3 unit tests'
+        description: "Run DeepSeek V3 unit tests"
         required: false
         default: false
         type: boolean
       deepseekv3_module_tests:
-        description: 'Run DeepSeek V3 module tests'
+        description: "Run DeepSeek V3 module tests"
         required: false
         default: false
         type: boolean
       teacher_forced:
-        description: 'Run teacher forced accuracy test'
+        description: "Run teacher forced accuracy test"
         required: false
         default: false
         type: boolean
       demo:
-        description: 'Run demo test'
+        description: "Run demo test"
         required: false
         default: false
         type: boolean
       demo_stress:
-        description: 'Run demo stress test'
+        description: "Run demo stress test"
         required: false
         default: false
         type: boolean
       recalculate_weights_cache:
-        description: 'Recalculate weights cache in a new directory'
+        description: "Recalculate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -47,10 +47,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes."
         required: false
         type: string
-        default: ''
+        default: ""
       platform:
         required: false
         type: choice

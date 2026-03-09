@@ -29,10 +29,10 @@ jobs:
   create-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      stable_matrix:   ${{ steps.ctm.outputs.stable_matrix }}
+      stable_matrix: ${{ steps.ctm.outputs.stable_matrix }}
       unstable_matrix: ${{ steps.ctm.outputs.unstable_matrix }}
-      stable_count:    ${{ steps.ctm.outputs.stable_count }}
-      unstable_count:  ${{ steps.ctm.outputs.unstable_count }}
+      stable_count: ${{ steps.ctm.outputs.stable_count }}
+      unstable_count: ${{ steps.ctm.outputs.unstable_count }}
       stable_ci_v2_matrix: ${{ steps.ctm.outputs.stable_ci_v2_matrix }}
       stable_ci_v2_count: ${{ steps.ctm.outputs.stable_ci_v2_count }}
     steps:

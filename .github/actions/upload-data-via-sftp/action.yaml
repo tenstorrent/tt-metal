@@ -19,36 +19,36 @@ inputs:
 runs:
   using: composite
   steps:
-  - name: Create key file
-    shell: bash
-    env:
-      PATH_INPUT: ${{ inputs.path }}
-      SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
-    run: |
-      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-      if [ -n "$PATH_INPUT" ]; then
-        validate_path "$PATH_INPUT" --allow-relative || exit 1
-        echo "Changing dir to $PATH_INPUT"
-        cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
-      fi
-      printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
-      chmod go-rwx id_key
-  - name: Upload files
-    shell: bash
-    env:
-      PATH_INPUT: ${{ inputs.path }}
-      SFTP_BATCHFILE: ${{ inputs.sftp-batchfile }}
-      SFTP_USERNAME: ${{ inputs.username }}
-      SFTP_HOSTNAME: ${{ inputs.hostname }}
-    run: |
-      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-      validate_hostname "$SFTP_HOSTNAME" || exit 1
-      validate_username "$SFTP_USERNAME" || exit 1
-      if [ -n "$PATH_INPUT" ]; then
-        validate_path "$PATH_INPUT" --allow-relative || exit 1
-        echo "Changing dir to $PATH_INPUT"
-        cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
-      fi
-      # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection for known hosts)
-      # For full security, consider using a pre-populated known_hosts file
-      sftp -oStrictHostKeyChecking=accept-new -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"
+    - name: Create key file
+      shell: bash
+      env:
+        PATH_INPUT: ${{ inputs.path }}
+        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+      run: |
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        if [ -n "$PATH_INPUT" ]; then
+          validate_path "$PATH_INPUT" --allow-relative || exit 1
+          echo "Changing dir to $PATH_INPUT"
+          cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
+        fi
+        printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
+        chmod go-rwx id_key
+    - name: Upload files
+      shell: bash
+      env:
+        PATH_INPUT: ${{ inputs.path }}
+        SFTP_BATCHFILE: ${{ inputs.sftp-batchfile }}
+        SFTP_USERNAME: ${{ inputs.username }}
+        SFTP_HOSTNAME: ${{ inputs.hostname }}
+      run: |
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_hostname "$SFTP_HOSTNAME" || exit 1
+        validate_username "$SFTP_USERNAME" || exit 1
+        if [ -n "$PATH_INPUT" ]; then
+          validate_path "$PATH_INPUT" --allow-relative || exit 1
+          echo "Changing dir to $PATH_INPUT"
+          cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
+        fi
+        # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection for known hosts)
+        # For full security, consider using a pre-populated known_hosts file
+        sftp -oStrictHostKeyChecking=accept-new -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"

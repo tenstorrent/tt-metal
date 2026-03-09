@@ -286,9 +286,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
@@ -308,9 +306,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
@@ -330,9 +326,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
@@ -367,9 +361,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:

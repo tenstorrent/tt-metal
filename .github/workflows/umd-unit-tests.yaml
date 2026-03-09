@@ -20,7 +20,7 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
 

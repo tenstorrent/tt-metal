@@ -1,4 +1,4 @@
-name: '[internal] tt-cnn unit tests impl'
+name: "[internal] tt-cnn unit tests impl"
 on:
   workflow_call:
     inputs:
@@ -32,15 +32,15 @@ on:
         required: true
         type: choice
         options:
-        - wormhole_b0
-        - blackhole
+          - wormhole_b0
+          - blackhole
       runner-label:
         required: true
         type: choice
         options:
-        - N150
-        - N300
-        - BH
+          - N150
+          - N300
+          - BH
       timeout:
         required: false
         type: number
@@ -60,10 +60,10 @@ jobs:
       matrix:
         os: [ubuntu-22.04]
         test-group:
-        - name: tt-cnn pipeline unit tests
-          cmd: pytest models/tt_cnn/tests/test_pipeline.py
-        - name: tt-cnn builder unit tests
-          cmd: pytest models/tt_cnn/tests/test_builder.py
+          - name: tt-cnn pipeline unit tests
+            cmd: pytest models/tt_cnn/tests/test_pipeline.py
+          - name: tt-cnn builder unit tests
+            cmd: pytest models/tt_cnn/tests/test_builder.py
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label
       }}
     runs-on: >-
@@ -82,47 +82,47 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
-      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
-      - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-    - name: 🧬 Checkout Repository
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        submodules: recursive
-        path: docker-job
-    - name: ⬇️  Setup Job
-      uses: ./docker-job/.github/actions/setup-job
-      timeout-minutes: 10
-      with:
-        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-        enable-watcher: ${{ inputs.enable-watcher || false }}
-    - name: ${{ matrix.test-group.name }} tests
-      timeout-minutes: ${{ inputs.timeout }}
-      env:
-        TEST_CMD: ${{ matrix.test-group.cmd }}
-      run: |
-        # Write command to script file to safely handle quotes and special characters
-        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-        #!/bin/bash
-        set -euo pipefail
-        SCRIPT_EOF
-        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-        chmod +x /tmp/test_cmd.sh
-        bash /tmp/test_cmd.sh
-    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      if: ${{ failure() }}
-      with:
-        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-        owner: U06ECNVR0EN   # Evan Smal
-    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-      timeout-minutes: 10
-      if: ${{ !cancelled() }}
-      with:
-        prefix: test_reports_
-    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-      if: always()
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06ECNVR0EN # Evan Smal
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: test_reports_
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

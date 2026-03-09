@@ -59,34 +59,34 @@ jobs:
           platform: ${{ inputs.platform }}
 
   build-artifact-tracy:
-      name: "Build artifact with tracy (for testing)"
-      needs: parse-platform
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: true
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    name: "Build artifact with tracy (for testing)"
+    needs: parse-platform
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   build-artifact-release:
-      name: "Build artifact for release (without tracy)"
-      needs: parse-platform
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: false
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    name: "Build artifact for release (without tracy)"
+    needs: parse-platform
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: false
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   determine-test-skus:
     runs-on: ubuntu-latest
@@ -144,7 +144,7 @@ jobs:
     with:
       platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
-      tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
+      tag-latest: ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
@@ -166,13 +166,13 @@ jobs:
     needs: build-artifact-release
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for AWS OIDC
+      id-token: write # Required for AWS OIDC
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4

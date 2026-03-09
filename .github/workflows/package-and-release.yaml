@@ -145,7 +145,6 @@ jobs:
       ignore-commits: ${{ inputs.ignore-commits || needs.release-precheck.outputs.default-ignore-commits }}
       dry-run: ${{ inputs.dry-run || false }}
 
-
   build-test-publish:
     needs: [create-tag, release-precheck]
     uses: ./.github/workflows/release-build-test-publish.yaml
@@ -194,8 +193,6 @@ jobs:
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
         uses: pypa/gh-action-pypi-publish@release/v1
-
-
 
   create-changelog:
     needs: [create-tag, release-precheck]
@@ -399,10 +396,10 @@ jobs:
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
     if: ${{ !cancelled() &&
-            needs.check-existing-release.result == 'success' &&
-            needs.check-existing-release.outputs.should-skip-release != 'true' &&
-            github.run_attempt == '1'
-        }}
+      needs.check-existing-release.result == 'success' &&
+      needs.check-existing-release.outputs.should-skip-release != 'true' &&
+      github.run_attempt == '1'
+      }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -414,11 +411,11 @@ jobs:
           output-files: tt-metalium.tar.gz
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
-      - name : Download release notes
+      - name: Download release notes
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: release-notes
-      - name : Download changelog
+      - name: Download changelog
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog

@@ -20,7 +20,7 @@ on:
         required: true
         type: string # tt-metalium or tt-nn
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
 

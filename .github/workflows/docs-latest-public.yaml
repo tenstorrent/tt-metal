@@ -114,7 +114,7 @@ jobs:
         uses: geekyeggo/delete-artifact@v5
         continue-on-error: true
         with:
-            name: github-pages
+          name: github-pages
       - name: Check the docs deployment is up
         if: ${{ github.ref == 'refs/heads/main' }}
         # TODO: Enhance this by looping over all the published versions in docs/published_versions.json

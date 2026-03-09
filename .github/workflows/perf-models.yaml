@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all

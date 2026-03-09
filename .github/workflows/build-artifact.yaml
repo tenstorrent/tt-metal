@@ -83,7 +83,7 @@ on:
         required: false
         type: string
         default: ""
-        description: 'Commit SHA to test (default: HEAD)'
+        description: "Commit SHA to test (default: HEAD)"
       use-artifacts-from-run:
         required: false
         type: string
@@ -541,7 +541,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: 'Tar files'
+      - name: "Tar files"
         if: ${{ inputs.publish-artifact }}
         run: |
           ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime"

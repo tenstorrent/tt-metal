@@ -3,11 +3,11 @@ name: "[internal] Security Library Tests"
 on:
   pull_request:
     paths:
-      - '.github/scripts/security/**'
+      - ".github/scripts/security/**"
   push:
     branches: [main]
     paths:
-      - '.github/scripts/security/**'
+      - ".github/scripts/security/**"
 
 permissions:
   contents: read

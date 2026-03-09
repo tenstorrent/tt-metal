@@ -168,9 +168,9 @@ jobs:
           find generated/cicd/ -type f
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: 'infra/requirements-infra.txt'
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: "infra/requirements-infra.txt"
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
       - name: Create JSON
@@ -224,9 +224,9 @@ jobs:
           sparse-checkout-cone-mode: true
       - uses: actions/setup-python@v5.0.0
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: 'infra/requirements-infra.txt'
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: "infra/requirements-infra.txt"
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
       - name: create dummy partial benchmark JSON

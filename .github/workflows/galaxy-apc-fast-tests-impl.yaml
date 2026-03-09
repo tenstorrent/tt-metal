@@ -1,4 +1,4 @@
-name: '[internal] Galaxy fast tests'
+name: "[internal] Galaxy fast tests"
 on:
   workflow_call:
     inputs:
@@ -33,14 +33,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [{name: Galaxy Llama3 demo tests, arch: wormhole_b0, cmd: LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-              pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc, model: llama3,
-            timeout: 10, owner_id: U053W15B6JF}                                                                                                                                                                                                                       # Djordje Ivanovic
-]
+        test-group: [
+            {
+              name: Galaxy Llama3 demo tests,
+              arch: wormhole_b0,
+              cmd: LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+                pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc,
+              model: llama3,
+              timeout: 10,
+              owner_id: U053W15B6JF,
+            }, # Djordje Ivanovic
+          ]
     runs-on:
-    - arch-wormhole_b0
-    - ${{ inputs.topology }}
-    - ${{ inputs.runner-label }}
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
+      - ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -50,43 +57,43 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
       volumes:
-      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
-      - /dev/hugepages-1G:/dev/hugepages-1G
-      - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-    - name: 🧬 Checkout Repository
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        submodules: recursive
-        path: docker-job
-    - name: ⬇️  Setup Job
-      uses: ./docker-job/.github/actions/setup-job
-      timeout-minutes: 10
-      with:
-        build-artifact-name: ${{ inputs.build-artifact-name }}
-        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-        enable-watcher: ${{ inputs.enable-watcher || false }}
-    - name: Run TG all-post-commit tests
-      timeout-minutes: ${{ matrix.test-group.timeout }}
-      env:
-        TEST_CMD: ${{ matrix.test-group.cmd }}
-      run: |
-        echo "Running command: $TEST_CMD"
-        # Write command to script file to safely handle quotes and special characters
-        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-        #!/bin/bash
-        set -euo pipefail
-        SCRIPT_EOF
-        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-        chmod +x /tmp/test_cmd.sh
-        bash /tmp/test_cmd.sh
-    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      if: ${{ failure() }}
-      with:
-        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-        owner: ${{ matrix.test-group.owner_id }}
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
+      - name: Run TG all-post-commit tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          echo "Running command: $TEST_CMD"
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}

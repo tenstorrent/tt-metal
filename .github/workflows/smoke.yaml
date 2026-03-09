@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
 
@@ -171,9 +171,9 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: ${{ !cancelled() && inputs.upload-coverage && (
-              (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
-              || (github.event_name == 'push' && github.ref_name == 'main')
-            ) }}
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
+          || (github.event_name == 'push' && github.ref_name == 'main')
+          ) }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:

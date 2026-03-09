@@ -34,7 +34,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 12 * * *'
+    - cron: "0 12 * * *"
 
 # any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
 # well, that's because of the two builds...

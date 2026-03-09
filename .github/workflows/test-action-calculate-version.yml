@@ -2,13 +2,13 @@ name: Test Calculate Version Action
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '.github/actions/calculate-version/**'
+      - ".github/actions/calculate-version/**"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '.github/actions/calculate-version/**'
+      - ".github/actions/calculate-version/**"
   workflow_dispatch:
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0  # Fetch all history for git tag operations
+          fetch-depth: 0 # Fetch all history for git tag operations
 
       # Clean up existing tags to simulate a repository with no tags
       - name: Remove all existing tags for clean test
@@ -1098,7 +1098,17 @@ jobs:
   final-test-summary:
     name: Final Test Summary
     runs-on: ubuntu-latest
-    needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits, test-dev-tag-rc-comparison]
+    needs:
+      [
+        test-calculate-version,
+        test-version-bumping,
+        test-dev-tag-versioning,
+        test-dev-tag-consistency,
+        test-edge-cases,
+        integration-test,
+        test-force-bump-and-ignore-commits,
+        test-dev-tag-rc-comparison,
+      ]
     steps:
       - name: Test summary
         run: |

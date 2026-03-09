@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       galaxy-unit:
-        description: 'Unit tests: Select all, specific model, or disabled'
+        description: "Unit tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
@@ -37,9 +37,9 @@ on:
           - prefetcher
           - distributed-ops
           - gpt-oss
-        default: 'disabled'
+        default: "disabled"
       galaxy-demo:
-        description: 'Demo tests: Select all, specific model, or disabled'
+        description: "Demo tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
@@ -63,9 +63,9 @@ on:
           - qwen3_32b_long_context
           - deepseek_v3
           - qwenimage
-        default: 'disabled'
+        default: "disabled"
       galaxy-integration:
-        description: 'Integration tests: Select all, specific model, or disabled'
+        description: "Integration tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
@@ -80,26 +80,26 @@ on:
           - flux1
           - motif
           - qwenimage
-        default: 'disabled'
+        default: "disabled"
       galaxy-perf:
-        description: 'Perf tests: Select all, specific model, or disabled'
+        description: "Perf tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
           - disabled
           - all
-#          - cnn
-#          - llama70b
-#          - llama_unit_tests
-#          - llama70b_prefill
+          #          - cnn
+          #          - llama70b
+          #          - llama_unit_tests
+          #          - llama70b_prefill
           - sd35
           - flux1-dev
           - motif
-#          - sentence_bert
+          #          - sentence_bert
           - wan2-2
           - mochi
           - qwenimage
-        default: 'disabled'
+        default: "disabled"
       platform:
         required: false
         type: choice
@@ -231,7 +231,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
-      topology: 'topology-6u'
+      topology: "topology-6u"
   galaxy-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
     needs: [build-artifact, determine-tests]

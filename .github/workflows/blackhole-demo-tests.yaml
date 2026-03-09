@@ -9,9 +9,9 @@ on:
         type: boolean
         default: false
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'llama3.1-8b'
+        default: "llama3.1-8b"
         type: choice
         options:
           - all
@@ -23,7 +23,7 @@ on:
           - flux.1-dev
           - wan2.2-t2v-a14b
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "P150 (1xP150)"
         type: choice
@@ -69,10 +69,10 @@ on:
       model:
         required: false
         type: string
-        default: 'all'
+        default: "all"
         description: "Select model to test"
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: string
@@ -92,7 +92,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 4 * * *"  # Every day at 4:00 UTC
+    - cron: "0 4 * * *" # Every day at 4:00 UTC
 
 jobs:
   generate-card-matrix:

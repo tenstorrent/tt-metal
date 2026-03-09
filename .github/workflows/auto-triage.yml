@@ -24,9 +24,8 @@ on:
       slack_channel_id:
         description: "Slack channel ID for sending notifications"
         required: false
-        default: ''
+        default: ""
         type: string
-
 
 jobs:
   auto-triage:

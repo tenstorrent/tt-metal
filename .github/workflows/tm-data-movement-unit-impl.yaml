@@ -1,4 +1,4 @@
-name: '[internal] Data Movement Unit Tests impl'
+name: "[internal] Data Movement Unit Tests impl"
 on:
   workflow_call:
     inputs:
@@ -27,7 +27,7 @@ on:
         type: boolean
       gtest_filter:
         required: false
-        default: '*'
+        default: "*"
         type: string
         description: Filter for gtest
 jobs:
@@ -38,9 +38,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-        - name: data movement
-          cmd: |
-            ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
+          - name: data movement
+            cmd: |
+              ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label
       }}
     container:
@@ -56,8 +56,8 @@ jobs:
         TT_METAL_HOME: /work
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
-      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
-      - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
       options: --device /dev/tenstorrent
     defaults:
       run:
@@ -74,49 +74,51 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
-    - name: 🧬 Checkout Repository
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        submodules: recursive
-        path: docker-job
-    - name: ⬇️  Setup Job
-      uses: ./docker-job/.github/actions/setup-job
-      timeout-minutes: 10
-      with:
-        build-artifact-name: ${{ inputs.build-artifact-name }}
-          # Unsure why these C++ tests need the wheel...  a cleanup to do separately
-          # https://github.com/tenstorrent/tt-metal/issues/20166
-        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-        enable-watcher: ${{ inputs.enable-watcher }}
-    - name: ${{ matrix.test-group.name }} tests
-        #GH Issue 16167
-      if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools')
-        }}
-      timeout-minutes: ${{ inputs.timeout }}
-      env:
-        GTEST_FILTER_INPUT: ${{ inputs.gtest_filter }}
-        TEST_CMD: ${{ matrix.test-group.cmd }}
-      run: |
-        mkdir -p generated/test_reports
-        GTEST_FILTER="$GTEST_FILTER_INPUT"
-        # Write command to script file to safely handle quotes and special characters
-        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-        #!/bin/bash
-        set -euo pipefail
-        SCRIPT_EOF
-        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-        chmod +x /tmp/test_cmd.sh
-        bash /tmp/test_cmd.sh
-    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      if: ${{ failure() }}
-      with:
-        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-        owner: U06CXU895AP   # Michael Chiou
-    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-      timeout-minutes: 10
-      if: ${{ !cancelled() }}
-      with:
-        prefix: test_reports_
-    - name: Generate gtest annotations on failure
-      uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-      if: ${{ failure() }}
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name:
+            ${{ inputs.build-artifact-name }}
+            # Unsure why these C++ tests need the wheel...  a cleanup to do separately
+            # https://github.com/tenstorrent/tt-metal/issues/20166
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
+      - name:
+          ${{ matrix.test-group.name }} tests
+          #GH Issue 16167
+        if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools')
+          }}
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GTEST_FILTER_INPUT: ${{ inputs.gtest_filter }}
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          mkdir -p generated/test_reports
+          GTEST_FILTER="$GTEST_FILTER_INPUT"
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06CXU895AP # Michael Chiou
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: test_reports_
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}

@@ -1,5 +1,5 @@
-name: 'Calculate Version'
-description: 'Calculates the next semantic version based on commit messages and tag type'
+name: "Calculate Version"
+description: "Calculates the next semantic version based on commit messages and tag type"
 inputs:
   tag-type:
     description: "Type of tag to create: 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
@@ -15,20 +15,20 @@ inputs:
     default: ""
 outputs:
   latest_semver:
-    description: 'The latest semver tag found'
+    description: "The latest semver tag found"
     value: ${{ steps.get-latest-semver.outputs.latest_semver }}
   bump_type:
-    description: 'The type of version bump determined from commits (major, minor, patch, none)'
+    description: "The type of version bump determined from commits (major, minor, patch, none)"
     value: ${{ steps.analyze-commits.outputs.bump_type }}
   new_version:
-    description: 'The calculated new version'
+    description: "The calculated new version"
     value: ${{ steps.calculate-version.outputs.new_version }}
   final_version:
-    description: 'The final version with tag type suffix (rc/dev) if applicable'
+    description: "The final version with tag type suffix (rc/dev) if applicable"
     value: ${{ steps.format-final-version.outputs.final_version }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Get latest semver tag
       id: get-latest-semver

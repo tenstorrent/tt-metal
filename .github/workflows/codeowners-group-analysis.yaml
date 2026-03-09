@@ -4,28 +4,28 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch name to analyze (e.g., feature-branch-name)'
+        description: "Branch name to analyze (e.g., feature-branch-name)"
         required: true
         type: string
       create-new-comment:
-        description: 'Create a new comment instead of editing existing one'
+        description: "Create a new comment instead of editing existing one"
         required: false
         default: false
         type: boolean
       ping-pending-owners:
-        description: 'Ping 2 random owners from pending approval groups'
+        description: "Ping 2 random owners from pending approval groups"
         required: false
         default: false
         type: boolean
       send-slack-notification:
-        description: 'Send ping notification to Slack channel'
+        description: "Send ping notification to Slack channel"
         required: false
         default: false
         type: boolean
       author-notes:
-        description: 'Optional message from PR author to include in notifications'
+        description: "Optional message from PR author to include in notifications"
         required: false
-        default: ''
+        default: ""
         type: string
   issue_comment:
     types: [created]
@@ -291,7 +291,6 @@ jobs:
             echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
             echo "pr-exists=true" >> $GITHUB_OUTPUT
           fi
-
 
   bypass-approval:
     needs: [parse-comment, find-pr]

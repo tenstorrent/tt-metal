@@ -20,15 +20,15 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         default: false
         type: boolean
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         default: false
         type: boolean
       ref:
@@ -44,9 +44,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: model},
-        ]
+        test-group: [{ name: model }]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{

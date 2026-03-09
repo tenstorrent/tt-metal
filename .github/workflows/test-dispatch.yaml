@@ -6,8 +6,8 @@ on:
         required: true
         type: choice
         options:
-        - wormhole_b0
-        - blackhole
+          - wormhole_b0
+          - blackhole
       runner-label:
         description: 'Optional: N150, N300, BH, config-t3000, topology-6u. for example:
           ["in-service", "config-t3000"]'
@@ -29,25 +29,25 @@ on:
       commit:
         required: false
         type: string
-        default: ''
-        description: 'Commit SHA to test (default: HEAD)'
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
       platform:
         required: false
         type: choice
         default: Ubuntu 22.04
         options:
-        - Ubuntu 22.04
-        - Ubuntu 24.04
+          - Ubuntu 22.04
+          - Ubuntu 24.04
         description: Platform to build and test
       build-type:
         required: false
         type: choice
         options:
-        - Release
-        - Debug
-        - RelWithDebInfo
-        - ASan
-        - TSan
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
       enable-lto:
         required: false
         type: boolean
@@ -85,68 +85,68 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
       volumes:
-      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
-      - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G'
-        || '/nohugepages:/nohugepages' }}
-      - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro'
-        || '/donotmount:/donotmount:ro' }}
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G'
+          || '/nohugepages:/nohugepages' }}
+        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro'
+          || '/donotmount:/donotmount:ro' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-    - name: 🧬 Checkout Repository
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      timeout-minutes: 10
-      with:
-        fetch-depth: 1
-        submodules: recursive
-        path: docker-job
-        ref: ${{ inputs.commit || github.sha }}
-    - name: 📦 Download Build Artifact
-      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0   # v5.0
-      timeout-minutes: 10
-      with:
-        name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-        path: docker-job
-    - name: 📂 Extract Build Files
-      timeout-minutes: 10
-      working-directory: docker-job
-      run: tar --zstd -xf ttm_any.tar.zst
-      shell: bash
-    - name: 🧪 Download Python Wheel
-      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0   # v5.0
-      timeout-minutes: 10
-      with:
-        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-        path: docker-job
-    - name: 💿 Install Wheel
-      timeout-minutes: 10
-      working-directory: docker-job
-      run: |
-        echo "📂 In directory: $(pwd)"
-        echo "📄 Files:"
-        ls -la
-        WHEEL_FILENAME=$(ls -1 *.whl)
-        echo "📦 Installing $WHEEL_FILENAME"
-        uv pip install "$WHEEL_FILENAME"
-      shell: bash
-    - name: Run regression in loop
-      env:
-        TEST_COMMAND: ${{ inputs.command }}
-      run: |
-        # SECURITY NOTE: This workflow executes user-provided commands.
-        # Only repository maintainers should be able to trigger workflow_dispatch.
-        uv pip install pytest-repeat
-        # Write command to script file to safely handle quotes and special characters
-        cat > /tmp/test_command.sh << 'SCRIPT_EOF'
-        #!/bin/bash
-        set -euo pipefail
-        SCRIPT_EOF
-        printf '%s\n' "$TEST_COMMAND" >> /tmp/test_command.sh
-        chmod +x /tmp/test_command.sh
-        bash /tmp/test_command.sh
-      shell: bash
-    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-      if: always()
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 10
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          path: docker-job
+          ref: ${{ inputs.commit || github.sha }}
+      - name: 📦 Download Build Artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          path: docker-job
+      - name: 📂 Extract Build Files
+        timeout-minutes: 10
+        working-directory: docker-job
+        run: tar --zstd -xf ttm_any.tar.zst
+        shell: bash
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: docker-job
+      - name: 💿 Install Wheel
+        timeout-minutes: 10
+        working-directory: docker-job
+        run: |
+          echo "📂 In directory: $(pwd)"
+          echo "📄 Files:"
+          ls -la
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          echo "📦 Installing $WHEEL_FILENAME"
+          uv pip install "$WHEEL_FILENAME"
+        shell: bash
+      - name: Run regression in loop
+        env:
+          TEST_COMMAND: ${{ inputs.command }}
+        run: |
+          # SECURITY NOTE: This workflow executes user-provided commands.
+          # Only repository maintainers should be able to trigger workflow_dispatch.
+          uv pip install pytest-repeat
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_command.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_COMMAND" >> /tmp/test_command.sh
+          chmod +x /tmp/test_command.sh
+          bash /tmp/test_command.sh
+        shell: bash
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

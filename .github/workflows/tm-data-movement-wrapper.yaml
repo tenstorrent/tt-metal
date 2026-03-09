@@ -4,27 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       microbenchmarks:
-        description: 'Run data movement microbenchmarks'
+        description: "Run data movement microbenchmarks"
         required: false
         default: true
         type: boolean
       run-n150:
-        description: 'Run tests on N150'
+        description: "Run tests on N150"
         required: false
         default: true
         type: boolean
       run-n300:
-        description: 'Run tests on N300'
+        description: "Run tests on N300"
         required: false
         default: true
         type: boolean
       run-p150b:
-        description: 'Run tests on P150b'
+        description: "Run tests on P150b"
         required: false
         default: true
         type: boolean
       run-perf-tests:
-        description: 'Run data movement performance tests'
+        description: "Run data movement performance tests"
         required: false
         default: true
         type: boolean
@@ -37,7 +37,7 @@ on:
           - "Ubuntu 24.04"
         description: "Platform to build and test"
       build-type:
-        description: 'Build type for the workflow'
+        description: "Build type for the workflow"
         required: false
         default: Release
         type: choice
@@ -126,12 +126,12 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
-        arch: ${{ matrix.test-group.arch }}
-        runner-label: ${{ matrix.test-group.runner-label }}
-        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-        gtest_filter: "*-*NIGHTLY_*"
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      gtest_filter: "*-*NIGHTLY_*"
   data-movement-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push') }}
     uses: ./.github/workflows/tm-data-movement-perf-impl.yaml

@@ -1,4 +1,4 @@
-name: '[internal] tt-train C++ tests impl'
+name: "[internal] tt-train C++ tests impl"
 on:
   workflow_call:
     inputs:
@@ -34,14 +34,14 @@ on:
         default: false
       gtest_filter:
         required: false
-        default: '*'
+        default: "*"
         type: string
         description: Filter for gtest
       ref:
         required: false
         type: string
-        default: ''
-        description: 'Commit SHA to test (default: HEAD)'
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 jobs:
   models:
     strategy:
@@ -49,8 +49,8 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [{name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit
-              generated/test_reports/ctest_report.xml}]
+        test-group: [{ name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit
+                generated/test_reports/ctest_report.xml }]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label
       }}
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
@@ -73,57 +73,57 @@ jobs:
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
       volumes:
-      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
-      - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-    - name: 🧬 Checkout Repository
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        ref: ${{ inputs.ref || github.sha }}
-        submodules: recursive
-        path: docker-job
-    - name: ⬇️  Setup Job
-      uses: ./docker-job/.github/actions/setup-job
-      timeout-minutes: 10
-      with:
-        build-artifact-name: ${{ inputs.build-artifact-name }}
-        enable-watcher: ${{ inputs.enable-watcher || false }}
-        enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts
-          || false }}
-        enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-        auto-triage: ${{ !inputs.enable-watcher }}
-    - name: ${{ matrix.test-group.name }} tests
-      timeout-minutes: ${{ inputs.timeout }}
-      env:
-        TEST_CMD: ${{ matrix.test-group.cmd }}
-      run: |
-        cd /work/build/tt-train
-        mkdir -p generated/test_reports
-        ldd tests/ttml_tests || true
-        # Write command to script file to safely handle quotes and special characters
-        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-        #!/bin/bash
-        set -euo pipefail
-        cd /work/build/tt-train
-        SCRIPT_EOF
-        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-        chmod +x /tmp/test_cmd.sh
-        bash /tmp/test_cmd.sh
-    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      if: ${{ failure() }}
-      with:
-        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-        owner: U07ASPTGJTS   # Denys
-    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-      timeout-minutes: 10
-      if: ${{ !cancelled() }}
-      with:
-        path: /work/build/tt-train/generated/test_reports/
-        prefix: test_reports_
-    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-      if: always()
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts
+            || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          cd /work/build/tt-train
+          mkdir -p generated/test_reports
+          ldd tests/ttml_tests || true
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          cd /work/build/tt-train
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07ASPTGJTS # Denys
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/build/tt-train/generated/test_reports/
+          prefix: test_reports_
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

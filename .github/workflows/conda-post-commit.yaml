@@ -26,15 +26,15 @@ on:
         required: true
         type: choice
         options:
-        - wormhole_b0
-        - blackhole
+          - wormhole_b0
+          - blackhole
       runner-label:
         required: true
         type: choice
         options:
-        - N150
-        - N300
-        - BH
+          - N150
+          - N300
+          - BH
       timeout:
         required: false
         type: number
@@ -55,52 +55,52 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-        - name: ttnn group 1
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 1 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 2
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 2 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 3
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 3 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 4
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 4 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 5
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 5 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 6
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 6 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 7
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 7 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 8
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 8 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 9
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 9 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 10
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 10 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 11
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 11 -m "not disable_fast_runtime_mode"
-        - name: ttnn group 12
-          cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
-            --group 12 -m "not disable_fast_runtime_mode"
-        - name: ttnn fast runtime off
-          cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
-          fast_runtime_mode_off: true
-        - name: ttnn example tests
-          cmd: ./tests/scripts/run_ttnn_examples.sh
+          - name: ttnn group 1
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 1 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 2
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 2 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 3
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 3 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 4
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 4 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 5
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 5 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 6
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 6 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 7
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 7 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 8
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 8 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 9
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 9 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 10
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 10 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 11
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 11 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 12
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }}
+              --group 12 -m "not disable_fast_runtime_mode"
+          - name: ttnn fast runtime off
+            cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
+            fast_runtime_mode_off: true
+          - name: ttnn example tests
+            cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label
       }}
     runs-on:
-    - ${{ inputs.runner-label }}
-    - in-service
+      - ${{ inputs.runner-label }}
+      - in-service
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -109,66 +109,66 @@ jobs:
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
       volumes:
-      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
-      - /dev/hugepages-1G:/dev/hugepages-1G
-      - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-    - name: Install Extra Tools
-      run: |
-        yum install -y git wget
-        git --version  # Verify installation
-    - name: ⬇️ Checkout
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        submodules: recursive
-        path: docker-job   # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-    - name: Create conda environment
-      run: |
-        source /opt/conda/etc/profile.d/conda.sh
-        conda create -y -n metalium_env python=3.10 tt-metalium accelerate click ipython multiprocess nbconvert nbformat pandas psutil pydantic pytest pytest-split pytest-timeout pyyaml seaborn torchvision transformers -c conda-forge
-    - name: Set ttnn fast runtime if exists in config
-      if: ${{ matrix.test-group.fast_runtime_mode_off }}
-      run: |
-        echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-    - name: ${{ matrix.test-group.name }} tests
-      timeout-minutes: ${{ inputs.timeout }}
-      env:
-        TEST_CMD: ${{ matrix.test-group.cmd }}
-      run: |
-        source /opt/conda/etc/profile.d/conda.sh
-        conda activate metalium_env
-        wget -O /tmp/sfpi-info.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-info.sh
-        wget -O /tmp/sfpi-version https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version
-        eval $(/tmp/sfpi-info.sh SHELL rpm)
-        wget $sfpi_url/$sfpi_filename
-        dnf -y install ./$sfpi_filename
-        rm -f $sfpi_filename /tmp/sfpi-info.sh /tmp/sfpi-version
-        export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
-        # Write command to script file to safely handle quotes and special characters
-        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-        #!/bin/bash
-        set -euo pipefail
-        source /opt/conda/etc/profile.d/conda.sh
-        conda activate metalium_env
-        export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
-        SCRIPT_EOF
-        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-        chmod +x /tmp/test_cmd.sh
-        bash /tmp/test_cmd.sh
-    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      if: ${{ failure() }}
-      with:
-        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-        owner: U07J3K6KS1K   # Bryan Lozano
-    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-      timeout-minutes: 10
-      if: ${{ !cancelled() }}
-      with:
-        prefix: test_reports_
-    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-      if: always()
+      - name: Install Extra Tools
+        run: |
+          yum install -y git wget
+          git --version  # Verify installation
+      - name: ⬇️ Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: Create conda environment
+        run: |
+          source /opt/conda/etc/profile.d/conda.sh
+          conda create -y -n metalium_env python=3.10 tt-metalium accelerate click ipython multiprocess nbconvert nbformat pandas psutil pydantic pytest pytest-split pytest-timeout pyyaml seaborn torchvision transformers -c conda-forge
+      - name: Set ttnn fast runtime if exists in config
+        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        run: |
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          source /opt/conda/etc/profile.d/conda.sh
+          conda activate metalium_env
+          wget -O /tmp/sfpi-info.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-info.sh
+          wget -O /tmp/sfpi-version https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version
+          eval $(/tmp/sfpi-info.sh SHELL rpm)
+          wget $sfpi_url/$sfpi_filename
+          dnf -y install ./$sfpi_filename
+          rm -f $sfpi_filename /tmp/sfpi-info.sh /tmp/sfpi-version
+          export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          source /opt/conda/etc/profile.d/conda.sh
+          conda activate metalium_env
+          export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07J3K6KS1K # Bryan Lozano
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: test_reports_
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

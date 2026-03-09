@@ -3,7 +3,7 @@ description: "Run commands in docker"
 
 inputs:
   image:
-    description: 'Docker image to run commands in - follows os-arch format'
+    description: "Docker image to run commands in - follows os-arch format"
     required: false
     default: ubuntu-20.04-amd64
 runs:

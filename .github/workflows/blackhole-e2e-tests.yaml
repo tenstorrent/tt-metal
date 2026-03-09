@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       run_bh_multi_card_unit_tests:
-        description: 'Run Blackhole multi card unit tests'
+        description: "Run Blackhole multi card unit tests"
         required: false
         type: boolean
         default: true
       bh_multi_card_system_type:
-        description: 'Select system type to test (for multi-card unit tests only)'
+        description: "Select system type to test (for multi-card unit tests only)"
         required: false
         default: "all"
         type: choice
@@ -21,12 +21,12 @@ on:
           - P300 (1xP300)
           - QuietBox 2 (2xP300)
       run_grid_override_tests:
-        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
+        description: "Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)"
         required: false
         type: boolean
         default: false
       run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole ttnn stress tests'
+        description: "Run Blackhole ttnn stress tests"
         required: false
         type: boolean
         default: false
@@ -57,22 +57,22 @@ on:
   workflow_call:
     inputs:
       run_bh_multi_card_unit_tests:
-        description: 'Run Blackhole multi card unit tests'
+        description: "Run Blackhole multi card unit tests"
         required: false
         type: boolean
         default: true
       bh_multi_card_system_type:
-        description: 'Select system type to test (for multi-card unit tests only)'
+        description: "Select system type to test (for multi-card unit tests only)"
         required: false
         default: "all"
         type: string
       run_grid_override_tests:
-        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
+        description: "Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)"
         required: false
         type: boolean
         default: false
       run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole ttnn stress tests'
+        description: "Run Blackhole ttnn stress tests"
         required: false
         type: boolean
         default: false
@@ -92,7 +92,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
+    - cron: "0 */8 * * *" # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
   build-artifact:

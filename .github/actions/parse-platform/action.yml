@@ -1,48 +1,48 @@
-name: 'Parse Platform'
+name: "Parse Platform"
 description: 'Parses platform dropdown (e.g., "Ubuntu 22.04") into distro, version, and toolchain'
 
 inputs:
   platform:
     description: 'Platform string (e.g., "Ubuntu 22.04", "Ubuntu 24.04")'
     required: false
-    default: ''
+    default: ""
   distro:
-    description: 'Direct distro input (used when platform is not set)'
+    description: "Direct distro input (used when platform is not set)"
     required: false
-    default: ''
+    default: ""
   version:
-    description: 'Direct version input (used when platform is not set)'
+    description: "Direct version input (used when platform is not set)"
     required: false
-    default: ''
+    default: ""
   default-distro:
-    description: 'Default distro if neither platform nor distro is set'
+    description: "Default distro if neither platform nor distro is set"
     required: false
-    default: 'ubuntu'
+    default: "ubuntu"
   default-version:
-    description: 'Default version if neither platform nor version is set'
+    description: "Default version if neither platform nor version is set"
     required: false
-    default: '22.04'
+    default: "22.04"
   enable-lto:
     description: 'Override LTO setting (true/false/auto). If "auto" or empty, uses platform default'
     required: false
-    default: 'auto'
+    default: "auto"
 
 outputs:
   distro:
-    description: 'Parsed distribution (ubuntu)'
+    description: "Parsed distribution (ubuntu)"
     value: ${{ steps.parse.outputs.distro }}
   version:
-    description: 'Parsed version (22.04, 24.04)'
+    description: "Parsed version (22.04, 24.04)"
     value: ${{ steps.parse.outputs.version }}
   toolchain:
-    description: 'Appropriate toolchain for the platform'
+    description: "Appropriate toolchain for the platform"
     value: ${{ steps.parse.outputs.toolchain }}
   enable-lto:
-    description: 'Whether LTO should be enabled for this platform'
+    description: "Whether LTO should be enabled for this platform"
     value: ${{ steps.parse.outputs.enable-lto }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - id: parse
       shell: bash

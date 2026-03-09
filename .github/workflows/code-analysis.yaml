@@ -163,7 +163,7 @@ jobs:
   # Full scan: single job that analyzes everything
   clang-tidy-full:
     name: 🤖 Clang Tidy (Full)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -177,15 +177,15 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'true'
-      merge-base: ''
-      prereq-targets: ''
-      scan-targets: ''
+      do-full-scan: "true"
+      merge-base: ""
+      prereq-targets: ""
+      scan-targets: ""
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
     name: 🤖 Clang Tidy (Metalium)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -199,14 +199,14 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: ''
-      scan-targets: 'tt_metal'
+      prereq-targets: ""
+      scan-targets: "tt_metal"
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -220,14 +220,14 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: 'tt_metal'
-      scan-targets: 'ttnn'
+      prereq-targets: "tt_metal"
+      scan-targets: "ttnn"
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -241,14 +241,14 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: 'tt_metal ttnn'
-      scan-targets: ''
+      prereq-targets: "tt_metal ttnn"
+      scan-targets: ""
 
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
-    needs: [ build-docker-image ]
+    needs: [build-docker-image]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
@@ -379,13 +379,12 @@ jobs:
 
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
-    needs: [ clang-static-analyzer ]
+    needs: [clang-static-analyzer]
     # Only publish on full scans (skip when debug-file-filter is used)
     if: >-
       ${{ always() && needs.clang-static-analyzer.result == 'success' &&
           inputs.debug-file-filter == '' }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Download CodeChecker HTML report
         uses: actions/download-artifact@v4

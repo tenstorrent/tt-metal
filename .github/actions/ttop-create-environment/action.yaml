@@ -1,31 +1,31 @@
-name: 'Create SSH Environment'
-description: 'A composable action to create an SSH environment'
+name: "Create SSH Environment"
+description: "A composable action to create an SSH environment"
 
 inputs:
   environmentName:
-    description: 'Environment name'
+    description: "Environment name"
     required: true
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
   workerImage:
-    description: 'Worker image'
+    description: "Worker image"
     required: true
   ranks:
-    description: 'Node-to-rank JSON mapping'
+    description: "Node-to-rank JSON mapping"
     required: false
-    default: ''
+    default: ""
   sharedVolumeEnabled:
-    description: 'Whether to mount volume shared with the runner (multihost-with-nfs runner required)'
+    description: "Whether to mount volume shared with the runner (multihost-with-nfs runner required)"
     required: false
-    default: 'false'
+    default: "false"
   timeout:
-    description: 'Timeout duration'
+    description: "Timeout duration"
     required: false
-    default: '5m'
+    default: "5m"
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Generate SSH key
       shell: bash

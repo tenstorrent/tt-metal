@@ -4,45 +4,45 @@ inputs:
   build-artifact-name:
     required: false
     description: Name of the build artifact
-    default: ''
+    default: ""
   wheel-artifact-name:
     required: false
     description: Name of the wheel artifact
-    default: ''
+    default: ""
   path:
     required: false
     description: Where to checkout
     default: docker-job
   enable-watcher:
-    description: 'Enable watcher'
+    description: "Enable watcher"
     default: false
     type: boolean
   enable-lightweight-kernel-asserts:
-    description: 'Enable lightweight kernel asserts'
+    description: "Enable lightweight kernel asserts"
     default: false
     type: boolean
   enable-llk-asserts:
-    description: 'Enable LLK asserts'
+    description: "Enable LLK asserts"
     default: false
     type: boolean
   enable-kernel-ccache:
-    description: 'Enable kernel ccache for JIT compilation at runtime'
+    description: "Enable kernel ccache for JIT compilation at runtime"
     default: false
     type: boolean
   redis-ccache-storage:
-    description: 'Redis storage for kernel ccache (runtime JIT compilation). Uses separate Redis instance from build ccache (REDIS_USER/REDIS_PASSWORD) to allow different retention/performance policies. Format: redis://user:password@host:port|read-only=false'
+    description: "Redis storage for kernel ccache (runtime JIT compilation). Uses separate Redis instance from build ccache (REDIS_USER/REDIS_PASSWORD) to allow different retention/performance policies. Format: redis://user:password@host:port|read-only=false"
     required: false
-    default: ''
+    default: ""
   use-evaluation-image:
-    description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
+    description: "Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image"
     default: false
     type: boolean
   auto-triage:
-    description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
+    description: "Enable detection of timeout on fast dispatch and automatically call tt-triage"
     default: true
     type: boolean
   hang-detection-timeout:
-    description: 'Timeout in seconds when dispatcher is not making progress before tt-triage is called automatically'
+    description: "Timeout in seconds when dispatcher is not making progress before tt-triage is called automatically"
     default: 5.0
     type: float
 runs:

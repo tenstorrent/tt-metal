@@ -4,15 +4,15 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '*/10 * * * *' # every 10 minutes
+    - cron: "*/10 * * * *" # every 10 minutes
   workflow_dispatch:
     inputs:
       days:
-        description: 'Number of days to look back for workflow runs'
+        description: "Number of days to look back for workflow runs"
         required: false
-        default: '15'
+        default: "15"
       force-fresh:
-        description: 'Force fresh fetch (skip using past artifacts and redownload everything)'
+        description: "Force fresh fetch (skip using past artifacts and redownload everything)"
         required: false
         type: boolean
         default: false
@@ -238,7 +238,7 @@ jobs:
           gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
-          alert-all: 'false'
+          alert-all: "false"
       - name: Upload status changes artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -254,7 +254,6 @@ jobs:
             ${{ steps.analyze.outputs.regressed_workflows_path }}
             ${{ steps.analyze.outputs.alert_all_message_path }}
           retention-days: 1
-
 
   handle-failures:
     needs: analyze-data

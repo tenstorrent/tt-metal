@@ -20,15 +20,15 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         default: false
         type: boolean
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         default: false
         type: boolean
 
@@ -71,9 +71,9 @@ jobs:
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            mkdir -p generated/test_reports
-            uv pip install -r tools/triage/requirements.txt
-            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v ./tools/tests/triage/
+          mkdir -p generated/test_reports
+          uv pip install -r tools/triage/requirements.txt
+          TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v ./tools/tests/triage/
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

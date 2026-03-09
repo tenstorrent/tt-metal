@@ -3,17 +3,17 @@ on:
   workflow_dispatch:
     inputs:
       t3k_multihost:
-        description: 'Run T3K multi-host job'
+        description: "Run T3K multi-host job"
         required: false
         default: true
         type: boolean
       glx_2x_multihost:
-        description: 'Run Galaxy 2x multi-host job'
+        description: "Run Galaxy 2x multi-host job"
         required: false
         default: true
         type: boolean
       glx_4x_unit_tests:
-        description: 'Run Galaxy 4x unit tests'
+        description: "Run Galaxy 4x unit tests"
         required: false
         default: false
         type: boolean
@@ -42,8 +42,8 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
-    - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
+    - cron: "0 4 * * *" # 8 PM PST (4 AM UTC) - 4x6U schedule
+    - cron: "0 */3 * * *" # Every 3 hours - T3K and 2x6U schedule
 
 run-name: >
   ${{ github.event_name == 'schedule' &&
