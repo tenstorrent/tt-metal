@@ -362,13 +362,17 @@ void Inspector::emit_debug_entry(
         const auto workload_id = mesh_workload->get_id();
 
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
-        auto pos = data->runtime_entries_write_pos.load(std::memory_order_relaxed);
+        auto pos = data->runtime_entries_write_pos;
         auto& slot = data->runtime_entries[pos % inspector::Data::kRuntimeEntriesCapacity];
         slot.workload_id = workload_id;
         slot.runtime_id = runtime_id;
         slot.operation_name = operation_name;
         slot.tensor_specs = std::move(tensor_specs);
-        data->runtime_entries_write_pos.store(pos + 1, std::memory_order_relaxed);
+        if (pos == 2 * inspector::Data::kRuntimeEntriesCapacity) {
+            data->runtime_entries_write_pos = inspector::Data::kRuntimeEntriesCapacity + 1;
+        } else {
+            data->runtime_entries_write_pos++;
+        }
 
         if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
             data->logger.log_runtime_entry(slot);
@@ -506,7 +510,7 @@ bool IsEnabled() {
     return Inspector::is_enabled();
 }
 
-bool CaptureTensorSpecs() {
+bool ShouldCaptureTensorSpecs() {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_tensor_specs();
 }
 

@@ -1203,9 +1203,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (disabled). Set to 1 to enable.
         // Usage: export TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS=1
         case EnvVarID::TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS:
-            this->inspector_settings.capture_tensor_specs = true;
-            if (strcmp(value, "0") == 0) {
-                this->inspector_settings.capture_tensor_specs = false;
+            this->inspector_settings.capture_tensor_specs = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.capture_tensor_specs = true;
             }
             break;
 

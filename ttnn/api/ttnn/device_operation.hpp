@@ -198,9 +198,12 @@ void enqueue_mesh_workload(
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
         std::vector<TensorSpec> spec_copies;
-        if (tt::tt_metal::experimental::inspector::CaptureTensorSpecs()) {
+        if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
+            size_t specs_count = tt::stl::reflection::count_object_of_type<Tensor>(tensor_args);
+            spec_copies.reserve(specs_count);
+
             tt::stl::reflection::visit_object_of_type<Tensor>(
-                [&](const Tensor& t) { spec_copies.push_back(t.tensor_spec()); }, tensor_args);
+                [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(

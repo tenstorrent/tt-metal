@@ -183,7 +183,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 void Data::rpc_get_mesh_workload_runtime_entries(
     rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
     std::lock_guard<std::mutex> lock(runtime_entries_mutex);
-    auto write_pos = runtime_entries_write_pos.load(std::memory_order_relaxed);
+    auto write_pos = runtime_entries_write_pos;
     size_t count = std::min(write_pos, kRuntimeEntriesCapacity);
     size_t start = write_pos - count;
 

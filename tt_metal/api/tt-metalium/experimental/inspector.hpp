@@ -17,7 +17,7 @@ namespace tt::tt_metal::experimental::inspector {
 bool IsEnabled();
 
 // Whether tensor spec capture is enabled on op dispatch (checks rtoptions).
-bool CaptureTensorSpecs();
+bool ShouldCaptureTensorSpecs();
 
 // Emit a debug entry for a mesh workload execution, capturing the operation name and tensor specs.
 void EmitMeshWorkloadDebugEntry(
