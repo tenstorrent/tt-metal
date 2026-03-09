@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include <type_traits>
 
 namespace {
 struct kernel_args {
@@ -23,16 +22,16 @@ struct kernel_params {
     TensorAccessorArgs<0> src_args;
 };
 
-inline constexpr kernel_args get_args() {
+inline kernel_args get_args() {
     return kernel_args{
         .src_addr = get_arg_val<uint32_t>(0),
 #ifdef STRIDED_L1_ACCESS
         .total_pages = get_arg_val<uint32_t>(1),
         .bank_id = get_arg_val<uint32_t>(2),
-        .stride = get_arg_val<uint32_t>(3)
+        .stride = get_arg_val<uint32_t>(3),
 #else
         .num_pages = get_arg_val<uint32_t>(1),
-        .start_id = get_arg_val<uint32_t>(2)
+        .start_id = get_arg_val<uint32_t>(2),
 #endif
     };
 }
@@ -46,6 +45,7 @@ inline constexpr kernel_params get_params() {
 #endif
         .src_args{},
     };
+}
 
 }  // namespace
 
@@ -57,7 +57,7 @@ void kernel_main() {
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
 
-    const auto s = TensorsAccessor(params.src_args, args.src_addr, page_bytes);
+    const auto s = TensorAccessor(params.src_args, args.src_addr, page_bytes);
 
 #ifdef STRIDED_L1_ACCESS
     // Strided access: each core reads only from its local L1 bank.

@@ -22,7 +22,7 @@ struct kernel_params {
     uint32_t batch_size;
 };
 
-constexpr inline kernel_args get_kernel_args() {
+inline kernel_args get_kernel_args() {
     return {
         .dst_addr = get_arg_val<uint32_t>(0),
 #ifdef STRIDED_L1_ACCESS
