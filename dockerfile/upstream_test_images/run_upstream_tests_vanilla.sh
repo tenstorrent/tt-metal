@@ -24,7 +24,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 test_suite_bh_umd_unit_tests() {
     ./build/test/umd/blackhole/unit_tests
     # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
-    gtest_filter="-ApiClusterTest.DifferentConstructors"
+    gtest_filter="-TestTTVisibleDevices.DifferentConstructors"
     ./build/test/umd/api/api_tests --gtest_filter="$gtest_filter"
 }
 
