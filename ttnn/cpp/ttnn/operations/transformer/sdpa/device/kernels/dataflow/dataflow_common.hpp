@@ -960,7 +960,6 @@ void write_block(
     uint32_t barrier_count = 0;
 
     cb_wait_front(cb_id, num_tiles);
-
     for (uint32_t row = 0; row < dst_rows; ++row) {
         uint32_t read_ptr = base_read_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < dst_cols; ++col) {
