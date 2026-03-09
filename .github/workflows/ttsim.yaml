@@ -290,7 +290,8 @@ jobs:
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          ${{ matrix.test-group.cmd }} --lf --tb=long -v ${{ steps.skip-list.outputs.skip_args }}
+          ${{ matrix.test-group.cmd }} --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
+          exit 1
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
