@@ -36,6 +36,13 @@ enum class EltwiseBinaryType : std::uint8_t
     ELWSUB,
 };
 
+enum class EltwiseBinaryReuseDestType
+{
+    NONE         = 0,
+    DEST_TO_SRCA = 1,
+    DEST_TO_SRCB = 2,
+};
+
 // Broadcasts only occur on SrcB
 enum class BroadcastType : std::uint8_t
 {
