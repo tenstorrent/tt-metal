@@ -142,11 +142,48 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
+    allocations_unsafe as _trace_allocations_unsafe,
+    mark_allocations_safe as _mark_trace_allocations_safe,
+    mark_allocations_unsafe as _mark_trace_allocations_unsafe,
 )
 
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
+
+
+def mark_trace_allocations_safe(mesh_device):
+    """Mark allocator safe for temporary allocations while traces are live."""
+    return _mark_trace_allocations_safe(mesh_device)
+
+
+def mark_trace_allocations_unsafe(mesh_device):
+    """Restore allocator unsafe mode for live-trace protection."""
+    return _mark_trace_allocations_unsafe(mesh_device)
+
+
+def trace_allocations_unsafe(mesh_device):
+    """Return True if allocator is currently in unsafe/live-trace mode."""
+    return _trace_allocations_unsafe(mesh_device)
+
+
+@contextlib.contextmanager
+def trace_allocation_safe_scope(mesh_device):
+    """
+    Temporarily allow allocations while traces are live.
+
+    Use this only around allocations you know are safe relative to trace replay.
+    """
+    was_unsafe = trace_allocations_unsafe(mesh_device)
+    mark_trace_allocations_safe(mesh_device)
+    try:
+        yield
+    finally:
+        if was_unsafe:
+            mark_trace_allocations_unsafe(mesh_device)
+        else:
+            mark_trace_allocations_safe(mesh_device)
+
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,

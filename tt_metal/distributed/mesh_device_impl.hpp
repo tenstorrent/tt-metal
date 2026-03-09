@@ -146,11 +146,6 @@ private:
     // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
     std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
@@ -174,6 +169,13 @@ public:
 
     MeshDeviceImpl(MeshDeviceImpl&&) = delete;
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
+
+    // Exposed for trace allocation safety control from higher-level APIs.
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void mark_allocations_unsafe();
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void mark_allocations_safe();
+    bool allocations_unsafe() const;
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
