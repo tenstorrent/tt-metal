@@ -42,6 +42,50 @@ def _debug_mtp_enabled() -> bool:
     return os.getenv("DEBUG_MTP", "0") == "1"
 
 
+def _build_verify_alias_page_table_host(
+    base_page_table: torch.Tensor,
+    num_prompts: int,
+    verify_offset: int,
+    prompt_indices: List[int] | None = None,
+    interleaved: bool = False,
+) -> torch.Tensor:
+    """Build a host-side aliased page table for verify batching."""
+    if num_prompts <= 0:
+        return base_page_table.clone()
+    if base_page_table.dim() != 2:
+        raise RuntimeError(f"Unexpected page table rank for MTP verify aliasing: {tuple(base_page_table.shape)}")
+
+    alias_page_table = base_page_table.clone().to(torch.int32)
+    num_rows = int(alias_page_table.shape[0])
+    if num_rows <= 0:
+        raise RuntimeError("Page table has zero rows; cannot build MTP verify aliasing.")
+
+    prompt_indices_for_alias = prompt_indices
+    if not interleaved and prompt_indices_for_alias is None:
+        prompt_indices_for_alias = list(range(num_prompts))
+
+    if interleaved:
+        if prompt_indices_for_alias is None:
+            for row in range(1, num_rows, 2):
+                alias_page_table[row] = alias_page_table[row - 1]
+        else:
+            for i in prompt_indices_for_alias:
+                if i < 0:
+                    continue
+                src_row = (2 * i) % num_rows
+                dst_row = (src_row + 1) % num_rows
+                alias_page_table[dst_row] = alias_page_table[src_row]
+    else:
+        for i in prompt_indices_for_alias:
+            if i < 0 or i >= num_prompts:
+                continue
+            src_row = i % num_rows
+            dst_row = (verify_offset + i) % num_rows
+            alias_page_table[dst_row] = alias_page_table[src_row]
+
+    return alias_page_table
+
+
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Return a copy of the HF state_dict with leading 'model.' stripped.
 
@@ -807,16 +851,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self.base_page_table_host is None:
             raise RuntimeError("Base page table host tensor is not initialized.")
         base_page_table = self.base_page_table_host.to(torch.int32)
-        if base_page_table.dim() != 2:
-            raise RuntimeError(f"Unexpected page table rank for MTP verify aliasing: {tuple(base_page_table.shape)}")
-
-        alias_page_table = base_page_table.clone()
-        num_rows = int(alias_page_table.shape[0])
-        if num_rows <= 0:
-            raise RuntimeError("Page table has zero rows; cannot build MTP verify aliasing.")
-
-        if prompt_indices is None:
-            prompt_indices = list(range(num_prompts))
+        alias_page_table = _build_verify_alias_page_table_host(
+            base_page_table=base_page_table,
+            num_prompts=num_prompts,
+            verify_offset=verify_offset,
+            prompt_indices=prompt_indices,
+            interleaved=interleaved,
+        )
         debug_page_table = _debug_mtp_enabled()
         if debug_page_table:
             logger.info(
@@ -824,23 +865,27 @@ class DeepseekGenerator(WarmupForwardMixin):
                 tuple(int(dim) for dim in base_page_table.shape),
                 base_page_table.tolist(),
             )
-        if interleaved:
-            for row in range(1, num_rows, 2):
-                alias_page_table[row] = alias_page_table[row - 1]
-                if debug_page_table:
-                    logger.info(
-                        "MTP interleaved alias: row={} -> row={}",
-                        row,
-                        row - 1,
-                    )
-        else:
-            for i in prompt_indices:
-                if i < 0 or i >= num_prompts:
-                    continue
-                src_row = i % num_rows
-                dst_row = (verify_offset + i) % num_rows
-                alias_page_table[dst_row] = alias_page_table[src_row]
-                if debug_page_table:
+            num_rows = int(alias_page_table.shape[0])
+            if interleaved:
+                if prompt_indices is None:
+                    for row in range(1, num_rows, 2):
+                        logger.info("MTP interleaved alias: row={} -> row={}", row, row - 1)
+                else:
+                    for i in prompt_indices:
+                        if i < 0:
+                            continue
+                        src_row = (2 * i) % num_rows
+                        dst_row = (src_row + 1) % num_rows
+                        logger.info(
+                            "MTP interleaved selective alias: prompt_idx={} row={} -> row={}", i, dst_row, src_row
+                        )
+            else:
+                prompt_indices_to_log = prompt_indices if prompt_indices is not None else list(range(num_prompts))
+                for i in prompt_indices_to_log:
+                    if i < 0 or i >= num_prompts:
+                        continue
+                    src_row = i % num_rows
+                    dst_row = (verify_offset + i) % num_rows
                     logger.info(
                         "MTP verify alias: prompt_idx={} src_row={} -> verify_row={} (verify_offset={})",
                         i,
@@ -881,16 +926,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self.mtp_page_table_host is None:
             raise RuntimeError("MTP base page table host tensor is not initialized.")
         base_page_table = self.mtp_page_table_host.to(torch.int32)
-        if base_page_table.dim() != 2:
-            raise RuntimeError(f"Unexpected MTP page table rank: {tuple(base_page_table.shape)}")
-
-        alias_page_table = base_page_table.clone()
-        num_rows = int(alias_page_table.shape[0])
-        if num_rows <= 0:
-            raise RuntimeError("MTP page table has zero rows; cannot build verify aliasing.")
-
-        if prompt_indices is None:
-            prompt_indices = list(range(num_prompts))
+        alias_page_table = _build_verify_alias_page_table_host(
+            base_page_table=base_page_table,
+            num_prompts=num_prompts,
+            verify_offset=verify_offset,
+            prompt_indices=prompt_indices,
+            interleaved=interleaved,
+        )
         debug_page_table = _debug_mtp_enabled()
         if debug_page_table:
             logger.info(
@@ -898,23 +940,30 @@ class DeepseekGenerator(WarmupForwardMixin):
                 tuple(int(dim) for dim in base_page_table.shape),
                 base_page_table.tolist(),
             )
-        if interleaved:
-            for row in range(1, num_rows, 2):
-                alias_page_table[row] = alias_page_table[row - 1]
-                if debug_page_table:
-                    logger.info(
-                        "MTP interleaved MTP alias: row={} -> row={}",
-                        row,
-                        row - 1,
-                    )
-        else:
-            for i in prompt_indices:
-                if i < 0 or i >= num_prompts:
-                    continue
-                src_row = i % num_rows
-                dst_row = (verify_offset + i) % num_rows
-                alias_page_table[dst_row] = alias_page_table[src_row]
-                if debug_page_table:
+            num_rows = int(alias_page_table.shape[0])
+            if interleaved:
+                if prompt_indices is None:
+                    for row in range(1, num_rows, 2):
+                        logger.info("MTP interleaved MTP alias: row={} -> row={}", row, row - 1)
+                else:
+                    for i in prompt_indices:
+                        if i < 0:
+                            continue
+                        src_row = (2 * i) % num_rows
+                        dst_row = (src_row + 1) % num_rows
+                        logger.info(
+                            "MTP interleaved selective MTP alias: prompt_idx={} row={} -> row={}",
+                            i,
+                            dst_row,
+                            src_row,
+                        )
+            else:
+                prompt_indices_to_log = prompt_indices if prompt_indices is not None else list(range(num_prompts))
+                for i in prompt_indices_to_log:
+                    if i < 0 or i >= num_prompts:
+                        continue
+                    src_row = i % num_rows
+                    dst_row = (verify_offset + i) % num_rows
                     logger.info(
                         "MTP verify MTP alias: prompt_idx={} src_row={} -> verify_row={} (verify_offset={})",
                         i,

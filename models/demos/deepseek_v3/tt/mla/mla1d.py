@@ -2036,7 +2036,15 @@ class MLA1D(AbstractModule):
                 shard_spec,
             )
 
-        if per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
+        if not alias_mask_any:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        elif per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
             _log_split_fallback("divisibility")
             ttnn.experimental.paged_update_cache(
                 kvpe_cache,

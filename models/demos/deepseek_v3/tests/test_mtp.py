@@ -12,8 +12,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
+from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
+from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
+from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator, _build_verify_alias_page_table_host
+from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 
 REFERENCE_DIR = Path(__file__).with_name("reference_io")
 DEFAULT_NUM_STEPS = 128
@@ -29,6 +34,211 @@ DEFAULT_VERIFY_STEPS = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", "16"))
 
 def _debug_mtp_enabled() -> bool:
     return os.getenv("DEBUG_MTP", "0") == "1"
+
+
+def test_mtp_verify_page_table_selective_interleaved_aliasing_host():
+    """Single-prompt selective aliasing should only alias row1->row0 and leave row3 untouched."""
+    base_page_table = torch.tensor(
+        [
+            [0, 1],
+            [10, 11],
+            [20, 21],
+            [30, 31],
+        ],
+        dtype=torch.int32,
+    )
+
+    alias_single = _build_verify_alias_page_table_host(
+        base_page_table=base_page_table,
+        num_prompts=1,
+        verify_offset=0,
+        prompt_indices=[0],
+        interleaved=True,
+    )
+    expected_single = torch.tensor(
+        [
+            [0, 1],
+            [0, 1],
+            [20, 21],
+            [30, 31],
+        ],
+        dtype=torch.int32,
+    )
+    assert torch.equal(alias_single, expected_single)
+
+    alias_all = _build_verify_alias_page_table_host(
+        base_page_table=base_page_table,
+        num_prompts=2,
+        verify_offset=0,
+        prompt_indices=None,
+        interleaved=True,
+    )
+    expected_all = torch.tensor(
+        [
+            [0, 1],
+            [0, 1],
+            [20, 21],
+            [20, 21],
+        ],
+        dtype=torch.int32,
+    )
+    assert torch.equal(alias_all, expected_all)
+
+
+def _run_reference_decode_replay_consistency(
+    mesh_device,
+    model_path,
+    cache_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    mtp_mode: str,
+):
+    num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
+    steps_to_check = min(int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", str(DEFAULT_VERIFY_STEPS))), num_steps)
+    mesh = mesh_device
+    reference_path = _get_reference_path(mesh, num_steps)
+    if not reference_path.exists():
+        pytest.skip(
+            f"Missing MTP reference IO at {reference_path}. "
+            "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
+        )
+
+    payload = torch.load(reference_path, map_location="cpu")
+    metadata = payload.get("metadata", {})
+    if tuple(metadata.get("mesh_shape", ())) != tuple(mesh.shape):
+        pytest.skip(
+            f"Reference IO mesh shape {metadata.get('mesh_shape')} does not match current mesh shape {tuple(mesh.shape)}."
+        )
+
+    next_tokens = payload["next_tokens"].to(torch.int32)
+    start_tokens = payload["start_tokens"].to(torch.long)
+    steps_to_check = min(steps_to_check, int(next_tokens.shape[0]))
+
+    with _prepare_generator(
+        mesh_device=mesh,
+        model_path=model_path,
+        cache_path=cache_path,
+        force_recalculate=force_recalculate_weight_config,
+        mtp_mode=mtp_mode,
+    ) as gen:
+        _assert_reference_start_tokens(payload, gen, context=f"MTP reference decode replay ({mtp_mode})")
+
+        positions = torch.zeros((gen.batch_size,), dtype=torch.int32)
+        tokens_step = start_tokens.clone()
+        mismatch_rows: list[str] = []
+        first_mismatch_step = None
+
+        for step in range(steps_to_check):
+            logits = (
+                gen._decode_step(
+                    tokens_step=tokens_step,
+                    positions=positions,
+                    batch_size_per_row=gen.batch_size_per_row,
+                    page_tables=gen._get_page_tables(),
+                    return_hidden=False,
+                )
+                .squeeze(0)
+                .squeeze(0)
+            )
+            pred_tokens = torch.argmax(logits, dim=-1).to(torch.int32)
+            gt_tokens = next_tokens[step].to(torch.int32)
+            mismatch_mask = pred_tokens != gt_tokens
+            mismatch_count = int(mismatch_mask.sum().item())
+
+            row = (
+                f"step={step} pos={int(positions[0].item())} mismatch_count={mismatch_count} "
+                f"sample_pred={int(pred_tokens[0].item())} sample_gt={int(gt_tokens[0].item())}"
+            )
+            mismatch_rows.append(row)
+            logger.info("MTP reference replay [{}] {}", mtp_mode, row)
+
+            if mismatch_count > 0 and first_mismatch_step is None:
+                first_mismatch_step = step
+                mismatch_idx = mismatch_mask.nonzero(as_tuple=False).flatten()[:8].tolist()
+                details = [
+                    f"uid={uid} pred={int(pred_tokens[uid].item())} gt={int(gt_tokens[uid].item())}"
+                    for uid in mismatch_idx
+                ]
+                logger.info(
+                    "MTP reference replay [{}] first mismatch step={} details={}",
+                    mtp_mode,
+                    step,
+                    details,
+                )
+
+            tokens_step = gt_tokens.to(torch.long)
+            positions += 1
+
+        logger.info(
+            "MTP reference replay [{}] summary: steps_checked={} first_mismatch_step={}",
+            mtp_mode,
+            steps_to_check,
+            first_mismatch_step,
+        )
+        assert first_mismatch_step is None, (
+            f"Fresh base decode ({mtp_mode}) does not reproduce the stored reference stream. "
+            f"first_mismatch_step={first_mismatch_step}\n" + "\n".join(mismatch_rows)
+        )
+
+
+@pytest.mark.timeout(TIMEOUT_S)
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": TRACE_REGION_SIZE,
+        }
+    ],
+    indirect=True,
+)
+def test_mtp_reference_decode_replay_consistency(
+    mesh_device,
+    model_path,
+    cache_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+):
+    """Fresh base decode under mtp=auto should reproduce the stored greedy reference stream."""
+    _run_reference_decode_replay_consistency(
+        mesh_device,
+        model_path,
+        cache_path,
+        force_recalculate_weight_config,
+        set_deterministic_env,
+        mtp_mode="auto",
+    )
+
+
+@pytest.mark.timeout(TIMEOUT_S)
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": TRACE_REGION_SIZE,
+        }
+    ],
+    indirect=True,
+)
+def test_mtp_reference_decode_replay_consistency_mtp_off(
+    mesh_device,
+    model_path,
+    cache_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+):
+    """Fresh base decode under mtp=off should reproduce the stored greedy reference stream."""
+    _run_reference_decode_replay_consistency(
+        mesh_device,
+        model_path,
+        cache_path,
+        force_recalculate_weight_config,
+        set_deterministic_env,
+        mtp_mode="off",
+    )
 
 
 def _get_reference_path(mesh_device: ttnn.MeshDevice, num_steps: int) -> Path:
@@ -173,6 +383,220 @@ def _run_mtp_step(
     ttnn.deallocate(rope_tensors["sin_matrix"])
 
     return logits
+
+
+def _iter_decode_block_cfgs(cfg):
+    layer_idx = 0
+    for block_cfg in cfg["mlp_decoder_block"]:
+        yield layer_idx, "mlp", DecoderBlock2D, block_cfg
+        layer_idx += 1
+    for block_cfg in cfg["moe_decoder_block"]:
+        yield layer_idx, "moe", MoEDecoderBlock2D, block_cfg
+        layer_idx += 1
+
+
+def _get_decode_kv_caches(gen: DeepseekGenerator) -> list[ttnn.Tensor]:
+    assert gen.model_run_config_decode is not None, "Decode run config is not initialized"
+    kv_caches: list[ttnn.Tensor] = []
+    for decoder_type in ("mlp_decoder_block", "moe_decoder_block"):
+        decoder_blocks = gen.model_run_config_decode.get(decoder_type, [])
+        for block_cfg in decoder_blocks:
+            kv_caches.append(block_cfg["mla"]["mla1d"]["kvpe_cache"])
+    return kv_caches
+
+
+def _set_kv_caches_on_run_config(run_config, kv_caches: list[ttnn.Tensor]) -> None:
+    cache_idx = 0
+    for decoder_type in ("mlp_decoder_block", "moe_decoder_block"):
+        decoder_blocks = run_config.get(decoder_type, [])
+        for block_cfg in decoder_blocks:
+            if cache_idx >= len(kv_caches):
+                raise RuntimeError(
+                    f"Not enough kv caches to populate run config: need at least {cache_idx + 1}, got {len(kv_caches)}"
+                )
+            block_cfg["mla"]["mla1d"]["kvpe_cache"] = kv_caches[cache_idx]
+            cache_idx += 1
+    if cache_idx != len(kv_caches):
+        raise RuntimeError(f"Unused kv caches while populating run config: used={cache_idx} total={len(kv_caches)}")
+
+
+def _reset_base_kv_caches(gen: DeepseekGenerator) -> None:
+    caches_unique: list[ttnn.Tensor] = []
+    seen: set[int] = set()
+    for cache in _get_decode_kv_caches(gen):
+        cache_id = id(cache)
+        if cache_id not in seen:
+            caches_unique.append(cache)
+            seen.add(cache_id)
+
+    for cache in caches_unique:
+        # Reuse the already-allocated decode caches to avoid allocating a fresh
+        # full cache set during the layerwise alias-vs-base compare.
+        ttnn.fill(cache, 0.0, memory_config=cache.memory_config(), output_tensor=cache)
+
+    gen.ccl.reset_sem_counters()
+
+
+def _replay_verify_decode_batches(
+    gen: DeepseekGenerator,
+    start_tokens: torch.Tensor,
+    batched_history: list[tuple[torch.Tensor, torch.Tensor]],
+    page_tables: tuple[ttnn.Tensor, ...],
+) -> None:
+    batch_size = int(start_tokens.shape[0])
+    seed_positions = torch.zeros((batch_size,), dtype=torch.int32)
+    seed_logits_tt = gen._decode_step_tt(
+        tokens_step=start_tokens,
+        positions=seed_positions,
+        batch_size_per_row=gen.batch_size_per_row,
+        page_tables=gen._get_page_tables(),
+        return_hidden=False,
+    )
+    ttnn.deallocate(seed_logits_tt)
+    gen.ccl.reset_sem_counters()
+
+    for batched_tokens, batched_positions in batched_history:
+        logits_tt = gen._decode_step_tt(
+            tokens_step=batched_tokens,
+            positions=batched_positions,
+            batch_size_per_row=gen.batch_size_per_row,
+            page_tables=page_tables,
+            return_hidden=False,
+        )
+        ttnn.deallocate(logits_tt)
+        gen.ccl.reset_sem_counters()
+
+
+def _replay_reference_decode_steps(
+    gen: DeepseekGenerator,
+    start_tokens: torch.Tensor,
+    next_tokens: torch.Tensor,
+    num_prior_steps: int,
+) -> None:
+    batch_size = int(start_tokens.shape[0])
+    seed_positions = torch.zeros((batch_size,), dtype=torch.int32)
+    seed_logits_tt = gen._decode_step_tt(
+        tokens_step=start_tokens,
+        positions=seed_positions,
+        batch_size_per_row=gen.batch_size_per_row,
+        page_tables=gen._get_page_tables(),
+        return_hidden=False,
+    )
+    ttnn.deallocate(seed_logits_tt)
+    gen.ccl.reset_sem_counters()
+
+    for replay_step in range(num_prior_steps):
+        prompt_tokens = next_tokens[replay_step].to(torch.int32)
+        prompt_positions = torch.full((batch_size,), replay_step + 1, dtype=torch.int32)
+        logits_tt = gen._decode_step_tt(
+            tokens_step=prompt_tokens,
+            positions=prompt_positions,
+            batch_size_per_row=gen.batch_size_per_row,
+            page_tables=gen._get_page_tables(),
+            return_hidden=False,
+        )
+        ttnn.deallocate(logits_tt)
+        gen.ccl.reset_sem_counters()
+
+
+def _decode_step_host(
+    gen: DeepseekGenerator,
+    tokens_step: torch.Tensor,
+    positions: torch.Tensor,
+    page_tables: tuple[ttnn.Tensor, ...],
+) -> torch.Tensor:
+    mesh_device = gen.mesh_device
+    logits_tt = gen._decode_step_tt(
+        tokens_step=tokens_step,
+        positions=positions,
+        batch_size_per_row=gen.batch_size_per_row,
+        page_tables=page_tables,
+        return_hidden=False,
+    )
+    logits = (
+        ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+        )
+        .squeeze(0)
+        .squeeze(0)
+    )
+    ttnn.deallocate(logits_tt)
+    gen.ccl.reset_sem_counters()
+    return logits
+
+
+def _decode_step_layerwise_host(
+    gen: DeepseekGenerator,
+    tokens_step: torch.Tensor,
+    positions: torch.Tensor,
+    page_tables: tuple[ttnn.Tensor, ...],
+    capture_user_ids: list[int],
+) -> tuple[torch.Tensor, list[dict[str, object]]]:
+    mesh_device = gen.mesh_device
+    cfg = gen.model_run_config_decode
+    assert cfg is not None, "Decode run config is not initialized"
+
+    tt_tokens = gen._tt_from_tokens_step(tokens_step)
+    rot_idxs = gen.rope_setup.get_rot_idxs(positions)
+    rope_tensors = gen.rope_setup.get_rot_mats_from_rot_idxs(rot_idxs)
+    tt_positions = ttnn.from_torch(
+        positions.to(torch.int32),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        dtype=ttnn.int32,
+    )
+
+    layer_captures: list[dict[str, object]] = []
+    logits_tt = None
+    try:
+        x = Embedding2D.forward_decode(tt_tokens, cfg["embedding"])
+        for (layer_idx, block_kind, BlockClass, block_cfg), page_table in zip(
+            _iter_decode_block_cfgs(cfg),
+            page_tables,
+            strict=True,
+        ):
+            x = BlockClass.forward_decode(x, tt_positions, block_cfg, rope_tensors, page_table)
+            x_host = (
+                ttnn.to_torch(
+                    x,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+                )
+                .squeeze(0)
+                .squeeze(0)
+            )
+            rows = {uid: x_host[uid].to(torch.float32).cpu() for uid in capture_user_ids}
+            layer_captures.append(
+                {
+                    "layer_idx": layer_idx,
+                    "block_kind": block_kind,
+                    "rows": rows,
+                }
+            )
+
+        x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
+        x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
+        ccl = cfg["lm_head"]["ccl"]
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
+        logits_tt = LMHead1D.forward_decode(x, cfg["lm_head"])
+        logits = (
+            ttnn.to_torch(
+                logits_tt,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )
+        gen.ccl.reset_sem_counters()
+        return logits, layer_captures
+    finally:
+        if logits_tt is not None:
+            ttnn.deallocate(logits_tt)
+        ttnn.deallocate(tt_tokens)
+        ttnn.deallocate(tt_positions)
+        ttnn.deallocate(rot_idxs)
+        ttnn.deallocate(rope_tensors["cos_matrix"])
+        ttnn.deallocate(rope_tensors["sin_matrix"])
 
 
 class _MtpTraceRunner:
@@ -580,9 +1004,20 @@ def test_mtp_prefill_priming(
             "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
         )
 
-    prompt_len = min(max(2, DEFAULT_PREFILL_LEN), num_steps - 2)
-    if prompt_len < 2:
-        pytest.skip("Need at least 2 prompt tokens and 2 reference steps for prefill priming test.")
+    prefill_seq_tile = ttnn.TILE_SIZE
+    max_prompt_len = num_steps - 2
+    if max_prompt_len < prefill_seq_tile:
+        pytest.skip(f"Need at least {prefill_seq_tile} prompt tokens and 2 reference steps for prefill priming test.")
+
+    requested_prompt_len = max(2, DEFAULT_PREFILL_LEN)
+    # Prefill matmuls require the sequence length to be tile-aligned.
+    prompt_len = ((requested_prompt_len + prefill_seq_tile - 1) // prefill_seq_tile) * prefill_seq_tile
+    if prompt_len > max_prompt_len:
+        prompt_len = (max_prompt_len // prefill_seq_tile) * prefill_seq_tile
+    if prompt_len < prefill_seq_tile:
+        pytest.skip(
+            f"Could not choose a tile-aligned prefill prompt length <= {max_prompt_len} " f"(tile={prefill_seq_tile})."
+        )
 
     payload = torch.load(reference_path, map_location="cpu")
     metadata = payload.get("metadata", {})
@@ -610,6 +1045,12 @@ def test_mtp_prefill_priming(
                 f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
             )
         _assert_reference_start_tokens(payload, gen, context="MTP verify batching")
+        logger.info(
+            "MTP prefill priming prompt length: requested={} aligned={} tile={}",
+            requested_prompt_len,
+            prompt_len,
+            prefill_seq_tile,
+        )
 
         # Build a prompt for user 0 using reference tokens: t0 + t1..t{L-1}
         prompt_tokens = torch.empty((prompt_len,), dtype=torch.long)
@@ -754,6 +1195,14 @@ def test_mtp_verify_batching_aliasing(
             pytest.skip("No prompt lanes available for verify batching test.")
         if 2 * num_prompts > batch_size:
             pytest.skip(f"Need at least 2x prompt lanes; batch_size={batch_size}, num_prompts={num_prompts}.")
+        selected_prompt_indices = list(range(num_prompts)) if num_prompts < full_num_prompts else None
+        if selected_prompt_indices is not None:
+            logger.info(
+                "Selective verify aliasing enabled: active_prompt_indices={} (full_num_prompts={} num_prompts={})",
+                selected_prompt_indices,
+                full_num_prompts,
+                num_prompts,
+            )
 
         # Map each prompt index to interleaved prompt/spec user IDs within the batch.
         prompt_user_ids_list: list[int] = []
@@ -779,7 +1228,10 @@ def test_mtp_verify_batching_aliasing(
 
         # Build aliased page tables so spec lanes share prompt-lane KV cache pages.
         decode_page_tables = gen._build_mtp_verify_page_tables(
-            num_prompts=num_prompts, verify_offset=0, interleaved=True
+            num_prompts=num_prompts,
+            verify_offset=0,
+            prompt_indices=selected_prompt_indices,
+            interleaved=True,
         )
         logger.info("decode_page_tables layers: {}", len(decode_page_tables))
         if len(decode_page_tables) > 0:
@@ -995,6 +1447,11 @@ def test_mtp_verify_batching_aliasing(
         prompt_count = 0  # total prompt-lane comparisons
         verify_matches = 0  # count of correct verify-lane next-next predictions (accepted only)
         verify_count = 0  # total accepted prompt lanes
+        debug_batched_history: list[tuple[torch.Tensor, torch.Tensor]] = []
+        debug_layer_compare_done = False
+        # For the single-prompt aliasing repro, the first observed prompt-lane
+        # mismatch happens at verify step 7, so compare there instead of step 1.
+        debug_compare_step = 7
 
         # breakpoint()
 
@@ -1077,21 +1534,218 @@ def test_mtp_verify_batching_aliasing(
                     spec_lane=int(spec_user_ids[0]),
                 )
 
-            logits_2b_tt = gen._decode_step_tt(
-                tokens_step=batched_tokens,
-                positions=batched_positions,
-                batch_size_per_row=gen.batch_size_per_row,
-                page_tables=decode_page_tables,
-                return_hidden=False,
-            )
-            logits_2b = ttnn.to_torch(
-                logits_2b_tt,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(-2, -1), mesh_shape=mesh.shape),
-            )
-            ttnn.deallocate(logits_2b_tt)
-            gen.ccl.reset_sem_counters()
+            if (
+                debug_mtp
+                and not debug_layer_compare_done
+                and step == debug_compare_step
+                and prompt_user_ids.numel() > 0
+            ):
+                if prompt_user_ids.numel() > 1:
+                    capture_user_ids = [int(prompt_user_ids[0].item()), int(prompt_user_ids[1].item())]
+                    control_uid = capture_user_ids[0]
+                    target_uid = capture_user_ids[1]
+                else:
+                    capture_user_ids = [int(prompt_user_ids[0].item())]
+                    control_uid = None
+                    target_uid = capture_user_ids[0]
+                logger.info(
+                    "MTP layer compare: rebuilding verify state for step {} target_uid={} control_uid={} prior_replay_steps={} capture_user_ids={}",
+                    step,
+                    target_uid,
+                    control_uid,
+                    len(debug_batched_history),
+                    capture_user_ids,
+                )
 
-            logits_2b = logits_2b.squeeze(0).squeeze(0)
+                base_page_tables = gen._get_page_tables()
+
+                _reset_base_kv_caches(gen)
+                _replay_verify_decode_batches(
+                    gen=gen,
+                    start_tokens=start_tokens,
+                    batched_history=debug_batched_history,
+                    page_tables=base_page_tables,
+                )
+                base_logits, base_layer_captures = _decode_step_layerwise_host(
+                    gen=gen,
+                    tokens_step=batched_tokens,
+                    positions=batched_positions,
+                    page_tables=base_page_tables,
+                    capture_user_ids=capture_user_ids,
+                )
+                base_pred_all = torch.argmax(base_logits, dim=-1).to(torch.int32)
+
+                _reset_base_kv_caches(gen)
+                _replay_verify_decode_batches(
+                    gen=gen,
+                    start_tokens=start_tokens,
+                    batched_history=debug_batched_history,
+                    page_tables=decode_page_tables,
+                )
+                logits_2b, alias_layer_captures = _decode_step_layerwise_host(
+                    gen=gen,
+                    tokens_step=batched_tokens,
+                    positions=batched_positions,
+                    page_tables=decode_page_tables,
+                    capture_user_ids=capture_user_ids,
+                )
+                debug_layer_compare_done = True
+
+                alias_pred_all = torch.argmax(logits_2b, dim=-1).to(torch.int32)
+                if control_uid is None:
+                    logger.info(
+                        "MTP layer compare final preds: step={} target_uid={} base_pred={} alias_pred={}",
+                        step,
+                        target_uid,
+                        int(base_pred_all[target_uid].item()),
+                        int(alias_pred_all[target_uid].item()),
+                    )
+                else:
+                    logger.info(
+                        "MTP layer compare final preds: step={} target_uid={} base_pred={} alias_pred={} control_uid={} base_control_pred={} alias_control_pred={}",
+                        step,
+                        target_uid,
+                        int(base_pred_all[target_uid].item()),
+                        int(alias_pred_all[target_uid].item()),
+                        control_uid,
+                        int(base_pred_all[control_uid].item()),
+                        int(alias_pred_all[control_uid].item()),
+                    )
+
+                first_divergent_layer = None
+                for base_cap, alias_cap in zip(base_layer_captures, alias_layer_captures, strict=True):
+                    layer_idx = int(base_cap["layer_idx"])
+                    block_kind = str(base_cap["block_kind"])
+                    base_rows = base_cap["rows"]
+                    alias_rows = alias_cap["rows"]
+                    base_target = base_rows[target_uid]
+                    alias_target = alias_rows[target_uid]
+                    target_equal = torch.equal(base_target, alias_target)
+                    target_max_abs = float((base_target - alias_target).abs().max().item())
+                    if control_uid is None:
+                        logger.info(
+                            "MTP layer compare step={} layer={} kind={} target_uid={} equal={} max_abs_diff={:.6f} "
+                            "base[:8]={} alias[:8]={}",
+                            step,
+                            layer_idx,
+                            block_kind,
+                            target_uid,
+                            target_equal,
+                            target_max_abs,
+                            base_target[:8].tolist(),
+                            alias_target[:8].tolist(),
+                        )
+                    else:
+                        base_control = base_rows[control_uid]
+                        alias_control = alias_rows[control_uid]
+                        control_equal = torch.equal(base_control, alias_control)
+                        control_max_abs = float((base_control - alias_control).abs().max().item())
+                        logger.info(
+                            "MTP layer compare step={} layer={} kind={} target_uid={} equal={} max_abs_diff={:.6f} "
+                            "base[:8]={} alias[:8]={} control_uid={} control_equal={} control_max_abs_diff={:.6f}",
+                            step,
+                            layer_idx,
+                            block_kind,
+                            target_uid,
+                            target_equal,
+                            target_max_abs,
+                            base_target[:8].tolist(),
+                            alias_target[:8].tolist(),
+                            control_uid,
+                            control_equal,
+                            control_max_abs,
+                        )
+                    if first_divergent_layer is None and not target_equal:
+                        first_divergent_layer = (layer_idx, block_kind, target_max_abs)
+
+                logger.info(
+                    "MTP layer compare summary: step={} target_uid={} first_divergent_layer={}",
+                    step,
+                    target_uid,
+                    first_divergent_layer,
+                )
+
+                trajectory_rows: list[str] = []
+                probe_steps = range(max(0, step - 1), step + 1)
+                for probe_step in probe_steps:
+                    probe_prompt_tokens = next_tokens[probe_step].to(torch.int32)
+                    probe_positions_prompt = torch.full((batch_size,), probe_step + 1, dtype=torch.int32)
+                    gt_probe_next = int(next_tokens[probe_step + 1][target_uid].item())
+
+                    _reset_base_kv_caches(gen)
+                    _replay_reference_decode_steps(
+                        gen=gen,
+                        start_tokens=start_tokens,
+                        next_tokens=next_tokens,
+                        num_prior_steps=probe_step,
+                    )
+                    prompt_only_logits = _decode_step_host(
+                        gen=gen,
+                        tokens_step=probe_prompt_tokens,
+                        positions=probe_positions_prompt,
+                        page_tables=base_page_tables,
+                    )
+                    prompt_only_pred = int(torch.argmax(prompt_only_logits, dim=-1).to(torch.int32)[target_uid].item())
+
+                    if probe_step < len(debug_batched_history):
+                        probe_batched_tokens, probe_batched_positions = debug_batched_history[probe_step]
+                        probe_prior_history = debug_batched_history[:probe_step]
+                    else:
+                        probe_batched_tokens = batched_tokens
+                        probe_batched_positions = batched_positions
+                        probe_prior_history = debug_batched_history
+
+                    _reset_base_kv_caches(gen)
+                    _replay_verify_decode_batches(
+                        gen=gen,
+                        start_tokens=start_tokens,
+                        batched_history=probe_prior_history,
+                        page_tables=base_page_tables,
+                    )
+                    verify_base_logits = _decode_step_host(
+                        gen=gen,
+                        tokens_step=probe_batched_tokens,
+                        positions=probe_batched_positions,
+                        page_tables=base_page_tables,
+                    )
+                    verify_base_pred = int(torch.argmax(verify_base_logits, dim=-1).to(torch.int32)[target_uid].item())
+                    spec_token = int(probe_batched_tokens[int(spec_user_ids[0].item())].item())
+                    spec_pos = int(probe_batched_positions[int(spec_user_ids[0].item())].item())
+                    trajectory_rows.append(
+                        "step={} prompt_token={} prompt_pos={} spec_token={} spec_pos={} gt_next={} "
+                        "prompt_only_pred={} verify_base_pred={}".format(
+                            probe_step,
+                            int(probe_prompt_tokens[target_uid].item()),
+                            int(probe_positions_prompt[target_uid].item()),
+                            spec_token,
+                            spec_pos,
+                            gt_probe_next,
+                            prompt_only_pred,
+                            verify_base_pred,
+                        )
+                    )
+
+                logger.info(
+                    "MTP trajectory compare target_uid={} rows:\n{}",
+                    target_uid,
+                    "\n".join(trajectory_rows),
+                )
+            else:
+                logits_2b_tt = gen._decode_step_tt(
+                    tokens_step=batched_tokens,
+                    positions=batched_positions,
+                    batch_size_per_row=gen.batch_size_per_row,
+                    page_tables=decode_page_tables,
+                    return_hidden=False,
+                )
+                logits_2b = ttnn.to_torch(
+                    logits_2b_tt,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(-2, -1), mesh_shape=mesh.shape),
+                )
+                ttnn.deallocate(logits_2b_tt)
+                gen.ccl.reset_sem_counters()
+                logits_2b = logits_2b.squeeze(0).squeeze(0)
+
             pred_all = torch.argmax(logits_2b, dim=-1).to(torch.int32)
             pred_next = pred_all[prompt_user_ids]  # base-model next-token prediction
             pred_after_spec = pred_all[spec_user_ids]  # base-model next-next prediction
@@ -1162,6 +1816,8 @@ def test_mtp_verify_batching_aliasing(
             if accepted_mask.any():
                 verify_matches += int((pred_after_spec[accepted_mask] == gt_after_spec[accepted_mask]).sum().item())
                 verify_count += int(accepted_mask.sum().item())
+
+            debug_batched_history.append((batched_tokens.clone(), batched_positions.clone()))
 
         prompt_rate = prompt_matches / max(prompt_count, 1)
         accept_rate = verify_count / max(prompt_count, 1)

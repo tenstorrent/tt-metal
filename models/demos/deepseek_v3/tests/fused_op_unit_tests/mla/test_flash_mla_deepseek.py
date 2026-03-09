@@ -585,3 +585,476 @@ def test_paged_flash_mla_verify_aliasing_replicated_update_idxs(mesh_device):
                 device_idx,
                 tt_output_torch[device_idx, 0, :, 0, :4].to(torch.float32).tolist(),
             )
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_paged_flash_mla_verify_aliasing_mesh_sharded_pos_idxs(mesh_device):
+    """
+    Match the full-model verify layout more closely by using mesh-sharded
+    position/update index tensors for both the cache update and decode read.
+    """
+    torch.manual_seed(0)
+    enable_debug = _debug_mtp_enabled()
+
+    mesh_shape = tuple(mesh_device.shape)
+    dp_factor = mesh_shape[1]
+    num_devices = mesh_shape[0] * mesh_shape[1]
+
+    num_users = 2
+    batch_per_shard = 2 * num_users
+    total_batch = batch_per_shard * dp_factor
+
+    num_heads = 128
+    head_dim = 576
+    kv_lora_rank = 512
+    block_size = ttnn.TILE_SIZE
+    blocks_per_user = 4
+    max_seq_len = blocks_per_user * block_size
+    max_num_blocks = batch_per_shard * blocks_per_user
+
+    base_page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(batch_per_shard, blocks_per_user)
+    alias_page_table = base_page_table.clone()
+    verify_offset = num_users
+    for i in range(num_users):
+        alias_page_table[verify_offset + i] = alias_page_table[i]
+
+    tt_page_table = ttnn.from_torch(
+        alias_page_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    torch_cache = (torch.randn((max_num_blocks, 1, block_size, head_dim), dtype=torch.float32) * 0.05).to(
+        torch.bfloat16
+    )
+    tt_cache = ttnn.from_torch(
+        torch_cache,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    positions_local = torch.tensor([1, 2, 1, 2], dtype=torch.int32)
+    positions_global = positions_local.repeat(num_devices)
+    prompt_update_idxs_local = torch.tensor([1, -1, 1, -1], dtype=torch.int32)
+    spec_update_idxs_local = torch.tensor([-1, 2, -1, 2], dtype=torch.int32)
+    prompt_update_idxs_global = prompt_update_idxs_local.repeat(num_devices)
+    spec_update_idxs_global = spec_update_idxs_local.repeat(num_devices)
+
+    update_tensor = torch.zeros((1, total_batch, 1, head_dim), dtype=torch.bfloat16)
+    for shard in range(dp_factor):
+        base = shard * batch_per_shard
+        base_value = 0.05 * shard
+        update_tensor[0, base + 0, 0, :] = 0.10 + base_value
+        update_tensor[0, base + 1, 0, :] = 0.20 + base_value
+        update_tensor[0, base + 2, 0, :] = 0.30 + base_value
+        update_tensor[0, base + 3, 0, :] = 0.40 + base_value
+
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    update_cores = batch_per_shard
+    update_core_grid = ttnn.num_cores_to_corerangeset(update_cores, grid_size, row_wise=True)
+    update_mem_cfg = ttnn.create_sharded_memory_config(
+        shape=(nearest_y(1, ttnn.TILE_SIZE), head_dim),
+        core_grid=update_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_update = ttnn.from_torch(
+        update_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=update_mem_cfg,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=mesh_shape),
+    )
+    tt_prompt_update_idxs = ttnn.from_torch(
+        prompt_update_idxs_global,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    tt_spec_update_idxs = ttnn.from_torch(
+        spec_update_idxs_global,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    mesh_coords = {ttnn.MeshCoordinate(r, c) for r in range(mesh_shape[0]) for c in range(mesh_shape[1])}
+    ttnn.experimental.paged_update_cache(
+        tt_cache,
+        tt_update,
+        update_idxs_tensor=tt_prompt_update_idxs,
+        page_table=tt_page_table,
+        mesh_coords=mesh_coords,
+    )
+    ttnn.experimental.paged_update_cache(
+        tt_cache,
+        tt_update,
+        update_idxs_tensor=tt_spec_update_idxs,
+        page_table=tt_page_table,
+        mesh_coords=mesh_coords,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    torch_q = (torch.randn((1, total_batch, num_heads, head_dim), dtype=torch.float32) * 0.05).to(torch.bfloat16)
+    q_core_grid = ttnn.num_cores_to_corerangeset(64, grid_size, row_wise=True)
+    q_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, head_dim),
+        core_grid=q_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, kv_lora_rank),
+        core_grid=q_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_q = ttnn.from_torch(
+        torch_q,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=q_sharded_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=mesh_shape),
+    )
+
+    tt_position_idxs = ttnn.from_torch(
+        positions_global,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    scale = (192 + 64) ** -0.5
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=0,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_output = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+        tt_q,
+        tt_cache,
+        page_table_tensor=tt_page_table,
+        cur_pos_tensor=tt_position_idxs,
+        head_dim_v=kv_lora_rank,
+        scale=scale,
+        program_config=sdpa_program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=output_sharded_mem_config,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    tt_cache_torch = ttnn.to_torch(tt_cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+        num_devices, max_num_blocks, 1, block_size, head_dim
+    )
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+        num_devices, 1, batch_per_shard, num_heads, kv_lora_rank
+    )
+
+    for shard_idx in range(dp_factor):
+        device_idx = shard_idx
+        logical_cache = _reconstruct_logical_cache_from_paged(
+            tt_cache_torch[device_idx], alias_page_table, block_size=block_size, head_dim=head_dim
+        )
+        q_local = torch_q[:, shard_idx * batch_per_shard : (shard_idx + 1) * batch_per_shard]
+        torch_output = scaled_dot_product_attention_reference(
+            q_local.permute(1, 2, 0, 3),
+            logical_cache,
+            logical_cache[..., :kv_lora_rank],
+            positions_local.tolist(),
+            max_seq_len,
+            scale,
+        ).permute(2, 0, 1, 3)
+        assert_with_pcc(torch_output, tt_output_torch[device_idx], pcc=0.99)
+
+    if enable_debug:
+        for device_idx in (0, 1, dp_factor, num_devices - 1):
+            logger.info(
+                "alias flash mla mesh-sharded pos output device{} slice={}",
+                device_idx,
+                tt_output_torch[device_idx, 0, :, 0, :4].to(torch.float32).tolist(),
+            )
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_paged_flash_mla_verify_aliasing_two_step_mesh_sharded_pos_idxs(mesh_device):
+    """
+    Replay two consecutive aliased verify steps with mesh-sharded position/update
+    tensors to check multi-step cache handoff plus read-side correctness.
+    """
+    torch.manual_seed(0)
+    enable_debug = _debug_mtp_enabled()
+
+    mesh_shape = tuple(mesh_device.shape)
+    dp_factor = mesh_shape[1]
+    num_devices = mesh_shape[0] * mesh_shape[1]
+
+    num_users = 2
+    batch_per_shard = 2 * num_users
+    total_batch = batch_per_shard * dp_factor
+
+    num_heads = 128
+    head_dim = 576
+    kv_lora_rank = 512
+    block_size = ttnn.TILE_SIZE
+    blocks_per_user = 4
+    max_seq_len = blocks_per_user * block_size
+    max_num_blocks = batch_per_shard * blocks_per_user
+
+    base_page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(batch_per_shard, blocks_per_user)
+    alias_page_table = base_page_table.clone()
+    for row in range(1, batch_per_shard, 2):
+        alias_page_table[row] = alias_page_table[row - 1]
+
+    tt_page_table = ttnn.from_torch(
+        alias_page_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    torch_cache = (torch.randn((max_num_blocks, 1, block_size, head_dim), dtype=torch.float32) * 0.05).to(
+        torch.bfloat16
+    )
+    tt_cache = ttnn.from_torch(
+        torch_cache,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    update_core_grid = ttnn.num_cores_to_corerangeset(batch_per_shard, grid_size, row_wise=True)
+    update_mem_cfg = ttnn.create_sharded_memory_config(
+        shape=(nearest_y(1, ttnn.TILE_SIZE), head_dim),
+        core_grid=update_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    q_core_grid = ttnn.num_cores_to_corerangeset(64, grid_size, row_wise=True)
+    q_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, head_dim),
+        core_grid=q_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, kv_lora_rank),
+        core_grid=q_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_q_steps = []
+    tt_q_steps = []
+    for step_idx in range(2):
+        torch_q = (torch.randn((1, total_batch, num_heads, head_dim), dtype=torch.float32) * 0.05).to(torch.bfloat16)
+        torch_q = torch_q + torch.tensor(0.02 * step_idx, dtype=torch.bfloat16)
+        tt_q = ttnn.from_torch(
+            torch_q,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=q_sharded_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=mesh_shape),
+        )
+        torch_q_steps.append(torch_q)
+        tt_q_steps.append(tt_q)
+
+    scale = (192 + 64) ** -0.5
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=0,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    mesh_coords = {ttnn.MeshCoordinate(r, c) for r in range(mesh_shape[0]) for c in range(mesh_shape[1])}
+    ref_cache_by_device = [torch_cache.clone() for _ in range(num_devices)]
+    step_positions = [
+        torch.tensor([1, 2, 1, 2], dtype=torch.int32),
+        torch.tensor([2, 3, 2, 3], dtype=torch.int32),
+    ]
+
+    for step_idx, positions_local in enumerate(step_positions):
+        prompt_update_idxs_local = positions_local.clone()
+        prompt_update_idxs_local[1::2] = -1
+        spec_update_idxs_local = positions_local.clone()
+        spec_update_idxs_local[0::2] = -1
+
+        prompt_update_idxs_global = prompt_update_idxs_local.repeat(num_devices)
+        spec_update_idxs_global = spec_update_idxs_local.repeat(num_devices)
+        positions_global = positions_local.repeat(num_devices)
+
+        update_tensor = torch.zeros((1, total_batch, 1, head_dim), dtype=torch.bfloat16)
+        for shard in range(dp_factor):
+            base = shard * batch_per_shard
+            step_base = 0.25 * step_idx + 0.05 * shard
+            update_tensor[0, base + 0, 0, :] = 0.10 + step_base
+            update_tensor[0, base + 1, 0, :] = 0.20 + step_base
+            update_tensor[0, base + 2, 0, :] = 0.30 + step_base
+            update_tensor[0, base + 3, 0, :] = 0.40 + step_base
+
+        tt_update = ttnn.from_torch(
+            update_tensor,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=update_mem_cfg,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=mesh_shape),
+        )
+        tt_prompt_update_idxs = ttnn.from_torch(
+            prompt_update_idxs_global,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_spec_update_idxs = ttnn.from_torch(
+            spec_update_idxs_global,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_position_idxs = ttnn.from_torch(
+            positions_global,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+        ttnn.experimental.paged_update_cache(
+            tt_cache,
+            tt_update,
+            update_idxs_tensor=tt_prompt_update_idxs,
+            page_table=tt_page_table,
+            mesh_coords=mesh_coords,
+        )
+        ttnn.experimental.paged_update_cache(
+            tt_cache,
+            tt_update,
+            update_idxs_tensor=tt_spec_update_idxs,
+            page_table=tt_page_table,
+            mesh_coords=mesh_coords,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        tt_output = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            tt_q_steps[step_idx],
+            tt_cache,
+            page_table_tensor=tt_page_table,
+            cur_pos_tensor=tt_position_idxs,
+            head_dim_v=kv_lora_rank,
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=output_sharded_mem_config,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        tt_cache_torch = ttnn.to_torch(tt_cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+            num_devices, max_num_blocks, 1, block_size, head_dim
+        )
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+            num_devices, 1, batch_per_shard, num_heads, kv_lora_rank
+        )
+
+        for device_idx in range(num_devices):
+            shard_idx = device_idx % dp_factor
+            local_update = update_tensor[0, shard_idx * batch_per_shard : (shard_idx + 1) * batch_per_shard, 0, :]
+            for local_idx, pos in enumerate(positions_local.tolist()):
+                block = pos // block_size
+                offset = pos % block_size
+                physical_block = int(alias_page_table[local_idx, block].item())
+                ref_cache_by_device[device_idx][physical_block, 0, offset, :] = local_update[local_idx, :]
+
+            assert_with_pcc(ref_cache_by_device[device_idx], tt_cache_torch[device_idx], pcc=0.999)
+
+            logical_cache = _reconstruct_logical_cache_from_paged(
+                ref_cache_by_device[device_idx],
+                alias_page_table,
+                block_size=block_size,
+                head_dim=head_dim,
+            )
+            q_local = torch_q_steps[step_idx][:, shard_idx * batch_per_shard : (shard_idx + 1) * batch_per_shard]
+            torch_output = scaled_dot_product_attention_reference(
+                q_local.permute(1, 2, 0, 3),
+                logical_cache,
+                logical_cache[..., :kv_lora_rank],
+                positions_local.tolist(),
+                max_seq_len,
+                scale,
+            ).permute(2, 0, 1, 3)
+            assert_with_pcc(torch_output, tt_output_torch[device_idx], pcc=0.99)
+
+        if enable_debug:
+            logger.info(
+                "two-step alias flash step={} positions={} device0 cache row2 pos{}[:4]={}",
+                step_idx,
+                positions_local.tolist(),
+                int(positions_local[2].item()),
+                tt_cache_torch[0, int(alias_page_table[2, 0].item()), 0, int(positions_local[2].item()), :4]
+                .to(torch.float32)
+                .tolist(),
+            )
+            logger.info(
+                "two-step alias flash step={} device0 output slice={}",
+                step_idx,
+                tt_output_torch[0, 0, :, 0, :4].to(torch.float32).tolist(),
+            )
