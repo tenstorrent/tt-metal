@@ -24,6 +24,10 @@
 
 void calc_numeric_stable(
     uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
+    auto cb_in_obj = experimental::CircularBuffer(cb_in);
+    auto cb_max_obj = experimental::CircularBuffer(cb_max);
+    auto cb_out_obj = experimental::CircularBuffer(cb_out);
+
     // calculate max val per row using PERSISTENT mode
     compute_kernel_lib::reduce<
         PoolType::MAX,
