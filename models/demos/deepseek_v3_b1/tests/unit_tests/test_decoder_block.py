@@ -492,18 +492,27 @@ def create_decoder_block_tensors(
     reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
     tile_1x32 = ttnn.Tile([1, 32])
 
-    reduce_intermediate_tensors = []
-    for _ in range(3):
-        it = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=final_output_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        reduce_intermediate_tensors.append(it)
+    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+    orig_shard_spec = final_output_mem_config.shard_spec
+    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            orig_shard_spec.grid,
+            intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_tensors = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
 
     compute_grid = submesh.compute_with_storage_grid_size()
     reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
@@ -581,7 +590,7 @@ def create_decoder_block_tensors(
         "shared_k_parallel": SharedExpert.K_PARALLEL,
         "shared_n_parallel": SharedExpert.N_PARALLEL,
         # Reduce-to-one
-        "reduce_intermediate_tensors": reduce_intermediate_tensors,
+        "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,
         "reduce_root_coord": root_coord,
         # MoE mcast grid (for shared expert)

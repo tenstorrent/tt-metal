@@ -134,7 +134,7 @@ class DecoderBlock:
         shared_k_parallel=None,
         shared_n_parallel=None,
         moe_semaphores=None,
-        reduce_intermediate_tensors: Optional[list] = None,
+        reduce_intermediate_tensors=None,
         reduce_output_tensor: Optional[ttnn.Tensor] = None,
         reduce_semaphores: Optional[list] = None,
         reduce_root_coord: Optional[ttnn.MeshCoordinate] = None,
