@@ -919,11 +919,10 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     bfloat16 bfloat_winv_value_group_1 = bfloat16::truncate(winv_group_1);
     uint32_t packed_winv_value_group_1 =
         pack_two_bfloat16_into_uint32({bfloat_winv_value_group_1, bfloat_winv_value_group_1});
-    float winv_group_2 = winv_group_1;
     bfloat16 bfloat_winv_value_group_2 = bfloat_winv_value_group_1;
     uint32_t packed_winv_value_group_2 = packed_winv_value_group_1;
     if (num_batches_per_core_group_2 > 0) {
-        winv_group_2 = 1.0f / std::sqrt(num_rows_per_batch_per_core_group_2 * num_channels_per_group);
+        float winv_group_2 = 1.0f / std::sqrt(num_rows_per_batch_per_core_group_2 * num_channels_per_group);
         bfloat_winv_value_group_2 = bfloat16::truncate(winv_group_2);
         packed_winv_value_group_2 =
             pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
