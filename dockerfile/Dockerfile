@@ -41,7 +41,8 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05e
 # These FROM scratch stubs are overridden by Bake:
 #   - Locally: Bake builds Dockerfile.tools/Dockerfile.python targets first
 #   - In CI:   Bake substitutes pre-built GHCR images via --set contexts
-# Without Bake, these resolve to empty scratch images (same as before).
+# WARNING: Plain `docker build` is NOT supported — it will fail because these
+# stubs resolve to empty scratch images. Always use `docker buildx bake`.
 #############################################################
 
 FROM scratch AS ccache-layer
@@ -97,8 +98,8 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=cmake-layer /install/ /usr/local/
 COPY --from=openmpi-layer /install/ /opt/
 
-# Fail-fast if OMPI_TAG drifted from Dockerfile.tools (empty dir = version mismatch)
-RUN test -d "${OMPI_PREFIX}/bin" || \
+RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
+    test -d "${OMPI_PREFIX}/bin" || \
     { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_TAG (${OMPI_TAG}) likely differs from Dockerfile.tools ARG OMPI_TAG." >&2; exit 1; }
 
 # Auto-detect Python version from Ubuntu version if not explicitly provided
@@ -123,6 +124,7 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     mkdir -p /opt/tenstorrent && \
     cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
+RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 #############################################################
 # CI Build image
@@ -147,6 +149,10 @@ COPY --from=doxygen-layer /install/ /usr/local/
 COPY --from=cba-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 COPY --from=mold-layer /install/ /usr/local/
+RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/doxygen || { echo "ERROR: doxygen not found in doxygen-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/yq || { echo "ERROR: yq not found in yq-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/mold || { echo "ERROR: mold not found in mold-layer" >&2; exit 1; }
 
 # Copy pre-built ci-build venv from tool image
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)

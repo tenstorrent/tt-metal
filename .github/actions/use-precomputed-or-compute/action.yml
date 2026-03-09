@@ -7,7 +7,11 @@ inputs:
     required: false
     default: ""
   compute-script:
-    description: "Script to run if precomputed-data is empty. Must output JSON to stdout."
+    description: |
+      Script path (relative to repo root) to run if precomputed-data is empty.
+      Must output JSON to stdout. Arguments can be appended after the path.
+      Example: ".github/scripts/compute-platform-data.sh 22.04 owner/repo"
+      SECURITY: Only file paths are accepted; arbitrary shell expressions are rejected.
     required: false
     default: ""
   output-mappings:
@@ -39,11 +43,29 @@ runs:
           echo "Using precomputed data"
           DATA="$PRECOMPUTED_DATA"
         elif [ -n "$COMPUTE_SCRIPT" ]; then
-          echo "Running compute script: $COMPUTE_SCRIPT"
-          # Run via bash -c rather than eval to reduce injection surface.
-          # TRUST BOUNDARY: compute-script values come from workflow files in
-          # this repository; do not pass untrusted/user-supplied strings here.
-          DATA=$(bash -c "$COMPUTE_SCRIPT")
+          # Reject shell metacharacters to prevent command injection.
+          # Only plain script paths with space-separated arguments are allowed.
+          if [[ "$COMPUTE_SCRIPT" =~ [\;\|\&\$\`\(\)\{\}\<\>\\] ]]; then
+            echo "Error: compute-script contains shell metacharacters. Only script paths with arguments are allowed." >&2
+            exit 1
+          fi
+
+          # Split into script path and arguments (word-splitting is intentional here)
+          read -ra SCRIPT_PARTS <<< "$COMPUTE_SCRIPT"
+          SCRIPT_PATH="${SCRIPT_PARTS[0]}"
+          SCRIPT_ARGS=("${SCRIPT_PARTS[@]:1}")
+
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "Error: compute-script path '$SCRIPT_PATH' does not exist" >&2
+            exit 1
+          fi
+          if [ ! -x "$SCRIPT_PATH" ]; then
+            echo "Error: compute-script path '$SCRIPT_PATH' is not executable" >&2
+            exit 1
+          fi
+
+          echo "Running compute script: $SCRIPT_PATH ${SCRIPT_ARGS[*]}"
+          DATA=$("$SCRIPT_PATH" "${SCRIPT_ARGS[@]}")
         else
           echo "Error: Either precomputed-data or compute-script must be provided" >&2
           exit 1

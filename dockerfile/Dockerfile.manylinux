@@ -4,6 +4,8 @@
 
 #############################################################
 # Tool layers (resolved by docker-bake.hcl contexts)
+# WARNING: Plain `docker build` is NOT supported — these stubs
+# resolve to empty scratch images. Always use `docker buildx bake`.
 #############################################################
 
 FROM scratch AS ccache-layer
@@ -52,6 +54,7 @@ RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
 
 # Copy OpenMPI (ULFM) from pre-built tool image
 COPY --from=openmpi-layer /install/ /opt/
+RUN test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; }
 
 # Hack for CIv2
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
@@ -96,3 +99,4 @@ RUN chmod +x /tmp/install_dependencies.sh && \
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     mkdir -p /opt/tenstorrent && \
     cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
+RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }

@@ -27,23 +27,23 @@ jobs:
           HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null)
 
           if [ -n "$HEALTH_RESPONSE" ]; then
-            # Parse health response and emit warnings for unhealthy components
-            # Emit warnings for each unhealthy component
             echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
               echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"
             done
 
-            # Check overall status
             OVERALL_STATUS=$(echo "$HEALTH_RESPONSE" | jq -r '.status')
             if [ "$OVERALL_STATUS" = "healthy" ]; then
               echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
               echo "✓ Harbor is available"
             else
-              echo "::warning title=Harbor Overall Unhealthy::Harbor overall status is: $OVERALL_STATUS"
+              echo "::error title=Harbor Unhealthy::Harbor overall status is: $OVERALL_STATUS. Docker pulls will fall back to direct GHCR."
               echo "harbor-prefix=" >> $GITHUB_OUTPUT
-              echo "⚠ Harbor unhealthy, falling back to direct GHCR"
+              echo "### Harbor Registry Unhealthy" >> $GITHUB_STEP_SUMMARY
+              echo "Overall status: \`$OVERALL_STATUS\`. Falling back to direct GHCR." >> $GITHUB_STEP_SUMMARY
             fi
           else
+            echo "::error title=Harbor Unavailable::Harbor registry did not respond. Docker pulls will fall back to direct GHCR."
             echo "harbor-prefix=" >> $GITHUB_OUTPUT
-            echo "⚠ Harbor unavailable, falling back to direct GHCR"
+            echo "### Harbor Registry Unavailable" >> $GITHUB_STEP_SUMMARY
+            echo "Harbor did not respond within timeout. Falling back to direct GHCR." >> $GITHUB_STEP_SUMMARY
           fi

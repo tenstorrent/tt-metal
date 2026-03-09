@@ -142,9 +142,17 @@ else
     CI_TEST_VENV_EXISTS=unknown
 fi
 
-# ci-build and ci-test existence mirrors dev existence
-CI_BUILD_EXISTS="$DEV_EXISTS"
-CI_TEST_EXISTS="$DEV_EXISTS"
+# Check ci-build and ci-test existence independently to handle partial push failures
+if [ "$FORCE_REBUILD" = "true" ]; then
+    CI_BUILD_EXISTS=false
+    CI_TEST_EXISTS=false
+elif [ "$CHECK_EXISTS" = "true" ]; then
+    docker manifest inspect "$CI_BUILD_TAG" > /dev/null 2>&1 && CI_BUILD_EXISTS=true || CI_BUILD_EXISTS=false
+    docker manifest inspect "$CI_TEST_TAG" > /dev/null 2>&1 && CI_TEST_EXISTS=true || CI_TEST_EXISTS=false
+else
+    CI_BUILD_EXISTS=unknown
+    CI_TEST_EXISTS=unknown
+fi
 
 # Output JSON
 # Use --argjson for boolean fields to output proper JSON booleans (true/false) not strings

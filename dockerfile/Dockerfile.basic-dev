@@ -19,6 +19,8 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05e
 
 #############################################################
 # Tool layers (resolved by docker-bake.hcl contexts)
+# WARNING: Plain `docker build` is NOT supported — these stubs
+# resolve to empty scratch images. Always use `docker buildx bake`.
 #############################################################
 
 FROM scratch AS cmake-layer
@@ -66,6 +68,10 @@ COPY --from=openmpi-layer /install/ /opt/
 
 # Copy ccache from pre-built tool image
 COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+
+RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
+    test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; }
 
 # Install basic tools to build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -122,6 +128,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     mkdir -p /opt/tenstorrent && \
     cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
+RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv

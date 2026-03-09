@@ -12,6 +12,12 @@ env:
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
+  workflow_dispatch:
+    inputs:
+      tool-data:
+        required: true
+        type: string
+        description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
   workflow_call:
     inputs:
       tool-data:

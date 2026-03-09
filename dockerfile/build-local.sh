@@ -53,6 +53,12 @@ EOF
 
 set -euo pipefail
 
+if ! docker buildx version &>/dev/null; then
+    echo "ERROR: docker buildx is required but not available." >&2
+    echo "See: https://docs.docker.com/build/install-buildx/" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BAKE_FILE="${SCRIPT_DIR}/docker-bake.hcl"
