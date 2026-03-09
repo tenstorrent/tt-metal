@@ -81,7 +81,6 @@ struct ReduceToOneB1 {
         uint32_t localCb,
         uint32_t scratchCb,
         uint32_t packetCb,
-        uint32_t packetHeaderCb,
         uint32_t numHops,
         uint32_t dstFabricNodeChipId,
         uint32_t dstFabricNodeMeshId,
@@ -98,7 +97,6 @@ struct ReduceToOneB1 {
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t packet_cb = packetCb;
-        static constexpr uint32_t packet_header_cb = packetHeaderCb;
         static constexpr uint32_t num_hops = numHops;
         static constexpr uint32_t dst_fabric_node_chip_id = dstFabricNodeChipId;
         static constexpr uint32_t dst_fabric_node_mesh_id = dstFabricNodeMeshId;
@@ -351,10 +349,9 @@ struct ReduceToOneB1 {
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
-            // Get packet header from CB (persistent across iterations)
-            uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
-                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            // Get packet header
+            PacketHeaderPool::reset();
+            auto* packet_header = PacketHeaderPool::allocate_header(1);
 
             // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
             set_unicast_route(

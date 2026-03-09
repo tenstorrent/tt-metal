@@ -251,13 +251,11 @@ class _MoeRoutedExpertContext:
     reduce_output_cb: int = 0
     reduce_scratch_cb: int = 0
     reduce_packet_cb: int = 0
-    reduce_packet_header_cb: int = 0
     reduce_params: dict = None
     # Pre-built CB descriptors for reduce (set by _overlap_cbs_with_sdpa_buffer)
     reduce_received_cb_descriptors: list = None  # CBs 39-42 (r1, r2, r3, output)
     reduce_scratch_cb_descriptor: Any = None
     reduce_packet_cb_descriptor: Any = None
-    reduce_packet_header_cb_descriptor: Any = None
 
 
 @dataclass
@@ -902,7 +900,6 @@ class MoeRoutedExpertOp:
         reduce_output_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_scratch_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_packet_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
-        reduce_packet_header_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
 
         # ==================================================================
         # RMSNorm tile reinterpretation (compute kernel needs 32x32 or 16x32 tiles)
@@ -1436,7 +1433,6 @@ class MoeRoutedExpertOp:
             reduce_output_cb=reduce_output_cb,
             reduce_scratch_cb=reduce_scratch_cb,
             reduce_packet_cb=reduce_packet_cb,
-            reduce_packet_header_cb=reduce_packet_header_cb,
             reduce_params=reduce_params if enable_reduce_to_one else None,
         )
 
@@ -1816,7 +1812,6 @@ class MoeRoutedExpertOp:
             descriptors += ctx.reduce_received_cb_descriptors
             descriptors.append(ctx.reduce_scratch_cb_descriptor)
             descriptors.append(ctx.reduce_packet_cb_descriptor)
-            descriptors.append(ctx.reduce_packet_header_cb_descriptor)
 
         return descriptors
 
@@ -1958,13 +1953,16 @@ class MoeSharedExpertOp:
         act_total_tiles = num_tiles_k
         weights_num_pages = k_per_core
 
-        # cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
+        cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
+        print("Check")
+        print(ttnn.get_cb_address(cb_weights_descriptor))
+        print(weights_tensor.buffer_address())
 
         return {
             "k_per_core": k_per_core,
             "act_total_tiles": act_total_tiles,
             "weights_num_pages": weights_num_pages,
-            "cb_weights_descriptor": None,
+            "cb_weights_descriptor": cb_weights_descriptor,
             "weights_cb_addr": weights_tensor.buffer_address(),
             "cb_out_descriptor": None,
         }
@@ -2270,13 +2268,12 @@ class MoeSharedExpertOp:
 
         # Tensor-backed CBs (format from weight tensors)
         shared_gate_up_weights_tensor = shared_gate_weights_overlapped.fused_tensor
-        # shared_gu_weights_cb = cb_id_context.get_cb_id(
-        #     shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
-        # )
+        shared_gu_weights_cb = cb_id_context.get_cb_id(
+            shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
+        )
         shared_down_matmul_in1_cb = cb_id_context.get_cb_id(
             shared_down_weights_tensor.dtype, ttnn.TileDescriptor(shared_down_weights_tensor.get_tile())
         )
-        shared_gu_weights_cb = shared_down_matmul_in1_cb
 
         # ==================================================================
         # Dimensions
@@ -2592,7 +2589,6 @@ class MoeSharedExpertOp:
             # Gate/Up matmul
             ("shared_gu_act_cb", rmsnorm_mcast_dst_cb),
             ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
-            ("shared_gu_weights_cb_addr", shared_ctx.gu_matmul_params["weights_cb_addr"]),
             ("shared_gu_out_cb", shared_ctx.gu_out_cb),
             ("shared_gu_k_per_core", shared_ctx.gu_matmul_params["k_per_core"]),
             ("shared_gu_act_total_tiles", shared_ctx.gu_matmul_params["act_total_tiles"]),
@@ -2622,7 +2618,7 @@ class MoeSharedExpertOp:
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
         return [
-            # shared_ctx.gu_matmul_params["cb_weights_descriptor"],
+            shared_ctx.gu_matmul_params["cb_weights_descriptor"],
             shared_ctx.gu_matmul_params["cb_out_descriptor"],
             shared_ctx.gated_reduce_params["cb_group1_descriptor"],
             shared_ctx.gated_reduce_params["cb_group2_descriptor"],
@@ -3754,24 +3750,6 @@ class MoeOp:
             routed_ctx.reduce_packet_cb_descriptor = reduce_cb_packet_desc
             reduce_offset += reduce_packet_size
 
-            # CB 45: reduce_packet_header_cb (96 bytes)
-            reduce_packet_header_size = 96
-            reduce_cb_header_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                routed_ctx.reduce_packet_header_cb,
-                out_buf,
-                address_offset=reduce_offset,
-                total_size=reduce_packet_header_size,
-            )
-            reduce_cb_header_desc.core_ranges = reduce_all_cores_set
-            reduce_cb_header_desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=routed_ctx.reduce_packet_header_cb,
-                    data_format=ttnn.bfloat16,
-                    page_size=reduce_packet_header_size,
-                )
-            ]
-            routed_ctx.reduce_packet_header_cb_descriptor = reduce_cb_header_desc
-
             # CB 39-42: reduce received/output CBs (tensor-backed, same L1 address on all devices)
             reduce_payload = routed_ctx.reduce_params["payload_size_bytes"]
             routed_ctx.reduce_received_cb_descriptors = []
@@ -3849,7 +3827,6 @@ class MoeOp:
                 ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                 ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
-                ("reduce_packet_header_cb", routed_ctx.reduce_packet_header_cb),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
@@ -4437,6 +4414,7 @@ class MoeOp:
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # Execute
+        print("Running MoeOp")
         ttnn.generic_op(moe.io_tensors, mesh_program_descriptor)
 
         # Return appropriate output based on reduce mode

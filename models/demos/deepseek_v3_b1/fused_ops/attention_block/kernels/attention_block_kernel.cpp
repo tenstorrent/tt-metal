@@ -735,7 +735,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
-        get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
         get_named_compile_time_arg_val("sdpa_l1_alignment"),
         get_named_compile_time_arg_val("sdpa_page_size_bytes"),
         get_named_compile_time_arg_val("sdpa_slot_size"),

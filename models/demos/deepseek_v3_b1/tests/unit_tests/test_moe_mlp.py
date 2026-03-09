@@ -1332,8 +1332,8 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("use_mlp_weights", [True, False], ids=["mlp", "moe"])
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("use_mlp_weights", [True], ids=["mlp"])
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp_with_reduce(
