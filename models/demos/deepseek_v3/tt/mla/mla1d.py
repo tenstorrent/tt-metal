@@ -1127,13 +1127,25 @@ class MLA1D(AbstractModule):
             in_dim=1,
             out_dim=2,
         )
+        # All-gather output uses half the cores of wo_in0 (4x2 instead of 8x2)
+        ag_num_cores = wo_num_in0_cores // 2
+        ag_shard_width = wo_k // ag_num_cores
+        ag_output_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 1))}),
+                [shard_height, ag_shard_width],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
         # WO
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=2,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ag_output_memory_config,
             use_broadcast=True,
         )
 
@@ -1974,13 +1986,13 @@ class MLA1D(AbstractModule):
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
+
         wo_in0_memory_config = ttnn.create_sharded_memory_config(
             (1, 1, bsz, num_heads * v_head_dim),
             **cfg["wo_in0_memory_config"],
         )
         v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
-        v_out = ttnn.tilize(v_out)
-        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+        v_out = ttnn.tilize(v_out, memory_config=wo_in0_memory_config)
         # 1,1,32,16384 WIDTH sharded 2x8 [32,1024]
 
         return v_out
