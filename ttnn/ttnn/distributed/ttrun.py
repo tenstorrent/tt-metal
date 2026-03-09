@@ -1376,30 +1376,40 @@ def new_mode_flow(
     except (FileNotFoundError, RuntimeError) as e:
         raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
 
-    # Phase 2: Build mock cluster mapping for Phase 2 ranks
-    # Map Phase 2 ranks (from generated rank_bindings.yaml) to Phase 1 mock descriptors
-    phase2_mock_mapping: Optional[Dict[int, Path]] = None
-    if mock_rank_to_desc:
-        phase2_mock_mapping = build_phase2_mock_mapping(rankfile_path, hosts, mock_rank_to_desc)
-        if verbose and phase2_mock_mapping:
-            logger.info(
-                f"{TT_RUN_PREFIX} Phase 2 mock mapping: {len(phase2_mock_mapping)} ranks "
-                f"mapped to Phase 1 mock descriptors"
-            )
-
-    # Phase 2: Call legacy_flow with generated files
-    # Create a temporary mock cluster rank binding file for Phase 2 if needed
+    # Phase 2: Use phase2_mock_mapping.yaml from generate_rank_bindings (cluster descriptors used during allocation).
+    # The C++ tool writes this file; ttrun only reads it.
     phase2_mock_binding_path: Optional[Path] = None
-    if phase2_mock_mapping:
-        # Create a temporary YAML file with Phase 2 mock mapping
-        phase2_mock_binding_path = output_dir / "phase2_mock_mapping.yaml"
-        phase2_mock_data = {
-            "rank_to_cluster_mock_cluster_desc": {
-                str(rank): str(desc_path) for rank, desc_path in phase2_mock_mapping.items()
-            }
-        }
-        with open(phase2_mock_binding_path, "w") as f:
-            yaml.dump(phase2_mock_data, f)
+    if mock_rank_to_desc:
+        generated_phase2_mock_path = output_dir / "phase2_mock_mapping.yaml"
+        if generated_phase2_mock_path.exists():
+            phase2_mock_binding_path = generated_phase2_mock_path
+            if verbose:
+                with open(phase2_mock_binding_path, "r") as f:
+                    phase2_data = yaml.safe_load(f) or {}
+                phase2_mock_mapping = phase2_data.get("rank_to_cluster_mock_cluster_desc", {})
+                logger.info(
+                    f"{TT_RUN_PREFIX} Phase 2 mock mapping: {len(phase2_mock_mapping)} ranks from "
+                    f"generate_rank_bindings"
+                )
+
+    # Log Phase 2-only command for re-runs without re-running generate_rank_bindings
+    def _path_for_display(p: Path) -> str:
+        try:
+            return str(p.relative_to(ORIGINAL_CWD))
+        except ValueError:
+            return str(p)
+
+    phase2_parts = ["tt-run", "--rank-binding", _path_for_display(rank_bindings_path)]
+    if phase2_mock_binding_path:
+        phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
+    mpi_launcher = get_mpi_launcher()
+    rankfile_args = inject_rankfile_mpi_args(rankfile_path, mpi_args or [], mpi_launcher)
+    if rankfile_needs_oversubscribe(rankfile_path) and "--oversubscribe" not in (mpi_args or []):
+        rankfile_args = ["--oversubscribe"] + rankfile_args
+    mpi_args_str = " ".join(shlex.quote(a) for a in rankfile_args)
+    phase2_parts.extend(["--mpi-args", shlex.quote(mpi_args_str)])
+    phase2_parts.extend(["--"] + [str(a) for a in ctx.args])
+    logger.info(f"{TT_RUN_PREFIX} To re-run only Phase 2 (skip generate_rank_bindings): {' '.join(phase2_parts)}")
 
     legacy_flow(
         ctx,
