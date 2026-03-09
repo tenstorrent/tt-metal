@@ -17,8 +17,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor sharded_to_interleaved_wrapper(
-    const ttnn::Tensor& input_tensor, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
-    return ttnn::sharded_to_interleaved(input_tensor, memory_config, output_dtype);
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DataType>& output_dtype) {
+    return ttnn::sharded_to_interleaved(
+        input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
 }
 
 // TODO: Add more descriptions to the arguments
@@ -44,7 +47,7 @@ void bind_sharded_to_interleaved(nb::module_& mod) {
         doc,
         &sharded_to_interleaved_wrapper,
         nb::arg("input_tensor").noconvert(),
-        nb::arg("memory_config"),
+        nb::arg("memory_config") = nb::none(),
         nb::arg("output_dtype") = nb::none());
 }
 
