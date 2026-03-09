@@ -25,6 +25,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # 512x512 image resolution
         ((512, 512), (256, 1280), 2, 0, 0.997),
         ((512, 512), (1024, 640), 1, 0, 0.999),
+        # 1152x896 image resolution
+        ((1152, 896), (1008, 1280), 2, 0, 0.997),
+        ((1152, 896), (4032, 640), 1, 0, 0.999),
     ],
 )
 def test_feedforward(
