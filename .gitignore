@@ -68,6 +68,7 @@ __cmake_systeminformation/
 *profile_log*.csv
 **/profiler/output/*
 generated
+tt-run-generated/
 
 env/
 tags
