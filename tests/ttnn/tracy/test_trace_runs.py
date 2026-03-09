@@ -39,7 +39,7 @@ def test_with_ops(device):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for i in range(5):
+    for i in range(50):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
 
@@ -47,7 +47,7 @@ def test_with_ops(device):
 @pytest.mark.parametrize(
     "device_params,capture_count,replay_count",
     [
-        ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 100, 5),
+        ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 100, 50),
         ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 5, 600),
     ],
     indirect=["device_params"],
