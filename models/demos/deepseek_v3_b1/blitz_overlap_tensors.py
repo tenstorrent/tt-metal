@@ -222,17 +222,17 @@ def overlap_tensors(
 
     total_cores = sum(lane[0][2].core_range_set.num_cores() for lane in tensors)
 
-    byte_offsets: dict[int, int] = {}
+    byte_offsets: dict[tuple[int, int], int] = {}
 
     per_device_raw: list[list[torch.Tensor]] = [[] for _ in range(mesh_rows)]
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             dev_packed = bytearray()
-            for lane in tensors:
+            for lane_idx, lane in enumerate(tensors):
                 num_cores = lane[0][2].core_range_set.num_cores()
                 for core_idx in range(num_cores):
                     shard_data = bytearray()
-                    for _name, tensor, spec in lane:
+                    for spec_idx, (_name, tensor, spec) in enumerate(lane):
                         h_idx = spec._dim_slice_idx(0, row, col, mesh_shape)
                         w_idx = spec._dim_slice_idx(1, row, col, mesh_shape)
                         per_dev_h = spec.per_device_height(mesh_shape)
@@ -249,7 +249,7 @@ def overlap_tensors(
                             core_slice = device_slice[core_idx * shard_h : (core_idx + 1) * shard_h, :]
                         shard_raw = tilize_and_pack(core_slice.contiguous(), spec)
                         assert len(shard_raw) == spec.shard_bytes(mesh_shape)
-                        byte_offsets[id(spec)] = len(shard_data)
+                        byte_offsets[(lane_idx, spec_idx)] = len(shard_data)
                         shard_data.extend(shard_raw)
 
                     if len(shard_data) < needed_shard_bytes:
@@ -294,8 +294,8 @@ def overlap_tensors(
     )
 
     result = {}
-    for lane in tensors:
-        for name, tensor, spec in lane:
+    for lane_idx, lane in enumerate(tensors):
+        for spec_idx, (name, tensor, spec) in enumerate(lane):
             ts = spec.logical_tensor_shape or (
                 spec.per_device_height(mesh_shape),
                 spec.per_device_width(mesh_shape),
@@ -307,7 +307,7 @@ def overlap_tensors(
                 core_range_set=spec.core_range_set,
                 dtype=spec.dtype,
                 tile_shape=(spec.tile_h, spec.tile_w),
-                byte_offset=byte_offsets[id(spec)],
+                byte_offset=byte_offsets[(lane_idx, spec_idx)],
                 total_size=spec.shard_bytes(mesh_shape),
             )
 
