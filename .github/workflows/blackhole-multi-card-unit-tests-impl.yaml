@@ -109,7 +109,7 @@ jobs:
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
             timeout: 30
-            test-type: loudbox
+            test-type: loudbox-or-qb
             owner_id: U08E1JCMAJF
           YAML_EOF
           )
@@ -122,13 +122,15 @@ jobs:
           if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
           loudbox_json="false"
           if [[ "$runner_label" == *LoudBox* ]]; then loudbox_json="true"; fi
+          quietbox_json="false"
+          if [[ "$runner_label" == *LLMBox* ]]; then quietbox_json="true"; fi
 
           if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" \
-              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" \
-              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
           fi
 
           echo "Filtered tests: $filtered_tests"
