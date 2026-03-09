@@ -53,7 +53,11 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     uint32_t id,
     std::function<std::lock_guard<std::mutex>()> lock_api_function,
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)),
+    MeshCommandQueueBase(
+        mesh_device,
+        id,
+        create_passthrough_thread_pool(mesh_device->impl().get_context_id()),
+        std::move(lock_api_function)),
     active_distributed_context_(std::move(distributed_context)) {}
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
@@ -68,7 +72,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return false;  // Skip hardware write for mock devices
     }
     // Wait for idle here to ensure that a previous program potentially using this address space
@@ -98,7 +102,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
     // Wait for idle here to ensure that programs emitting this data are complete.
@@ -130,7 +134,7 @@ void SDMeshCommandQueue::wait_for_cores_idle() {
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip workload execution for mock devices
     }
 
@@ -180,7 +184,8 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                         // Device had active cores before this program was launched
                         // Merge the active cores from the previous program with the active cores from the current
                         // program
-                        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+                        const auto& hal =
+                            tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
                         auto program_cores = program.impl().logical_cores();
                         for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
                              core_type_index++) {
@@ -216,13 +221,17 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) { wait_for_cores_idle(); }
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
     wait_for_cores_idle();
     for (const auto& device : mesh_device_->get_devices()) {
-        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+            .get_cluster()
+            .dram_barrier(device->id());
+        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+            .get_cluster()
+            .l1_barrier(device->id());
     }
 
     // Barrier across all active hosts of the mesh

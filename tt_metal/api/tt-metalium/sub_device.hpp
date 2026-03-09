@@ -11,6 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 
 namespace tt::tt_metal {
 
@@ -22,6 +23,9 @@ class SubDeviceImpl;
 class SubDevice {
 public:
     explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
+    // Experimental API for creating a SubDevice which will use the given MetalEnv. May be removed or changed in the
+    // future.
+    explicit SubDevice(tt::tt_metal::MetalEnv& env, tt::stl::Span<const CoreRangeSet> cores);
     // Internal constructor (internal use only)
     SubDevice(SubDeviceImpl&& impl);
 

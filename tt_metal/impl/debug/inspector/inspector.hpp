@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"

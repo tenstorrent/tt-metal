@@ -110,7 +110,7 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
+void initialize_worker_config_buf_mgr(const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
@@ -159,6 +159,7 @@ void write_program_command_sequence(
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
+    const Hal& hal,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,

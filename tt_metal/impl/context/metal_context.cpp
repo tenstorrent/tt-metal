@@ -17,8 +17,11 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
+#include "distributed/mesh_device_impl.hpp"
+#include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "device/firmware/risc_firmware_initializer.hpp"
@@ -44,6 +47,7 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
@@ -52,7 +56,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
+                    namespace tt::tt_metal {
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};
@@ -97,6 +101,23 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
         max_worker_l1_size);
 }
 }  // namespace
+
+ContextId extract_context_id(const IDevice* device) {
+    // get_mesh_device is not const
+    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
+        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
+        return mesh_device->impl().get_context_id();
+    }
+    // Must be a Device if not MeshDevice
+    const auto* device_concrete = dynamic_cast<const Device*>(device);
+    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
+    return device_concrete->get_context_id();
+}
+
+ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
+    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
+    return mesh_device->impl().get_context_id();
+}
 
 void MetalContext::initialize_device_manager(
     const std::vector<ChipId>& device_ids,
@@ -153,7 +174,15 @@ void MetalContext::initialize(
     }
 
     initialized_ = true;
+
+    // Resolve the dispatch core axis for this context's architecture.
+    // The default DispatchCoreConfig leaves axis_ unset, causing get_dispatch_core_axis()
+    // to call get_default_axis() which only checks the DEFAULT context. For non-default
+    // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here.
     dispatch_core_config_ = dispatch_core_config;
+    dispatch_core_config_.set_dispatch_core_axis(
+        resolve_dispatch_core_axis(get_cluster().arch(), get_fabric_tensix_config()));
+
     num_hw_cqs_ = num_hw_cqs;
     worker_l1_size_ = worker_l1_size;
     l1_bank_remap_ = l1_bank_remap;
@@ -165,17 +194,20 @@ void MetalContext::initialize(
         max_alignment);
 
     // Initialize inspector
-    inspector_data_ = Inspector::initialize();
-    // Set fw_compile_hash for Inspector RPC build environment info
-    Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
-
+    if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        inspector_data_ = Inspector::initialize();
+        // Set fw_compile_hash for Inspector RPC build environment info
+        Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
+    }
     // Reset timeout detection state
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
     bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
-    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
-    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
+        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
+    dispatch_query_manager_ =
+        std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
@@ -186,10 +218,10 @@ void MetalContext::initialize(
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
-        dprint_server_ = std::make_unique<DPrintServer>(rtoptions());
+        dprint_server_ = std::make_unique<DPrintServer>(*this->env_, num_hw_cqs, dispatch_core_config_);
     }
-    watcher_server_ =
-        std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
+    // Watcher server always created, since we use it to register kernels
+    watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
     if (rtoptions().get_experimental_noc_debug_dump_enabled()) {
@@ -236,7 +268,7 @@ void MetalContext::initialize(
     risc_firmware_initializer_->run_async_build_phase(device_ids);
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+    if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
@@ -259,8 +291,10 @@ void MetalContext::initialize(
 void MetalContext::reinitialize_dispatch_managers() {
     // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
     // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
-    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config_, num_hw_cqs_);
-    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
+        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl());
+    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(
+        *this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs_);
 }
 
 void MetalContext::set_fast_dispatch_mode(bool enable) {
@@ -434,7 +468,7 @@ void MetalContext::teardown_dispatch_state() {
 MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
     env_(&metal_env), context_id_(context_id) {
     check_context_id(context_id);
-    device_manager_ = std::make_unique<DeviceManager>();
+    device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
 MetalContext::~MetalContext() {
@@ -545,7 +579,9 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    bool updated = MetalEnvAccessor(*env_).impl().set_fabric_config(
+    // This env pointer was provided to both descriptors so they
+    // will see the updated config as well
+    MetalEnvAccessor(*env_).impl().set_fabric_config(
         fabric_config,
         reliability_mode,
         num_routing_planes,
@@ -553,18 +589,6 @@ void MetalContext::set_fabric_config(
         fabric_udm_mode,
         fabric_manager,
         router_config);
-    if (updated) {
-        // Update the risc firmware context descriptor with the new fabric settings
-        // as well due to transient state between the descriptor creation and the fabric config update
-        if (risc_fw_context_descriptor_) {
-            risc_fw_context_descriptor_->fabric_config_ = fabric_config;
-            risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
-            risc_fw_context_descriptor_->num_routing_planes_ = num_routing_planes;
-            risc_fw_context_descriptor_->fabric_tensix_config_ = fabric_tensix_config;
-            risc_fw_context_descriptor_->fabric_udm_mode_ = fabric_udm_mode;
-            risc_fw_context_descriptor_->fabric_manager_ = fabric_manager;
-        }
-    }
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -632,19 +656,11 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvImpl& env_accessor = MetalEnvAccessor(*env_).impl();
     std::string mock_cluster_desc_path =
         env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
     context_descriptor_ = std::make_shared<ContextDescriptor>(
-        hal(),
-        get_cluster(),
-        rtoptions(),
-        env_accessor.get_fabric_config(),
-        env_accessor.get_fabric_reliability_mode(),
-        env_accessor.get_fabric_tensix_config(),
-        env_accessor.get_fabric_udm_mode(),
-        env_accessor.get_fabric_manager(),
-        env_accessor.get_fabric_router_config(),
+        env_,
+        this,
         num_hw_cqs,
         l1_small_size,
         trace_region_size,
@@ -660,17 +676,9 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
 
     // Fabric settings are used during risc init. In some cases, fabric is already running
     // and we don't want to reset the cores
-    MetalEnvImpl& env_accessor = MetalEnvAccessor(*env_).impl();
     risc_fw_context_descriptor_ = std::make_shared<ContextDescriptor>(
-        hal(),
-        get_cluster(),
-        rtoptions(),
-        env_accessor.get_fabric_config(),
-        env_accessor.get_fabric_reliability_mode(),
-        env_accessor.get_fabric_tensix_config(),
-        env_accessor.get_fabric_udm_mode(),
-        env_accessor.get_fabric_manager(),
-        env_accessor.get_fabric_router_config(),
+        env_,
+        this,
         num_hw_cqs,
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,

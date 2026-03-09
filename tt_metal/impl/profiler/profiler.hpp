@@ -71,6 +71,9 @@ private:
     // Device ID
     ChipId device_id{};
 
+    // Device
+    const IDevice* device;
+
     // Device frequency
     int device_core_frequency{};
 
@@ -252,6 +255,9 @@ private:
 
     // Get the trace id and trace id count
     std::pair<uint64_t, uint64_t> getTraceIdAndCount(uint32_t run_host_id, uint32_t device_trace_counter) const;
+
+    // Check the device context to seeif the profiler is enabled for this device
+    bool profiler_enabled() const;
 
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
