@@ -103,6 +103,42 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+### 12. No cross-run learning mechanism
+**Status**: Proposed — HIGH PRIORITY
+**Discovered**: layer_norm self-reflection (Mar 9, 2026)
+
+The pipeline ran 3 times for layer_norm with no knowledge transfer between runs. Each run started from scratch with new analysis, new design, new build, and new kernels. Approximately 3.5 hours of agent compute was wasted across the first two runs, all of which was entirely superseded by the third run.
+
+**Root cause**: The orchestrator has no concept of "prior attempts" for an operation. When re-running, it does not check for existing artifacts, prior failure patterns, or design decisions that were already validated or rejected.
+
+**Proposal**: Before starting a pipeline run, check for prior artifacts (op_design.md, .tdd_state.json, analysis files, REPORT.md). If found, generate a "prior run lessons" summary: (a) what approach was tried, (b) what failed and why, (c) what should be different. Inject this into the architect's context. Consider persisting a `run_history.jsonl` file that accumulates across runs.
+
+---
+
+### 13. Architect does not validate broadcast types against tilized tensor shapes
+**Status**: Proposed
+**Discovered**: layer_norm self-reflection (Mar 9, 2026)
+
+The architect specified `mul<NONE>` (element-wise) for gamma/beta operations, but gamma/beta tensors shaped `[1,1,1,W]` only have valid data in row 0 when tilized. The kernel writer had to independently discover that ROW broadcast was needed. This worked in layer_norm because the kernel writer was skilled, but a less capable writer would have produced a silent numerical bug.
+
+**Root cause**: The architect does not reason about what happens to tensor data after tilization. A `[1,1,1,W]` tensor tilized into 32x32 tiles has its values in row 0 of each tile; rows 1-31 are padding zeros.
+
+**Proposal**: Add a mandatory "Tilized Data Layout Check" to architect instructions. For every binary/broadcast op, the architect must annotate which region of each CB tile contains valid data (All, Row0, Col0, Scalar) and verify the broadcast type matches.
+
+---
+
+### 14. Reference selection can drive incorrect layout assumptions
+**Status**: Proposed
+**Discovered**: layer_norm self-reflection (Mar 9, 2026)
+
+In Run 2 of layer_norm, the discovery phase selected tilize and untilize as references. This led the architect to design around ROW_MAJOR input/output with tilize/untilize in the compute pipeline, adding unnecessary complexity and wasting an entire pipeline run (~54 minutes).
+
+**Root cause**: Reference selection does not consider whether the reference's input/output layout matches the target operation's natural domain. LayerNorm naturally operates on tiled data; tilize/untilize references are irrelevant.
+
+**Proposal**: Add a layout-match gate to reference selection. If the target operation naturally works on TILE_LAYOUT data (normalization, reduction, matmul), do not select references whose primary function is layout conversion (tilize, untilize).
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +151,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | No cross-run learning | HIGH | MEDIUM | HIGH |
+| 13 | Broadcast type validation | MEDIUM | SMALL | MEDIUM |
+| 14 | Reference layout gate | HIGH | SMALL | HIGH |
