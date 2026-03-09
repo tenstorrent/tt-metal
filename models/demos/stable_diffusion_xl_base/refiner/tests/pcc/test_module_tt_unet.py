@@ -9,7 +9,7 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
@@ -82,20 +82,15 @@ def run_refiner_unet_model(
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_refiner_unet_location,
     iterations=1,
 ):
-    assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
-    model_name = "stabilityai/stable-diffusion-xl-refiner-1.0"
-    model_location = model_location_generator(
-        "stable-diffusion-xl-refiner-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     unet = UNet2DConditionModel.from_pretrained(
-        model_name if not is_ci_v2_env else model_location,
+        sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env or is_ci_v2_env,
-        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -215,9 +210,11 @@ def test_unet(
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_refiner_unet_location,
     reset_seeds,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     run_refiner_unet_model(
         device,
         image_resolution,
@@ -230,5 +227,5 @@ def test_unet(
         debug_mode,
         is_ci_env,
         is_ci_v2_env,
-        model_location_generator,
+        sdxl_refiner_unet_location,
     )

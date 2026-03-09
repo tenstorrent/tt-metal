@@ -38,28 +38,21 @@ def test_clip_encoder(
     expected_pcc: float,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_base_text_encoder_location,
+    sdxl_base_text_encoder_2_location,
+    sdxl_base_tokenizer_location,
+    sdxl_base_tokenizer_2_location,
     reset_seeds,
 ) -> None:
-    model_name_checkpoint = "stabilityai/stable-diffusion-xl-base-1.0"
-
-    # Download model for CI v2
-    model_location = model_location_generator(
-        f"stable-diffusion-xl-base-1.0/{clip_path}",
-        download_if_ci_v2=True,
-        ci_v2_timeout_in_s=1800,
-    )
-    tokenizer_location = model_location_generator(
-        f"stable-diffusion-xl-base-1.0/{tokenizer_path}",
-        download_if_ci_v2=True,
-        ci_v2_timeout_in_s=1800,
-    )
-
     has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
 
+    # Select the appropriate fixture based on the clip_path
+    model_location = sdxl_base_text_encoder_2_location if has_projection else sdxl_base_text_encoder_location
+    tokenizer_location = sdxl_base_tokenizer_2_location if has_projection else sdxl_base_tokenizer_location
+
     # Build kwargs conditionally to avoid transformers subfolder=None bug
-    model_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
-    tokenizer_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
+    model_kwargs = {"local_files_only": is_ci_v2_env or is_ci_env}
+    tokenizer_kwargs = {"local_files_only": is_ci_v2_env or is_ci_env}
 
     if not is_ci_v2_env:
         model_kwargs["subfolder"] = clip_path
@@ -67,16 +60,16 @@ def test_clip_encoder(
 
     if has_projection:
         hf_model = CLIPTextModelWithProjection.from_pretrained(
-            model_location if is_ci_v2_env else model_name_checkpoint,
+            model_location,
             **model_kwargs,
         )
     else:
         hf_model = CLIPTextModel.from_pretrained(
-            model_location if is_ci_v2_env else model_name_checkpoint,
+            model_location,
             **model_kwargs,
         )
     tokenizer = CLIPTokenizer.from_pretrained(
-        tokenizer_location if is_ci_v2_env else model_name_checkpoint,
+        tokenizer_location,
         **tokenizer_kwargs,
     )
 

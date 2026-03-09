@@ -39,7 +39,16 @@ UNET_LOOP_SEED = {
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_inference_steps, debug_mode):
+def run_unet_inference(
+    ttnn_device,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
+    image_resolution,
+    prompts,
+    num_inference_steps,
+    debug_mode,
+):
     # Get seed from configuration
     height, width = image_resolution
     resolution_key = f"{height}x{width}"
@@ -51,12 +60,12 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
 
     guidance_scale = 5.0
 
-    # 1. Load components
+    # 1. Load components - use CIv2 LFC when available
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     # 2. Load tt_unet and tt_scheduler
@@ -315,7 +324,6 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
 @pytest.mark.parametrize(
     "image_resolution",
     [
@@ -337,9 +345,22 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
 def test_unet_loop(
     device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
     image_resolution,
     prompt,
     loop_iter_num,
     debug_mode,
 ):
-    return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
+    return run_unet_inference(
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        sdxl_base_pipeline_location,
+        image_resolution,
+        prompt,
+        loop_iter_num,
+        debug_mode,
+    )

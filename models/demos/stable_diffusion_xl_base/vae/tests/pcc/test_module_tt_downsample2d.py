@@ -10,7 +10,7 @@ from diffusers import AutoencoderKL
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import from_channel_last_ttnn, to_channel_last_ttnn
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
@@ -45,14 +45,18 @@ def test_downsample2d(
     dilation,
     debug_mode,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_vae_location,
     reset_seeds,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_vae_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="vae",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "vae",
     )
     vae.eval()
     state_dict = vae.state_dict()
