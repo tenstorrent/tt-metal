@@ -134,7 +134,8 @@ def run_ring_joint_sdpa(
         exp_approx_mode=False,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        submesh.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
