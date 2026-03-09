@@ -142,6 +142,10 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
         )
 
+        logger.info("Waiting for all stages to be initialized...")
+        model_pipeline.barrier()  # Wait for all stages to be initialized
+        logger.info("All stages initialized")
+
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
