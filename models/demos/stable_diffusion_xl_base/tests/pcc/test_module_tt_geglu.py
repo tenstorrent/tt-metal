@@ -26,6 +26,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # 512x512 image resolution
         ((512, 512), (256, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
         ((512, 512), (1024, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
+        # 1152x896 image resolution
+        ((1152, 896), (1008, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
+        ((1152, 896), (4032, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
     ],
 )
 def test_geglu(device, image_resolution, input_shape, module_path, pcc, is_ci_env, reset_seeds):

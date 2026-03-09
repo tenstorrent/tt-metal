@@ -8,6 +8,9 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_512x51
 from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024 import (
     ModelOptimisations1024x1024,
 )
+from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1152x896 import (
+    ModelOptimisations1152x896,
+)
 
 
 def get_image_resolution_from_model_config(model_config):
@@ -15,8 +18,8 @@ def get_image_resolution_from_model_config(model_config):
     Get the image resolution from a ModelOptimisations instance.
 
     Args:
-        model_config: A ModelOptimisations instance (either ModelOptimisations512x512 or
-            ModelOptimisations1024x1024).
+        model_config: A ModelOptimisations instance (either ModelOptimisations512x512,
+            ModelOptimisations1024x1024, or ModelOptimisations1152x896).
 
     Returns:
         tuple: A tuple of (height, width) representing the image resolution.
@@ -33,10 +36,12 @@ def get_image_resolution_from_model_config(model_config):
         return (512, 512)
     elif isinstance(model_config, ModelOptimisations1024x1024):
         return (1024, 1024)
+    elif isinstance(model_config, ModelOptimisations1152x896):
+        return (1152, 896)
     else:
         raise ValueError(
             f"Unsupported model_config type: {type(model_config).__name__}. "
-            "Expected ModelOptimisations512x512 or ModelOptimisations1024x1024."
+            "Expected ModelOptimisations512x512, ModelOptimisations1024x1024, or ModelOptimisations1152x896."
         )
 
 
@@ -53,7 +58,7 @@ def load_model_optimisations(
 
     Args:
         image_resolution (tuple): A tuple of (height, width) representing the image resolution.
-            Supported resolutions are (512, 512) and (1024, 1024).
+            Supported resolutions are (512, 512), (1024, 1024), and (1152, 896).
         conv_act_dtype: Optional dtype for convolution activations. Defaults to ttnn.bfloat16.
         conv_w_dtype: Optional dtype for convolution weights. Defaults to ttnn.bfloat16.
         attention_weights_dtype: Optional dtype for attention weights. Defaults to ttnn.bfloat8_b.
@@ -61,8 +66,8 @@ def load_model_optimisations(
         force_full_grid (bool): Optional flag to force full grid. Defaults to False.
 
     Returns:
-        ModelOptimisations512x512 or ModelOptimisations1024x1024: The appropriate ModelOptimisation
-            object based on the image resolution.
+        ModelOptimisations512x512, ModelOptimisations1024x1024, or ModelOptimisations1152x896: The
+            appropriate ModelOptimisation object based on the image resolution.
 
     Raises:
         ValueError: If the image_resolution is not supported.
@@ -70,6 +75,7 @@ def load_model_optimisations(
     Example:
         >>> model_opt = load_model_optimisations((512, 512))
         >>> model_opt = load_model_optimisations((1024, 1024))
+        >>> model_opt = load_model_optimisations((1152, 896))
     """
     if not isinstance(image_resolution, (tuple, list)) or len(image_resolution) != 2:
         raise ValueError(f"image_resolution must be a tuple or list of length 2, got {image_resolution}")
@@ -91,7 +97,10 @@ def load_model_optimisations(
         return ModelOptimisations512x512(**init_kwargs)
     elif (height, width) == (1024, 1024):
         return ModelOptimisations1024x1024(**init_kwargs)
+    elif (height, width) == (1152, 896):
+        return ModelOptimisations1152x896(**init_kwargs)
     else:
         raise ValueError(
-            f"Unsupported image_resolution: {image_resolution}. " "Only (512, 512) and (1024, 1024) are supported."
+            f"Unsupported image_resolution: {image_resolution}. "
+            "Only (512, 512), (1024, 1024), and (1152, 896) are supported."
         )
