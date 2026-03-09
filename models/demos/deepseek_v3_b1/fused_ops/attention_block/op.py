@@ -11,7 +11,6 @@ import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
-    OverlappedTensor,
 )
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
@@ -211,6 +210,7 @@ class AttentionBlock:
         kv_cache_tensor,
         position_ids_tensor,
         scale,
+        output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
         sender_coord,
@@ -313,13 +313,7 @@ class AttentionBlock:
         post_sdpa_weights2_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights2_tensor.fused_tensor)
         _debug_checkpoint("collected post-SDPA weights2 per-device tensors")
 
-        attention_block_output_is_overlapped = isinstance(attention_block_output_tensor, OverlappedTensor)
-        if attention_block_output_is_overlapped:
-            attention_block_output_fused_per_device = ttnn.get_device_tensors(
-                attention_block_output_tensor.fused_tensor
-            )
-        else:
-            attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
+        attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
 
         assert (
             attention_block_semaphores is not None
@@ -3970,6 +3964,7 @@ class AttentionBlock:
         kv_cache_tensor,
         position_ids_tensor,
         scale,
+        output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
         sender_coord,
@@ -4016,6 +4011,7 @@ class AttentionBlock:
             kv_cache_tensor,
             position_ids_tensor,
             scale,
+            output_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
             sender_coord,
