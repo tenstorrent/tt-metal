@@ -57,8 +57,9 @@ ttnn::SmallVector<int> generate_reduce_dim(
         }
         int dim_i = dim[i];
         TT_FATAL(
-            dim_i >= 0 && dim_i < rank,
-            "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}",
+            (dim_i >= 0 && dim_i < rank) || (rank == 0 && dim_i == 0),
+            "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}, "
+            "or exactly 0 for a rank 0 tensor.",
             dim_i,
             i,
             rank);
