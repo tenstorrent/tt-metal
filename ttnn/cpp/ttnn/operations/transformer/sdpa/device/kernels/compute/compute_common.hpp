@@ -830,8 +830,8 @@ void calculate_exponential_first_column() {
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = ckernel::sfpu::
-                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+            sfpi::vFloat result =
+                ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                     val, scale_bf16);
             sfpi::dst_reg[0] = result;
 
@@ -923,11 +923,11 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_prev =
+            ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_worker =
+            ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         // Store exponentials for optional debug/pack-out
