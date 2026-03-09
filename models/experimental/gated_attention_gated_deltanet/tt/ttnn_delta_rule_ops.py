@@ -112,7 +112,7 @@ def fused_decay_and_write_ttnn(
     h,
     k_t,
     delta,
-    g_t,
+    decay_t,
     beta_t,
     device=None,
 ):
@@ -130,9 +130,8 @@ def fused_decay_and_write_ttnn(
     V = h.shape[3]
 
     # decay: [B, H] -> [B, H, 1, 1]
-    decay = ttnn.exp(g_t)
-    # Keep recurrent path in BF16; decay follows h dtype.
-    decay = ttnn.typecast(decay, ttnn.bfloat16)
+    # decay_t is already exp(g_t); keep recurrent path in BF16.
+    decay = ttnn.typecast(decay_t, ttnn.bfloat16)
     decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # beta: [B, H] -> [B, H, 1, 1]
@@ -190,7 +189,7 @@ def recurrent_delta_rule_step_ttnn(
     k_t,
     v_t,
     beta_t,
-    g_t,
+    decay_t,
     h,
     seq_len=None,
     device=None,
@@ -239,12 +238,12 @@ def recurrent_delta_rule_step_ttnn(
     # 2. Compute delta (pre-beta): delta = v_t - v_read
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # 3. Fused-style decay + write to state
+    # 3. Fused-style decay + write to state (decay_t already = exp(g_t))
     h = fused_decay_and_write_ttnn(
         h=h,
         k_t=k_t,
         delta=delta,
-        g_t=g_t,
+        decay_t=decay_t,
         beta_t=beta_t,
         device=device,
     )
@@ -327,6 +326,9 @@ def recurrent_gated_delta_rule_ttnn(
     beta = ttnn.typecast(beta, ttnn.bfloat16)
     g = ttnn.typecast(g, ttnn.bfloat16)
 
+    # Precompute exp(g) once and slice per timestep in the loop.
+    g_exp = ttnn.exp(g)
+
     if initial_state is not None:
         h = ttnn.typecast(initial_state, ttnn.bfloat16)
     else:
@@ -338,9 +340,9 @@ def recurrent_gated_delta_rule_ttnn(
         k_t = k[:, :, i]  # [B, H, K]
         v_t = v[:, :, i]  # [B, H, V]
         beta_t = beta[:, :, i]  # [B, H]
-        g_t = g[:, :, i]  # [B, H]
+        decay_t = g_exp[:, :, i]  # [B, H]
 
-        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h, seq_len=T, device=device)
+        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, decay_t, h, seq_len=T, device=device)
         outputs.append(o_t)
 
     outputs_4d = [ttnn.reshape(o, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG) for o in outputs]
