@@ -19,6 +19,8 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     dprint/test_print_config_register.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
+    watcher/test_mcast_wrap_around.cpp
+    watcher/test_mcast_wrap_around_device.cpp
     watcher/test_noc_sanitize_delays.cpp
     watcher/test_sanitize.cpp
     watcher/test_pause.cpp
