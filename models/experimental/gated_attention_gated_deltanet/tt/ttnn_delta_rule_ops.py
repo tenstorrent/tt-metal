@@ -356,9 +356,10 @@ def fused_decay_and_write_ttnn(
     # delta: [B, H, V] -> [B, H, 1, V]
     d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # tilize matmul inputs
     k_col = ttnn.to_layout(k_col, ttnn.TILE_LAYOUT)
     d_row = ttnn.to_layout(d_row, ttnn.TILE_LAYOUT)
+    k_col = ttnn.to_memory_config(k_col, ttnn.L1_MEMORY_CONFIG)
+    d_row = ttnn.to_memory_config(d_row, ttnn.L1_MEMORY_CONFIG)
 
     matmul_compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -422,6 +423,7 @@ def recurrent_delta_rule_step_ttnn(
     k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT)
     v_t = ttnn.to_layout(v_t, ttnn.TILE_LAYOUT)
     h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
+    h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
 
     read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -440,6 +442,7 @@ def recurrent_delta_rule_step_ttnn(
 
     k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     k_row = ttnn.to_layout(k_row, ttnn.TILE_LAYOUT)
+    k_row = ttnn.to_memory_config(k_row, ttnn.L1_MEMORY_CONFIG)
     v_read = ttnn.matmul(
         k_row,
         h,
@@ -462,6 +465,7 @@ def recurrent_delta_rule_step_ttnn(
 
     q_row = ttnn.reshape(q_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     q_row = ttnn.to_layout(q_row, ttnn.TILE_LAYOUT)
+    q_row = ttnn.to_memory_config(q_row, ttnn.L1_MEMORY_CONFIG)
     o_t = ttnn.matmul(
         q_row,
         h,
