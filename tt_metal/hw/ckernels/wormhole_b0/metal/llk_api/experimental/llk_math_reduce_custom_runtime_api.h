@@ -68,3 +68,15 @@ inline void llk_math_reduce_block_max_row_runtime(const uint dst_index) {
  * for a certain use case and the LLK team does not guarantee any degree of generality.
  */
 inline void llk_math_reduce_block_max_row_reinit_runtime() { _llk_math_reduce_block_max_row_reinit_runtime_(); }
+
+/**
+ * Short reinitialization for block-based reduce_max_row operation after a matmul.
+ * Reprograms address modifiers and MOP configuration with runtime block_ct_dim.
+ *
+ * This LLK API function is used only to re-initialize the address modifiers and MOP
+ * after a matmul operation in an SDPA inner loop.
+ */
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim) {
+    _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
+}
