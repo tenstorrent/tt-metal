@@ -10,11 +10,19 @@
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
-    // same arg indices as in reader_bmm_8bank for reuse
     uintptr_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t Mt = get_arg_val<uint32_t>(2);
     uint32_t Nt = get_arg_val<uint32_t>(4);
     uint32_t batch = get_arg_val<uint32_t>(7);
+    uint32_t lane_id = 0;
+#ifdef ARCH_QUASAR
+    uint32_t consumer_mask = get_arg_val<uint32_t>(8);  // 0 for single-writer; output DFB consumer_risc_mask for 4-lane
+    if (consumer_mask != 0) {
+        std::uint64_t hartid;
+        asm volatile("csrr %0, mhartid" : "=r"(hartid));
+        lane_id = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
+    }
+#endif
 
     constexpr int onetile = 1;
 #ifdef ARCH_QUASAR
@@ -34,7 +42,10 @@ void kernel_main() {
 
     // C is MN so we iterate in tile RM order
     for (uint32_t nb = 0; nb < batch; nb++) {
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {      // output tile of C
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {  // output tile of C
+#ifdef ARCH_QUASAR
+            if (consumer_mask != 0 && mt_C % 4 != lane_id) continue;
+#endif
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) {  // output tile index of C
                 // bmm will generate C's tiles C=A*B, MN=MK*KN, in row major order, we just read them from CB and write
                 // out to DRAM

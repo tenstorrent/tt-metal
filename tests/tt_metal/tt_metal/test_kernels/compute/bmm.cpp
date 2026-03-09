@@ -6,6 +6,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
+#include "ckernel.h"
 #include "experimental/dataflow_buffer.h"
 #else
 #include "experimental/circular_buffer.h"
@@ -27,6 +28,7 @@ void kernel_main() {
     uint32_t Nt = get_compile_time_arg_val(3);
 
 #ifdef ARCH_QUASAR
+    uint32_t lane_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     experimental::DataflowBuffer dfb0(0);
     experimental::DataflowBuffer dfb1(1);
     experimental::DataflowBuffer dfb_out(2);
@@ -43,7 +45,10 @@ void kernel_main() {
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
     for (uint32_t nb = 0; nb < batch; nb++) {
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {  // output tile of C
+#ifdef ARCH_QUASAR
+            if (mt_C % 4 != lane_id) continue;
+#endif
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
                 acquire_dst();
