@@ -147,7 +147,8 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    uint32_t out_ready_sem_target = 0;
+    // Snapshot the semaphore's value at startup
+    uint32_t out_ready_sem_target = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
@@ -320,7 +321,7 @@ void kernel_main() {
                 }
             }
         }
-        // Reset the semaphore before the next batch to avoid overflow
+        // Reset between batches so the counter doesn't overflow across batches.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
 
@@ -329,4 +330,7 @@ void kernel_main() {
         mm_sem_target = 0;
 #endif
     }
+
+    // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
