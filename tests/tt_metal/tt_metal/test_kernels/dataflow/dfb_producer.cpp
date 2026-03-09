@@ -30,6 +30,8 @@ void kernel_main() {
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
+    DPRINT << "HERE" << ENDL();
+
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
         if constexpr (implicit_sync) {

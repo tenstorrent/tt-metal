@@ -19,6 +19,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_
     experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
     uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
     TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, tc_id);
+    DPRINT << "llk_wait_for_free_tiles: dfb_id " << dfb_id << "tc_id: " << tc_id << ENDL();
 }
 
 /**
@@ -33,6 +34,7 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
     uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
     // Update the tile counters values
     TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
+    DPRINT << "llk_push_tiles: dfb_id " << dfb_id << "tc_id: " << tc_id << ENDL();
 
     const std::uint32_t num_words = num_tiles * local_dfb_interface.stride_size;
 
