@@ -13,7 +13,7 @@
  * in0 tile shape: [{1, 2, 4, 8}, 32]
  * in1 tile shape: [32, 32]
  * rt_dim: 1
- * ct_dim: {1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16}
+ * ct_dim: any integer from 1 to 16
  * kt_dim: even number from 2 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
@@ -25,10 +25,12 @@ template <bool transpose = false>
 inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
+    const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t operandA_unpack_dst_format = unpack_dst_format[operandA_id];
 
-    _llk_unpack_AB_custom_mm_init_<transpose>(operandB_face_r_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_init_<transpose>(operandB_face_r_dim, operandA_unpack_dst_format, ct_dim);
 }
 
 template <bool read_transposed = false>
