@@ -48,3 +48,9 @@
   - ./build/test_deit/test_deit_for_image_classification models/experimental/deit/deit_cpp/deit_model/deit_classifier_model.pt
 - Distilled teacher variant:
   - ./build/test_deit/test_deit_for_image_classification_with_teacher models/experimental/deit/deit_cpp/deit_model/deit_teacher_model.pt
+- Test Perf:
+  - ./build/test_deit/test_deit_e2e_optimized models/experimental/deit/deit_cpp/deit_model/deit_classifier_model.pt
+
+
+## Result
+- ttnn_deit_224x224_batch_size_1. One inference iteration time (sec): 0.012335, FPS: 81.07, inference time (sec): 0.077563, sync output time(sec): 0.045783

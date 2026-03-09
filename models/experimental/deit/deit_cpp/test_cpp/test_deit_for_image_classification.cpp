@@ -234,12 +234,11 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
         ttnn::operations::trace::execute_trace(device.get(), tid, ttnn::QueueId(0), false);
 
         profiler.stop("inference_time");
-
-        profiler.start("sync_output");
-        auto tt_logits_host_prof = ttnn::from_device(tt_logits_trace);
-        profiler.stop("sync_output");
     }
 
+    profiler.start("sync_output");
+    auto tt_logits_host_final = ttnn::from_device(tt_logits_trace, false);
+    profiler.stop("sync_output");
     ttnn::operations::trace::release_trace(device.get(), tid);
     device->disable_and_clear_program_cache();
 
@@ -248,11 +247,16 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     double inference_time_avg = (inference_time_total + sync_time_total) / 10.0;
     double fps = batch_size / inference_time_avg;
 
-    std::cout << std::fixed << std::setprecision(6);
-    std::cout << "ttnn_deit_for_image_classification_batch_size_" << batch_size
-              << ". One inference iteration time (sec): " << inference_time_avg << ", FPS: " << std::setprecision(2)
-              << fps << ", inference time (sec): " << std::setprecision(6) << (inference_time_total / 10.0)
-              << ", sync output time(sec): " << (sync_time_total / 10.0) << std::endl;
+    std::cout << fmt::format(
+                     "ttnn_deit_for_image_classification_batch_size_{}. One inference iteration time (sec): {:.6f}, "
+                     "FPS: {:.2f}, "
+                     "inference time (sec): {:.6f}, sync output time(sec): {:.6f}",
+                     batch_size,
+                     inference_time_avg,
+                     fps,
+                     inference_time_total,
+                     sync_time_total)
+              << std::endl;
 
     // Clean up device resources
     device->close();
