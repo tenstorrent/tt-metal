@@ -10,7 +10,12 @@ namespace ttml::metal {
 
 ttnn::Tensor swiglu_fw(
     const ttnn::Tensor& input_tensor, const ttnn::Tensor& w1, const ttnn::Tensor& w2, const ttnn::Tensor& w3) {
-    return ttnn::prim::ttml_swiglu_fw(input_tensor, w1, w2, w3, std::nullopt);
+    return ttnn::prim::ttml_swiglu_fw(
+        input_tensor,  // [B, 1, S, C]
+        w1,            // [1, 1, C, H]
+        w2,            // [1, 1, H, C]
+        w3,            // [1, 1, C, H]
+        std::nullopt);
 }
 
 }  // namespace ttml::metal
