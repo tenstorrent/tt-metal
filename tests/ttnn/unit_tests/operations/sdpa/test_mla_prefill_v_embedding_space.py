@@ -6,6 +6,7 @@ import torch
 import ttnn
 from loguru import logger
 import pytest
+from models.common.utility_functions import skip_with_llk_assert
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -158,6 +159,7 @@ def run_flash_mla_prefill_impl(
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_unpacker_AB_configured_correctly.")
 @pytest.mark.parametrize(
     "batch, seq_len_q, seq_len_kv, nh, nkv, kv_lora_rank, d_rope, v_head_dim, q_chunk_first, v_chunk_first, q_chunk_second, v_chunk_second",
     [
