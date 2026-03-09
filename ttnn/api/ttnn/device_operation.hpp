@@ -457,12 +457,12 @@ typename device_operation_t::tensor_return_value_t launch(
 
         if (!custom_topologies.empty()) {
             // Use custom topologies provided by the op
-            tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&custom_topologies, topology_idx = size_t{0}](const Tensor& output_tensor) mutable {
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&custom_topologies, topology_idx = size_t{0}](Tensor& output_tensor) mutable {
                     TT_FATAL(
                         topology_idx < custom_topologies.size(),
                         "Not enough custom topologies provided for output tensors");
-                    return output_tensor.with_tensor_topology(custom_topologies[topology_idx++]);
+                    output_tensor.update_tensor_topology(custom_topologies[topology_idx++]);
                 },
                 tensor_return_value);
         } else {
@@ -471,13 +471,13 @@ typename device_operation_t::tensor_return_value_t launch(
             auto output_topology_result =
                 detail::compute_output_placements_and_shape(input_tensors, first_tensor.value());
 
-            tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&output_topology_result](const Tensor& output_tensor) {
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&output_topology_result](Tensor& output_tensor) {
                     auto topology = tt::tt_metal::TensorTopology(
                         output_topology_result.second,
                         output_topology_result.first,
                         output_tensor.tensor_topology().mesh_coords());
-                    return output_tensor.with_tensor_topology(topology);
+                    output_tensor.update_tensor_topology(topology);
                 },
                 tensor_return_value);
         }

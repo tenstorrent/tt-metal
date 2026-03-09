@@ -543,6 +543,18 @@ struct visit_object_of_type_t<T> {
 
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& /*callback*/, T& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, const T& value) const {
         callback(value);
     }
@@ -562,14 +574,28 @@ struct visit_object_of_type_t<std::optional<T>> {
             visit_object_of_type<object_t>(callback, value.value());
         }
     }
+
+    template <typename object_t>
+    void operator()(auto&& callback, std::optional<T>& value) const {
+        if (value.has_value()) {
+            visit_object_of_type<object_t>(callback, value.value());
+        }
+    }
 };
 
 template <typename T>
 struct visit_object_of_type_t<std::vector<T>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::vector<T>& value) const {
-        for (auto& tensor : value) {
-            visit_object_of_type<object_t>(callback, tensor);
+        for (const auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
+        }
+    }
+
+    template <typename object_t>
+    void operator()(auto&& callback, std::vector<T>& value) const {
+        for (auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
         }
     }
 };
@@ -578,8 +604,15 @@ template <typename T, auto N>
 struct visit_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::array<T, N>& value) const {
-        for (auto& tensor : value) {
-            visit_object_of_type<object_t>(callback, tensor);
+        for (const auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
+        }
+    }
+
+    template <typename object_t>
+    void operator()(auto&& callback, std::array<T, N>& value) const {
+        for (auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
         }
     }
 };
@@ -588,6 +621,13 @@ template <typename... Ts>
 struct visit_object_of_type_t<std::tuple<Ts...>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::tuple<Ts...>& value) const {
+        [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (visit_object_of_type<object_t>(callback, std::get<Ns>(value)), ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+    }
+
+    template <typename object_t>
+    void operator()(auto&& callback, std::tuple<Ts...>& value) const {
         [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
             (visit_object_of_type<object_t>(callback, std::get<Ns>(value)), ...);
         }(std::make_index_sequence<sizeof...(Ts)>{});
@@ -606,6 +646,19 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, T&& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        visit_object_of_type<object_t>(callback, object.attribute_values());
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& callback, T& object) const {
         constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
         visit_object_of_type<object_t>(callback, object.attribute_values());
     }
@@ -636,6 +689,20 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, T&& object) const {
+        reflect::for_each(
+            [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); },
+            object);
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& callback, T& object) const {
         reflect::for_each(
             [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); },
             object);
