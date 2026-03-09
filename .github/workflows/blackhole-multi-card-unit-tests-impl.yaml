@@ -28,6 +28,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      model:
+        description: 'Filter tests by model-name (default: all)'
+        required: false
+        type: string
+        default: "all"
 
 jobs:
   generate-matrix:
@@ -111,6 +116,7 @@ jobs:
             timeout: 30
             test-type: loudbox-or-qb
             owner_id: U08E1JCMAJF
+            model-name: deepseek_prefill
           YAML_EOF
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
@@ -131,6 +137,13 @@ jobs:
           else
             filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
               '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
+          fi
+
+          # Filter by model if specified
+          model_filter="${{ inputs.model }}"
+          if [ "$model_filter" != "all" ]; then
+            filtered_tests=$(echo "$filtered_tests" | jq -c --arg model "$model_filter" \
+              '[.[] | select(.["model-name"] == $model or .["model-name"] == null)]')
           fi
 
           echo "Filtered tests: $filtered_tests"
