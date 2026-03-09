@@ -413,12 +413,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     log_info(
         tt::LogMetal,
-        "Creating DFB {} with {} producers (mask 0x{:x}) and {} consumers (mask 0x{:x})",
+        "Creating DFB {} with {} producers and {} consumers",
         dfb->id,
         config.num_producers,
-        config.producer_risc_mask,
-        config.num_consumers,
-        config.consumer_risc_mask);
+        config.num_consumers);
 
     uint32_t capacity;
     switch (config.cap) {
@@ -534,7 +532,6 @@ void ProgramImpl::finalize_single_dfb_config(
     bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
     bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
     bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
-    bool use_remapper = core_has_remapper && (producer_is_tensix_only || consumer_is_tensix_only);
     TT_FATAL(
         !(producer_is_tensix_only && consumer_is_tensix_only),
         "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
@@ -550,14 +547,15 @@ void ProgramImpl::finalize_single_dfb_config(
     bool dm_dm_blocked = (config.cap == ::experimental::AccessPattern::BLOCKED) &&
                          !producer_is_tensix_only && !consumer_is_tensix_only;
 
+    // Remapper is needed only for BLOCKED 1-to-many with Tensix
+    // Adding a TC to a remapper config entry removes it from the default Tensix<->DM mirror group, even with
+    // remapper enabled the default mirroring holds for STRIDED cases
+    bool use_remapper = core_has_remapper &&
+                        (config.cap == ::experimental::AccessPattern::BLOCKED) &&
+                        !dm_dm_blocked;
+
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
-
-    // For DM-DM BLOCKED, override: producer owns num_consumers TCs (one shared with each consumer)
-    // if (dm_dm_blocked) {
-    //     num_producer_tcs = config.num_consumers;
-    //     num_consumer_tcs = 1;
-    // }
 
     std::vector<uint8_t> producer_risc_ids;
     std::vector<uint8_t> consumer_risc_ids;

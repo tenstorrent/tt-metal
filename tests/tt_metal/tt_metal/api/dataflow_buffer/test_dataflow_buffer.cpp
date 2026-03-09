@@ -645,7 +645,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB1Sx4B) {
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB1Sx4B) { // is this valid?
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -692,7 +692,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx1B) {
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx1B) { // is this valid?
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -740,7 +740,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx4B) { // tensix producer needs to be fixed
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx4B) { // is this valid?
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -787,7 +787,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx2B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx2B) { // fix tensix producer
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx2B) { // is this valid?
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -833,7 +833,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB2Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB2Sx4B) { // fix tensix producer
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB2Sx4B) { // is this valid?
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
