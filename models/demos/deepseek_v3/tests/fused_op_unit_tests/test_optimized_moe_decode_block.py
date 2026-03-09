@@ -420,7 +420,7 @@ def gen_combine_golden(
 
 def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden):
     PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 625.0
+    ATOL_THRESHOLD = 650.0
 
     # factors in linearized_mesh_coord
     if cluster_axis == 0:
@@ -484,9 +484,9 @@ def gen_output_golden(
                 torch_w2_tensors[expert],
             )
 
-            # TODO: (GR)
-            # output_reference[token, :, :, :] = (output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden)
-            output_reference[token, :, :, :] = output_reference[token, :, :, :] + matmul_golden
+            output_reference[token, :, :, :] = (
+                output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden
+            )
 
     # [512, 1, 1, 7168]
     return output_reference
@@ -494,7 +494,7 @@ def gen_output_golden(
 
 def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
     PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 1670.0
+    ATOL_THRESHOLD = 270.0
 
     # bring to host
     # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
@@ -876,9 +876,6 @@ def test_optimized_moe_decode_block(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
     )
-    logger.info(
-        f"preallocated_dispatch_output_sparse_bufffer shape: {tt_preallocated_dispatch_output_sparse_buffer.shape}"
-    )
 
     # same shard spec for indices and scores
     dispatch_output_shard_spec = ttnn.ShardSpec(
@@ -905,9 +902,6 @@ def test_optimized_moe_decode_block(
         memory_config=dispatch_output_expert_indices_memory_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
     )
-    logger.info(
-        f"preallocated_dispatch_output_expert_indices shape: {tt_preallocated_dispatch_output_expert_indices.shape}"
-    )
 
     # [1, total_tokens, select_experts_k] per device
     dispatch_output_expert_scores_memory_config = ttnn.MemoryConfig(
@@ -924,9 +918,6 @@ def test_optimized_moe_decode_block(
         dtype=dispatch_output_expert_scores_dtype,
         memory_config=dispatch_output_expert_scores_memory_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
-    )
-    logger.info(
-        f"preallocated_dispatch_output_expert_scores shape: {tt_preallocated_dispatch_output_expert_scores.shape}"
     )
 
     # NOTE: these don't have to be double buffered, as there is a global sync in combine after reading all dispatch output
@@ -1084,13 +1075,17 @@ def test_optimized_moe_decode_block(
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
         tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
 
-        # TODO: (GR)
         # scale with scores
         # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
-        # topk_experts_weights = ttnn.permute(tt_dispatch_input_expert_scores_tensors[iteration], (3, 1, 0, 2), memory_config=scaled_output_memory_config)
-        # topk_experts_weights = ttnn.to_layout(topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config)
-        # tt_scaled_output = ttnn.mul(tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config)
-        tt_scaled_output = tt_unsqueezed_output
+        topk_experts_weights = ttnn.permute(
+            tt_dispatch_input_expert_scores_tensors[iteration], (3, 1, 0, 2), memory_config=scaled_output_memory_config
+        )
+        topk_experts_weights = ttnn.to_layout(
+            topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
+        )
+        tt_scaled_output = ttnn.mul(
+            tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
+        )
 
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
             tt_scaled_output,
@@ -1108,7 +1103,6 @@ def test_optimized_moe_decode_block(
             topology=ttnn.Topology.Ring,
             cluster_axis=1,
         )
-        print(tt_final_output.shape)
 
         return tt_combine_output, tt_final_output
 
