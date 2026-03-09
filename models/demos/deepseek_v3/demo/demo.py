@@ -379,6 +379,8 @@ def run_demo(
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
             )
+        else:
+            raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
         pre_tokenized_prompts = None
         if random_weights:
