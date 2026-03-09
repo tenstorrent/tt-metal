@@ -2221,7 +2221,11 @@ class ModelArgs:
                 return 1
             return 1 << ((n - 1).bit_length())
 
-        lm_head_size = math.ceil(self.vocab_size / self.num_devices)
+        lm_head_size = (
+            (self.padded_vocab_size // self.num_devices)
+            if self.padded_vocab_size
+            else math.ceil(self.vocab_size / self.num_devices)
+        )
         lm_head_size_per_device = next_power_of_2(lm_head_size)
         return ttnn.create_sharded_memory_config(
             shape=(32, lm_head_size_per_device // prefetcher.ring_size),
