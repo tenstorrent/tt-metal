@@ -143,6 +143,11 @@ void write_launch_msg_to_core(
 
     cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
     tt_driver_atomics::sfence();
+    if (chip == 0) {
+        std::cout << "Writing launch msg to device " << chip << " " << core.str() << std::endl;
+        std::cout << "Launch msg address: " << launch_addr << std::endl;
+        std::cout << "Launch msg size: " << msg.size() << std::endl;
+    }
     if (send_go) {
         cluster.write_core_immediate(go_msg.data(), go_msg.size(), {static_cast<size_t>(chip), core}, go_addr);
     }

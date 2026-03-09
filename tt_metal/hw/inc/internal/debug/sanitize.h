@@ -162,7 +162,8 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
-    if (addr < MEM_L1_BASE) {
+    // 88240
+    if (addr < MEM_L1_BASE + 96 + 12896 && addr >= MEM_L1_BASE + 96) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {

@@ -527,9 +527,11 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     }
     auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
     fprintf(reader.f, "%s: ", core_str.c_str());
-
     uint64_t mailbox_addr =
         MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+    fprintf(reader.f, "Mailbox address: %u\n", mailbox_addr);
+    uint32_t full_size = hal.get_dev_msgs_factory(programmable_core_type).size_of<dev_msgs::mailboxes_t>();
+    fprintf(reader.f, "Mailbox size: %u\n", full_size);
 
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
     uint32_t mailbox_read_size =

@@ -738,6 +738,11 @@ bool DataMovementKernel::configure(
     const ll_api::memory& binary_mem =
         *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
+    if (device_id == 0) {
+        std::cout << "Writing binary to device " << device_id << " " << worker_core.str() << std::endl;
+        std::cout << "Binary address: " << base_address + offsets[riscv_id] << std::endl;
+    }
+    TT_FATAL(base_address + offsets[riscv_id] != 0, "Binary address is 0");
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
     return true;
@@ -780,6 +785,11 @@ bool ComputeKernel::configure(
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     int32_t dm_count = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
+        if (device_id == 0) {
+            std::cout << "Writing binary to device " << device_id << " " << worker_core.str() << std::endl;
+            std::cout << "Binary address: " << base_address + offsets[dm_count + trisc_id] << std::endl;
+        }
+        TT_FATAL(base_address + offsets[dm_count + trisc_id] != 0, "Binary address is 0");
         llrt::write_binary_to_address(
             *binaries[trisc_id], device_id, worker_core, base_address + offsets[dm_count + trisc_id]);
     }

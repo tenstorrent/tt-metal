@@ -395,6 +395,7 @@ int main() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
+            DPRINT << "Waiting for GO message" << ENDL();
             if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
                 (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
                 (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
@@ -417,6 +418,7 @@ int main() {
                     notify_dispatch_core_done(dispatch_addr, noc_index);
                 }
             }
+            DPRINT << "GO message received" << ENDL();
         }
 
         WAYPOINT("GD");
@@ -506,6 +508,7 @@ int main() {
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                DPRINT << "Kernel Started" << ENDL();
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
             } else {
