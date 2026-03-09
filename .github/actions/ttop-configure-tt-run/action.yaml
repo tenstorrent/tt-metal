@@ -32,18 +32,8 @@ runs:
     env:
       DIRECTORY: ${{ inputs.directory }}
     run: |
-      if [[ "$DIRECTORY" == *".."* ]]; then
-        echo "Error: directory cannot contain path traversal sequences"
-        exit 1
-      fi
-      if [[ "$DIRECTORY" =~ [;\|\&\$\`] ]]; then
-        echo "Error: directory contains shell metacharacters"
-        exit 1
-      fi
-      if [[ ! "$DIRECTORY" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-        echo "Error: directory contains invalid characters. Only alphanumeric, dots, underscores, hyphens, and slashes allowed."
-        exit 1
-      fi
+      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+      validate_path "$DIRECTORY" --allow-relative || exit 1
   - name: Create directory
     shell: bash
     env:
@@ -79,11 +69,12 @@ runs:
       printf "%s" "$MGD_CONTENT" | sudo tee "$DIRECTORY/mgd.textproto"
 
       # If mgd is empty and mgdFile is not - assign the mgdFile to mesh_graph_desc_path
+      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
       if [ -z "$MGD_CONTENT" ] && [ -n "$MGD_FILE" ]; then
         echo "No MGD spec provided but MGD file path given. Will use $MGD_FILE as mesh_graph_desc_path in rank_bindings.yaml"
-        echo "mesh_graph_desc_path=$MGD_FILE" >> $GITHUB_OUTPUT
+        set_github_output "mesh_graph_desc_path" "$MGD_FILE"
       else
-        echo "mesh_graph_desc_path=$DIRECTORY/mgd.textproto" >> $GITHUB_OUTPUT
+        set_github_output "mesh_graph_desc_path" "$DIRECTORY/mgd.textproto"
       fi
   - name: Create rank bindings file
     shell: bash
@@ -136,13 +127,12 @@ runs:
     env:
       DIRECTORY: ${{ inputs.directory }}
     run: |
+      source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
       echo "Copying files to all the workers..."
       while IFS= read -r hostname; do
         echo "Processing worker: $hostname"
-        # Validate hostname (RFC 1123 compliant - alphanumeric, dots, hyphens only)
-        # Must start and end with alphanumeric character
-        if [[ ! "$hostname" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]; then
-          echo "::warning::Skipping invalid hostname: $hostname (must be valid hostname format)"
+        if ! validate_hostname "$hostname"; then
+          validation_warning "Skipping invalid hostname: $hostname"
           continue
         fi
         # Create directory on worker

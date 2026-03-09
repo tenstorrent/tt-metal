@@ -50,11 +50,8 @@ runs:
         WORKFLOW_RUN_ID: ${{ inputs.workflow_run_id }}
         GITHUB_REPO: ${{ github.repository }}
       run: |
-        # Validate workflow run ID is numeric
-        if [[ ! "$WORKFLOW_RUN_ID" =~ ^[0-9]+$ ]]; then
-          echo "::error::Invalid workflow run ID: must be numeric"
-          exit 1
-        fi
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_workflow_id "$WORKFLOW_RUN_ID" || exit 1
         echo "Fetching artifacts from workflow run: $WORKFLOW_RUN_ID"
 
         # Get workflow run details
@@ -87,11 +84,10 @@ runs:
           exit 1
         fi
 
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
         echo "Available artifacts:"
         echo "$ARTIFACTS"
-        echo "artifacts<<EOF" >> $GITHUB_OUTPUT
-        echo "$ARTIFACTS" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        set_github_output "artifacts" "$ARTIFACTS"
 
     - name: Download artifacts
       id: download
@@ -200,9 +196,9 @@ runs:
           rm -rf "$TEMP_DIR"
         fi
 
-        # Set outputs - use the original artifact names so downstream jobs can reference them
-        echo "build-artifact-name=$BUILD_ARTIFACT" >> $GITHUB_OUTPUT
-        echo "wheel-artifact-name=${WHEEL_ARTIFACT:-}" >> $GITHUB_OUTPUT
-        echo "packages-artifact-name=${PACKAGES_ARTIFACT:-}" >> $GITHUB_OUTPUT
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        set_github_output "build-artifact-name" "$BUILD_ARTIFACT"
+        set_github_output "wheel-artifact-name" "${WHEEL_ARTIFACT:-}"
+        set_github_output "packages-artifact-name" "${PACKAGES_ARTIFACT:-}"
 
         echo "✓ Artifacts downloaded successfully to $WORK_DIR"

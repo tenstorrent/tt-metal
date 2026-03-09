@@ -66,36 +66,35 @@ jobs:
       runs-on-labels: ${{ steps.config.outputs.runs-on-labels }}
       arch-name: ${{ steps.config.outputs.arch-name }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: false
       - id: config
         shell: bash
         env:
           RUNNER_LABEL: ${{ inputs.runner-label }}
         run: |
-
-          # Determine runs-on labels based on runner type
+          source .github/scripts/security/input-validation.sh
 
           if [[ "$RUNNER_LABEL" == "topology-6u" ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
-            # Galaxy/topology-6u runners and BH-LoudBox require bare-metal (not cloud-virtual-machine)
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "bare-metal"]'
           elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000)$ ]]; then
-            # Standard single-card runners use cloud-virtual-machine
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "cloud-virtual-machine"]'
           else
-            # Fallback to viommu-stable format (output as JSON array)
             echo "Warning: unexpected runner label '$RUNNER_LABEL'; using fallback VIOMMU label." >&2
             VIOMMU_LABEL='tt-ubuntu-2204-'$RUNNER_LABEL'-viommu-stable'
             RUNS_ON='["'$VIOMMU_LABEL'"]'
           fi
 
-          # Determine architecture name based on runner type
           if [[ "$RUNNER_LABEL" =~ ^(N150|N300|config-t3000|topology-6u)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
             ARCH_NAME="wormhole_b0"
           else
             ARCH_NAME="blackhole"
           fi
 
-          echo "runs-on-labels=$RUNS_ON" >> $GITHUB_OUTPUT
-          echo "arch-name=$ARCH_NAME" >> $GITHUB_OUTPUT
+          set_github_output "runs-on-labels" "$RUNS_ON"
+          set_github_output "arch-name" "$ARCH_NAME"
           echo "Determined runs-on: $RUNS_ON"
           echo "Determined arch: $ARCH_NAME"
 
@@ -149,7 +148,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           submodules: recursive
@@ -256,87 +255,46 @@ jobs:
           TEST_SCRIPT_INPUT: ${{ inputs.test-script }}
         run: |
           set -euo pipefail
+          source .github/scripts/security/input-validation.sh
 
           # Parse commit range from combined input
           IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "${COMMIT_RANGE}"
 
-          # Validate parsed values
           if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
-            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+            validation_error "Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
             exit 1
           fi
 
+          validate_commit_sha "$GOOD_COMMIT" || exit 1
+          validate_commit_sha "$BAD_COMMIT" || exit 1
           echo "✓ Parsed good commit: $GOOD_COMMIT"
           echo "✓ Parsed bad commit: $BAD_COMMIT"
 
-          # Validate that commits exist
+          # Validate that commits exist in the repo
           if ! git cat-file -e "$GOOD_COMMIT^{commit}" 2>/dev/null; then
-            echo "ERROR: Good commit does not exist: $GOOD_COMMIT"
+            validation_error "Good commit does not exist: $GOOD_COMMIT"
             exit 1
           fi
-
           if ! git cat-file -e "$BAD_COMMIT^{commit}" 2>/dev/null; then
-            echo "ERROR: Bad commit does not exist: $BAD_COMMIT"
+            validation_error "Bad commit does not exist: $BAD_COMMIT"
             exit 1
           fi
-
           echo "✓ Both commits exist in repository"
 
-          # Validate that good commit is an ancestor of bad commit
           if ! git merge-base --is-ancestor "$GOOD_COMMIT" "$BAD_COMMIT" 2>/dev/null; then
-            echo "ERROR: Good commit ($GOOD_COMMIT) is not an ancestor of bad commit ($BAD_COMMIT)"
-            echo "This means the good commit does not come before the bad commit in git history."
-            echo "Please verify your commit range."
+            validation_error "Good commit ($GOOD_COMMIT) is not an ancestor of bad commit ($BAD_COMMIT)"
             exit 1
           fi
-
           echo "✓ Good commit is an ancestor of bad commit"
 
-          # Validate timeout and attempts (from env)
-
-          if [ -z "$TIMEOUT" ]; then
-            echo "ERROR: Timeout must be provided"
-            exit 1
-          fi
-
-          # Validate timeout is a positive integer
-          if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: Timeout must be a positive integer (got: '$TIMEOUT')"
-            exit 1
-          fi
-
-          if [ "$TIMEOUT" -le 0 ]; then
-            echo "ERROR: Timeout must be greater than 0 (got: $TIMEOUT)"
-            exit 1
-          fi
-
-          if [ -z "$ATTEMPTS" ]; then
-            echo "ERROR: Attempts must be provided"
-            exit 1
-          fi
-
-          # Validate attempts is a positive integer
-          if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: Attempts must be a positive integer (got: '$ATTEMPTS')"
-            exit 1
-          fi
-
-          if [ "$ATTEMPTS" -le 0 ]; then
-            echo "ERROR: Attempts must be greater than 0 (got: $ATTEMPTS)"
-            exit 1
-          fi
-
+          validate_positive_integer "$TIMEOUT" "Timeout" 1440 || exit 1
+          validate_positive_integer "$ATTEMPTS" "Attempts" 100 || exit 1
           echo "✓ Timeout: $TIMEOUT minutes"
           echo "✓ Attempts: $ATTEMPTS"
 
-          # Validate test-script is provided (from env as TEST_SCRIPT_INPUT)
+          validate_required TEST_SCRIPT_INPUT || exit 1
           TEST_SCRIPT="$TEST_SCRIPT_INPUT"
-          if [ -z "$TEST_SCRIPT" ]; then
-            echo "ERROR: test-script must be provided"
-            exit 1
-          fi
 
-          # Determine if it's a gist or inline command
           if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
             echo "✓ Detected gist URL: $TEST_SCRIPT"
           else
@@ -346,9 +304,8 @@ jobs:
           echo ""
           echo "All inputs validated successfully"
 
-          # Export parsed values as outputs for next step
-          echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
-          echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
+          set_github_output "good-commit" "$GOOD_COMMIT"
+          set_github_output "bad-commit" "$BAD_COMMIT"
 
       - name: Run Git Bisect
         shell: bash

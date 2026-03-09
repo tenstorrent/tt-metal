@@ -65,7 +65,7 @@ jobs:
       new-sha: ${{ steps.update.outputs.new-sha }}
     steps:
       - name: Setup
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           token: ${{ secrets.LLK_UPLIFT_PAT }}
@@ -289,7 +289,7 @@ jobs:
     steps:
       - name: Checkout
         if: matrix.should-run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Trigger and monitor workflow
         if: matrix.should-run == 'true'
@@ -439,7 +439,7 @@ jobs:
       pr-number: ${{ steps.check.outputs.pr-number }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           token: ${{ secrets.LLK_UPLIFT_PAT }}
 
@@ -554,7 +554,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Finalize PR
         env:

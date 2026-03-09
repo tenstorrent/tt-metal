@@ -26,13 +26,11 @@ runs:
   steps:
     - name: Validate docker image tag format
       shell: bash
+      env:
+        DOCKER_IMAGE_TAG: ${{ inputs.docker-image-tag }}
       run: |
-        if [[ ! "${{ inputs.docker-image-tag }}" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]]; then
-          echo "Error: docker-image-tag must be in format REPO_NAME:VERSION"
-          echo "Provided: ${{ inputs.docker-image-tag }}"
-          exit 1
-        fi
-        echo "✅ Docker image tag format is valid"
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_docker_image "$DOCKER_IMAGE_TAG" || exit 1
 
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
@@ -50,15 +48,21 @@ runs:
     - name: Parse repository name
       id: parse-repo
       shell: bash
+      env:
+        DOCKER_IMAGE_TAG: ${{ inputs.docker-image-tag }}
       run: |
-        FULL_TAG="${{ inputs.docker-image-tag }}"
-        REPO_NAME="${FULL_TAG%:*}"
-        echo "repo-name=${REPO_NAME}" >> $GITHUB_OUTPUT
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        REPO_NAME="${DOCKER_IMAGE_TAG%:*}"
+        set_github_output "repo-name" "$REPO_NAME"
         echo "Extracted repository name: ${REPO_NAME}"
 
     - name: Pull, tag and push image
       shell: bash
+      env:
+        DOCKER_IMAGE_TAG: ${{ inputs.docker-image-tag }}
+        REPO_NAME: ${{ steps.parse-repo.outputs.repo-name }}
+        NEW_TAG: ${{ inputs.new-tag }}
       run: |
-        LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:${{ inputs.new-tag }}"
-        echo "Copying ${{ inputs.docker-image-tag }} to ${LATEST_TAG}"
-        regctl image copy ${{ inputs.docker-image-tag }} ${LATEST_TAG}
+        LATEST_TAG="${REPO_NAME}:${NEW_TAG}"
+        echo "Copying $DOCKER_IMAGE_TAG to ${LATEST_TAG}"
+        regctl image copy "$DOCKER_IMAGE_TAG" "$LATEST_TAG"

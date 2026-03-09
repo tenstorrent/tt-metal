@@ -100,7 +100,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -117,30 +117,36 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: |
+          source .github/scripts/security/input-validation.sh
+          set_github_output "home" "${HOME}"
 
       - name: Prepare custom weights cache directory
         id: cache-config
+        env:
+          RECALCULATE_CACHE: ${{ inputs.recalculate_weights_cache }}
+          INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
         run: |
+          source .github/scripts/security/input-validation.sh
           CACHE_BASE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
-          if [[ "${{ inputs.recalculate_weights_cache }}" == "Yes" ]]; then
-            if [[ -z "${{ inputs.new_cache_dir }}" ]]; then
-              echo "::error::recalculate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
+          if [[ "$RECALCULATE_CACHE" == "Yes" ]]; then
+            if [[ -z "${INPUT_CACHE_DIR}" ]]; then
+              validation_error "recalculate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
               exit 1
             fi
-            DIR_NAME="${{ inputs.new_cache_dir }}"
+            DIR_NAME="${INPUT_CACHE_DIR}"
             if [[ "${DIR_NAME}" =~ [/[:space:][:cntrl:]] || "${DIR_NAME}" == "." || "${DIR_NAME}" == ".." ]]; then
-              echo "::error::new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
+              validation_error "new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
               exit 1
             fi
             if [[ "${DIR_NAME}" == "CI" ]]; then
-              echo "::error::new_cache_dir cannot be 'CI' — this would overwrite the production cache."
+              validation_error "new_cache_dir cannot be 'CI' — this would overwrite the production cache."
               exit 1
             fi
             NEW_DIR="${CACHE_BASE}/${DIR_NAME}"
             RESOLVED=$(realpath -m "${NEW_DIR}")
             if [[ "${RESOLVED}" != "${CACHE_BASE}/"* || "${RESOLVED}" == "${CACHE_BASE}/CI" ]]; then
-              echo "::error::new_cache_dir resolves outside the allowed cache base or to the CI directory."
+              validation_error "new_cache_dir resolves outside the allowed cache base or to the CI directory."
               exit 1
             fi
             echo "Creating new cache directory: ${NEW_DIR}"
@@ -149,9 +155,9 @@ jobs:
             rm -rf "${NEW_DIR}/test_io_cache"
             cp -r "${CACHE_BASE}/CI/test_io_cache" "${NEW_DIR}/test_io_cache"
             chmod -R a+rwX "${NEW_DIR}"
-            echo "cache_override=${NEW_DIR}" >> $GITHUB_OUTPUT
+            set_github_output "cache_override" "${NEW_DIR}"
           else
-            echo "cache_override=" >> $GITHUB_OUTPUT
+            set_github_output "cache_override" ""
           fi
 
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────

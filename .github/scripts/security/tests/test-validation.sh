@@ -1032,6 +1032,28 @@ fi
 echo ""
 
 # ============================================
+# validate_positive_integer
+# ============================================
+echo "Testing validate_positive_integer..."
+
+assert_returns_0 "positive_integer: valid 1" validate_positive_integer "1"
+assert_returns_0 "positive_integer: valid 42" validate_positive_integer "42"
+assert_returns_0 "positive_integer: valid 999" validate_positive_integer "999"
+assert_returns_0 "positive_integer: with label" validate_positive_integer "30" "Timeout"
+assert_returns_0 "positive_integer: at max" validate_positive_integer "100" "Value" "100"
+assert_returns_1 "positive_integer: empty" validate_positive_integer ""
+assert_returns_1 "positive_integer: zero" validate_positive_integer "0"
+assert_returns_1 "positive_integer: negative" validate_positive_integer "-1"
+assert_returns_1 "positive_integer: float" validate_positive_integer "3.14"
+assert_returns_1 "positive_integer: text" validate_positive_integer "abc"
+assert_returns_1 "positive_integer: mixed" validate_positive_integer "12abc"
+assert_returns_1 "positive_integer: exceeds max" validate_positive_integer "101" "Value" "100"
+assert_returns_1 "positive_integer: injection attempt" validate_positive_integer '$(whoami)'
+assert_returns_1 "positive_integer: newline injection" validate_positive_integer $'5\n6'
+
+echo ""
+
+# ============================================
 # Unicode / Encoding Edge Cases
 # ============================================
 echo "Testing unicode/encoding edge cases..."

@@ -429,6 +429,38 @@ validate_workflow_id() {
     return 0
 }
 
+# Validates a positive integer (e.g. timeout, retry count, port number)
+# $1: value to validate
+# $2: optional label for error messages (default: "Value")
+# $3: optional maximum value
+validate_positive_integer() {
+    local value="$1"
+    local label="${2:-Value}"
+    local max="${3:-}"
+
+    if [[ -z "$value" ]]; then
+        validation_error "$label cannot be empty"
+        return 1
+    fi
+
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        validation_error "$label must be a positive integer"
+        return 1
+    fi
+
+    if [[ "$value" == "0" ]]; then
+        validation_error "$label must be greater than zero"
+        return 1
+    fi
+
+    if [[ -n "$max" ]] && [[ "$value" -gt "$max" ]]; then
+        validation_error "$label exceeds maximum of $max"
+        return 1
+    fi
+
+    return 0
+}
+
 # Validates Docker image references
 # Checks format: [registry/][namespace/]name[:tag|@digest]
 validate_docker_image() {

@@ -27,11 +27,8 @@ runs:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
         EXPLICIT_NODES: ${{ inputs.explicit }}
       run: |
-        # Validate allocation name (alphanumeric, hyphen, underscore only)
-        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
-          exit 1
-        fi
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
         apiVersion: tenstorrent.com/v1alpha1
@@ -53,11 +50,8 @@ runs:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
         SPEC_INPUT: ${{ inputs.spec }}
       run: |
-        # Validate allocation name
-        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
-          exit 1
-        fi
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
         SPEC=$(printf '%s\n' "$SPEC_INPUT" | sed 's/^/  /')
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
@@ -82,10 +76,7 @@ runs:
       env:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        # Validate allocation name
-        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
-          exit 1
-        fi
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
         echo "Waiting for allocation to be ready..."
         kubectl wait --for=jsonpath='{.status.phase}'=Allocated "allocation/$ALLOCATION_NAME" --timeout=999m

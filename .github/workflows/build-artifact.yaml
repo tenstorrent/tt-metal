@@ -239,7 +239,7 @@ jobs:
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -282,7 +282,7 @@ jobs:
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -425,7 +425,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}

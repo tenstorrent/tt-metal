@@ -14,9 +14,6 @@ runs:
       env:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        # Validate allocation name (alphanumeric, hyphen, underscore only)
-        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
-          exit 1
-        fi
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
         kubectl delete "allocation/$ALLOCATION_NAME" --ignore-not-found

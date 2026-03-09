@@ -720,7 +720,7 @@ jobs:
       github.event.schedule == '0 2 * * *'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -801,7 +801,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -896,7 +896,7 @@ jobs:
     runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -962,7 +962,7 @@ jobs:
           mkdir -p /tmp/vectors
           # Move all JSON files from subdirectories to /tmp/vectors
           find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           clean: false
       - id: set-matrix
@@ -1025,7 +1025,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1167,7 +1167,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1312,7 +1312,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1369,7 +1369,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github/actions

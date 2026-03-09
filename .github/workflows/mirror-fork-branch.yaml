@@ -32,6 +32,11 @@ jobs:
   mirror-fork-branch:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout base repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
       - name: Parse input
         id: parse_input
         shell: bash
@@ -39,35 +44,22 @@ jobs:
           SOURCE_INPUT: ${{ github.event.inputs.source }}
           GITHUB_REPO: ${{ github.repository }}
         run: |
-          # Expect input format: <fork_owner>:<branch>
+          source .github/scripts/security/input-validation.sh
           IFS=":" read -r FORK_OWNER SRC_BRANCH <<< "$SOURCE_INPUT"
           if [ -z "$FORK_OWNER" ] || [ -z "$SRC_BRANCH" ]; then
-            echo "Error: Input must be in the format <fork_owner>:<branch>"
+            validation_error "Input must be in the format <fork_owner>:<branch>"
             exit 1
           fi
-          # Validate fork owner and branch (alphanumeric, hyphens, underscores, dots, slashes for branch)
-          if [[ ! "$FORK_OWNER" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-            echo "Error: Invalid fork owner format"
-            exit 1
-          fi
-          if [[ ! "$SRC_BRANCH" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
-            echo "Error: Invalid branch name format"
-            exit 1
-          fi
-          # Derive the fork repository name from the current repository.
+          validate_username "$FORK_OWNER" || exit 1
+          validate_branch_name "$SRC_BRANCH" || exit 1
           ORIGIN_REPO_NAME=$(echo "$GITHUB_REPO" | cut -d'/' -f2)
           FORK_REPO="${FORK_OWNER}/${ORIGIN_REPO_NAME}"
           echo "FORK_OWNER: $FORK_OWNER"
           echo "Source branch: $SRC_BRANCH"
           echo "Fork repository: $FORK_REPO"
-          echo "fork_owner=$FORK_OWNER" >> $GITHUB_OUTPUT
-          echo "src_branch=$SRC_BRANCH" >> $GITHUB_OUTPUT
-          echo "fork_repo=$FORK_REPO" >> $GITHUB_OUTPUT
-
-      - name: Checkout base repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+          set_github_output "fork_owner" "$FORK_OWNER"
+          set_github_output "src_branch" "$SRC_BRANCH"
+          set_github_output "fork_repo" "$FORK_REPO"
 
       - name: Configure Git
         run: |
@@ -98,11 +90,8 @@ jobs:
           else
             TARGET_BRANCH="mirror/${FORK_OWNER}/${SRC_BRANCH}"
           fi
-          # Validate target branch name
-          if [[ ! "$TARGET_BRANCH" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
-            echo "Error: Invalid target branch name format"
-            exit 1
-          fi
+          source .github/scripts/security/input-validation.sh
+          validate_branch_name "$TARGET_BRANCH" || exit 1
           echo "Using target branch: $TARGET_BRANCH"
           # If the branch exists locally, update it; if not, create it.
           if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
@@ -113,7 +102,7 @@ jobs:
             echo "Branch '$TARGET_BRANCH' does not exist. Creating it from fork branch."
             git checkout -b "$TARGET_BRANCH" "fork/${SRC_BRANCH}"
           fi
-          echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
+          set_github_output "target_branch" "$TARGET_BRANCH"
 
       - name: Push branch to origin
         env:
@@ -137,13 +126,14 @@ jobs:
           PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPO}/pulls?head=${HEAD_QUERY}")
+          source .github/scripts/security/input-validation.sh
           PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number // empty')
           if [ -z "$PR_NUMBER" ]; then
             echo "No PR found"
-            echo "issue=" >> $GITHUB_OUTPUT
+            set_github_output "issue" ""
           else
             echo "Found PR #$PR_NUMBER"
-            echo "issue=$PR_NUMBER" >> $GITHUB_OUTPUT
+            set_github_output "issue" "$PR_NUMBER"
           fi
 
       - name: Post comment on PR

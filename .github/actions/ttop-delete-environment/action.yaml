@@ -14,9 +14,6 @@ runs:
       env:
         ENVIRONMENT_NAME: ${{ inputs.environmentName }}
       run: |
-        # Validate environment name (alphanumeric, hyphen, underscore only)
-        if [[ ! "$ENVIRONMENT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-          echo "::error::Invalid environment name: must be alphanumeric with hyphens/underscores only"
-          exit 1
-        fi
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ENVIRONMENT_NAME" || exit 1
         kubectl -nttop delete "helmrelease/$ENVIRONMENT_NAME" --ignore-not-found
