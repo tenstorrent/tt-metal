@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -30,7 +31,14 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t Mt = 4, Kt = 2, Nt = 3, B = 2;
+    uint32_t B = 2;
+    uint32_t Mt = 4;
+    uint32_t Kt, Nt;
+    if (dev->arch() != ARCH::QUASAR) {
+        Kt = 2, Nt = 3;
+    } else {
+        Kt = 4, Nt = 4;
+    }
     uint32_t num_tilesA = Mt * Kt * B;
     uint32_t num_tilesB = Kt * Nt * B;
     uint32_t num_tilesC = Mt * Nt * B;
@@ -60,9 +68,6 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     std::vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
 
-    uint32_t num_input_tiles = 2;
-    uint32_t num_output_tiles = 2;
-
     vector<uint32_t> compute_kernel_args = {B, Mt, Kt, Nt};
     KernelHandle reader;
     KernelHandle writer;
@@ -72,6 +77,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     uint32_t src1_dfb = 0;
     uint32_t dst_dfb = 0;
     if (dev->arch() != ARCH::QUASAR) {
+        uint32_t num_input_tiles = 2;
+        uint32_t num_output_tiles = 2;
+
         uint32_t src0_cb_index = 0;
         CircularBufferConfig cb_src0_config =
             CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -114,14 +122,15 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             core,
             ComputeConfig{.compile_args = compute_kernel_args});
     } else {
+        uint32_t num_input_tiles = 4 * Kt;
+        uint32_t num_output_tiles = 4;
+
         tt_metal::experimental::dfb::DataflowBufferConfig src0_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .producer_risc_mask = 0x1,
-            .num_producers = 1,
+            .num_producers = 4,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
-            .num_consumers = 1,
+            .num_consumers = 4,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -129,23 +138,19 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig src1_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .producer_risc_mask = 0x1,
-            .num_producers = 1,
+            .num_producers = 4,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 4,
+            .cap = tt_metal::experimental::dfb::AccessPattern::BLOCKED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
         };
         tt_metal::experimental::dfb::DataflowBufferConfig dst_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_output_tiles,
-            .producer_risc_mask = 0x100,
-            .num_producers = 1,
+            .num_producers = 4,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x2,
-            .num_consumers = 1,
+            .num_consumers = 4,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -160,7 +165,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1,
+                .num_threads_per_cluster = 4,
                 .compile_args = reader_compile_time_args});
 
         writer = tt_metal::experimental::quasar::CreateKernel(
@@ -168,14 +173,14 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1,
+                .num_threads_per_cluster = 4,
                 .compile_args = writer_compile_time_args});
 
         compute = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_kernel_args});
+            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4, .compile_args = compute_kernel_args});
     }
 
     if (dev->arch() == ARCH::QUASAR) {
@@ -190,12 +195,19 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
     uint32_t do_bcast = 0;
+    uint32_t producer_mask = 0;
+    uint32_t consumer_mask = 0;
+    if (dev->arch() == ARCH::QUASAR) {
+        producer_mask = program.impl().get_dataflow_buffer(src0_dfb)->config.producer_risc_mask;
+        consumer_mask = program.impl().get_dataflow_buffer(dst_dfb)->config.consumer_risc_mask;
+    }
     SetRuntimeArgs(
         program,
         reader,
         core,
-        {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B});
+        {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast, producer_mask});
+    SetRuntimeArgs(
+        program, writer, core, {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, consumer_mask});
 
     detail::LaunchProgram(dev, program, true);
 
