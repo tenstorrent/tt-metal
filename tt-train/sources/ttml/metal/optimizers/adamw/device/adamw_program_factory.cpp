@@ -237,8 +237,37 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     const uint32_t twice_block_size = 2U * block_size;
 
-    const uint32_t num_input_tiles = twice_block_size;
-    const uint32_t num_output_tiles = twice_block_size;
+    const uint32_t intermediate_num_tiles = twice_block_size;
+
+    uint32_t pipeline_bytes_per_slot = 6U * param_single_tile_size_bytes + grad_single_tile_size_bytes;
+    if (operation_attributes.amsgrad) {
+        pipeline_bytes_per_slot += 2U * param_single_tile_size_bytes;
+    }
+
+    uint32_t intermediate_cb_total_bytes = 2U * intermediate_num_tiles * float32_single_tile_size_bytes;
+    if (operation_attributes.amsgrad) {
+        intermediate_cb_total_bytes += intermediate_num_tiles * float32_single_tile_size_bytes;
+    }
+
+    const uint32_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t pipeline_l1_budget = available_L1_in_bytes - intermediate_cb_total_bytes;
+    uint32_t max_pipeline_depth = pipeline_l1_budget / pipeline_bytes_per_slot;
+
+    uint32_t pipeline_depth = 0;
+    if (operation_attributes.pipeline_depth_tiles != 0) {
+        // Explicit override: clamp to L1 max and align to block_size
+        pipeline_depth = std::min(operation_attributes.pipeline_depth_tiles, max_pipeline_depth);
+        pipeline_depth = std::min(pipeline_depth, num_tiles_per_core_group_1);
+        pipeline_depth = (pipeline_depth / block_size) * block_size;
+        pipeline_depth = std::max(pipeline_depth, block_size);
+    } else {
+        // Auto: use 1× block_size (sweep showed no benefit from deeper pipeline buffering)
+        pipeline_depth = std::min(block_size, num_tiles_per_core_group_1);
+    }
+
+    const uint32_t num_input_tiles = pipeline_depth;
+    const uint32_t num_output_tiles = pipeline_depth;
 
     // param CB - uses param_data_format (bf16 or fp32 depending on mode)
     [[maybe_unused]] auto cb_param = create_circular_buffer(

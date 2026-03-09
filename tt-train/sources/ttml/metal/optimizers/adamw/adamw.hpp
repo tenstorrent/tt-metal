@@ -22,6 +22,7 @@ ttnn::Tensor adamw(
     float beta2_pow,
     float epsilon,
     float weight_decay,
-    StochasticRounding stochastic_rounding = StochasticRounding::Disabled);
+    StochasticRounding stochastic_rounding = StochasticRounding::Disabled,
+    uint32_t pipeline_depth_tiles = 0);
 
 }  // namespace ttml::metal

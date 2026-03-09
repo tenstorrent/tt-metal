@@ -21,6 +21,7 @@ struct operation_attributes_t {
     float weight_decay{};
     bool amsgrad{false};
     StochasticRounding stochastic_rounding{StochasticRounding::Disabled};
+    uint32_t pipeline_depth_tiles{0};  // 0 = auto (use L1-budget heuristic)
 };
 
 struct tensor_args_t {

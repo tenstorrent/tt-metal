@@ -21,7 +21,8 @@ ttnn::Tensor adamw(
     float beta2_pow,
     float epsilon,
     float weight_decay,
-    StochasticRounding stochastic_rounding) {
+    StochasticRounding stochastic_rounding,
+    uint32_t pipeline_depth_tiles) {
     return ttnn::prim::adamw(
         param_in,
         grad,
@@ -36,7 +37,8 @@ ttnn::Tensor adamw(
         epsilon,
         weight_decay,
         max_exp_avg_sq.has_value(),
-        stochastic_rounding);
+        stochastic_rounding,
+        pipeline_depth_tiles);
 }
 
 }  // namespace ttml::metal
