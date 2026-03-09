@@ -39,21 +39,42 @@ def _find_op_dir(clone_dir: Path, op_name: str) -> Path | None:
     return None
 
 
-def _collect_kernels(op_dir: Path) -> list:
-    """Collect kernel source files from the operation directory."""
-    kernels = []
-    kernel_dir = op_dir / "kernels"
-    if not kernel_dir.is_dir():
-        return kernels
+def _read_source(path: Path) -> str | None:
+    """Read a source file, returning None if empty or unreadable."""
+    try:
+        content = path.read_text()
+        return content if content.strip() else None
+    except (OSError, UnicodeDecodeError):
+        return None
 
-    for ext in KERNEL_EXTENSIONS:
-        for path in sorted(kernel_dir.glob(ext)):
-            try:
-                source = path.read_text()
-                if source.strip():
+
+def _collect_kernels(op_dir: Path, op_name: str) -> list:
+    """Collect kernel C++ files and Python source (program descriptor + entry point)."""
+    kernels = []
+
+    # C++ kernels from kernels/ subdirectory
+    kernel_dir = op_dir / "kernels"
+    if kernel_dir.is_dir():
+        for ext in KERNEL_EXTENSIONS:
+            for path in sorted(kernel_dir.glob(ext)):
+                source = _read_source(path)
+                if source:
                     kernels.append({"filename": path.name, "source_code": source})
-            except (OSError, UnicodeDecodeError):
-                pass
+
+    # Program descriptor: <op_name>_program_descriptor.py
+    pd_path = op_dir / f"{op_name}_program_descriptor.py"
+    if pd_path.is_file():
+        source = _read_source(pd_path)
+        if source:
+            kernels.append({"filename": pd_path.name, "source_code": source})
+
+    # Entry point: <op_name>.py
+    entry_path = op_dir / f"{op_name}.py"
+    if entry_path.is_file():
+        source = _read_source(entry_path)
+        if source:
+            kernels.append({"filename": entry_path.name, "source_code": source})
+
     return kernels
 
 
@@ -130,7 +151,7 @@ def ingest_run(
         clone_path = Path(clone_dir)
         op_dir = _find_op_dir(clone_path, op_name)
         if op_dir:
-            kernels = _collect_kernels(op_dir)
+            kernels = _collect_kernels(op_dir, op_name)
             if kernels:
                 db.insert_kernels(conn, run_id, kernels)
 

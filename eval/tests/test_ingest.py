@@ -152,14 +152,17 @@ def test_ingest_multiple_runs(db_path):
 
 
 def test_ingest_with_kernels(db_path, tmp_path):
-    """Ingest should collect kernel files from the clone."""
-    # Create a fake clone with op directory and kernels
+    """Ingest should collect C++ kernels, program descriptor, and entry point."""
     clone = tmp_path / "clone"
-    op_dir = clone / "ttnn" / "ttnn" / "operations" / "my_op" / "kernels"
-    op_dir.mkdir(parents=True)
-    (op_dir / "reader.cpp").write_text('#include "dataflow_api.h"\nvoid kernel_main() {}')
-    (op_dir / "compute.cpp").write_text("namespace NAMESPACE {\nvoid MAIN {}\n}")
-    (op_dir / "empty.cpp").write_text("")  # empty should be skipped
+    op_dir = clone / "ttnn" / "ttnn" / "operations" / "my_op"
+    kernel_dir = op_dir / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "reader.cpp").write_text('#include "dataflow_api.h"\nvoid kernel_main() {}')
+    (kernel_dir / "compute.cpp").write_text("namespace NAMESPACE {\nvoid MAIN {}\n}")
+    (kernel_dir / "empty.cpp").write_text("")  # empty should be skipped
+    # Program descriptor and entry point
+    (op_dir / "my_op_program_descriptor.py").write_text("def create_program_descriptor(): pass")
+    (op_dir / "my_op.py").write_text("def my_op(input): pass")
 
     rid = ingest_run(
         db_path=db_path,
@@ -176,10 +179,12 @@ def test_ingest_with_kernels(db_path, tmp_path):
     kernels = db.get_kernels(conn, rid)
     conn.close()
 
-    assert len(kernels) == 2  # empty.cpp skipped
+    assert len(kernels) == 4  # 2 cpp + descriptor + entry point
     filenames = {k["filename"] for k in kernels}
     assert "reader.cpp" in filenames
     assert "compute.cpp" in filenames
+    assert "my_op_program_descriptor.py" in filenames
+    assert "my_op.py" in filenames
 
 
 def test_ingest_with_self_reflection(db_path, tmp_path):

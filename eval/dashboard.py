@@ -178,6 +178,7 @@ def _html_head() -> str:
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
 </head>
 <body>
 <h1>Eval Dashboard</h1>
@@ -393,9 +394,10 @@ def _html_run_detail(rid: int, details: dict) -> str:
         for i, k in enumerate(kernels):
             active = " active" if i == 0 else ""
             escaped_code = html.escape(k["source_code"])
+            lang = "python" if k["filename"].endswith(".py") else "cpp"
             parts.append(f'<div class="kernel-panel{active}" id="{kid}-{i}">')
             parts.append(
-                f'  <div class="kernel-code"><pre><code class="language-cpp">{escaped_code}</code></pre></div>'
+                f'  <div class="kernel-code"><pre><code class="language-{lang}">{escaped_code}</code></pre></div>'
             )
             parts.append("</div>")
         parts.append("</div>")
