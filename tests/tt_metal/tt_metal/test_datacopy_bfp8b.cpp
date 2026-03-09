@@ -5,6 +5,7 @@
 #include <chrono>
 #include <errno.h>
 #include <fmt/base.h>
+#include <iomanip>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -54,15 +55,13 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
+        int device_id = 1;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
-
-        CoreCoord core = {6, 6};
+        CoreCoord grid_size = device->compute_with_storage_grid_size();
 
         uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
         TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
@@ -79,110 +78,105 @@ int main(int argc, char** argv) {
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 2;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 2;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(ouput_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
-        auto unary_reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
-
-        auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-
-        vector<uint32_t> compute_kernel_args = {
-            uint(num_tiles)  // per_core_tile_cnt
-        };
-
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
-            core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = test_utils::create_random_vector_of_bfp8(
             dram_buffer_size,
             /*is_exp_a=*/false,
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_reader_kernel,
-            core,
-            {dram_buffer_src_addr,
-            0,
-            num_tiles});
+        uint32_t src0_cb_index = 0;
+        uint32_t num_input_tiles = 2;
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
+        uint32_t num_output_tiles = 2;
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles)  // per_core_tile_cnt
+        };
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dram_buffer_dst_addr,
-            0,
-            num_tiles});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Execute on each core one by one
+        ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
-        // ////////////////////////////////////////////////////////////////////////////
-        // //                      Validation & Teardown
-        // ////////////////////////////////////////////////////////////////////////////
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            for (uint32_t y = 0; y < grid_size.y; y++) {
+                CoreCoord core = {x, y};
 
-        pass &= (src_vec == result_vec);
+                tt_metal::Program program = tt_metal::CreateProgram();
 
-        std::cout << "Source vector:\n";
-        size_t src_half = src_vec.size() / 2;
-        for (size_t i = 0; i < src_vec.size(); ++i) {
-            std::cout << std::hex << std::setw(8) << src_vec[i] << " ";
-            if ((i + 1) % 16 == 0) {
-                std::cout << std::endl;
-            }
-            if ((i + 1) == src_half) {
-                std::cout << std::endl;
+                tt_metal::CircularBufferConfig cb_src0_config =
+                    tt_metal::CircularBufferConfig(
+                        num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
+                        .set_page_size(src0_cb_index, single_tile_size);
+                tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+
+                tt_metal::CircularBufferConfig cb_output_config =
+                    tt_metal::CircularBufferConfig(
+                        num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
+                        .set_page_size(ouput_cb_index, single_tile_size);
+                tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+
+                auto unary_reader_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/kernels/dataflow/reader_unary.cpp",
+                    core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+                auto unary_writer_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/kernels/dataflow/writer_unary.cpp",
+                    core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+
+                tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
+                    core,
+                    tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+
+                tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+
+                tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, {dram_buffer_src_addr, 0, num_tiles});
+
+                tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles});
+
+                tt_metal::detail::LaunchProgram(device, program);
+
+                tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+
+                bool core_pass = (src_vec == result_vec);
+                pass &= core_pass;
+                if (!core_pass) {
+                    log_error(LogTest, "Datacopy BFP8b failed on core ({}, {})", x, y);
+                    std::cout << "Expected (core " << x << "," << y << "):\n";
+                    size_t src_half = src_vec.size() / 2;
+                    for (size_t i = 0; i < src_vec.size(); ++i) {
+                        std::cout << std::hex << std::setw(8) << src_vec[i] << " ";
+                        if ((i + 1) % 16 == 0) {
+                            std::cout << std::endl;
+                        }
+                        if ((i + 1) == src_half) {
+                            std::cout << std::endl;
+                        }
+                    }
+                    std::cout << std::dec << std::endl;
+                    std::cout << "Result (core " << x << "," << y << "):\n";
+                    size_t res_half = result_vec.size() / 2;
+                    for (size_t i = 0; i < result_vec.size(); ++i) {
+                        std::cout << std::hex << std::setw(8) << result_vec[i] << " ";
+                        if ((i + 1) % 16 == 0) {
+                            std::cout << std::endl;
+                        }
+                        if ((i + 1) == res_half) {
+                            std::cout << std::endl;
+                        }
+                    }
+                    std::cout << std::dec << std::endl;
+                } else {
+                    log_info(LogTest, "Datacopy BFP8b passed on core ({}, {})", x, y);
+                }
             }
         }
-        std::cout << std::dec << std::endl;
-        std::cout << "Result vector:\n";
-        size_t res_half = result_vec.size() / 2;
-        for (size_t i = 0; i < result_vec.size(); ++i) {
-            std::cout << std::hex << std::setw(8) << result_vec[i] << " ";
-            if ((i + 1) % 16 == 0) {
-                std::cout << std::endl;
-            }
-            if ((i + 1) == res_half) {
-                std::cout << std::endl;
-            }
-        }
-        std::cout << std::dec << std::endl;
 
         pass &= tt_metal::CloseDevice(device);
 

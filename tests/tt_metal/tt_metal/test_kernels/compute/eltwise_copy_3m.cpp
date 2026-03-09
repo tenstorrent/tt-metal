@@ -59,7 +59,7 @@ void pack_main() {
     //     }
     //     DPRINT << ENDL();
     // }
-    // llk_pack_dest_section_done<DST_ACCUM_MODE>();
+    llk_pack_dest_section_done<DST_ACCUM_MODE>();
 }
 #endif
 
