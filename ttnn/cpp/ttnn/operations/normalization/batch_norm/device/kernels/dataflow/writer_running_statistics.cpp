@@ -90,7 +90,11 @@ void kernel_main() {
                         {.page_id = tile_offset},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_mean);
+#ifdef OLD_MEAN_IS_FP32
+                    fill_tile_with_first_element<float>(cb_id_old_running_mean);
+#else
+                    fill_tile_with_first_element_bfloat16(cb_id_old_running_mean);
+#endif
                     cb_id_old_running_mean_obj.push_back(onetile);
 
                     // write data
@@ -115,7 +119,11 @@ void kernel_main() {
                         {.page_id = tile_offset},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_var);
+#ifdef OLD_VAR_IS_FP32
+                    fill_tile_with_first_element<float>(cb_id_old_running_var);
+#else
+                    fill_tile_with_first_element_bfloat16(cb_id_old_running_var);
+#endif
                     cb_id_old_running_var_obj.push_back(onetile);
 
                     // write data

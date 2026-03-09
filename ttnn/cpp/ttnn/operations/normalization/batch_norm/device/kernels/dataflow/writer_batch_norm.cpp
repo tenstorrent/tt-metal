@@ -83,7 +83,11 @@ void kernel_main() {
             cb_id_src_obj.reserve_back(onetile);
             noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
+#ifdef MEAN_IS_FP32
+            fill_tile_with_first_element<float>(cb_id_src);
+#else
+            fill_tile_with_first_element_bfloat16(cb_id_src);
+#endif
             cb_id_src_obj.push_back(onetile);
 
             // read a tile from batch variance
@@ -91,7 +95,11 @@ void kernel_main() {
             noc.async_read(
                 batch_var, cb_id_batch_var_obj, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
+#ifdef VAR_IS_FP32
+            fill_tile_with_first_element<float>(cb_id_batch_var);
+#else
+            fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+#endif
             cb_id_batch_var_obj.push_back(onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
@@ -99,7 +107,11 @@ void kernel_main() {
                 noc.async_read(
                     weight, cb_id_weight_obj, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_weight);
+#ifdef WEIGHT_IS_FP32
+                fill_tile_with_first_element<float>(cb_id_weight);
+#else
+                fill_tile_with_first_element_bfloat16(cb_id_weight);
+#endif
                 cb_id_weight_obj.push_back(onetile);
             }
 
@@ -107,7 +119,11 @@ void kernel_main() {
                 cb_id_bias_obj.reserve_back(onetile);
                 noc.async_read(bias, cb_id_bias_obj, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_bias);
+#ifdef BIAS_IS_FP32
+                fill_tile_with_first_element<float>(cb_id_bias);
+#else
+                fill_tile_with_first_element_bfloat16(cb_id_bias);
+#endif
                 cb_id_bias_obj.push_back(onetile);
             }
 

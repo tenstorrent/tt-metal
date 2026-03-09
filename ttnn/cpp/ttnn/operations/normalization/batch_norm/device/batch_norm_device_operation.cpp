@@ -171,11 +171,32 @@ ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::normalization::BatchNormOperation;
+
+    DataType output_dtype = input.dtype();
+    if (output.has_value()) {
+        output_dtype = output->dtype();
+    } else {
+        auto promote = [&output_dtype](DataType dt) {
+            if (dt == DataType::FLOAT32) {
+                output_dtype = DataType::FLOAT32;
+            }
+        };
+        promote(batch_mean.dtype());
+        promote(batch_var.dtype());
+        if (weight.has_value()) {
+            promote(weight->dtype());
+        }
+        if (bias.has_value()) {
+            promote(bias->dtype());
+        }
+    }
+
     OperationType::operation_attributes_t operation_attributes{
         eps,
         memory_config.value_or(input.memory_config()),
         ttnn::operations::normalization::batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, input),
-        input.dtype()};
+        input.dtype(),
+        output_dtype};
     OperationType::tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

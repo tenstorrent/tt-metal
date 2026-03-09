@@ -50,7 +50,6 @@ void kernel_main() {
 
     // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // cb tile index
         constexpr uint32_t tile_index = 0;
 
         cb_batch_mean_obj.wait_front(onetile);
@@ -59,35 +58,34 @@ void kernel_main() {
         if constexpr (old_running_mean_has_value) {
             // 1 - momentum
             cb_tmp1_obj.reserve_back(onetile);
-            sub_binary_tile_init();
             tile_regs_acquire();
-            tile_regs_wait();
-
-            copy_tile_to_dst_init_short_with_dt(cb_momentum, cb_one);
+            sub_binary_tile_init();
+            // Use cb_batch_mean as old_cbid since unary_op_init_common configured the unpacker for it
+            copy_tile_to_dst_init_short_with_dt(cb_batch_mean, cb_one);
             copy_tile(cb_one, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_one, cb_momentum);
             copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
-
             sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_tmp1);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_tmp1);
             tile_regs_release();
             cb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
             cb_tmp2_obj.reserve_back(onetile);
-            mul_binary_tile_init();
             tile_regs_acquire();
-            tile_regs_wait();
-
+            mul_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_momentum, cb_batch_mean);
             copy_tile(cb_batch_mean, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_batch_mean, cb_momentum);
             copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
-
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_tmp2);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_tmp2);
             tile_regs_release();
             cb_tmp2_obj.push_back(onetile);
 
@@ -96,16 +94,15 @@ void kernel_main() {
             cb_old_running_mean_obj.wait_front(onetile);
             cb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
-            tile_regs_wait();
-
             copy_tile_to_dst_init_short_with_dt(cb_tmp1, cb_old_running_mean);
             copy_tile(cb_old_running_mean, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_old_running_mean, cb_tmp1);
             copy_tile(cb_tmp1, tile_index, tile_index * 2 + 1);
-
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_tmp3);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_tmp3);
             tile_regs_release();
             cb_tmp3_obj.push_back(onetile);
 
@@ -116,21 +113,19 @@ void kernel_main() {
             cb_tmp2_obj.wait_front(onetile);
             cb_tmp3_obj.wait_front(onetile);
             cb_updated_running_mean_obj.reserve_back(onetile);
-            add_binary_tile_init();
             tile_regs_acquire();
-            tile_regs_wait();
-
+            add_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_tmp2, cb_tmp3);
             copy_tile(cb_tmp3, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_tmp3, cb_tmp2);
             copy_tile(cb_tmp2, tile_index, tile_index * 2 + 1);
-
             add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_updated_running_mean);
-            // For the output tensor, return the same values as either of the stats.
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_updated_running_mean);
             if constexpr (!old_running_var_has_value) {
-                pack_tile(tile_index * 2, cb_out0);
+                pack_tile_with_dt(tile_index * 2, cb_out0);
             }
             tile_regs_release();
             cb_updated_running_mean_obj.push_back(onetile);
@@ -144,36 +139,34 @@ void kernel_main() {
         if constexpr (old_running_var_has_value) {
             // 1 - momentum
             cb_tmp1_obj.reserve_back(onetile);
-            sub_binary_tile_init();
             tile_regs_acquire();
-            tile_regs_wait();
-
+            sub_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_momentum, cb_one);
             copy_tile(cb_one, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_one, cb_momentum);
             copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
-
             sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_tmp1);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_tmp1);
             tile_regs_release();
             cb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
             cb_batch_var_obj.wait_front(onetile);
             cb_tmp2_obj.reserve_back(onetile);
-            mul_binary_tile_init();
             tile_regs_acquire();
-            tile_regs_wait();
-
+            mul_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_momentum, cb_batch_var);
             copy_tile(cb_batch_var, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_batch_var, cb_momentum);
             copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
-
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_tmp2);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_tmp2);
             tile_regs_release();
             cb_tmp2_obj.push_back(onetile);
 
@@ -184,16 +177,15 @@ void kernel_main() {
             cb_old_running_var_obj.wait_front(onetile);
             cb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
-            tile_regs_wait();
-
             copy_tile_to_dst_init_short_with_dt(cb_tmp1, cb_old_running_var);
             copy_tile(cb_old_running_var, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_old_running_var, cb_tmp1);
             copy_tile(cb_tmp1, tile_index, tile_index * 2 + 1);
-
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_tmp3);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_tmp3);
             tile_regs_release();
             cb_tmp3_obj.push_back(onetile);
 
@@ -204,19 +196,18 @@ void kernel_main() {
             cb_tmp2_obj.wait_front(onetile);
             cb_tmp3_obj.wait_front(onetile);
             cb_updated_running_var_obj.reserve_back(onetile);
-            add_binary_tile_init();
             tile_regs_acquire();
-            tile_regs_wait();
-
+            add_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(cb_tmp2, cb_tmp3);
             copy_tile(cb_tmp3, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_tmp3, cb_tmp2);
             copy_tile(cb_tmp2, tile_index, tile_index * 2 + 1);
-
             add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
-            pack_tile(tile_index * 2, cb_updated_running_var);
-            pack_tile(tile_index * 2, cb_out0);
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_updated_running_var);
+            pack_tile_with_dt(tile_index * 2, cb_out0);
             tile_regs_release();
             cb_updated_running_var_obj.push_back(onetile);
 
