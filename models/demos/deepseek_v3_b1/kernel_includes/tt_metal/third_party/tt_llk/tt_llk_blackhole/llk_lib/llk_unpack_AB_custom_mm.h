@@ -74,13 +74,13 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
 
         // Loop 8 times to fill up the replay buffer
         for (std::uint32_t i = 0; i < 8; i++) {
-            // Reuse unpack (unpacks only SrA, SrcB is reused across width dim)
+            // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
             TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);  // Also set dvalid
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
         }
 
-        // Reuse unpack (unpacks only SrA, SrcB is reused across width dim)
+        // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
         TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);  // Also set dvalid
         // This last iteration uses inner_increment instead of block_increment
         TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
