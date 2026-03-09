@@ -536,9 +536,12 @@ class Generator(WarmupForwardMixin):
 
             # For batched prefill: pass full page_table (function handles slot placement)
             # For non-batched prefill: pass sliced page_table for current user (like original code)
-            page_table_for_user = (
-                page_table if use_batched_prefill else (page_table[idx : idx + 1] if page_table is not None else None)
-            )
+            if use_batched_prefill:
+                page_table_for_user = page_table
+            elif page_table is not None:
+                page_table_for_user = page_table[idx : idx + 1]
+            else:
+                page_table_for_user = None
             page_table_user = (
                 self._get_prefill_user_page_table(
                     page_table_for_user,
