@@ -35,15 +35,27 @@ jobs:
       - name: Parse input
         id: parse_input
         shell: bash
+        env:
+          SOURCE_INPUT: ${{ github.event.inputs.source }}
+          GITHUB_REPO: ${{ github.repository }}
         run: |
           # Expect input format: <fork_owner>:<branch>
-          IFS=":" read -r FORK_OWNER SRC_BRANCH <<< "${{ github.event.inputs.source }}"
+          IFS=":" read -r FORK_OWNER SRC_BRANCH <<< "$SOURCE_INPUT"
           if [ -z "$FORK_OWNER" ] || [ -z "$SRC_BRANCH" ]; then
             echo "Error: Input must be in the format <fork_owner>:<branch>"
             exit 1
           fi
+          # Validate fork owner and branch (alphanumeric, hyphens, underscores, dots, slashes for branch)
+          if [[ ! "$FORK_OWNER" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "Error: Invalid fork owner format"
+            exit 1
+          fi
+          if [[ ! "$SRC_BRANCH" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+            echo "Error: Invalid branch name format"
+            exit 1
+          fi
           # Derive the fork repository name from the current repository.
-          ORIGIN_REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          ORIGIN_REPO_NAME=$(echo "$GITHUB_REPO" | cut -d'/' -f2)
           FORK_REPO="${FORK_OWNER}/${ORIGIN_REPO_NAME}"
           echo "FORK_OWNER: $FORK_OWNER"
           echo "Source branch: $SRC_BRANCH"
@@ -63,37 +75,50 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add fork remote and fetch branch
+        env:
+          FORK_REPO: ${{ steps.parse_input.outputs.fork_repo }}
+          SRC_BRANCH: ${{ steps.parse_input.outputs.src_branch }}
         run: |
-          echo "Adding remote for fork: ${{ steps.parse_input.outputs.fork_repo }}"
-          git remote add fork https://github.com/${{ steps.parse_input.outputs.fork_repo }}.git || echo "Remote 'fork' already exists"
-          echo "Fetching branch: ${{ steps.parse_input.outputs.src_branch }}"
-          git fetch fork ${{ steps.parse_input.outputs.src_branch }}
+          echo "Adding remote for fork: $FORK_REPO"
+          git remote add fork "https://github.com/${FORK_REPO}.git" || echo "Remote 'fork' already exists"
+          echo "Fetching branch: $SRC_BRANCH"
+          git fetch fork "$SRC_BRANCH"
 
       - name: Create or update local branch from fork branch
         id: create_branch
         shell: bash
+        env:
+          TARGET_BRANCH_INPUT: ${{ github.event.inputs.target_branch }}
+          FORK_OWNER: ${{ steps.parse_input.outputs.fork_owner }}
+          SRC_BRANCH: ${{ steps.parse_input.outputs.src_branch }}
         run: |
           # Determine the target branch name.
-          if [ -n "${{ github.event.inputs.target_branch }}" ]; then
-            TARGET_BRANCH="${{ github.event.inputs.target_branch }}"
+          if [ -n "$TARGET_BRANCH_INPUT" ]; then
+            TARGET_BRANCH="$TARGET_BRANCH_INPUT"
           else
-            TARGET_BRANCH="mirror/${{ steps.parse_input.outputs.fork_owner }}/${{ steps.parse_input.outputs.src_branch }}"
+            TARGET_BRANCH="mirror/${FORK_OWNER}/${SRC_BRANCH}"
+          fi
+          # Validate target branch name
+          if [[ ! "$TARGET_BRANCH" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+            echo "Error: Invalid target branch name format"
+            exit 1
           fi
           echo "Using target branch: $TARGET_BRANCH"
           # If the branch exists locally, update it; if not, create it.
           if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
             echo "Branch '$TARGET_BRANCH' exists. Updating with latest commits from fork."
             git checkout "$TARGET_BRANCH"
-            git reset --hard "fork/${{ steps.parse_input.outputs.src_branch }}"
+            git reset --hard "fork/${SRC_BRANCH}"
           else
             echo "Branch '$TARGET_BRANCH' does not exist. Creating it from fork branch."
-            git checkout -b "$TARGET_BRANCH" "fork/${{ steps.parse_input.outputs.src_branch }}"
+            git checkout -b "$TARGET_BRANCH" "fork/${SRC_BRANCH}"
           fi
           echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
 
       - name: Push branch to origin
+        env:
+          TARGET_BRANCH: ${{ steps.create_branch.outputs.target_branch }}
         run: |
-          TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "Pushing branch '$TARGET_BRANCH' to origin"
           git push origin "$TARGET_BRANCH" --force
 
@@ -102,13 +127,16 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORK_OWNER: ${{ steps.parse_input.outputs.fork_owner }}
+          SRC_BRANCH: ${{ steps.parse_input.outputs.src_branch }}
+          GITHUB_REPO: ${{ github.repository }}
         run: |
           # Look for a PR with head "fork_owner:src_branch"
-          HEAD_QUERY="${{ steps.parse_input.outputs.fork_owner }}:${{ steps.parse_input.outputs.src_branch }}"
+          HEAD_QUERY="${FORK_OWNER}:${SRC_BRANCH}"
           echo "Searching for PR with head: ${HEAD_QUERY}"
           PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${HEAD_QUERY}")
+            "https://api.github.com/repos/${GITHUB_REPO}/pulls?head=${HEAD_QUERY}")
           PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number // empty')
           if [ -z "$PR_NUMBER" ]; then
             echo "No PR found"

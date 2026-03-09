@@ -131,8 +131,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          bash -c "$TEST_CMD"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

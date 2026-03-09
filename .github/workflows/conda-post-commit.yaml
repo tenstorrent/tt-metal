@@ -131,6 +131,8 @@ jobs:
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env
@@ -141,7 +143,7 @@ jobs:
           dnf -y install ./$sfpi_filename
           rm -f $sfpi_filename /tmp/sfpi-info.sh /tmp/sfpi-version
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
-          ${{ matrix.test-group.cmd }}
+          bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate metalium_env && export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib && $TEST_CMD"
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

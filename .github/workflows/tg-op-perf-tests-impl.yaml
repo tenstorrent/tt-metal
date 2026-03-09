@@ -72,6 +72,7 @@ jobs:
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -79,9 +80,10 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e "TEST_CMD=${{ matrix.test-group.cmd }}"
           install_wheel: true
           run_args: |
-            ${{ matrix.test-group.cmd }}
+            bash -c "$TEST_CMD"
       - name: Disable performance mode
         if: always()
         run: |

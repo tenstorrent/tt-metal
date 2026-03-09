@@ -75,8 +75,10 @@ jobs:
 
      - name: Run UMD unit regression tests
        timeout-minutes: ${{ matrix.test-group.timeout }}
+       env:
+         TEST_CMD: ${{ matrix.test-group.cmd }}
        run: |
-         ${{ matrix.test-group.cmd }}
+         bash -c "$TEST_CMD"
 
      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
        if: always()

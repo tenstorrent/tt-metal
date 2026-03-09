@@ -23,17 +23,25 @@ runs:
       shell: bash
       id: explicit
       if: ${{ inputs.explicit != '' }}
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
+        EXPLICIT_NODES: ${{ inputs.explicit }}
       run: |
+        # Validate allocation name (alphanumeric, hyphen, underscore only)
+        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
+          exit 1
+        fi
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
         apiVersion: tenstorrent.com/v1alpha1
         kind: Allocation
         metadata:
-          name: ${{ inputs.allocationName }}
+          name: ${ALLOCATION_NAME}
         spec:
           retryPolicy: Always
           allocationType: Explicit
-          explicit: [${{ inputs.explicit }}]
+          explicit: [${EXPLICIT_NODES}]
         ALLOCATION_EOF
         EOF
 
@@ -41,14 +49,22 @@ runs:
       shell: bash
       id: spec
       if: ${{ inputs.spec != '' }}
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
+        SPEC_INPUT: ${{ inputs.spec }}
       run: |
-        SPEC=$(printf '%s\n' '${{ inputs.spec }}' | sed 's/^/  /')
+        # Validate allocation name
+        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
+          exit 1
+        fi
+        SPEC=$(printf '%s\n' "$SPEC_INPUT" | sed 's/^/  /')
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
         apiVersion: tenstorrent.com/v1alpha1
         kind: Allocation
         metadata:
-          name: ${{ inputs.allocationName }}
+          name: ${ALLOCATION_NAME}
         spec:
           retryPolicy: Always
         ${SPEC}
@@ -59,10 +75,17 @@ runs:
       shell: bash
       run: |
         echo "Creating allocation..."
-        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl apply -f -
+        printf "%s" "$ALLOCATION_MANIFEST" | kubectl apply -f -
 
     - name: Wait for allocation
       shell: bash
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
+        # Validate allocation name
+        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
+          exit 1
+        fi
         echo "Waiting for allocation to be ready..."
-        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
+        kubectl wait --for=jsonpath='{.status.phase}'=Allocated "allocation/$ALLOCATION_NAME" --timeout=999m

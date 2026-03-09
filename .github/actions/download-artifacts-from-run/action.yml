@@ -46,12 +46,19 @@ runs:
     - name: Get workflow run info
       id: run-info
       shell: bash
+      env:
+        WORKFLOW_RUN_ID: ${{ inputs.workflow_run_id }}
+        GITHUB_REPO: ${{ github.repository }}
       run: |
-        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+        # Validate workflow run ID is numeric
+        if [[ ! "$WORKFLOW_RUN_ID" =~ ^[0-9]+$ ]]; then
+          echo "::error::Invalid workflow run ID: must be numeric"
+          exit 1
+        fi
         echo "Fetching artifacts from workflow run: $WORKFLOW_RUN_ID"
 
         # Get workflow run details
-        RUN_INFO=$(gh run view "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --json conclusion,workflowName 2>&1)
+        RUN_INFO=$(gh run view "$WORKFLOW_RUN_ID" --repo "$GITHUB_REPO" --json conclusion,workflowName 2>&1)
         if [ $? -ne 0 ]; then
           echo "ERROR: Failed to fetch workflow run $WORKFLOW_RUN_ID"
           echo "$RUN_INFO"
@@ -68,9 +75,11 @@ runs:
     - name: List available artifacts
       id: list-artifacts
       shell: bash
+      env:
+        WORKFLOW_RUN_ID: ${{ inputs.workflow_run_id }}
+        GITHUB_REPO: ${{ github.repository }}
       run: |
-        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-        ARTIFACTS=$(gh api repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[].name' 2>&1)
+        ARTIFACTS=$(gh api "repos/${GITHUB_REPO}/actions/runs/${WORKFLOW_RUN_ID}/artifacts" --jq '.artifacts[].name' 2>&1)
 
         if [ $? -ne 0 ]; then
           echo "ERROR: Failed to list artifacts for run $WORKFLOW_RUN_ID"
@@ -87,16 +96,17 @@ runs:
     - name: Download artifacts
       id: download
       shell: bash
+      env:
+        WORKFLOW_RUN_ID: ${{ inputs.workflow_run_id }}
+        WORK_DIR: ${{ inputs.working-directory }}
+        TRACY_ENABLED: ${{ inputs.tracy }}
+        ARTIFACTS_LIST: ${{ steps.list-artifacts.outputs.artifacts }}
       run: |
-        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-        WORK_DIR="${{ inputs.working-directory }}"
-        TRACY_ENABLED="${{ inputs.tracy }}"
-
         mkdir -p "$WORK_DIR"
         cd "$WORK_DIR"
 
         # Parse artifact names from previous step
-        ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
+        ARTIFACTS="$ARTIFACTS_LIST"
 
         # Find build artifact (ttm_any.tar.zst)
         BUILD_ARTIFACT=""

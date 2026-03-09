@@ -114,7 +114,9 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run microbenchmark tests
         timeout-minutes: 45
-        run: ${{ matrix.test-group.cmd }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: bash -c "$TEST_CMD"
       - name: Upload microbenchmark report csvs
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

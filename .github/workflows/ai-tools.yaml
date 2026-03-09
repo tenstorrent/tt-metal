@@ -26,5 +26,9 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+    # SECURITY TODO: Pin this workflow to a commit SHA instead of a branch ref
+    # Using a mutable branch ref allows anyone with push access to ay/tools_job
+    # to modify the workflow and access inherited secrets.
+    # Replace @ay/tools_job with @<full-commit-sha> once workflow is stable.
     uses: tenstorrent/tt-metal/.github/workflows/ai_tools_impl.yaml@ay/tools_job
     secrets: inherit

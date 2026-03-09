@@ -81,9 +81,11 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run TG all-post-commit tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          echo "Running command: ${{ matrix.test-group.cmd }}"
-          eval "${{ matrix.test-group.cmd }}"
+          echo "Running command: $TEST_CMD"
+          bash -c "$TEST_CMD"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

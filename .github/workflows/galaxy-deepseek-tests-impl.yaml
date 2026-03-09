@@ -46,6 +46,8 @@ jobs:
     steps:
       - name: Generate test matrix
         id: generate
+        env:
+          INPUT_TEST_TYPE: ${{ inputs.test-type }}
         run: |
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
@@ -55,15 +57,16 @@ jobs:
           ]')
 
           # Filter matrix based on test-type selection
-          if [ "${{ inputs.test-type }}" = "all" ]; then
+          INPUT_TEST_TYPE="${INPUT_TEST_TYPE:-all}"
+          if [ "$INPUT_TEST_TYPE" = "all" ]; then
             matrix="$all_tests"
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"${{ inputs.test-type }}\")]")
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"$INPUT_TEST_TYPE\")]")
           fi
 
           # Fail fast if the matrix is empty (invalid test-type selected)
           if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
-            echo "Error: Invalid test-type selected: '${{ inputs.test-type }}'"
+            echo "Error: Invalid test-type selected: '$INPUT_TEST_TYPE'"
             exit 1
           fi
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT

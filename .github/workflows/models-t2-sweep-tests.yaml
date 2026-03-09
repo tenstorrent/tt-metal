@@ -56,9 +56,11 @@ jobs:
     steps:
       - name: Resolve SKU selection
         id: resolve
+        env:
+          INPUT_SKU: ${{ inputs.sku }}
         run: |
           ALL_SKUS="wh_llmbox_perf"
-          SKU_INPUT="${{ inputs.sku || 'all' }}"
+          SKU_INPUT="${INPUT_SKU:-all}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           else

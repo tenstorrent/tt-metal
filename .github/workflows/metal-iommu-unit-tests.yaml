@@ -75,9 +75,11 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           mkdir -p generated/test_reports
-          ${{ matrix.test-group.cmd }}
+          bash -c "$TEST_CMD"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

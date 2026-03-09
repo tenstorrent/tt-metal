@@ -405,9 +405,10 @@ jobs:
       run: git config --global --add safe.directory $GITHUB_WORKSPACE
     - name: Fetch base branch
       timeout-minutes: 5
+      env:
+        BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
       run: |
-        BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
         git remote add upstream "https://github.com/${BASE_REPO}"
         git fetch --no-tags upstream "${BASE_REF}"
     - name: Install clang-tidy
@@ -446,6 +447,8 @@ jobs:
       # Big PRs will have a LOT to scan, but this should be enough for everyone
       timeout-minutes: 90
       shell: bash
+      env:
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
       run: |
         set -euo pipefail
 
@@ -457,7 +460,6 @@ jobs:
         jq --arg prefix "$PREFIX/" -r \
           '.[].file | sub("^" + $prefix; "")' \
           build/compile_commands.json > relative_files_in_build.txt
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
         git diff --name-only \
           "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
         grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
@@ -469,7 +471,6 @@ jobs:
         }
 
         # Analyze the relevant diffs of the relevant files
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
         git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
           -- $(cat common_files.txt) > filtered_changes.diff
         clang-tidy-diff-20.py -p1 -path build \

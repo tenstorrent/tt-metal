@@ -112,21 +112,27 @@ jobs:
 
       - name: Set evaluation image metadata
         id: evaluation-image-metadata
+        env:
+          INPUT_EVAL_IMAGE_TAG: ${{ inputs.evaluation-image-tag }}
+          INPUT_PUSH_TO_HARBOR: ${{ inputs.push-to-harbor }}
+          INPUT_PUSH_TO_GHCR: ${{ inputs.push-to-ghcr }}
+          GH_SHA: ${{ github.sha }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
           # Construct tag
-          if [ -z "${{ inputs.evaluation-image-tag }}" ]; then
-            eval_image_tag="${{ github.sha }}-${{ github.run_id }}"
+          if [ -z "$INPUT_EVAL_IMAGE_TAG" ]; then
+            eval_image_tag="${GH_SHA}-${GH_RUN_ID}"
           else
-            eval_image_tag="${{ inputs.evaluation-image-tag }}"
+            eval_image_tag="$INPUT_EVAL_IMAGE_TAG"
           fi
           echo "Evaluation image tag: $eval_image_tag"
 
           # Construct image URLs
           image_urls=()
-          if [ "${{ inputs.push-to-harbor }}" = "true" ]; then
+          if [ "$INPUT_PUSH_TO_HARBOR" = "true" ]; then
             image_urls+=("harbor.ci.tenstorrent.net/evaluation/tt-metalium")
           fi
-          if [ "${{ inputs.push-to-ghcr }}" = "true" ]; then
+          if [ "$INPUT_PUSH_TO_GHCR" = "true" ]; then
             image_urls+=("ghcr.io/tenstorrent/evaluation/tt-metalium")
           fi
 

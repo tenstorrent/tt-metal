@@ -121,11 +121,15 @@ runs:
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e no_proxy={0}', env.CIV2_no_proxy)) || '' }}
           ${{ inputs.device }}
           -w ${{ github.workspace }}
+          -e RUN_ARGS
+          -e INSTALL_WHEEL
+        env:
+          RUN_ARGS: ${{ inputs.run_args }}
+          INSTALL_WHEEL: ${{ inputs.install_wheel }}
         run: |
           set -euo pipefail
 
-          install_wheel=${{ inputs.install_wheel }}
-          if [ "${install_wheel,,}" == "true" ]; then
+          if [ "${INSTALL_WHEEL,,}" == "true" ]; then
             WHEEL_FILES=(*.whl)
             if [ ! -e "${WHEEL_FILES[0]}" ]; then
               echo "::warning::No .whl file found in workspace. Skipping wheel installation."
@@ -139,4 +143,4 @@ runs:
             fi
           fi
 
-          ${{ inputs.run_args }}
+          bash -c "$RUN_ARGS"

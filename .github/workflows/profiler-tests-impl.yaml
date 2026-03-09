@@ -68,8 +68,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run profiler regression tests
         timeout-minutes: 35
+        env:
+          TEST_SCRIPT: ${{ inputs.test-script }}
         run: |
-          ${{ inputs.test-script }}
+          bash "$TEST_SCRIPT"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

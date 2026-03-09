@@ -55,21 +55,18 @@ jobs:
     steps:
       - name: Parse comment and get PR info
         id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: |
-          # Properly escape comment body to handle quotes
-          COMMENT_BODY=$(cat <<'COMMENT_EOF'
-          ${{ github.event.comment.body }}
-          COMMENT_EOF
-          )
-          PR_NUMBER="${{ github.event.issue.number }}"
-          COMMENT_AUTHOR="${{ github.event.comment.user.login }}"
 
-          echo "Comment body: $COMMENT_BODY"
-          echo "PR number: $PR_NUMBER"
-          echo "Comment author: $COMMENT_AUTHOR"
+          printf '%s\n' "Comment body: $COMMENT_BODY"
+          printf '%s\n' "PR number: $PR_NUMBER"
+          printf '%s\n' "Comment author: $COMMENT_AUTHOR"
 
           # Check if comment contains our trigger commands
-          if echo "$COMMENT_BODY" | grep -E "^/(codeowners?|ping)(\s|$)" > /dev/null; then
+          if printf '%s\n' "$COMMENT_BODY" | grep -E "^/(codeowners?|ping)(\s|$)" > /dev/null; then
             # Add reaction to acknowledge we saw the command
             curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
@@ -103,7 +100,7 @@ jobs:
               echo "Found branch: $BRANCH"
 
               # Parse command options
-              if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+bypass(\s|$)" > /dev/null; then
+              if printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+bypass(\s|$)" > /dev/null; then
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=false" >> $GITHUB_OUTPUT
@@ -132,7 +129,7 @@ jobs:
                     echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                   fi
                 fi
-              elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
+              elif printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
                 echo "create-new-comment=true" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=false" >> $GITHUB_OUTPUT
@@ -140,7 +137,7 @@ jobs:
                 echo "is-bypass-command=false" >> $GITHUB_OUTPUT
                 echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: new comment"
-              elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping(\s|$)" > /dev/null; then
+              elif printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping(\s|$)" > /dev/null; then
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=true" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=true" >> $GITHUB_OUTPUT
@@ -148,7 +145,7 @@ jobs:
                 echo "is-bypass-command=false" >> $GITHUB_OUTPUT
                 echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: ping owners"
-              elif echo "$COMMENT_BODY" | grep -E "^/ping\s+" > /dev/null; then
+              elif printf '%s\n' "$COMMENT_BODY" | grep -E "^/ping\s+" > /dev/null; then
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=true" >> $GITHUB_OUTPUT
@@ -160,7 +157,7 @@ jobs:
                 # Extract GitHub usernames and optional author notes from /ping command
                 # Format: /ping @user1 @team1/subteam optional message (quotes optional)
 
-                FULL_TEXT=$(echo "$COMMENT_BODY" | sed 's/^\/ping\s\+//')
+                FULL_TEXT=$(printf '%s\n' "$COMMENT_BODY" | sed 's/^\/ping\s\+//')
 
                 # Extract all @mentions for ping users
                 PING_USERS=$(echo "$FULL_TEXT" | grep -oE '@[a-zA-Z0-9_/-]+' | tr '\n' ',' | sed 's/,$//')
@@ -190,12 +187,12 @@ jobs:
 
               # Extract author notes from /codeowners ping command if provided
               if [ -z "$AUTHOR_NOTES" ]; then
-                if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping" > /dev/null; then
+                if printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping" > /dev/null; then
                   # Extract everything after /codeowners ping (handle both same line and new line)
-                  RAW_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s*\(.*\)$/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                  RAW_TEXT=$(printf '%s\n' "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s*\(.*\)$/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                   # If no content on same line, check for content after removing the command line entirely
                   if [ -z "$RAW_TEXT" ]; then
-                    RAW_TEXT=$(echo "$COMMENT_BODY" | sed '0,/^\/codeowners\?\s\+ping\s*$/d' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                    RAW_TEXT=$(printf '%s\n' "$COMMENT_BODY" | sed '0,/^\/codeowners\?\s\+ping\s*$/d' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                   fi
                   if [ -n "$RAW_TEXT" ]; then
                     # Strip leading and trailing quotes (handles both complete and incomplete quoting)

@@ -162,9 +162,11 @@ jobs:
       - name: Build prerequisite targets (without analysis)
         if: ${{ inputs.prereq-targets != '' }}
         timeout-minutes: 30
+        env:
+          PREREQ_TARGETS: ${{ inputs.prereq-targets }}
         run: |
-          echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
-          for target in ${{ inputs.prereq-targets }}; do
+          echo "Building prerequisite targets (will not be analyzed): $PREREQ_TARGETS"
+          for target in $PREREQ_TARGETS; do
             echo "Building target: $target"
             cmake --build --preset clang-tidy --target "$target"
           done
@@ -177,10 +179,12 @@ jobs:
 
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
+        env:
+          SCAN_TARGETS: ${{ inputs.scan-targets }}
         run: |
-          if [ -n "${{ inputs.scan-targets }}" ]; then
-            echo "Scanning specific targets: ${{ inputs.scan-targets }}"
-            for target in ${{ inputs.scan-targets }}; do
+          if [ -n "$SCAN_TARGETS" ]; then
+            echo "Scanning specific targets: $SCAN_TARGETS"
+            for target in $SCAN_TARGETS; do
               echo "Scanning target: $target"
               cmake --build --preset clang-tidy --target "$target"
             done

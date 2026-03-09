@@ -106,11 +106,13 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           ls -lart /mnt/MLPerf/
           source tests/scripts/t3000/run_t3000_integration_tests.sh
-          echo ${{ matrix.test-group.cmd }}
-          ${{ matrix.test-group.cmd }}
+          echo "$TEST_CMD"
+          bash -c "$TEST_CMD"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

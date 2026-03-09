@@ -281,9 +281,12 @@ jobs:
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+          SKIP_ARGS: ${{ steps.skip-list.outputs.skip_args }}
         run: |
           # Run pytest with parallel execution and skip list
-          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
+          bash -c "$TEST_CMD -n 4 $SKIP_ARGS"
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}

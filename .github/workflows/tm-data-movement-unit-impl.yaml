@@ -87,10 +87,13 @@ jobs:
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GTEST_FILTER_INPUT: ${{ inputs.gtest_filter }}
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
             mkdir -p generated/test_reports
-            GTEST_FILTER="${{inputs.gtest_filter}}"
-            ${{ matrix.test-group.cmd }}
+            GTEST_FILTER="$GTEST_FILTER_INPUT"
+            bash -c "$TEST_CMD"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

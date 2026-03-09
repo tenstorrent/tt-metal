@@ -70,7 +70,9 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run microbenchmark tests
         timeout-minutes: 45
-        run: ${{ matrix.test-group.cmd }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: bash -c "$TEST_CMD"
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v4
         timeout-minutes: 10

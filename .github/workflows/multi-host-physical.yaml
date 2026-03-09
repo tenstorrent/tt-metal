@@ -114,7 +114,9 @@ jobs:
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -167,7 +169,9 @@ jobs:
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
@@ -221,5 +225,7 @@ jobs:
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests

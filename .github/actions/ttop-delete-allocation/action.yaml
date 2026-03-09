@@ -11,5 +11,12 @@ runs:
   steps:
     - name: Delete Allocation
       shell: bash
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        kubectl delete allocation/${{ inputs.allocationName }} --ignore-not-found
+        # Validate allocation name (alphanumeric, hyphen, underscore only)
+        if [[ ! "$ALLOCATION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "::error::Invalid allocation name: must be alphanumeric with hyphens/underscores only"
+          exit 1
+        fi
+        kubectl delete "allocation/$ALLOCATION_NAME" --ignore-not-found

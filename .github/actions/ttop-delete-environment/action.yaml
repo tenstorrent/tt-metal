@@ -11,5 +11,12 @@ runs:
   steps:
     - name: Delete Environment
       shell: bash
+      env:
+        ENVIRONMENT_NAME: ${{ inputs.environmentName }}
       run: |
-        kubectl -nttop delete helmrelease/${{ inputs.environmentName }} --ignore-not-found
+        # Validate environment name (alphanumeric, hyphen, underscore only)
+        if [[ ! "$ENVIRONMENT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "::error::Invalid environment name: must be alphanumeric with hyphens/underscores only"
+          exit 1
+        fi
+        kubectl -nttop delete "helmrelease/$ENVIRONMENT_NAME" --ignore-not-found

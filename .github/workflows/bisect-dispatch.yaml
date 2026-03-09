@@ -68,8 +68,9 @@ jobs:
     steps:
       - id: config
         shell: bash
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label }}
         run: |
-          RUNNER_LABEL="${{ inputs.runner-label }}"
 
           # Determine runs-on labels based on runner type
 
@@ -200,10 +201,11 @@ jobs:
       - name: Download Gist Script
         if: ${{ contains(inputs.test-script, 'gist.github.com') || contains(inputs.test-script, 'gist.githubusercontent.com') }}
         shell: bash
+        env:
+          GIST_URL: ${{ inputs.test-script }}
         run: |
           set -euo pipefail
-          echo "Downloading gist from ${{ inputs.test-script }}"
-          GIST_URL="${{ inputs.test-script }}"
+          echo "Downloading gist from $GIST_URL"
 
           # Extract gist ID and filename from various URL formats
           if [[ "$GIST_URL" =~ gist\.github\.com/([^/]+)/([a-f0-9]+) ]]; then
@@ -247,12 +249,16 @@ jobs:
       - name: Validate Inputs
         id: validate
         shell: bash
+        env:
+          COMMIT_RANGE: ${{ inputs.commit-range }}
+          TIMEOUT: ${{ inputs.timeout }}
+          ATTEMPTS: ${{ inputs.attempts }}
+          TEST_SCRIPT_INPUT: ${{ inputs.test-script }}
         run: |
           set -euo pipefail
 
           # Parse commit range from combined input
-          COMMIT_RANGE='${{ inputs.commit-range }}'
-          IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
+          IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "${COMMIT_RANGE}"
 
           # Validate parsed values
           if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
@@ -286,9 +292,7 @@ jobs:
 
           echo "✓ Good commit is an ancestor of bad commit"
 
-          # Validate timeout and attempts
-          TIMEOUT='${{ inputs.timeout }}'
-          ATTEMPTS='${{ inputs.attempts }}'
+          # Validate timeout and attempts (from env)
 
           if [ -z "$TIMEOUT" ]; then
             echo "ERROR: Timeout must be provided"
@@ -325,8 +329,8 @@ jobs:
           echo "✓ Timeout: $TIMEOUT minutes"
           echo "✓ Attempts: $ATTEMPTS"
 
-          # Validate test-script is provided
-          TEST_SCRIPT='${{ inputs.test-script }}'
+          # Validate test-script is provided (from env as TEST_SCRIPT_INPUT)
+          TEST_SCRIPT="$TEST_SCRIPT_INPUT"
           if [ -z "$TEST_SCRIPT" ]; then
             echo "ERROR: test-script must be provided"
             exit 1
@@ -352,6 +356,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
+          GOOD_COMMIT: ${{ steps.validate.outputs.good-commit }}
+          BAD_COMMIT: ${{ steps.validate.outputs.bad-commit }}
+          TIMEOUT: ${{ inputs.timeout }}
+          ATTEMPTS: ${{ inputs.attempts }}
+          TEST_SCRIPT: ${{ inputs.test-script }}
+          TRACY_FLAG: ${{ inputs.tracy }}
+          ND_MODE_FLAG: ${{ inputs.nd-mode }}
+          DOWNLOAD_ARTIFACTS_FLAG: ${{ inputs.download-artifacts }}
+          SKIP_COMMITS: ${{ inputs.skip-commits }}
         run: |
           set -euo pipefail
           trap 'rm -rf ./build_bisect' EXIT
@@ -361,27 +374,14 @@ jobs:
           chmod +x ./build_bisect/tt_bisect.sh
           chmod +x ./build_bisect/download_artifacts.sh
 
-          # Use parsed values from validation step
-          GOOD_COMMIT='${{ steps.validate.outputs.good-commit }}'
-          BAD_COMMIT='${{ steps.validate.outputs.bad-commit }}'
-          TIMEOUT='${{ inputs.timeout }}'
-          ATTEMPTS='${{ inputs.attempts }}'
-
           # Determine which script to run based on test-script input
           SCRIPT_PATH=""
-          TEST_SCRIPT='${{ inputs.test-script }}'
 
           if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
-            # It's a gist URL, use the downloaded gist script
             SCRIPT_PATH="/work/bisect_gist_script.sh"
           else
-            # It's an inline command, write it to a temporary script to avoid quoting issues
-            # Note: using heredoc with 'EOF' prevents variable expansion
-            cat > /work/bisect_command_script.sh << 'EOF'
-          #!/bin/bash
-          set -eo pipefail
-          ${{ inputs.test-script }}
-          EOF
+            # Write inline command to a script file safely using printf
+            printf '%s\n' '#!/bin/bash' 'set -eo pipefail' "$TEST_SCRIPT" > /work/bisect_command_script.sh
             chmod +x /work/bisect_command_script.sh
             SCRIPT_PATH="/work/bisect_command_script.sh"
           fi
@@ -393,18 +393,18 @@ jobs:
           bisect_args+=(-g "$GOOD_COMMIT")
           bisect_args+=(-r "$ATTEMPTS")
 
-          if [[ "${{ inputs.tracy }}" == 'true' ]]; then
+          if [[ "$TRACY_FLAG" == 'true' ]]; then
             bisect_args+=(-p)
           fi
-          if [[ "${{ inputs.nd-mode }}" == 'true' ]]; then
+          if [[ "$ND_MODE_FLAG" == 'true' ]]; then
             bisect_args+=(-n)
           fi
-          if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
+          if [[ "$DOWNLOAD_ARTIFACTS_FLAG" == 'true' ]]; then
             bisect_args+=(-a)
           fi
 
-          if [[ "${{ inputs.skip-commits }}" != '' ]]; then
-            bisect_args+=(-c "${{ inputs.skip-commits }}")
+          if [[ "$SKIP_COMMITS" != '' ]]; then
+            bisect_args+=(-c "$SKIP_COMMITS")
           fi
 
           bisect_args+=(-s "$SCRIPT_PATH")

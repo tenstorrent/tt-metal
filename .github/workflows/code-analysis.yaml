@@ -116,17 +116,22 @@ jobs:
 
       - id: compute-outputs
         shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          CLANG_TIDY_CONFIG_CHANGED: ${{ steps.find-changes.outputs.clang-tidy-config-changed }}
+          ANY_CODE_CHANGED: ${{ steps.find-changes.outputs.any-code-changed }}
+          CMAKE_CHANGED: ${{ steps.find-changes.outputs.cmake-changed }}
         run: |
-          if [[ "${{ github.ref_name }}" == "main" ]] || \
-             [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
+          if [[ "$REF_NAME" == "main" ]] || \
+             [[ "$CLANG_TIDY_CONFIG_CHANGED" == "true" ]]; then
             do_full_scan="true"
           else
             do_full_scan="false"
           fi
 
           if [[ "$do_full_scan" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+             [[ "$ANY_CODE_CHANGED" == "true" ]] || \
+             [[ "$CMAKE_CHANGED" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"
@@ -134,8 +139,8 @@ jobs:
 
           merge_base=""
           if [[ "$do_full_scan" != "true" ]]; then
-            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
-            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
+            merge_base=$(git merge-base "$REF_NAME" origin/main)
+            echo "Merge base between $REF_NAME and main: $merge_base"
           fi
 
           echo "Do a scan: $do_scan"
@@ -293,6 +298,8 @@ jobs:
 
       - name: 🔬 Analyze with CodeChecker
         id: codechecker
+        env:
+          DEBUG_FILE_FILTER: ${{ inputs.debug-file-filter }}
         run: |
           set -euo pipefail
 
@@ -301,20 +308,20 @@ jobs:
 
           echo "=== Starting CodeChecker analysis ==="
 
-          # Build command with optional file filter
-          ANALYZE_CMD="CodeChecker analyze \
-            /work/.build/clang-static-analyzer/compile_commands.json \
-            --output $OUTPUT_DIR \
-            --jobs $(nproc) \
-            --config /work/.codechecker.json"
+          ANALYZE_ARGS=(
+            /work/.build/clang-static-analyzer/compile_commands.json
+            --output "$OUTPUT_DIR"
+            --jobs "$(nproc)"
+            --config /work/.codechecker.json
+          )
 
-          if [ -n "${{ inputs.debug-file-filter }}" ]; then
-            echo "🐛 DEBUG MODE: Analyzing only: ${{ inputs.debug-file-filter }}"
-            ANALYZE_CMD="$ANALYZE_CMD --file '${{ inputs.debug-file-filter }}'"
+          if [ -n "$DEBUG_FILE_FILTER" ]; then
+            echo "🐛 DEBUG MODE: Analyzing only: $DEBUG_FILE_FILTER"
+            ANALYZE_ARGS+=(--file "$DEBUG_FILE_FILTER")
           fi
 
           # Run analysis (don't fail on analyzer crashes - common with static analysis)
-          eval "$ANALYZE_CMD" || echo "⚠️ Analysis completed with warnings"
+          CodeChecker analyze "${ANALYZE_ARGS[@]}" || echo "⚠️ Analysis completed with warnings"
 
           # Set output for downstream steps
           echo "analyze-output=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"

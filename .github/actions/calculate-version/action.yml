@@ -63,11 +63,35 @@ runs:
     - name: Analyze commits for version bump
       id: analyze-commits
       shell: bash
+      env:
+        LATEST_TAG: ${{ steps.get-latest-semver.outputs.latest_semver }}
+        LATEST_RC: ${{ steps.get-latest-semver.outputs.latest_rc }}
+        FORCE_BUMP_INPUT: ${{ inputs.force-bump-type }}
+        IGNORE_COMMITS_INPUT: ${{ inputs.ignore-commits }}
       run: |
-        latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-        latest_rc="${{ steps.get-latest-semver.outputs.latest_rc }}"
-        force_bump="${{ inputs.force-bump-type }}"
-        ignore_commits="${{ inputs.ignore-commits }}"
+        latest_tag="$LATEST_TAG"
+        latest_rc="$LATEST_RC"
+        force_bump="$FORCE_BUMP_INPUT"
+        ignore_commits="$IGNORE_COMMITS_INPUT"
+
+        # Validate force-bump-type if provided
+        if [ -n "$force_bump" ]; then
+          if [[ ! "$force_bump" =~ ^(major|minor|patch|none)$ ]]; then
+            echo "::error::Invalid force-bump-type: must be major, minor, patch, or none"
+            exit 1
+          fi
+        fi
+
+        # Validate ignore-commits format (comma-separated hex SHAs)
+        if [ -n "$ignore_commits" ]; then
+          for sha in $(echo "$ignore_commits" | tr ',' ' '); do
+            sha=$(echo "$sha" | xargs)
+            if [ -n "$sha" ] && [[ ! "$sha" =~ ^[a-fA-F0-9]+$ ]]; then
+              echo "::error::Invalid commit SHA format in ignore-commits: $sha"
+              exit 1
+            fi
+          done
+        fi
 
         # Check if a forced bump type is provided
         if [ -n "$force_bump" ]; then

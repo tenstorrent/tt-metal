@@ -138,14 +138,21 @@ jobs:
       - name: Determine test execution
         id: logic
         # Skip all but galaxy-quick if trigger-type is not manual
+        env:
+          INPUT_TRIGGER_TYPE: ${{ inputs.trigger_type }}
+          INPUT_GALAXY_QUICK: ${{ inputs.galaxy-quick }}
+          INPUT_GALAXY_UNIT: ${{ inputs.galaxy-unit }}
+          INPUT_GALAXY_INTEGRATION: ${{ inputs.galaxy-integration }}
+          INPUT_GALAXY_DEMO: ${{ inputs.galaxy-demo }}
+          INPUT_GALAXY_PERF: ${{ inputs.galaxy-perf }}
         run: |
-          case "${{ inputs.trigger_type }}" in
+          case "$INPUT_TRIGGER_TYPE" in
             "manual")
-              echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-integration=${{ inputs.galaxy-integration != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.galaxy-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-quick=$INPUT_GALAXY_QUICK" >> $GITHUB_OUTPUT
+              echo "run-unit=$([[ "$INPUT_GALAXY_UNIT" != "disabled" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+              echo "run-integration=$([[ "$INPUT_GALAXY_INTEGRATION" != "disabled" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+              echo "run-demo=$([[ "$INPUT_GALAXY_DEMO" != "disabled" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+              echo "run-model-perf=$([[ "$INPUT_GALAXY_PERF" != "disabled" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-quick=true" >> $GITHUB_OUTPUT

@@ -145,8 +145,10 @@ jobs:
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          bash -c "$TEST_CMD"
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}

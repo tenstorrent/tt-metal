@@ -89,7 +89,9 @@ jobs:
 
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: ${{ matrix.test-group.cmd }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: bash -c "$TEST_CMD"
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

@@ -171,6 +171,8 @@ jobs:
           runner-label: ${{ join(matrix.test-group.runs_on, ' ') }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           # For single-card wormhole tests, source the test functions
           if [[ "${{ matrix.test-group.sku }}" =~ ^wh_n150 || "${{ matrix.test-group.sku }}" =~ ^wh_n300 ]]; then
@@ -181,7 +183,7 @@ jobs:
             source tests/scripts/t3000/run_t3000_demo_tests.sh
           fi
           # Execute the command
-          ${{ matrix.test-group.cmd }}
+          bash -c "$TEST_CMD"
       - name: Print tt-smi data on failure
         if: ${{ failure() && contains(matrix.test-group.sku, 'bh_') }}
         run: |

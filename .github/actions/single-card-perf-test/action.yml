@@ -31,31 +31,34 @@ runs:
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
+        TEST_COMMANDS: ${{ inputs.commands }}
+        DEVICE_PERF_MODEL_NAME: ${{ inputs.device_perf_model_name }}
+        CI_LOG_FILE_INPUT: ${{ inputs.ci_log_file }}
       run: |
         set -euo pipefail
         cd docker-job
 
         # E2E perf tests need git config
-        if [[ -z "${{ inputs.device_perf_model_name }}" ]]; then
+        if [[ -z "$DEVICE_PERF_MODEL_NAME" ]]; then
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
         fi
 
-        : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
+        : "${CI_LOG_FILE:=$CI_LOG_FILE_INPUT}"
         mkdir -p "$(dirname "$CI_LOG_FILE")"
 
         # run tests; keep exit code but do not stop subsequent steps
         set +e
-        bash -eo pipefail -c '${{ inputs.commands }}' 2>&1 | tee -a "$CI_LOG_FILE"
+        bash -eo pipefail -c "$TEST_COMMANDS" 2>&1 | tee -a "$CI_LOG_FILE"
         status=${PIPESTATUS[0]}
         echo "$status" > .command_status
         set -e
 
         # Conditional report merging based on test type
-        if [[ -n "${{ inputs.device_perf_model_name }}" ]]; then
+        if [[ -n "$DEVICE_PERF_MODEL_NAME" ]]; then
           # Device perf branch
-          export DEVICE_PERF_REPORT_FILENAME="Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv"
+          export DEVICE_PERF_REPORT_FILENAME="Models_Device_Perf_${DEVICE_PERF_MODEL_NAME}_$(date +%Y_%m_%d).csv"
           python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
-          cat "Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv" > "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
+          cat "Models_Device_Perf_${DEVICE_PERF_MODEL_NAME}_$(date +%Y_%m_%d).csv" > "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
           cat "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
         else
@@ -70,10 +73,14 @@ runs:
     - name: Compact test summary (output to CI and Step Summary)
       if: always()
       shell: bash
+      env:
+        CI_LOG_FILE_INPUT: ${{ inputs.ci_log_file }}
+        SUMMARY_PATTERN: ${{ inputs.summary_pattern }}
+        SUMMARY_MAX_LINES: ${{ inputs.summary_max_lines }}
       run: |
         set -euo pipefail
         cd docker-job
-        : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
+        : "${CI_LOG_FILE:=$CI_LOG_FILE_INPUT}"
 
         if [[ ! -s "$CI_LOG_FILE" ]]; then
           # No log file case
@@ -92,13 +99,13 @@ runs:
           summary_start_line=$(grep -n "short test summary info" "$nolog" | tail -1 | cut -d: -f1 || echo "0")
           if [[ "$summary_start_line" -gt 0 ]]; then
             # Extract from that line onwards, then apply the pattern
-            tail -n +$summary_start_line "$nolog" | grep -nE "${{ inputs.summary_pattern }}" \
-              | head -n "${{ inputs.summary_max_lines }}" \
+            tail -n +$summary_start_line "$nolog" | grep -nE "$SUMMARY_PATTERN" \
+              | head -n "$SUMMARY_MAX_LINES" \
               | grep -v "PytestBenchmarkWarning\|pytest_benchmark" > compact-summary.txt || true
           else
             # Fallback to original behavior if no summary section found
-            grep -nE "${{ inputs.summary_pattern }}" "$nolog" \
-              | head -n "${{ inputs.summary_max_lines }}" \
+            grep -nE "$SUMMARY_PATTERN" "$nolog" \
+              | head -n "$SUMMARY_MAX_LINES" \
               | grep -v "PytestBenchmarkWarning\|pytest_benchmark" > compact-summary.txt || true
           fi
 

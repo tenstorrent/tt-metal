@@ -11,23 +11,34 @@ jobs:
     steps:
       - name: Set username and number based on event type
         id: set-variables
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_LOGIN: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          PR_LOGIN: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER_VAL: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            echo "USERNAME=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
-            echo "NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
-            echo "EVENT_URL=${{ github.event.issue.html_url }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=issue" >> $GITHUB_ENV
-            echo "GH_COMMAND=issue" >> $GITHUB_ENV
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
-            echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-            echo "EVENT_URL=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=PR" >> $GITHUB_ENV
-            echo "GH_COMMAND=pr" >> $GITHUB_ENV
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
-            echo "EVENT_URL=https://github.com/${{ github.repository }}/commit/${{ github.sha }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=push" >> $GITHUB_ENV
+          if [ "$EVENT_NAME" = "issues" ]; then
+            echo "USERNAME=$ISSUE_LOGIN" >> "$GITHUB_ENV"
+            echo "NUMBER=$ISSUE_NUMBER" >> "$GITHUB_ENV"
+            echo "EVENT_URL=$ISSUE_URL" >> "$GITHUB_ENV"
+            echo "EVENT_TYPE=issue" >> "$GITHUB_ENV"
+            echo "GH_COMMAND=issue" >> "$GITHUB_ENV"
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "USERNAME=$PR_LOGIN" >> "$GITHUB_ENV"
+            echo "NUMBER=$PR_NUMBER_VAL" >> "$GITHUB_ENV"
+            echo "EVENT_URL=$PR_URL" >> "$GITHUB_ENV"
+            echo "EVENT_TYPE=PR" >> "$GITHUB_ENV"
+            echo "GH_COMMAND=pr" >> "$GITHUB_ENV"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            echo "USERNAME=$ACTOR" >> "$GITHUB_ENV"
+            echo "EVENT_URL=https://github.com/${REPO}/commit/${SHA}" >> "$GITHUB_ENV"
+            echo "EVENT_TYPE=push" >> "$GITHUB_ENV"
           fi
       - name: Check if organization member
         id: is_organization_member
@@ -35,7 +46,7 @@ jobs:
           GITHUB_ORG: tenstorrent
           ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
-          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" "https://api.github.com/orgs/${GITHUB_ORG}/members/${USERNAME}")
           if [ "$http_status" -eq 204 ]; then
             echo "Detected org member"
             echo "is_member=true" >> $GITHUB_OUTPUT
@@ -46,7 +57,7 @@ jobs:
       - name: Add community label
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' && env.GH_COMMAND && env.NUMBER }}
         run: |
-          gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
+          gh $GH_COMMAND edit "$NUMBER" --add-label "$LABELS"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

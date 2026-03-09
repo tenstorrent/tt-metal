@@ -364,11 +364,13 @@ jobs:
           runner-label: ${{ matrix.runner-group.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           if [[ "${{ matrix.test-group.name }}" == "fabric system health tests" && "${{ matrix.runner-group.runner-label }}" == "BH-DeskBox" ]]; then
-            ${{ matrix.test-group.cmd }} --min-connections 4
+            bash -c "$TEST_CMD --min-connections 4"
           else
-            ${{ matrix.test-group.cmd }}
+            bash -c "$TEST_CMD"
           fi
       - name: Print tt-smi data on failure
         if: ${{ failure() }}

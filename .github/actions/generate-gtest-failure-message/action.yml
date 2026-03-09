@@ -13,6 +13,8 @@ runs:
     - name: Generate gtest failure messages
       id: generate-gtest-message
       shell: bash
+      env:
+        TEST_REPORT_PATH: ${{ inputs.test-report-path }}
       run: |
         set +e
-        python3 ${GITHUB_ACTION_PATH}/print_gtest_annotations.py ${{ inputs.test-report-path }}
+        python3 ${GITHUB_ACTION_PATH}/print_gtest_annotations.py "$TEST_REPORT_PATH"

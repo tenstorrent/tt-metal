@@ -46,22 +46,28 @@ runs:
   steps:
     - id: parse
       shell: bash
+      env:
+        INPUT_PLATFORM: ${{ inputs.platform }}
+        INPUT_DISTRO: ${{ inputs.distro }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_DEFAULT_DISTRO: ${{ inputs.default-distro }}
+        INPUT_DEFAULT_VERSION: ${{ inputs.default-version }}
+        INPUT_ENABLE_LTO: ${{ inputs.enable-lto }}
       run: |
         # Helper function to output enable-lto value
         # If user provided explicit override (true/false), use it; otherwise use platform default
         output_enable_lto() {
           local platform_default="$1"
-          local override="${{ inputs.enable-lto }}"
-          if [ "$override" = "true" ] || [ "$override" = "false" ]; then
-            echo "enable-lto=$override" >> "$GITHUB_OUTPUT"
+          if [ "$INPUT_ENABLE_LTO" = "true" ] || [ "$INPUT_ENABLE_LTO" = "false" ]; then
+            echo "enable-lto=$INPUT_ENABLE_LTO" >> "$GITHUB_OUTPUT"
           else
             echo "enable-lto=$platform_default" >> "$GITHUB_OUTPUT"
           fi
         }
 
         # Parse platform dropdown if provided, otherwise use direct inputs or defaults
-        if [ -n "${{ inputs.platform }}" ]; then
-          case "${{ inputs.platform }}" in
+        if [ -n "$INPUT_PLATFORM" ]; then
+          case "$INPUT_PLATFORM" in
             "Ubuntu 22.04")
               echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
               echo "version=22.04" >> "$GITHUB_OUTPUT"
@@ -76,18 +82,18 @@ runs:
               ;;
             *)
               # Unknown platform, use legacy fallback
-              echo "distro=${{ inputs.default-distro }}" >> "$GITHUB_OUTPUT"
-              echo "version=${{ inputs.default-version }}" >> "$GITHUB_OUTPUT"
+              echo "distro=$INPUT_DEFAULT_DISTRO" >> "$GITHUB_OUTPUT"
+              echo "version=$INPUT_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
               echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
               ;;
           esac
         else
           # No platform dropdown, use direct inputs or defaults
-          DISTRO="${{ inputs.distro }}"
-          VERSION="${{ inputs.version }}"
-          [ -z "$DISTRO" ] && DISTRO="${{ inputs.default-distro }}"
-          [ -z "$VERSION" ] && VERSION="${{ inputs.default-version }}"
+          DISTRO="$INPUT_DISTRO"
+          VERSION="$INPUT_VERSION"
+          [ -z "$DISTRO" ] && DISTRO="$INPUT_DEFAULT_DISTRO"
+          [ -z "$VERSION" ] && VERSION="$INPUT_DEFAULT_VERSION"
 
           echo "distro=$DISTRO" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

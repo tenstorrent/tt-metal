@@ -73,14 +73,21 @@ jobs:
     steps:
       - name: Determine test execution
         id: logic
+        env:
+          INPUT_TRIGGER_TYPE: ${{ inputs.trigger_type }}
+          INPUT_SINGLE_CARD_DEMO: ${{ inputs.single-card-demo }}
+          INPUT_SINGLE_CARD_PERF_MODELS: ${{ inputs.single-card-perf-models }}
+          INPUT_SINGLE_CARD_PERF_DEVICE_MODELS: ${{ inputs.single-card-perf-device-models }}
+          INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT: ${{ inputs.single-card-ttnn-models-frequent }}
+          INPUT_CPP_UNIT: ${{ inputs.cpp-unit }}
         run: |
-          case "${{ inputs.trigger_type }}" in
+          case "$INPUT_TRIGGER_TYPE" in
             "manual")
-              echo "run-demo=${{ inputs.single-card-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-perf-models=${{ inputs.single-card-perf-models }}" >> $GITHUB_OUTPUT
-              echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
+              echo "run-demo=$([[ "$INPUT_SINGLE_CARD_DEMO" != "disabled" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+              echo "run-perf-models=$INPUT_SINGLE_CARD_PERF_MODELS" >> $GITHUB_OUTPUT
+              echo "run-perf-device-models=$INPUT_SINGLE_CARD_PERF_DEVICE_MODELS" >> $GITHUB_OUTPUT
+              echo "run-ttnn-models-frequent=$INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT" >> $GITHUB_OUTPUT
+              echo "run-cpp-unit=$INPUT_CPP_UNIT" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-demo=false" >> $GITHUB_OUTPUT

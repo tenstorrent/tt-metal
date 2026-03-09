@@ -130,9 +130,13 @@ jobs:
           uv pip install "$WHEEL_FILENAME"
         shell: bash
       - name: Run regression in loop
+        env:
+          TEST_COMMAND: ${{ inputs.command }}
         run: |
+          # SECURITY NOTE: This workflow executes user-provided commands.
+          # Only repository maintainers should be able to trigger workflow_dispatch.
           uv pip install pytest-repeat
-          ${{ inputs.command }}
+          bash -c "$TEST_COMMAND"
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
