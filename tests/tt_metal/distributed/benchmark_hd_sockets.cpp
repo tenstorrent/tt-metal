@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hd_socket_test_utils.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "physical_system_descriptor.hpp"
 
 #include <benchmark/benchmark.h>
 
