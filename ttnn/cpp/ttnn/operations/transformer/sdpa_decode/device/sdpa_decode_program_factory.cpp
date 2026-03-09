@@ -85,7 +85,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // Handle paged attention sequence length
     if (is_paged_attention) {
-        B = page_table_tensor.value().padded_shape()[0];
+        B = page_table_tensor->is_sharded() ? page_table_tensor->padded_shape()[0] /
+                                                  page_table_tensor->memory_config().shard_spec()->grid.num_cores()
+                                            : page_table_tensor->padded_shape()[0];
         uint32_t block_size = k_shape[2];
         original_block_size = input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
