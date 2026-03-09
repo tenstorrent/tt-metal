@@ -233,6 +233,7 @@ class BlazeMoeGate(AbstractModule):
                 #     ),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "routed_scaling_factor": hf_config.routed_scaling_factor,
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -302,6 +303,7 @@ class BlazeMoeGate(AbstractModule):
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "routed_scaling_factor": hf_config.routed_scaling_factor,
             }
 
     @classmethod
@@ -383,7 +385,7 @@ class BlazeMoeGate(AbstractModule):
         ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
         eps = 1e-20
-        scaling_factor = 2.5
+        scaling_factor = cfg["routed_scaling_factor"]
         enable_sigmoid = True
 
         topk_experts_scores_normalized, topk_experts_indices = DeepseekMoeGateSingleCore.op(

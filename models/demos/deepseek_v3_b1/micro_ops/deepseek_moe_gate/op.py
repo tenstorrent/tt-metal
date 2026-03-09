@@ -68,7 +68,6 @@ class DeepseekMoeGateSingleCore:
         eps=1e-20,
         scaling_factor=2.5,
         enable_sigmoid=False,
-        unit_test=False,
     ):
         """
         Execute Deepseek Moe Gate operation using generic_op.
@@ -82,7 +81,6 @@ class DeepseekMoeGateSingleCore:
             eps: Epsilon value for normalization
             scaling_factor: Scaling factor for normalization
             enable_sigmoid: Whether to enable sigmoid activation
-            unit_test: Whether this op is running in its own unit test
 
         Returns:
             output_tensor with top8 normalized scores (shape [1, 8])
@@ -124,11 +122,11 @@ class DeepseekMoeGateSingleCore:
         input_tile = input_tensor.tile
         input_tile_height, input_tile_width = input_tile.tile_shape
         input_tile_size = input_tile.get_tile_size(input_tensor.dtype)
-        expected_input_tile_size = (16, 16)
+        # expected_input_tile_size = (16, 16)
         output_tile = output_tensor.tile
         output_tile_height, output_tile_width = output_tile.tile_shape
         output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
-        expected_output_tile_size = (32, 32)
+        # expected_output_tile_size = (32, 32)
         # assert input_tile == bias_tensor.tile
         # assert input_tile == input_indices_tensor.tile
         assert output_tile == output_indices_tensor.tile
@@ -269,16 +267,4 @@ class DeepseekMoeGateSingleCore:
         io_tensors = [input_tensor, bias_tensor, input_indices_tensor, output_tensor, output_indices_tensor]
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
-        if unit_test:
-            return output_tensor, output_indices_tensor
-
-        # here we only take the 1x8  out of 32x32
-        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        output_indices_tensor = ttnn.to_layout(output_indices_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = output_tensor[:, 0, :8]
-        output_tensor = ttnn.reshape(output_tensor, (1, 1, output_tensor.shape[-2], output_tensor.shape[-1]))
-        output_indices_tensor = output_indices_tensor[:, 0, :8]
-        output_indices_tensor = ttnn.reshape(
-            output_indices_tensor, (1, 1, output_indices_tensor.shape[-2], output_indices_tensor.shape[-1])
-        )
         return output_tensor, output_indices_tensor

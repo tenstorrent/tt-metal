@@ -134,7 +134,6 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         eps,
         scaling_factor,
         enable_sigmoid,
-        unit_test=True,
     )
 
     # Convert back to torch for verification
@@ -145,6 +144,7 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     output_indices_torch = output_indices_torch[:, 0, :8]
 
     sorted_output_indices_torch, i = torch.sort(output_indices_torch, dim=-1)
+    sorted_output_indices_torch = sorted_output_indices_torch.squeeze(1)
     sorted_output_torch = torch.gather(output_torch, dim=-1, index=i)
 
     top8_indices, i = torch.sort(top8_indices, dim=-1)
