@@ -155,7 +155,6 @@ void kernel_main() {
     // CCL Receiver NCRISC CTArgs (waits for remote data)
     // Note: skip_local_push=1 because gather3 already pushed to CB7 (gather3_dst_cb)
     using CCLReceiverReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<
-        get_named_compile_time_arg_val("ccl_receiver_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
         get_named_compile_time_arg_val("ccl_receiver_l1_alignment"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in2"),
@@ -624,7 +623,7 @@ void kernel_main() {
     if constexpr (Core::is_ccl_receiver_core) {
         DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
         // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-        using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
