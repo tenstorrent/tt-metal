@@ -59,8 +59,9 @@ if [[ -z "$PROMPT_PATH" ]]; then
     echo "Error: prompt file or directory is required" >&2; show_usage
 fi
 
-# Infer branch and repo URL from the current git repo
+# Infer branch, commit, and repo URL from the current git repo
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+STARTING_COMMIT="$(git rev-parse HEAD)"
 REPO_URL="$(git remote get-url origin)"
 if [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]]; then
     echo "Error: Could not determine current branch. Are you in a git repo?" >&2
@@ -126,27 +127,21 @@ run_golden_tests() {
     fi
 
     echo "[${prompt_name}:${run_id}] Running golden tests for '${golden_op}'..."
-    local golden_log="${log_dir}/golden_test.log"
-    local golden_results="${log_dir}/golden_results.txt"
 
-    # Run via tt-test.sh (handles device lock and venv activation)
-    scripts/tt-test.sh --run-all "eval/golden_tests/${golden_op}/" \
-        > "$golden_log" 2>&1 || true
+    # Use eval_test_runner.sh for structured output (junitxml + classification)
+    eval/eval_test_runner.sh "eval/golden_tests/${golden_op}/" "$log_dir" \
+        > "${log_dir}/golden_test.log" 2>&1 || true
 
-    # Parse pytest summary line: "X passed, Y failed, Z errors" (any combination)
-    local summary_line
-    summary_line="$(grep -E '=+ .*(passed|failed|error).* =+' "$golden_log" | tail -1 || true)"
-
-    local passed=0 failed=0 errors=0
-    if [[ -n "$summary_line" ]]; then
-        passed="$(echo "$summary_line" | grep -oP '\d+(?= passed)' || echo 0)"
-        failed="$(echo "$summary_line" | grep -oP '\d+(?= failed)' || echo 0)"
-        errors="$(echo "$summary_line" | grep -oP '\d+(?= error)' || echo 0)"
+    # Read summary from structured output
+    if [[ -f "${log_dir}/golden_results.txt" ]]; then
+        local passed failed total
+        passed="$(grep -oP 'PASSED=\K\d+' "${log_dir}/golden_results.txt" || echo 0)"
+        failed="$(grep -oP 'FAILED=\K\d+' "${log_dir}/golden_results.txt" || echo 0)"
+        total="$(grep -oP 'TOTAL=\K\d+' "${log_dir}/golden_results.txt" || echo 0)"
+        echo "[${prompt_name}:${run_id}] Golden tests: ${passed}/${total} passed"
+    else
+        echo "[${prompt_name}:${run_id}] Golden tests: no results produced"
     fi
-    local total=$(( passed + failed + errors ))
-
-    echo "PASSED=${passed} FAILED=${failed} ERRORS=${errors} TOTAL=${total}" > "$golden_results"
-    echo "[${prompt_name}:${run_id}] Golden tests: ${passed}/${total} passed"
 }
 
 run_single() {
@@ -321,6 +316,25 @@ WRAPPER
     echo "$result" > "${log_dir}/result.txt"
     echo "[${prompt_name}:${run_id}] ${result} (${mins}m ${secs}s)"
     echo "${elapsed}" > "${log_dir}/duration_seconds.txt"
+
+    # 8. Ingest into tracking database
+    local ingest_args=(
+        --prompt-name "$prompt_name"
+        --run-number "$run_id"
+        --starting-branch "$BRANCH"
+        --starting-commit "$STARTING_COMMIT"
+        --created-branch "$run_branch"
+    )
+    if [[ -f "${log_dir}/test_results.json" ]]; then
+        ingest_args+=(--test-results "${log_dir}/test_results.json")
+    fi
+    # Score JSON is optional — only present if score.py was run
+    if [[ -f "${log_dir}/score.json" ]]; then
+        ingest_args+=(--score-json "${log_dir}/score.json")
+    fi
+    python3 -m eval.ingest "${ingest_args[@]}" \
+        >> "${log_dir}/ingest.log" 2>&1 || \
+        echo "[${prompt_name}:${run_id}] WARNING: DB ingest failed" >&2
 }
 
 # --- Launch all runs in parallel ---
