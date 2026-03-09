@@ -1040,11 +1040,6 @@ protected:
 };
 
 TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
-    // Skipped on T3K: kernel compilation failure in minimal_default_writer. See
-    // https://github.com/tenstorrent/tt-metal/issues/39242
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::T3K) {
-        GTEST_SKIP() << "Disabled on T3K. See https://github.com/tenstorrent/tt-metal/issues/39242";
-    }
     // This test replicates AllGatherReturnedTensor test in test_multi_tensor_ccl.cpp but with the generic op.
     // Hardcoded for 1x4 linear topology with 1 worker per direction and 1 link.
     log_info(tt::LogTest, "Running {}: all_gather via generic_op with MUX", __func__);
@@ -1338,6 +1333,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                 "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp",
             .core_ranges = worker_cores,
             .compile_time_args = writer_ct_args,
+            .defines = {{"USE_WORKER_MUX", "1"}},
             .runtime_args = {{worker_fwd_core, fwd_writer_rt}, {worker_bwd_core, bwd_writer_rt}},
             .config = tt::tt_metal::WriterConfigDescriptor{},
         });
