@@ -67,7 +67,7 @@ ttnn::Tensor pad_impl(
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    if (input_tensor.is_sharded()) {
+    if (input_tensor.is_sharded() && input_tensor.memory_config().memory_layout() != TensorMemoryLayout::ND_SHARDED) {
         auto total_height = [](const auto& shape) {
             return std::accumulate(shape.begin(), shape.end() - 1, 1, std::multiplies<uint32_t>());
         };
@@ -134,12 +134,12 @@ ttnn::Tensor pad_impl(
                 return output_tensor_height_padded;
             }
         }
-    }
 
-    auto output_w = output_padded_shape[3];
-    TT_ASSERT(
-        !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec()->shape[1],
-        "output_w != output_memory_config.shard_spec().shape[1]");
+        auto output_w_check = output_padded_shape[3];
+        TT_ASSERT(
+            output_w_check == output_memory_config.shard_spec()->shape[1],
+            "output_w != output_memory_config.shard_spec().shape[1]");
+    }
 
     ttnn::Shape output_shape{output_padded_shape};
     return ttnn::prim::pad(
