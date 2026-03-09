@@ -15,6 +15,8 @@ struct MatmulMultiCoreProgramFactory {
         tt::tt_metal::KernelHandle writer_kernel_id{};
         uint32_t num_cores{};
         uint32_t num_cores_y{};
+        // Tracking for view buffer support (zero-copy batch selection)
+        mutable uint32_t dst_start_tile_id{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

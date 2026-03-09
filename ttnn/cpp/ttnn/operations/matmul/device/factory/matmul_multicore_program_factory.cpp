@@ -81,8 +81,10 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     // Compute start tile offsets for view buffers (zero-copy batch selection)
     auto src0_region = src0_buffer->root_buffer_region();
     auto src1_region = src1_buffer->root_buffer_region();
+    auto dst_region = dst_buffer->root_buffer_region();
     uint32_t src0_start_tile_id = src0_region.offset / src0_buffer->page_size();
     uint32_t src1_start_tile_id = src1_region.offset / src1_buffer->page_size();
+    uint32_t dst_start_tile_id = dst_region.offset / dst_buffer->page_size();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -195,11 +197,12 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
              MtNt,
              src0_start_tile_id,
              src1_start_tile_id});
-        tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, num_output_tiles_per_core, num_tiles_written});
+        tt_metal::SetRuntimeArgs(
+            program, writer_id, core, {dst_addr, num_output_tiles_per_core, num_tiles_written + dst_start_tile_id});
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y}};
+    return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y, dst_start_tile_id}};
 }
 
 void MatmulMultiCoreProgramFactory::override_runtime_arguments(
@@ -221,8 +224,12 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     // Compute start tile offsets for view buffers (zero-copy batch selection)
     auto src0_region = src_dram_buffer_a->root_buffer_region();
     auto src1_region = src_dram_buffer_b->root_buffer_region();
+    auto dst_region = dst_dram_buffer->root_buffer_region();
     uint32_t src0_start_tile_id = src0_region.offset / src_dram_buffer_a->page_size();
     uint32_t src1_start_tile_id = src1_region.offset / src_dram_buffer_b->page_size();
+    uint32_t new_dst_start_tile_id = dst_region.offset / dst_dram_buffer->page_size();
+    int32_t dst_delta =
+        static_cast<int32_t>(new_dst_start_tile_id) - static_cast<int32_t>(shared_variables.dst_start_tile_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -236,8 +243,13 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
+            // Update output start tile id with delta for view buffer support
+            runtime_args[2] = static_cast<uint32_t>(static_cast<int32_t>(runtime_args[2]) + dst_delta);
         }
     }
+
+    // Update tracked output start tile id
+    shared_variables.dst_start_tile_id = new_dst_start_tile_id;
 }
 
 ////////////////////////////////////////////////////////////////////////////

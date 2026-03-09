@@ -22,6 +22,7 @@ struct matmul_mcast_1d_common_override_variables_t {
     // Tracking for view buffer support (zero-copy batch selection)
     mutable uint32_t in0_root_buffer_start_tile{};
     mutable uint32_t in1_root_buffer_start_tile{};
+    mutable uint32_t out_root_buffer_start_tile{};
 };
 
 struct MatmulMultiCoreReuseMcast1DProgramFactory {

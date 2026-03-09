@@ -13,8 +13,9 @@ Usage:
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
@@ -51,9 +52,9 @@ def test_batch_view_tile(mesh_device, b, M, N):
         # Verify data matches
         view_torch = ttnn.to_torch(view)
         expected = torch_input[batch_idx]
-        assert torch.allclose(view_torch, expected, atol=1e-2), (
-            f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
-        )
+        assert torch.allclose(
+            view_torch, expected, atol=1e-2
+        ), f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
 
         logger.info(f"batch_idx={batch_idx} passed: shape={view.shape}")
 
@@ -91,9 +92,9 @@ def test_batch_view_row_major(mesh_device, b, M, N):
         # Verify data matches
         view_torch = ttnn.to_torch(view)
         expected = torch_input[batch_idx]
-        assert torch.allclose(view_torch, expected, atol=1e-3), (
-            f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
-        )
+        assert torch.allclose(
+            view_torch, expected, atol=1e-3
+        ), f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
 
         logger.info(f"batch_idx={batch_idx} passed: shape={view.shape}")
 
@@ -235,9 +236,9 @@ def test_batch_view_4d(mesh_device, X, b, M, N):
         view_torch = ttnn.to_torch(view)
         expected = torch_input[0, batch_idx]  # [M, N]
 
-        assert torch.allclose(view_torch, expected, atol=1e-2), (
-            f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
-        )
+        assert torch.allclose(
+            view_torch, expected, atol=1e-2
+        ), f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
 
         logger.info(f"batch_idx={batch_idx} passed: shape={view.shape}")
 
@@ -281,9 +282,9 @@ def test_batch_view_4d_with_shard_mapper(mesh_device):
         if view_torch.dim() > expected.dim():
             view_torch = view_torch.squeeze()
 
-        assert torch.allclose(view_torch, expected, atol=1e-2), (
-            f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
-        )
+        assert torch.allclose(
+            view_torch, expected, atol=1e-2
+        ), f"Data mismatch at batch_idx={batch_idx}: max diff = {(view_torch - expected).abs().max().item()}"
 
         logger.info(f"batch_idx={batch_idx} passed with ShardTensor2dMesh")
 
@@ -392,3 +393,74 @@ def test_batch_view_then_add(mesh_device):
 
         assert pcc_passed, f"PCC failed at batch_idx={batch_idx}: {pcc_message}"
         logger.info(f"batch_idx={batch_idx} add passed")
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_batch_view_as_matmul_output(mesh_device):
+    """Test using batch_view as matmul output - writing to specific batch of pre-allocated output buffer."""
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    b, M, K, N = 4, 512, 1024, 256
+
+    # Create input tensors
+    torch_input = torch.randn(b, M, K, dtype=torch.float32)
+    torch_weights = torch.randn(K, N, dtype=torch.float32)
+
+    # Pre-allocate output buffer [b, M, N]
+    torch_output = torch.zeros(b, M, N, dtype=torch.bfloat16)
+    ttnn_output = ttnn.from_torch(
+        torch_output,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input.to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_weights = ttnn.from_torch(
+        torch_weights.to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    logger.info(
+        f"Input shape: {ttnn_input.shape}, Weights shape: {ttnn_weights.shape}, Output shape: {ttnn_output.shape}"
+    )
+
+    # Compute reference
+    torch_expected = torch.zeros(b, M, N, dtype=torch.float32)
+    for batch_idx in range(b):
+        torch_expected[batch_idx] = torch_input[batch_idx] @ torch_weights
+
+    # Run matmul for each batch, writing to output view
+    for batch_idx in range(b):
+        # Create input view [M, K]
+        input_view = ttnn.experimental.deepseek.batch_view(ttnn_input, batch_idx)
+        # Create output view [M, N]
+        output_view = ttnn.experimental.deepseek.batch_view(ttnn_output, batch_idx)
+
+        logger.info(
+            f"batch_idx={batch_idx}: input_view.shape={input_view.shape}, output_view.shape={output_view.shape}"
+        )
+
+        # Run matmul with output view as destination
+        ttnn.matmul(input_view, ttnn_weights, dtype=ttnn.bfloat16, optional_output_tensor=output_view)
+        logger.info(f"batch_idx={batch_idx}: matmul completed")
+
+    # Read back full output and compare
+    result_torch = ttnn.to_torch(ttnn_output).to(torch.float32)
+    logger.info(f"Result shape: {result_torch.shape}, Expected shape: {torch_expected.shape}")
+
+    # Compare each batch
+    for batch_idx in range(b):
+        pcc_passed, pcc_message = comp_pcc(torch_expected[batch_idx], result_torch[batch_idx], 0.99)
+        logger.info(f"batch_idx={batch_idx}: {pcc_passed} PCC = {pcc_message}. Threshold = 0.99")
+        assert pcc_passed, f"PCC failed at batch_idx={batch_idx}: {pcc_message}"
+
+    logger.info("batch_view as matmul output test passed")

@@ -353,8 +353,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     // Compute start tile offsets for view buffers (zero-copy batch selection)
     auto in0_region = in0_buffer->root_buffer_region();
     auto in1_region = in1_buffer->root_buffer_region();
+    auto out_region = out_buffer->root_buffer_region();
     uint32_t in0_root_buffer_start_tile = in0_region.offset / in0_buffer->page_size();
     uint32_t in1_root_buffer_start_tile = in1_region.offset / in1_buffer->page_size();
+    uint32_t out_root_buffer_start_tile = out_region.offset / out_buffer->page_size();
 
     if (in0_block_sharded) {
         uint32_t num_x = in0_sender_num_cores_along_width;
@@ -1203,7 +1205,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                     // READER
                     // in1 tensor args
                     (std::uint32_t)in1_buffer->address(),
-                    (std::uint32_t)(in1_tensor_start_tile_id_stride * in1_idx + in1_root_buffer_start_tile),  // in1_tensor_start_tile_id
+                    (std::uint32_t)(in1_tensor_start_tile_id_stride * in1_idx +
+                                    in1_root_buffer_start_tile),  // in1_tensor_start_tile_id
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
                     (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
@@ -1216,7 +1219,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                     // WRITER
                     // out tensor args
                     (std::uint32_t)out_buffer->address(),
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
+                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N) +
+                        out_root_buffer_start_tile  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
@@ -1347,8 +1351,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_buffer->address(),                               // out_tensor_addr
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
+                    (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N) +
+                        out_root_buffer_start_tile  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
@@ -1450,7 +1455,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
          transpose_mcast,
          cores,
          in0_root_buffer_start_tile,
-         in1_root_buffer_start_tile}};
+         in1_root_buffer_start_tile,
+         out_root_buffer_start_tile}};
 }
 
 void override_runtime_arguments_impl(
@@ -1499,12 +1505,16 @@ void override_runtime_arguments_impl(
     // Compute new root buffer start tiles and delta for view buffer support
     auto in0_region = src_buffer_a->root_buffer_region();
     auto in1_region = src_buffer_b->root_buffer_region();
+    auto out_region = dst_buffer->root_buffer_region();
     uint32_t new_in0_root_buffer_start_tile = in0_region.offset / src_buffer_a->page_size();
     uint32_t new_in1_root_buffer_start_tile = in1_region.offset / src_buffer_b->page_size();
+    uint32_t new_out_root_buffer_start_tile = out_region.offset / dst_buffer->page_size();
     int32_t in0_delta = static_cast<int32_t>(new_in0_root_buffer_start_tile) -
                         static_cast<int32_t>(shared_variables.in0_root_buffer_start_tile);
     int32_t in1_delta = static_cast<int32_t>(new_in1_root_buffer_start_tile) -
                         static_cast<int32_t>(shared_variables.in1_root_buffer_start_tile);
+    int32_t out_delta = static_cast<int32_t>(new_out_root_buffer_start_tile) -
+                        static_cast<int32_t>(shared_variables.out_root_buffer_start_tile);
 
     // in0 sender
     if (src0_sharded) {
@@ -1529,6 +1539,8 @@ void override_runtime_arguments_impl(
         writer_runtime_args[1] = static_cast<uint32_t>(
             static_cast<int32_t>(writer_runtime_args[1]) + in1_delta);
         writer_runtime_args[7] = dst_buffer->address();
+        // Update out start tile id with delta for view buffer support
+        writer_runtime_args[8] = static_cast<uint32_t>(static_cast<int32_t>(writer_runtime_args[8]) + out_delta);
         if (bias_tensor.has_value()) {
             writer_runtime_args[18] = (*bias_buffer)->address();
         }
@@ -1537,12 +1549,15 @@ void override_runtime_arguments_impl(
     // Update tracked root buffer start tiles
     shared_variables.in0_root_buffer_start_tile = new_in0_root_buffer_start_tile;
     shared_variables.in1_root_buffer_start_tile = new_in1_root_buffer_start_tile;
+    shared_variables.out_root_buffer_start_tile = new_out_root_buffer_start_tile;
 
     // in1 receiver
     auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
     for (const auto& core : in1_receiver_cores) {
         auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
         writer_runtime_args[2] = dst_buffer->address();
+        // Update out start tile id with delta for view buffer support
+        writer_runtime_args[3] = static_cast<uint32_t>(static_cast<int32_t>(writer_runtime_args[3]) + out_delta);
     }
     if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id) {
         auto& receiver_writer_runtime_args_by_core =
@@ -1550,6 +1565,8 @@ void override_runtime_arguments_impl(
         for (const auto& core : in1_receiver_other_cores) {
             auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
             writer_runtime_args[2] = dst_buffer->address();
+            // Update out start tile id with delta for view buffer support
+            writer_runtime_args[3] = static_cast<uint32_t>(static_cast<int32_t>(writer_runtime_args[3]) + out_delta);
         }
     }
 
