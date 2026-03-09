@@ -1054,7 +1054,7 @@ bool acquire_lock() {
 #else
     auto& lock_atomic = get_device_print_buffer()->aux.lock;
 
-    while (lock_atomic.exchange(1, std::memory_order_acquire) != 0) {
+    while (lock_atomic.exchange(1) != 0) {
         // Failed to acquire lock, wait and try again
         invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
@@ -1116,7 +1116,7 @@ void release_lock() {
     asm volatile("" ::: "memory");
 #else
     auto& lock_atomic = get_device_print_buffer()->aux.lock;
-    lock_atomic.store(0, std::memory_order_acquire);
+    lock_atomic = 0;
 #endif
 }
 
@@ -1128,7 +1128,7 @@ void initialize_lock() {
     asm volatile("" ::: "memory");
 #else
     auto& lock_atomic = get_device_print_buffer()->aux.lock;
-    lock_atomic.store(0, std::memory_order_acquire);
+    lock_atomic = 0;
 #endif
 }
 
