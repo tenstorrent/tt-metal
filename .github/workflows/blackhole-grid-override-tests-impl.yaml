@@ -1,5 +1,4 @@
-name: "[internal] Blackhole Grid Override Tests impl"
-
+name: '[internal] Blackhole Grid Override Tests impl'
 on:
   workflow_call:
     inputs:
@@ -15,14 +14,13 @@ on:
       runner-label:
         required: true
         type: string
-        default: 'P150b'
+        default: P150b
         description: 'Runner label: default is P150b'
       arch_name:
         required: false
         type: string
-        default: 'blackhole'
-        description: 'Architecture name to use'
-
+        default: blackhole
+        description: Architecture name to use
 jobs:
   reduced-core-count-tests:
     strategy:
@@ -31,10 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sharding on 20 cores
-            owner_id: U08ARDXARPF  # Ilija Anastasijevic
-            cmd: pytest tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
-            timeout: 10
+        - name: ttnn sharding on 20 cores
+          owner_id: U08ARDXARPF   # Ilija Anastasijevic
+          cmd: pytest
+            tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+          timeout: 10
           # 20 cores tests disabled in https://github.com/tenstorrent/tt-metal/issues/36807
           # - name: 20 cores oft
           #   owner_id: U08ARDXARPF  # Ilija Anastasijevic
@@ -44,18 +43,20 @@ jobs:
           #   owner_id: U08ARDXARPF  # Ilija Anastasijevic
           #   cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/'
           #   timeout: 10
-          - name: 110 cores panoptic-deeplab
-            owner_id: U09LK84G4TF # Nikola Milicevic
-            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/'
-            timeout: 10
-          - name: 110 cores panoptic-deeplab demo
-            owner_id: U09LK84G4TF # Nikola Milicevic
-            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1800'
-            timeout: 30
-          - name: 110 cores bevformer
-            owner_id: U08E1JCMAJF  # Marko Bezulj
-            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/'
-            timeout: 15
+        - name: 110 cores panoptic-deeplab
+          owner_id: U09LK84G4TF   # Nikola Milicevic
+          cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
+          timeout: 10
+        - name: 110 cores panoptic-deeplab demo
+          owner_id: U09LK84G4TF   # Nikola Milicevic
+          cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest
+            models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline
+            --timeout=1800
+          timeout: 30
+        - name: 110 cores bevformer
+          owner_id: U08E1JCMAJF   # Marko Bezulj
+          cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/
+          timeout: 15
     name: ${{ matrix.test-group.name }} test
     # CIv2 to get weights
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
@@ -67,40 +68,45 @@ jobs:
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
+      - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent -e TT_GH_CI_INFRA
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-
-      - name: Run frequent reg tests scripts
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        env:
-          TEST_CMD: ${{ matrix.test-group.cmd }}
-        run: bash -c "$TEST_CMD"
-
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}
+    - name: 🧬 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        path: docker-job
+    - name: ⬇️  Setup Job
+      uses: ./docker-job/.github/actions/setup-job
+      timeout-minutes: 10
+      with:
+        build-artifact-name: ${{ inputs.build-artifact-name }}
+        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+    - name: Run frequent reg tests scripts
+      timeout-minutes: ${{ matrix.test-group.timeout }}
+      env:
+        TEST_CMD: ${{ matrix.test-group.cmd }}
+      run: |
+        # Write command to script file to safely handle quotes and special characters
+        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+        #!/bin/bash
+        set -euo pipefail
+        SCRIPT_EOF
+        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+        chmod +x /tmp/test_cmd.sh
+        bash /tmp/test_cmd.sh
+    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      timeout-minutes: 10
+      if: ${{ !cancelled() }}
+      with:
+        prefix: test_reports_
+    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      if: ${{ failure() }}
+      with:
+        slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        owner: ${{ matrix.test-group.owner_id }}

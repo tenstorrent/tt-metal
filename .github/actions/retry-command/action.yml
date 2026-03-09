@@ -1,47 +1,56 @@
-name: "Wrap a bash command with retries"
-description: "Wrap a bash command with retries so it attempts it again on failure after a backoff period"
+name: Wrap a bash command with retries
+description: Wrap a bash command with retries so it attempts it again on failure after
+  a backoff period
 inputs:
   command:
-    description: "Command to run"
+    description: Command to run
     required: true
   timeout-seconds:
-    description: "Timeout period in seconds for command to complete"
+    description: Timeout period in seconds for command to complete
     required: true
   backoff-seconds:
-    description: "Backoff period in seconds to wait before trying command again"
+    description: Backoff period in seconds to wait before trying command again
     default: 5
   max-retries:
-    description: "Max number of retries to retry command"
+    description: Max number of retries to retry command
     default: 3
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: "Invoke command with retries"
-      shell: bash
-      env:
-        COMMAND: ${{ inputs.command }}
-        TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
-        BACKOFF_SECONDS: ${{ inputs.backoff-seconds }}
-        MAX_RETRIES: ${{ inputs.max-retries }}
-      run: |
-        set +e
+  - name: Invoke command with retries
+    shell: bash
+    env:
+      COMMAND: ${{ inputs.command }}
+      TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+      BACKOFF_SECONDS: ${{ inputs.backoff-seconds }}
+      MAX_RETRIES: ${{ inputs.max-retries }}
+    run: |
+      set +e
 
-        max_retries="$MAX_RETRIES"
-        count=0
+      max_retries="$MAX_RETRIES"
+      count=0
 
-        while (( count < max_retries )); do
-          echo "Attempt $((count + 1)) of $max_retries..."
+      # Write command to script file to safely handle quotes and special characters
+      cat > /tmp/retry_command.sh << 'SCRIPT_EOF'
+      #!/bin/bash
+      set -euo pipefail
+      SCRIPT_EOF
+      printf '%s\n' "$COMMAND" >> /tmp/retry_command.sh
+      chmod +x /tmp/retry_command.sh
 
-          if timeout "$TIMEOUT_SECONDS" bash -c "$COMMAND"; then
-            echo "Command succeeded."
-            exit 0
-          else
-            echo "Command failed or timed out. Backing off..."
-            count=$((count + 1))
-          fi
+      while (( count < max_retries )); do
+        echo "Attempt $((count + 1)) of $max_retries..."
 
-          sleep "$BACKOFF_SECONDS"
-        done
+        if timeout "$TIMEOUT_SECONDS" bash /tmp/retry_command.sh; then
+          echo "Command succeeded."
+          exit 0
+        else
+          echo "Command failed or timed out. Backing off..."
+          count=$((count + 1))
+        fi
 
-        echo "Command failed after $max_retries attempts."
-        exit 1
+        sleep "$BACKOFF_SECONDS"
+      done
+
+      echo "Command failed after $max_retries attempts."
+      exit 1

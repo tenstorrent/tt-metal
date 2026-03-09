@@ -1,5 +1,4 @@
-name: "[internal] Fabric unit tests impl"
-
+name: '[internal] Fabric unit tests impl'
 on:
   workflow_call:
     inputs:
@@ -27,16 +26,15 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: Enable lightweight kernel asserts
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: Enable LLK asserts
         required: false
         type: boolean
         default: false
-
 jobs:
   fabric-tests:
     strategy:
@@ -44,17 +42,19 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
-        ]
-    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
+        test-group: [{name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh}]
+    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name
+      }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+
+        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine",
+      "{0}"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'
+        }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -63,44 +63,52 @@ jobs:
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
+      - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher || false }}
-          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
-        env:
-          TEST_CMD: ${{ matrix.test-group.cmd }}
-        run: |
-          bash -c "$TEST_CMD"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06CXU895AP # Michael Chiou
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+    - name: 🧬 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        path: docker-job
+    - name: ⬇️  Setup Job
+      uses: ./docker-job/.github/actions/setup-job
+      timeout-minutes: 10
+      with:
+        build-artifact-name: ${{ inputs.build-artifact-name }}
+        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+        enable-watcher: ${{ inputs.enable-watcher || false }}
+        enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts
+          || false }}
+        enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+    - name: ${{ matrix.test-group.name }} tests
+      timeout-minutes: ${{ inputs.timeout }}
+      env:
+        TEST_CMD: ${{ matrix.test-group.cmd }}
+      run: |
+        # Write command to script file to safely handle quotes and special characters
+        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+        #!/bin/bash
+        set -euo pipefail
+        SCRIPT_EOF
+        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+        chmod +x /tmp/test_cmd.sh
+        bash /tmp/test_cmd.sh
+    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      if: ${{ failure() }}
+      with:
+        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+        owner: U06CXU895AP   # Michael Chiou
+    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      timeout-minutes: 10
+      if: ${{ !cancelled() }}
+      with:
+        prefix: test_reports_
+    - name: Generate gtest annotations on failure
+      uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+      if: ${{ failure() }}

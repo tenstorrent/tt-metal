@@ -1,5 +1,4 @@
-name: "[internal] T3000 integration tests impl"
-
+name: '[internal] T3000 integration tests impl'
 on:
   workflow_call:
     inputs:
@@ -18,51 +17,50 @@ on:
       model:
         required: false
         type: string
-        default: "all"
-
+        default: all
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix
+        }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_integration_tests.yaml
     steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .github
-            tests/pipeline_reorg
-          sparse-checkout-cone-mode: true
-      - name: Install dependencies
-        run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "integration"
-      - name: Build unified test matrix based on enabled SKUs
-        id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
-      - name: Filter test matrix by model
-        id: filter-matrix
-        if: inputs.model != 'all'
-        env:
-          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-        run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
-          echo "matrix<<EOF" >> $GITHUB_OUTPUT
-          echo "$filtered" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
+    - name: Checkout the repository
+      uses: actions/checkout@v4
+      with:
+        sparse-checkout: |
+          .github
+          tests/pipeline_reorg
+        sparse-checkout-cone-mode: true
+    - name: Install dependencies
+      run: pip3 install PyYAML
+    - name: Verify test timeouts against budget
+      run: |
+        set -e
+        echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+        python3 .github/scripts/utils/verify_time_budget.py \
+          ${{ env.TESTS_YAML_PATH }} \
+          ./.github/time_budget.yaml \
+          "integration"
+    - name: Build unified test matrix based on enabled SKUs
+      id: build-matrix
+      run: |
+        python3 .github/scripts/utils/prepare_test_matrix.py \
+          ${{ env.TESTS_YAML_PATH }} \
+          "${{ inputs.enabled-skus }}" \
+          ./.github/sku_config.yaml
+    - name: Filter test matrix by model
+      id: filter-matrix
+      if: inputs.model != 'all'
+      env:
+        MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+      run: |
+        filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+        echo "matrix<<EOF" >> $GITHUB_OUTPUT
+        echo "$filtered" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
   t3000-integration-tests:
     needs: load-test-matrix
     strategy:
@@ -81,47 +79,54 @@ jobs:
         LOGURU_LEVEL: INFO
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      - ${{ github.workspace }}/docker-job:/work   # Subdir to workaround https://github.com/actions/runner/issues/691
+      - /dev/hugepages-1G:/dev/hugepages-1G
+      - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: Mark repository as safe directory
-        run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ${{ matrix.test-group.name }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        env:
-          TEST_CMD: ${{ matrix.test-group.cmd }}
-        run: |
-          ls -lart /mnt/MLPerf/
-          source tests/scripts/t3000/run_t3000_integration_tests.sh
-          echo "$TEST_CMD"
-          bash -c "$TEST_CMD"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+    - name: 🧬 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        path: docker-job
+    - name: Mark repository as safe directory
+      run: |
+        git config --global --add safe.directory $GITHUB_WORKSPACE
+    - name: ⬇️  Setup Job
+      uses: ./docker-job/.github/actions/setup-job
+      timeout-minutes: 10
+      with:
+        build-artifact-name: ${{ inputs.build-artifact-name }}
+        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+    - name: ${{ matrix.test-group.name }}
+      timeout-minutes: ${{ matrix.test-group.timeout }}
+      env:
+        TEST_CMD: ${{ matrix.test-group.cmd }}
+      run: |
+        ls -lart /mnt/MLPerf/
+        source tests/scripts/t3000/run_t3000_integration_tests.sh
+        echo "$TEST_CMD"
+        # Write command to script file to safely handle quotes and special characters
+        cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+        #!/bin/bash
+        set -euo pipefail
+        SCRIPT_EOF
+        printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+        chmod +x /tmp/test_cmd.sh
+        bash /tmp/test_cmd.sh
+    - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      if: ${{ failure() }}
+      with:
+        slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+        owner: ${{ matrix.test-group.owner_id }}
+    - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      timeout-minutes: 10
+      if: ${{ !cancelled() }}
+      with:
+        prefix: test_reports_
+    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      if: always()

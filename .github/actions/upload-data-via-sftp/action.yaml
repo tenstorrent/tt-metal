@@ -1,63 +1,63 @@
-name: "Upload data via SFTP"
-description: "Upload data SFTP server for later analysis"
+name: Upload data via SFTP
+description: Upload data SFTP server for later analysis
 inputs:
   ssh-private-key:
-    description: "The Slack ID of the person to be tagged."
+    description: The Slack ID of the person to be tagged.
     required: true
   sftp-batchfile:
-    description: "Text batchfile containing SFTP commands"
+    description: Text batchfile containing SFTP commands
     required: true
   username:
-    description: "Username of account on server"
+    description: Username of account on server
     required: true
   hostname:
-    description: "Hostname of server"
+    description: Hostname of server
     required: true
   path:
-    description: "Path where data and batchfile are located"
+    description: Path where data and batchfile are located
     required: false
-
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: Create key file
-      shell: bash
-      env:
-        PATH_INPUT: ${{ inputs.path }}
-        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
-      run: |
-        # Change dir to path if its set
-        # If provided, generate key file in inputs.path location for the upload step
-        if [ -n "$PATH_INPUT" ]; then
-          echo "Changing dir to $PATH_INPUT"
-          cd -- "$PATH_INPUT" || { echo "::error::Failed to change directory"; exit 1; }
-        fi
-        printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
-        chmod go-rwx id_key
-    - name: Upload files
-      shell: bash
-      env:
-        PATH_INPUT: ${{ inputs.path }}
-        SFTP_BATCHFILE: ${{ inputs.sftp-batchfile }}
-        SFTP_USERNAME: ${{ inputs.username }}
-        SFTP_HOSTNAME: ${{ inputs.hostname }}
-      run: |
-        # Validate hostname (alphanumeric, dots, hyphens only)
-        if [[ ! "$SFTP_HOSTNAME" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-          echo "::error::Invalid hostname: must be alphanumeric with dots and hyphens only"
-          exit 1
-        fi
-        # Validate username (alphanumeric, underscores, hyphens only)
-        if [[ ! "$SFTP_USERNAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-          echo "::error::Invalid username: must be alphanumeric with underscores and hyphens only"
-          exit 1
-        fi
-        # Change dir to path if its set
-        # Example: when running in containers the batchfile and data files are located under /work
-        if [ -n "$PATH_INPUT" ]; then
-          echo "Changing dir to $PATH_INPUT"
-          cd -- "$PATH_INPUT" || { echo "::error::Failed to change directory"; exit 1; }
-        fi
-        # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection for known hosts)
-        # For full security, consider using a pre-populated known_hosts file
-        sftp -oStrictHostKeyChecking=accept-new -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"
+  - name: Create key file
+    shell: bash
+    env:
+      PATH_INPUT: ${{ inputs.path }}
+      SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+    run: |
+      # Change dir to path if its set
+      # If provided, generate key file in inputs.path location for the upload step
+      if [ -n "$PATH_INPUT" ]; then
+        echo "Changing dir to $PATH_INPUT"
+        cd -- "$PATH_INPUT" || { echo "::error::Failed to change directory"; exit 1; }
+      fi
+      printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
+      chmod go-rwx id_key
+  - name: Upload files
+    shell: bash
+    env:
+      PATH_INPUT: ${{ inputs.path }}
+      SFTP_BATCHFILE: ${{ inputs.sftp-batchfile }}
+      SFTP_USERNAME: ${{ inputs.username }}
+      SFTP_HOSTNAME: ${{ inputs.hostname }}
+    run: |
+      # Validate hostname (alphanumeric, dots, hyphens only)
+      # Note: Hostname regex intentionally allows dots for domain names (e.g., sftp.example.com)
+      if [[ ! "$SFTP_HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]; then
+        echo "::error::Invalid hostname: must start/end with alphanumeric and contain only alphanumerics, dots, and hyphens"
+        exit 1
+      fi
+      # Validate username (alphanumeric, underscores, hyphens only)
+      if [[ ! "$SFTP_USERNAME" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]; then
+        echo "::error::Invalid username: must start with alphanumeric or underscore, and contain only alphanumerics, underscores, and hyphens"
+        exit 1
+      fi
+      # Change dir to path if its set
+      # Example: when running in containers the batchfile and data files are located under /work
+      if [ -n "$PATH_INPUT" ]; then
+        echo "Changing dir to $PATH_INPUT"
+        cd -- "$PATH_INPUT" || { echo "::error::Failed to change directory"; exit 1; }
+      fi
+      # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection for known hosts)
+      # For full security, consider using a pre-populated known_hosts file
+      sftp -oStrictHostKeyChecking=accept-new -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"
