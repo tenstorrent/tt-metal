@@ -480,7 +480,7 @@ def test_torch_conversion_unsigned_edge_cases(
     device, tensor_data, ttnn_dtype, torch_input_type, ttnn_layout, with_device
 ):
     torch_input_tensor = torch.tensor(tensor_data, dtype=torch_input_type)
-    ttnn_input_tensor = ttnn.Tensor(
+    ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn_dtype,
         layout=ttnn_layout,

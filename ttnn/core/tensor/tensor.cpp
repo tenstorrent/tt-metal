@@ -44,7 +44,7 @@ namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
 
 template <typename T>
-Tensor from_buffer(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
+Tensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
     ZoneScopedN("ttnn::Tensor::from_span");
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
@@ -188,7 +188,7 @@ Tensor Tensor::from_span(
     // than from_vector allocate another vector to change layout, in that use case we don't need first
     // allocation.
     if (!logical_matches_physical(spec)) {
-        auto res = from_buffer(buffer, spec, static_cast<T>(pad_value));
+        auto res = from_span_impl(buffer, spec, static_cast<T>(pad_value));
         return to_dtype(res, spec.data_type());
     }
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);

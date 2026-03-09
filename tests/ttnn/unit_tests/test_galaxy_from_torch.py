@@ -66,7 +66,7 @@ def get_expected_conversion_pcc(ttnn_dtype, other_dtype):
         return 0.999
 
 
-def generate_bfloat4_b_exact_tensor(shape, seed=0):
+def generate_bfloat4_b_exact_tensor(shape, torch_dtype=torch.float32, seed=0):
     """
     Generate a float32 torch tensor whose values survive a round-trip through
     bfloat4_b without any precision loss.
@@ -87,7 +87,7 @@ def generate_bfloat4_b_exact_tensor(shape, seed=0):
     """
     torch.manual_seed(seed)
 
-    EXACT_MANTISSAS = torch.tensor([1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875], dtype=torch.float32)
+    EXACT_MANTISSAS = torch.tensor([1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875], dtype=torch_dtype)
     FACE_ROW_SIZE = 16
 
     assert len(shape) >= 2, "Shape must have at least 2 dimensions"
@@ -101,20 +101,20 @@ def generate_bfloat4_b_exact_tensor(shape, seed=0):
     num_blocks_per_row = W // FACE_ROW_SIZE
     total_blocks = total_rows * num_blocks_per_row
 
-    exponents = torch.randint(-4, 5, (total_blocks, 1), dtype=torch.float32)
+    exponents = torch.randint(-4, 5, (total_blocks, 1), dtype=torch_dtype)
     mantissa_indices = torch.randint(0, 8, (total_blocks, FACE_ROW_SIZE))
     mantissas = EXACT_MANTISSAS[mantissa_indices]
     signs = torch.where(
         torch.randint(0, 2, (total_blocks, FACE_ROW_SIZE)).bool(),
-        torch.ones(1, dtype=torch.float32),
-        -torch.ones(1, dtype=torch.float32),
+        torch.ones(1, dtype=torch_dtype),
+        -torch.ones(1, dtype=torch_dtype),
     )
 
     values = signs * torch.pow(2.0, exponents) * mantissas
     return values.reshape(shape)
 
 
-def quantize_to_bf4(tensor, exp_bits=2, mant_bits=1):
+def quantize_to_bf4(tensor, torch_dtype=torch.float32, exp_bits=2, mant_bits=1):
     """
     Simulates a 4-bit float roundtrip.
     Default: 1 sign bit, 2 exponent bits, 1 mantissa bit (E2M1).
@@ -143,7 +143,7 @@ def quantize_to_bf4(tensor, exp_bits=2, mant_bits=1):
     # 5. Reconstruct the "crushed" value
     bf4_simulated = sign * mantissa * (2**exponent)
 
-    return bf4_simulated.to(torch.float32)
+    return bf4_simulated.to(torch_dtype)
 
 
 @pytest.mark.parametrize("shape", [(4, 18432, 7168)])
@@ -463,9 +463,11 @@ def test_from_torch_deep_seek_interleaved_weights_galaxy(mesh_device, shape, ttn
 def test_from_torch_deep_seek_padded_4b_weights_galaxy(
     mesh_device, shape, shard_shape, memory_layout, shard_dims, ttnn_dtype
 ):
+    # Due to the padding, we do layout convertion on the host, could be futher optimzed
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)
+    torch_input_tensor = quantize_to_bf4(torch_input_tensor)
 
     memory_config = ttnn.MemoryConfig(
         memory_layout,
@@ -503,7 +505,7 @@ def test_from_torch_deep_seek_padded_4b_weights_galaxy(
 @pytest.mark.parametrize(
     "shape,shard_shape,memory_layout,shard_dims",
     [
-        ([1, 16384, 7168], (256, 608), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, 1)),
+        ([1, 16384, 7168], (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b])
@@ -513,7 +515,8 @@ def test_from_torch_deep_seek_padded_8b_weights_galaxy(
 ):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor = generate_bfloat4_b_exact_tensor(shape, torch_dtype=torch.bfloat16)
+    torch_input_tensor = quantize_to_bf4(torch_input_tensor, torch_dtype=torch.bfloat16)
 
     memory_config = ttnn.MemoryConfig(
         memory_layout,
@@ -521,7 +524,15 @@ def test_from_torch_deep_seek_padded_8b_weights_galaxy(
         ttnn.ShardSpec(DRAM_CORE_GRID_12, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
-    mesh_shape = (mesh_device.shape[0], mesh_device.shape[1])
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[
+                ttnn.PlacementReplicate(),
+                ttnn.PlacementShard(shard_dims[1]),
+            ],
+        ),
+    )
 
     ttnn_result_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -529,7 +540,7 @@ def test_from_torch_deep_seek_padded_8b_weights_galaxy(
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=memory_config,
-        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=1),  # ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        mesh_mapper=mesh_mapper,
     )
 
     assert ttnn_result_tensor.dtype == ttnn_dtype, f"Expected {ttnn_dtype}, got {ttnn_result_tensor.dtype}"
@@ -537,8 +548,8 @@ def test_from_torch_deep_seek_padded_8b_weights_galaxy(
     mesh_composer = ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
-            dims=[x for x in shard_dims if x is not None],
-            mesh_shape_override=ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1]),
+            dims=shard_dims,
+            mesh_shape_override=ttnn.MeshShape(1, mesh_device.shape[1]),  # 1 - replicate, shard_dims[1] - shard
         ),
     )
 

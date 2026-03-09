@@ -156,6 +156,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 
+    TT_FATAL(converted_tensor_handle != nullptr, "parse_py_tensor: ndarray_import failed.");
     return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
 }
 

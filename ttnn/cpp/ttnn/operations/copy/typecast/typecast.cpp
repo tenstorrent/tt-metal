@@ -18,6 +18,9 @@ inline Tensor typecast_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    if (input_tensor.dtype() == output_dtype) {
+        return input_tensor;
+    }
     // Handle host tensors by delegating to to_dtype
     log_info(tt::LogOp, "[DEBUG] typecast_impl ");
     ZoneScopedN("ttnn::operations::typecast");

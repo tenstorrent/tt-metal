@@ -324,6 +324,16 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
+    import torch
+    import numpy as np
+
+    if isinstance(tensor, np.ndarray):
+        # We use bf16 as an intermediate type between types unsupported by ttnn (e.g., int64)
+        # and types unsupported by Torch/NumPy (e.g., bfloat8).
+        # This allows type conversion: int64 -> bf16 -> bf8/4.
+        # NumPy does not support bfloat16, so we use a Torch tensor instead.
+        tensor = torch.from_numpy(tensor)
+
     return ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,
