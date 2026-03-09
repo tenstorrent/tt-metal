@@ -3,7 +3,12 @@
 
 import logging
 import os
+import shutil
+import subprocess
+import sys
+import time
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -14,6 +19,172 @@ from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from helpers.test_config import TestConfig, TestMode, process_coverage_run_artefacts
 from ttexalens import tt_exalens_init
+
+
+class ExalensServer:
+    """Manages the tt-exalens server lifecycle for simulator-based test runs.
+
+    Starts tt-exalens as a subprocess, waits for it to become ready by polling
+    its output for the readiness pattern, and provides graceful shutdown.
+    """
+
+    READY_PATTERN = "[4B MODE]"
+    READY_TIMEOUT_S = 600
+    POLL_INTERVAL_S = 2
+
+    def __init__(self, simulator_path: str, port: int):
+        self._simulator_path = simulator_path
+        self._port = port
+        self._process: Optional[subprocess.Popen] = None
+        self._log_path: Optional[str] = None
+        self._log_read_offset = 0
+
+    def start(self) -> None:
+        if not os.path.isdir(self._simulator_path):
+            pytest.exit(
+                f"ERROR: Simulator build path does not exist: {self._simulator_path}",
+                returncode=1,
+            )
+
+        if not shutil.which("tt-exalens"):
+            pytest.exit("ERROR: tt-exalens not found in PATH", returncode=1)
+
+        missing_vars = [
+            v
+            for v in ("NNG_SOCKET_ADDR", "NNG_SOCKET_LOCAL_PORT")
+            if v not in os.environ
+        ]
+        if missing_vars:
+            pytest.exit(
+                f"ERROR: Required environment variable(s) not set: "
+                f"{', '.join(missing_vars)}",
+                returncode=1,
+            )
+
+        self._log_path = os.path.join(os.getcwd(), "tt-exalens.log")
+        log_file = open(self._log_path, "w")
+
+        logger.info(
+            "Starting tt-exalens server (port={}, simulator={}, "
+            "NNG_SOCKET_ADDR={}, NNG_SOCKET_LOCAL_PORT={})...",
+            self._port,
+            self._simulator_path,
+            os.environ.get("NNG_SOCKET_ADDR", "<not set>"),
+            os.environ.get("NNG_SOCKET_LOCAL_PORT", "<not set>"),
+        )
+        logger.info("tt-exalens output: {}", self._log_path)
+
+        self._process = subprocess.Popen(
+            [
+                "tt-exalens",
+                f"--port={self._port}",
+                "--server",
+                "-s",
+                self._simulator_path,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        log_file.close()
+
+        self._wait_until_ready()
+
+    def _wait_until_ready(self) -> None:
+        logger.info(
+            "Waiting for tt-exalens to become ready (timeout: {}s)...",
+            self.READY_TIMEOUT_S,
+        )
+        elapsed = 0
+        while elapsed < self.READY_TIMEOUT_S:
+            if self._process.poll() is not None:
+                log_tail = self._read_log_tail(50)
+                pytest.exit(
+                    f"ERROR: tt-exalens exited prematurely "
+                    f"(code {self._process.returncode}).\n"
+                    f"Log output:\n{log_tail}",
+                    returncode=1,
+                )
+
+            if self._log_contains_ready_pattern():
+                logger.info(
+                    "tt-exalens ready (PID {}, took ~{}s)",
+                    self._process.pid,
+                    elapsed,
+                )
+                return
+
+            time.sleep(self.POLL_INTERVAL_S)
+            elapsed += self.POLL_INTERVAL_S
+            if elapsed % 10 == 0:
+                logger.info("    ... still waiting ({}s elapsed)", elapsed)
+
+        log_tail = self._read_log_tail(50)
+        self.stop()
+        pytest.exit(
+            f"ERROR: tt-exalens did not become ready "
+            f"within {self.READY_TIMEOUT_S}s.\n"
+            f"Log output:\n{log_tail}",
+            returncode=1,
+        )
+
+    def _log_contains_ready_pattern(self) -> bool:
+        if not self._log_path or not os.path.exists(self._log_path):
+            return False
+        try:
+            with open(self._log_path, "r") as f:
+                f.seek(self._log_read_offset)
+                new_data = f.read()
+                self._log_read_offset = f.tell()
+                return self.READY_PATTERN in new_data
+        except OSError:
+            return False
+
+    def _read_log_tail(self, lines: int = 30) -> str:
+        if not self._log_path or not os.path.exists(self._log_path):
+            return "<no log available>"
+        try:
+            with open(self._log_path, "r") as f:
+                all_lines = f.readlines()
+                return "".join(all_lines[-lines:])
+        except OSError:
+            return "<failed to read log>"
+
+    def stop(self) -> None:
+        if self._process is None:
+            return
+
+        if self._process.poll() is None:
+            logger.info("Stopping tt-exalens (PID {})...", self._process.pid)
+            try:
+                self._process.stdin.write(b"exit\n")
+                self._process.stdin.flush()
+                self._process.stdin.close()
+            except OSError:
+                pass
+
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("tt-exalens did not exit gracefully, sending SIGTERM...")
+                self._process.terminate()
+                try:
+                    self._process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning("tt-exalens did not terminate, sending SIGKILL...")
+                    self._process.kill()
+                    self._process.wait()
+
+            logger.info("tt-exalens stopped.")
+
+        self._process = None
+
+    @property
+    def running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+
+_exalens_server: Optional[ExalensServer] = None
 
 
 def init_llk_home():
@@ -142,13 +313,49 @@ def pytest_configure(config):
 
     if TestConfig.MODE != TestMode.PRODUCE:
         if test_target.run_simulator:
+            simulator_path = os.environ.get("TT_UMD_SIMULATOR_PATH")
+
+            if simulator_path is None:
+                pytest.exit(
+                    "ERROR: --run-simulator requires TT_UMD_SIMULATOR_PATH "
+                    "environment variable to be set.",
+                    returncode=1,
+                )
+
+            # Only the controller process starts the server; xdist workers
+            # just connect to the already-running instance.
+            if not hasattr(config, "workerinput"):
+                # Temporarily enable console logging so ExalensServer startup
+                # messages are visible (pytest's log_cli isn't active yet).
+                _console = logging.StreamHandler(sys.stderr)
+                _console.setLevel(logging.INFO)
+                _console.setFormatter(
+                    logging.Formatter(
+                        config.getini("log_cli_format"),
+                        datefmt=config.getini("log_date_format"),
+                    )
+                )
+                root = logging.getLogger()
+                _prev_root_level = root.level
+                root.setLevel(logging.INFO)
+                root.addHandler(_console)
+
+                try:
+                    global _exalens_server
+                    _exalens_server = ExalensServer(
+                        simulator_path=simulator_path,
+                        port=test_target.simulator_port,
+                    )
+                    _exalens_server.start()
+                finally:
+                    root.removeHandler(_console)
+                    root.setLevel(_prev_root_level)
+
             tt_exalens_init.init_ttexalens_remote(
                 port=test_target.simulator_port, use_4B_mode=False
             )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
-            # context.dma_read_threshold = 2000000
-            # context.dma_write_threshold = 2000000
 
 
 def pytest_collection_modifyitems(config, items):
@@ -325,6 +532,11 @@ def pytest_sessionfinish(session):
         combine_perf_reports()
         if TestConfig.WITH_COVERAGE:
             process_coverage_run_artefacts()
+
+    global _exalens_server
+    if _exalens_server is not None:
+        _exalens_server.stop()
+        _exalens_server = None
 
 
 # Define the possible custom command line options
