@@ -135,7 +135,7 @@ __attribute__((always_inline)) inline void piecewise_rational_eval_numer_denom(
 // Halves FMA count for atanh, erfinv, silu, etc.
 // ============================================================================
 
-#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+// Always available — called via USE_PARITY template parameter or macro guard
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
 __attribute__((always_inline)) inline void piecewise_rational_eval_parity_numer_denom(
     const float* num_coeffs, const float* den_coeffs, vFloat x, vFloat x2, vFloat& out_numer, vFloat& out_denom) {
@@ -174,7 +174,6 @@ __attribute__((always_inline)) inline void piecewise_rational_eval_parity_numer_
     out_numer = numer * x;  // odd parity: P(x) = x * Horner_result
     out_denom = denom;
 }
-#endif
 
 // ============================================================================
 // Unified numer/denom dispatcher: selects parity or interleaved automatically
@@ -249,40 +248,49 @@ __attribute__((always_inline)) inline void piecewise_rational_unroll_segment(
 // ============================================================================
 // Public API: evaluate piecewise rational LUT for a single vFloat x
 // Automatically dispatches parity when macros are defined.
+// USE_PARITY template parameter allows per-call parity control without macros.
 // ============================================================================
 
-template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE>
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE, bool USE_PARITY = false>
 __attribute__((always_inline)) inline vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, vFloat x) {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
     constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
 
+    // Parity active if either: template parameter says so, or macros are defined
+    constexpr bool parity_active = USE_PARITY
 #if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
-    vFloat x2 = x * x;
+                                   || true
 #endif
+        ;
+
+    vFloat x2;
+    if constexpr (parity_active) {
+        x2 = x * x;
+    }
 
     vFloat numer = 0.0f, denom = 0.0f;
-    piecewise_rational_dispatch_numer_denom<NUM_DEGREE, DEN_DEGREE>(
-        &lut[COEFF_OFFSET],
-        &lut[COEFF_OFFSET + NUM_COEFFS],
-        x,
-        numer,
-        denom
-#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
-        ,
-        x2
-#endif
-    );
 
-    piecewise_rational_unroll_segment<1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE>(
-        lut,
-        x,
-        numer,
-        denom
+    if constexpr (parity_active) {
+        piecewise_rational_eval_parity_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+            &lut[COEFF_OFFSET], &lut[COEFF_OFFSET + NUM_COEFFS], x, x2, numer, denom);
+    } else {
+        piecewise_rational_eval_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+            &lut[COEFF_OFFSET], &lut[COEFF_OFFSET + NUM_COEFFS], x, numer, denom);
+    }
+
+    // Unroll remaining segments (seg 1..N-1)
+    if constexpr (NUM_SEGMENTS > 1) {
+        piecewise_rational_unroll_segment<1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE>(
+            lut,
+            x,
+            numer,
+            denom
 #if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
-        ,
-        x2
+            ,
+            x2
 #endif
-    );
+        );
+    }
 
     return numer * sfpu_reciprocal<false>(denom);
 }
