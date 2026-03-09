@@ -17,11 +17,11 @@
 #   # All prompts in a folder (one clone+run per .txt file)
 #   ./eval/run_eval.sh eval/prompts/ --runs 3
 #
-# Each run gets its own clone at:
-#   <base-dir>/eval_<branch>_<timestamp>_<prompt>_<run>/tt-metal/
-#
-# Results are collected into:
-#   <base-dir>/eval_results/<branch>_<timestamp>/
+# Directory structure:
+#   <base-dir>/<YYYY_MM_DD>/<HHMM>_<branch>/
+#     clones/<prompt_name>_run<N>/tt-metal/
+#     results/<prompt_name>/run_<N>/
+#     results/summary.txt
 
 set -euo pipefail
 
@@ -86,10 +86,12 @@ else
     exit 1
 fi
 
-# --- Setup results directory ---
-TIMESTAMP="$(date +%d_%m_%H%M)"
+# --- Setup session directory ---
+DATE_STAMP="$(date +%Y_%m_%d)"
+TIME_STAMP="$(date +%H%M)"
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/' '_')"
-RESULTS_DIR="${BASE_DIR}/results/${BRANCH_SLUG}_${TIMESTAMP}"
+SESSION_DIR="${BASE_DIR}/${DATE_STAMP}/${TIME_STAMP}_${BRANCH_SLUG}"
+RESULTS_DIR="${SESSION_DIR}/results"
 mkdir -p "$RESULTS_DIR"
 
 echo "=== Eval Configuration ==="
@@ -99,7 +101,7 @@ for pf in "${PROMPT_FILES[@]}"; do
 done
 echo "Branch:    $BRANCH"
 echo "Runs:      $NUM_RUNS per prompt"
-echo "Base dir:  $BASE_DIR"
+echo "Session:   $SESSION_DIR"
 echo "Results:   $RESULTS_DIR"
 echo "=========================="
 echo ""
@@ -152,8 +154,7 @@ run_single() {
     local run_id="$2"
     local prompt_name
     prompt_name="$(basename "$prompt_file" .txt)"
-    local run_tag="${TIMESTAMP}_run${run_id}_${prompt_name}_${BRANCH_SLUG}"
-    local clone_dir="${BASE_DIR}/${run_tag}/tt-metal"
+    local clone_dir="${SESSION_DIR}/clones/${prompt_name}_run${run_id}/tt-metal"
     local log_dir="${RESULTS_DIR}/${prompt_name}/run_${run_id}"
     mkdir -p "$log_dir"
 
@@ -168,7 +169,7 @@ run_single() {
     echo "[${prompt_name}:${run_id}]   Prompt:    ${prompt_file}"
 
     # 1. Clone and create a unique branch from the source branch
-    local run_branch="${TIMESTAMP}_run${run_id}_${prompt_name}"
+    local run_branch="${DATE_STAMP}_${TIME_STAMP}_run${run_id}_${prompt_name}"
     echo "[${prompt_name}:${run_id}] Cloning ${BRANCH} -> ${run_branch}"
     git clone --branch "$BRANCH" "$REPO_URL" "$clone_dir" \
         > "${log_dir}/clone.log" 2>&1
@@ -378,7 +379,8 @@ fi
 
 cat > "${RESULTS_DIR}/summary.txt" <<EOF
 === Evaluation Summary ===
-Timestamp: $TIMESTAMP
+Date:      $DATE_STAMP
+Time:      $TIME_STAMP
 Prompts:   ${#PROMPT_FILES[@]} file(s)
 Branch:    $BRANCH
 Runs:      $NUM_RUNS per prompt
@@ -392,6 +394,26 @@ EOF
 
 echo ""
 cat "${RESULTS_DIR}/summary.txt"
+
+# --- Print session tree and clickable clone paths ---
+echo ""
+echo "=== Session Tree ==="
+if command -v tree &>/dev/null; then
+    tree -L 3 --dirsfirst "$SESSION_DIR"
+else
+    find "$SESSION_DIR" -maxdepth 3 -type d | sort | while IFS= read -r d; do
+        depth=$(( $(echo "$d" | tr -cd '/' | wc -c) - $(echo "$SESSION_DIR" | tr -cd '/' | wc -c) ))
+        indent=""
+        for (( i=0; i<depth; i++ )); do indent+="  "; done
+        echo "${indent}$(basename "$d")/"
+    done
+fi
+
+echo ""
+echo "=== Clone Repos ==="
+find "${SESSION_DIR}/clones" -maxdepth 2 -name "tt-metal" -type d | sort | while IFS= read -r repo; do
+    echo "  ${repo}"
+done
 
 # Exit non-zero if any run failed
 [[ $FAIL_COUNT -eq 0 ]]
