@@ -11,7 +11,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
 #include "sdpa/sdpa_nanobind.hpp"
 #include "sdpa_config.hpp"
@@ -46,7 +45,6 @@ void py_module(nb::module_& mod) {
                 config.exp_approx_mode);
         });
 
-    bind_attention_softmax(mod);
     bind_concatenate_heads(mod);
     bind_split_query_key_value_and_split_heads(mod);
 
