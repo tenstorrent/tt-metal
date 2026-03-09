@@ -476,11 +476,8 @@ Tensor Tensor::reshape(
     return view(*this, new_logical_shape, new_padded_shape);
 }
 
-Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
-    Tensor result = *this;
-    result.tensor_attributes =
-        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
-    return result;
+void Tensor::update_tensor_topology(TensorTopology tensor_topology) {
+    tensor_attributes->update_tensor_topology(std::move(tensor_topology));
 }
 
 bool Tensor::is_allocated() const {
