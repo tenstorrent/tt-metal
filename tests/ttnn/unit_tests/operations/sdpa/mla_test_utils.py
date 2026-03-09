@@ -52,6 +52,7 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
     """
     _, nh, _, _ = Q.shape
     _, nkv, _, _ = V.shape
+    # Expand KV to match Q heads
     head_rep = nh // nkv
     K_exp = K.repeat_interleave(head_rep, dim=1)
     V_exp = V.repeat_interleave(head_rep, dim=1)
@@ -149,6 +150,7 @@ def from_paged_cache(
 
     batch, num_blocks_per_batch = mapping.shape
 
+    # Use the mapping to get the original order, paged_cache + mapping = original cache
     cache = paged_cache[mapping.view(-1)]
     cache = cache.reshape(batch, num_blocks_per_batch, nh, block_size, dim)
     cache = cache.transpose(1, 2)
@@ -232,7 +234,7 @@ def run_flash_mla_decode_impl(
             .reshape(1, 1, -1, q.shape[-1])
         )
     else:
-        q_for_tt = q.permute(2, 0, 1, 3)  # Original path: (1, 4, 128, 576)
+        q_for_tt = q.permute(2, 0, 1, 3)
 
     ######################
     ### TT Setup
