@@ -223,9 +223,8 @@ Error points to `/tmp/tt-metal-cache/...`
 
 ### Recovery Script Fails with "could not access or execute an executable"
 
-**Symptom**: Running `recover_4x32.sh` or `recover_8x16.sh` fails with:
-
-```text
+**Symptom**: Running `recover.sh` fails with:
+```
 mpirun was unable to launch the specified application as it could not access
 or execute an executable:
 
@@ -534,7 +533,7 @@ This error typically appears across multiple MPI ranks with the same hostname me
    Option A - Modify the recovery script temporarily:
 
    ```bash
-   # Edit recover_4x32.sh and change the --factory-descriptor-path to the correct FSD
+   # Use recover.sh with --factory-descriptor-path to point to the correct FSD
    ```
 
    Option B - Run the validation command directly with the correct FSD:
