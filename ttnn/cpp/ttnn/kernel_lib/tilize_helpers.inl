@@ -43,7 +43,9 @@ constexpr bool has_32x32_tiles() {
 
 template <uint32_t input_cb>
 constexpr bool has_supported_fast_tilize_format() {
-    // Fast tilize only supports Float32 (0) and Float16_b/bfp16 (5)
+    // Fast tilize only supports Float16_b/bfp16 (5).
+    // Float32 is excluded: fast_tilize converts Float32 via FP16/TF32 (lossy),
+    // while standard tilize uses the lossless unpack-to-dest path for Float32.
     // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
     // unpack_src_format (UNPACK/MATH) and pack_dst_format (PACK) are both the L1 format
     // for the CB, equalized by JIT (genfiles.cpp:equalize_data_format_vectors).
@@ -52,7 +54,7 @@ constexpr bool has_supported_fast_tilize_format() {
 #else
     constexpr auto format = unpack_src_format[input_cb];
 #endif
-    return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
+    return format == 5;  // Float16_b only
 }
 
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>

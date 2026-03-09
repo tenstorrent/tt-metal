@@ -8,7 +8,6 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "experimental/circular_buffer.h"
-#include "ttnn/kernel_lib/tilize_helpers.h"
 
 using std::uint32_t;
 
