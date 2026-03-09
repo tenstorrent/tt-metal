@@ -11,9 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from tests.nightly.t3000.ccl.test_all_to_all_combine import get_cluster_dims
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
-from tests.nightly.tg.ccl.moe.test_selective_combine_6U import _device_mesh_iterator  # TODO (AM) bad form
 
 os.environ.setdefault("MESH_DEVICE", "QUAD")
 
@@ -339,36 +337,34 @@ def create_torch_dispatch_input_export_scores_tensor(batch, seq, selected_expert
 
 
 def gen_matmul_golden(torch_input_token, torch_w0, torch_w1, torch_w2):
-    # L = 1
-    # N = 2048
-    # H = hidden_size = 7168
+    # NOTE: L hardcoded to 1 throughout this test
 
-    # (L, 1, 1, H) @ (L, 1, H, N) -> (L, 1, 1, N)
+    # [L, 1, 1, H] @ [L, 1, H, N] -> [L, 1, 1, N]
     torch_w0_output_ref = torch_input_token @ torch_w0
     torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
 
-    # (L, 1, 1, H) @ (L, 1, H, N) -> (L, 1, 1, N)
+    # [L, 1, 1, H] @ [L, 1, H, N] -> [L, 1, 1, N]
     torch_w1_output_ref = torch_input_token @ torch_w1
     torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref
 
-    # (L, 1, 1, N) @ (L, 1, N, H) -> (L, 1, 1, H)
+    # [L, 1, 1, N] @ [L, 1, N, H] -> [L, 1, 1, H]
     torch_output_ref = torch_intermediate_ref @ torch_w2
 
     return torch_output_ref
 
 
-def _device_mesh_iterator(mesh_shape):
+def device_mesh_iterator(mesh_shape):
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
             device = m0 * mesh_shape[1] + m1
             yield m0, m1, device
 
 
-def get_batch_cluster_idxr(replication_axis, batch, batch_per_device):
+def get_batch_cluster_idxr(cluster_axis, batch, batch_per_device):
     def _idxr(m0, m1, b):
-        if replication_axis == 0:
+        if cluster_axis == 0:
             return m1 * batch + m0 * batch_per_device + b
-        elif replication_axis == 1:
+        elif cluster_axis == 1:
             return m0 * batch + m1 * batch_per_device + b
         else:
             return b
@@ -376,33 +372,36 @@ def get_batch_cluster_idxr(replication_axis, batch, batch_per_device):
     return _idxr
 
 
-# TODO: (GR) adjust for diff cluster axis
 def gen_combine_golden(
-    torch_dispatch_input_tensor,  # [512, 1, 1, H]
-    torch_w0_tensors,  # [E, L, 1, H, N]
-    torch_w1_tensors,  # [E, L, 1, H, N]
-    torch_w2_tensors,  # [E, L, 1, N, H]
-    torch_dispatch_input_expert_indices,  # [512, 1, 1, K]
+    mesh_shape,
+    cluster_axis,
+    num_devices,
+    num_dispatch_devices,
+    num_replicated_devices,
+    torch_dispatch_input_tensor,
+    torch_w0_tensors,
+    torch_w1_tensors,
+    torch_w2_tensors,
+    torch_dispatch_input_expert_indices,
+    experts_per_device,
     batch,
     batches_per_device,
     hidden_size,
     select_experts_k,
-    cluster_axis,
-    mesh_shape,
 ):
-    # 8, 16, 128
-    cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
+    torch_dispatch_input_tensor = torch_dispatch_input_tensor.repeat([num_replicated_devices, 1, 1, 1])
+    torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([num_replicated_devices, 1, 1, 1])
 
-    torch_dispatch_input_tensor = torch_dispatch_input_tensor.repeat([cluster_factor, 1, 1, 1])
-    torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([cluster_factor, 1, 1, 1])
-
-    # (512, 32, 7168) local
-    # (512, 4096, 7168) global
-    torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * cluster_factor, hidden_size).bfloat16()
+    torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * num_replicated_devices, hidden_size).bfloat16()
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch, batches_per_device)
-    for m0, m1, d in _device_mesh_iterator(mesh_shape):
-        lower_expert = cluster_size * m1 * 2
-        upper_expert = cluster_size * (m1 + 1) * 2
+    for m0, m1, d in device_mesh_iterator(mesh_shape):
+        if cluster_axis == 0:
+            cluster_id = m1
+        else:
+            cluster_id = m0
+
+        first_expert_on_cluster = num_dispatch_devices * cluster_id * experts_per_device
+        last_expert_on_cluster = num_dispatch_devices * (cluster_id + 1) * experts_per_device - 1
 
         for b in range(batches_per_device):
             global_b = batch_rep_idxr(m0, m1, b)
@@ -410,11 +409,12 @@ def gen_combine_golden(
             for k in range(select_experts_k):
                 e = torch_dispatch_input_expert_indices[global_b, :, :, k].item()
 
-                if e >= lower_expert and e < upper_expert:
+                # only applicable if expert is on the current cluster
+                if e >= first_expert_on_cluster and e <= last_expert_on_cluster:
                     contrib = gen_matmul_golden(token, torch_w0_tensors[e], torch_w1_tensors[e], torch_w2_tensors[e])
-
                     torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
 
+    # [select_experts_k, batch * num_replicated_devices, hidden_size]
     return torch_combine_ref_tensor
 
 
@@ -447,24 +447,22 @@ def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_
 
 
 def gen_output_golden(
-    torch_dispatch_input_tensor,  # [512, 1, 1, 7168]
-    torch_dispatch_input_expert_indices,  # [512, 1, 1, 8]
-    torch_dispatch_input_expert_scores,  # [512, 1, 1, 8]
+    torch_dispatch_input_tensor,
+    torch_dispatch_input_expert_indices,
+    torch_dispatch_input_expert_scores,
     torch_w0_tensors,
     torch_w1_tensors,
     torch_w2_tensors,
+    batch,
+    hidden_size,
+    select_experts_k,
 ):
-    total_tokens = torch_dispatch_input_tensor.shape[0]
-    hidden_size = torch_dispatch_input_tensor.shape[-1]
-    num_selected_experts = torch_dispatch_input_expert_indices.shape[-1]
-
-    # [512, 1, 1, 7168]
-    output_reference = torch.zeros((total_tokens, 1, 1, hidden_size), dtype=torch.bfloat16)
+    output_reference = torch.zeros((batch, 1, 1, hidden_size), dtype=torch.bfloat16)
 
     # loop over each token
-    for token in range(total_tokens):
+    for token in range(batch):
         # loop over each selected expert
-        for k in range(num_selected_experts):
+        for k in range(select_experts_k):
             # determine which expert to use
             expert = torch_dispatch_input_expert_indices[token, :, :, k].item()
 
@@ -480,6 +478,7 @@ def gen_output_golden(
             # output_reference[token, :, :, :] = (output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden)
             output_reference[token, :, :, :] = output_reference[token, :, :, :] + matmul_golden
 
+    # [512, 1, 1, 7168]
     return output_reference
 
 
@@ -817,17 +816,21 @@ def test_optimized_moe_decode_block(
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
         torch_combine_golden = gen_combine_golden(
+            mesh_shape,
+            cluster_axis,
+            num_devices,
+            num_dispatch_devices,
+            num_replicated_devices,
             torch_dispatch_input_tensor,
             torch_w0_tensors,
             torch_w1_tensors,
             torch_w2_tensors,
             torch_dispatch_input_expert_indices_tensor,
+            experts_per_device,
             batch,
             batches_per_device,
             hidden_size,
             select_experts_k,
-            cluster_axis,
-            mesh_shape,
         )
         torch_combine_goldens.append(torch_combine_golden)
 
@@ -838,6 +841,9 @@ def test_optimized_moe_decode_block(
             torch_w0_tensors,
             torch_w1_tensors,
             torch_w2_tensors,
+            batch,
+            hidden_size,
+            select_experts_k,
         )
         torch_output_goldens.append(torch_output_golden)
 
