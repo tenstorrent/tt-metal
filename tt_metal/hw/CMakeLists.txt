@@ -15,9 +15,7 @@ set(PROCS
     main_aerisc
     subordinate_aerisc
 )
-set(BH_ONLY_PROCS
-    drisc
-)
+set(BH_ONLY_PROCS drisc)
 set(TYPES
     firmware
     kernel
