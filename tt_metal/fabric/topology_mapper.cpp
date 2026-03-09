@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 #include <algorithm>
@@ -9,16 +10,16 @@
 #include <unordered_set>
 #include <limits>
 #include <functional>
+#include <numeric>
 #include <optional>
 #include <tuple>
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include <fmt/format.h>
 #include <set>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -573,7 +574,11 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_f
     for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
-            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
+            TT_FATAL(
+                host_rank.has_value(),
+                "Fabric node id mesh_id={}, chip_id={} not found",
+                *mesh_id,
+                chip_id);
             mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
         }
     }
@@ -1064,7 +1069,7 @@ MeshShape TopologyMapper::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostR
             it != mesh_host_rank_coord_ranges_.end(),
             "TopologyMapper: host_rank {} not found for mesh {}",
             *host_rank,
-            *mesh_id);
+            mesh_id);
         return it->second.shape();
     }
     return mesh_graph_.get_mesh_shape(mesh_id);
@@ -1077,7 +1082,7 @@ MeshCoordinateRange TopologyMapper::get_coord_range(MeshId mesh_id, std::optiona
             it != mesh_host_rank_coord_ranges_.end(),
             "TopologyMapper: host_rank {} not found for mesh {}",
             *host_rank,
-            *mesh_id);
+            mesh_id);
         return it->second;
     }
     return mesh_graph_.get_coord_range(mesh_id);
@@ -1375,7 +1380,7 @@ HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
             break;
         }
     }
-    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", *switch_id);
+    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", switch_id);
 
     // Convert SwitchId to MeshId and use the consolidated mesh hostname function
     return get_hostname_for_mesh(MeshId(*switch_id));
@@ -1848,7 +1853,7 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
                 info.fabric_node_id,
                 info.hostname,
                 e.what());
-        }
+            }
 
         // Check 3: For local chips, verify physical chip ID maps correctly to ASIC ID via cluster API
         if (is_local_chip) {
@@ -1856,9 +1861,8 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
             if (physical_chip_to_asic_it == physical_chip_id_to_asic_id.end()) {
                 TT_FATAL(
                     false,
-                    "TopologyMapper verification failed: Physical chip ID {} not found in local cluster for local ASIC "
-                    "{} "
-                    "(fabric_node_id={}, hostname={})",
+                    "TopologyMapper verification failed: Physical chip ID {} not found in local cluster for local "
+                    "ASIC {} (fabric_node_id={}, hostname={})",
                     info.physical_chip_id,
                     info.asic_id,
                     info.fabric_node_id,

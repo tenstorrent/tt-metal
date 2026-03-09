@@ -394,7 +394,10 @@ def _run_prepare_expert_tensors_test(
     )
 
     # Compare outputs - indices (use exact match for integers)
-    indices_match = torch.all(tt_indices_rm_torch == ref_indices_rm)
+    # Cast both to int32 before comparing: tt_indices_rm_torch is uint16 (from TTNN DataType::UINT16)
+    # and ref_indices_rm is int16 (torch.Short). PyTorch does not support type promotion between
+    # unsigned and signed integer types, so we widen both to int32 for the comparison.
+    indices_match = torch.all(tt_indices_rm_torch.to(torch.int32) == ref_indices_rm.to(torch.int32))
     logger.info(f"Indices exact match: {indices_match}")
     assert indices_match, "Expert indices don't match exactly"
 

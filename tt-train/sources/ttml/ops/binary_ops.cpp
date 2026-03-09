@@ -4,7 +4,6 @@
 
 #include "binary_ops.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
@@ -19,6 +18,8 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {

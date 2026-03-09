@@ -133,15 +133,21 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
+                        static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        tt_memmove<true, false, false, 0>(
-                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+
+                        noc_async_read(
+                            get_noc_addr(recv.read_ptr),
+                            get_write_ptr(CTArgs::cb0_id),
+                            args.socket_page_size,
+                            1 - noc_index);
+                        noc_async_read_barrier(1 - noc_index);
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
-                        socket_notify_sender(recv);
+                        socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
                     } else {
 #endif
@@ -158,6 +164,7 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
+                PacketHeaderPool::reset();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
@@ -258,11 +265,9 @@ struct Broadcast {
                     // between iterations will naturally sync the devices, but wait_min is a
                     // pragmatic choice to streamline standalone testing.
                     if (args.wait_output_semaphore) {
-                        WATCHER_RING_BUFFER_PUSH(0xA1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                        WATCHER_RING_BUFFER_PUSH(0xA2);
                     }
 
                     // 4. global semaphore reset
@@ -277,11 +282,9 @@ struct Broadcast {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender
                     if (args.wait_output_semaphore) {
-                        WATCHER_RING_BUFFER_PUSH(0xB1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                        WATCHER_RING_BUFFER_PUSH(0xB2);
                     }
 
                     // Reset semaphore after receiving data
@@ -312,11 +315,9 @@ struct Broadcast {
                 } else {
                     // Receiver: wait for data from broadcaster
                     if (args.wait_output_semaphore) {
-                        WATCHER_RING_BUFFER_PUSH(0xC1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                        WATCHER_RING_BUFFER_PUSH(0xC2);
                     }
 
                     // Reset global semaphore

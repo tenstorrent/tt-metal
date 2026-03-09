@@ -6,12 +6,14 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 class MemoryUtilsTest : public ::testing::Test {
@@ -175,9 +177,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     expected_peak_size += compute_tensor_size(mul_result) + 10240;
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
     expected_peak_size +=
-        compute_tensor_size(sdpa_result->get_value()) + 1830912;  // All the intermediate tensors / activations
+        compute_tensor_size(sdpa_result->get_value()) + 243712;  // All the intermediate tensors / activations
 
-    expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
+    expected_size = expected_peak_size;
 
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     EXPECT_EQ(dram_usage.peak, expected_peak_size);

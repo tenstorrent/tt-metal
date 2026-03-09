@@ -19,6 +19,8 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
+#include "layernorm_compute_utils.h"
+
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
@@ -27,7 +29,7 @@ namespace generic = kutil::generic;
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
@@ -52,6 +54,9 @@ void kernel_main() {
     uint32_t cb_fusion = tt::CBIndex::c_22;       // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto cb_accumulate = tt::CBIndex::c_26;  // For accumulating (x-E[x])^2
+
+    constexpr auto cb_in_rm = tt::CBIndex::c_27;  // input row-major (if row-major input, otherwise unused)
+
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
@@ -65,6 +70,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
+    // Always call binary_op_init_common regardless of TILIZE_IN.
+    // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
+    // in the "available for MATH" state.  Without it, the first tilize_block call's
+    // internal llk_math_wait_for_dest_available() spins forever (deadlock).
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #endif
     cb_wait_front(cb_eps, 1);     // comes from the reader
@@ -80,10 +89,10 @@ void kernel_main() {
         //         n
 #ifdef FUSE_PRE_ADD
         numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, blk);
+            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, block_size);
 #else
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_scaler, cb_ex, W, Wt, blk);
+            cb_in, cb_scaler, cb_ex, W, Wt, block_size);
 #endif
 #endif  // !RMS ifdef end
         // Start of
@@ -92,9 +101,17 @@ void kernel_main() {
         //         -----------
         //              n
         const bool last_tile_is_partial = W % tt::constants::TILE_WIDTH > 0;
-        for (auto block : generic::blocks(Wt, blk)) {
-            tile_regs_acquire();
+        for (auto block : generic::blocks(Wt, block_size)) {
+#ifdef TILIZE_IN
+            // Tilize one block from cb_in_rm → cb_in per loop iteration.
+            tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
+            // tilize_uninit (inside tilize_row_major_block) calls llk_pack_init which resets
+            // the PACK dest state.  binary_op_init_common re-initializes the DST semaphore so
+            // the subsequent tile_regs_acquire() and the next tilize_block don't deadlock.
+            binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
             cb_wait_front(cb_in, block.full_block_size());
+            tile_regs_acquire();
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
             copy_tile_init(cb_in);
@@ -228,7 +245,14 @@ void kernel_main() {
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
+#ifdef TILIZE_IN
+            // Tilize one block from cb_in_rm → cb_in per loop iteration (Pass 2).
+            // Reader supplies this second pass of data after the variance data.
+            tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
+
+            binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
             tile_regs_acquire();
             cb_wait_front(cb_in, block.full_block_size());
 #ifdef RMSNORM
@@ -278,6 +302,15 @@ void kernel_main() {
             mul_tiles_init(cb_xmm, cb_ex2pe);
             for (auto i : block.local()) {
                 mul_tiles(cb_xmm, cb_ex2pe, i, 0, i);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
+                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -306,6 +339,15 @@ void kernel_main() {
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    // Activation must be applied last. If do_beta != 0 then
+                    // activation will be applied after the beta addition.
+                    // Otherwise, we can apply the activation here.
+                    if constexpr (!(do_beta == 1)) {
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+#endif
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_gamma, block.full_block_size());
@@ -336,6 +378,10 @@ void kernel_main() {
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_beta, block.full_block_size());
@@ -347,7 +393,12 @@ void kernel_main() {
                 tile_regs_release();
                 cb_push_back(cb_out, block.full_block_size());
             }
-        }
+
+#ifdef UNTILIZE_OUT
+            constexpr auto cb_out_rm = tt::CBIndex::c_28;
+            untilize_row_major_block<decltype(block), block_size>(cb_out, cb_out_rm, block);
+#endif
+        }  // block loop
         // End of
         // Final Val Calc
         //    x-E[X]

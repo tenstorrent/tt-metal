@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -135,6 +135,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        vae_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -249,15 +250,22 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
+            dtype=vae_dtype,
         )
 
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            # This is the best dynamic loading strategy across all supported device configurations.
             self.tt_umt5_encoder.set_unload_set(self.transformer_2)
-            self.transformer.set_unload_set(self.transformer_2)
-            self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            if ttnn.device.is_blackhole():
+                self.transformer.set_unload_set(self.transformer_2)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            else:
+                # WH T3K has tighter DRAM — include VAE in the unload chain so
+                # transformers and VAE never coexist in DRAM across pipeline runs.
+                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -296,11 +304,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": True,
             }
             device_configs[(2, 2)] = device_configs[(1, 4)]
-            device_configs[(1, 8)] = {
-                "sp_axis": 0,
-                "tp_axis": 1,
+            device_configs[(2, 4)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": False,
+                "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -386,6 +394,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
 
@@ -396,6 +405,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer_2",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 
@@ -978,7 +988,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tt_latents_BTHWC, logical_h = conv_pad_height(
                 tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
             )
-            tt_latents_BTHWC = bf16_tensor_2dshard(
+            tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
                 self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -986,6 +996,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.height_parallel.mesh_axis: 2,
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
+                dtype=self.tt_vae.dtype,
             )
             with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 self._prepare_vae()
