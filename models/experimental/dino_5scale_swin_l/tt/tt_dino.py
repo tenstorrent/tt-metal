@@ -63,39 +63,143 @@ def sine_positional_encoding(
     if normalize:
         y_embed = (y_embed) / (y_embed[:, -1:, :] + eps) * scale
         x_embed = (x_embed) / (x_embed[:, :, -1:] + eps) * scale
-
     dim_t = torch.arange(num_feats, dtype=torch.float32)
     dim_t = temperature ** (2 * (dim_t // 2) / num_feats)
-
     pos_x = x_embed[:, :, :, None] / dim_t
     pos_y = y_embed[:, :, :, None] / dim_t
-
     pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).view(1, H, W, -1)
     pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).view(1, H, W, -1)
-
-    pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)  # [1, 256, H, W]
+    pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
     return pos
+
+
+def sine_positional_encoding_ttnn(
+    device,
+    H: int,
+    W: int,
+    num_feats: int = 128,
+    temperature: float = 20,
+    scale: float = 2.0 * math.pi,
+    eps: float = 1e-6,
+    dtype=ttnn.bfloat16,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    dim_t_cache=None,
+):
+    x_embed = ttnn.arange(1, W + 1, 1, dtype=dtype, device=device, memory_config=memory_config)
+    x_embed = ttnn.reshape(x_embed, (1, 1, W))
+    x_embed = ttnn.multiply(ttnn.divide(x_embed, W + eps), scale)
+    x_embed = ttnn.repeat(x_embed, (1, H, 1))
+    y_embed = ttnn.arange(1, H + 1, 1, dtype=dtype, device=device, memory_config=memory_config)
+    y_embed = ttnn.reshape(y_embed, (1, H, 1))
+    y_embed = ttnn.multiply(ttnn.divide(y_embed, H + eps), scale)
+    y_embed = ttnn.repeat(y_embed, (1, 1, W))
+    if dim_t_cache is not None:
+        dim_t = dim_t_cache
+    else:
+        dim_t = ttnn.arange(0, num_feats, 1, dtype=dtype, device=device, memory_config=memory_config)
+        dim_t = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=memory_config))
+        dim_t = ttnn.multiply(dim_t, 2.0, memory_config=memory_config)
+        dim_t = ttnn.divide(dim_t, float(num_feats), memory_config=memory_config)
+        dim_t = ttnn.pow(float(temperature), dim_t, memory_config=memory_config)
+    x_embed = ttnn.reshape(x_embed, (1, H, W, 1))
+    pos_x = ttnn.divide(x_embed, dim_t)
+    y_embed = ttnn.reshape(y_embed, (1, H, W, 1))
+    pos_y = ttnn.divide(y_embed, dim_t)
+    sin_x = ttnn.sin(pos_x[:, :, :, 0::2])
+    cos_x = ttnn.cos(pos_x[:, :, :, 1::2])
+    sin_x = ttnn.unsqueeze(sin_x, -1)
+    cos_x = ttnn.unsqueeze(cos_x, -1)
+    pos_x = ttnn.concat([sin_x, cos_x], dim=-1)
+    pos_x = ttnn.reshape(pos_x, (1, H, W, num_feats))
+    sin_y = ttnn.sin(pos_y[:, :, :, 0::2])
+    cos_y = ttnn.cos(pos_y[:, :, :, 1::2])
+    sin_y = ttnn.unsqueeze(sin_y, -1)
+    cos_y = ttnn.unsqueeze(cos_y, -1)
+    pos_y = ttnn.concat([sin_y, cos_y], dim=-1)
+    pos_y = ttnn.reshape(pos_y, (1, H, W, num_feats))
+    pos = ttnn.concat([pos_y, pos_x], dim=-1)
+    pos = ttnn.permute(pos, (0, 3, 1, 2))
+    pos = ttnn.reshape(pos, (1, num_feats * 2, H * W))
+    pos = ttnn.permute(pos, (0, 2, 1))
+    return ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def _linspace_ttnn(start, end, steps, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    if steps <= 1:
+        return ttnn.full((1,), start, dtype=dtype, device=device, memory_config=memory_config)
+    idx = ttnn.arange(0, steps, dtype=dtype, device=device, memory_config=memory_config)
+    step_size = (end - start) / (steps - 1)
+    return ttnn.add(ttnn.multiply(idx, step_size), start)
+
+
+def gen_encoder_output_proposals_ttnn(
+    device,
+    memory_tt: ttnn.Tensor,
+    spatial_shapes,
+    B: int,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    hw_list = spatial_shapes.tolist() if hasattr(spatial_shapes, "tolist") else list(spatial_shapes)
+    proposals_list = []
+    for lvl, hw in enumerate(hw_list):
+        H, W = int(hw[0]), int(hw[1])
+        if H * W == 0:
+            continue
+        grid_x = _linspace_ttnn(0, W - 1, W, device, memory_config=memory_config)
+        grid_x = ttnn.reshape(grid_x, (1, W))
+        grid_x = ttnn.add(grid_x, 0.5)
+        grid_x = ttnn.divide(grid_x, float(W))
+        grid_x = ttnn.repeat(grid_x, (H, 1))
+        grid_x = ttnn.reshape(grid_x, (1, H * W))
+        grid_y = _linspace_ttnn(0, H - 1, H, device, memory_config=memory_config)
+        grid_y = ttnn.reshape(grid_y, (H, 1))
+        grid_y = ttnn.add(grid_y, 0.5)
+        grid_y = ttnn.divide(grid_y, float(H))
+        grid_y = ttnn.repeat(grid_y, (1, W))
+        grid_y = ttnn.reshape(grid_y, (1, H * W))
+        wh_val = 0.05 * (2.0**lvl)
+        wh = ttnn.full((1, H * W), wh_val, dtype=ttnn.bfloat16, device=device, memory_config=memory_config)
+        level_proposal = ttnn.stack([grid_x, grid_y, wh, wh], dim=-1)
+        level_proposal = ttnn.repeat(level_proposal, (B, 1, 1))
+        proposals_list.append(level_proposal)
+    output_proposals = ttnn.concat(proposals_list, dim=1)
+    for t in proposals_list:
+        ttnn.deallocate(t)
+    gt_lo = ttnn.gt(output_proposals, 0.01)
+    lt_hi = ttnn.lt(output_proposals, 0.99)
+    both = ttnn.logical_and(gt_lo, lt_hi)
+    valid_sum = ttnn.sum(both, dim=-1, keepdim=True, memory_config=memory_config)
+    four = ttnn.full(
+        (output_proposals.shape[0], output_proposals.shape[1], 1),
+        4.0,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=memory_config,
+    )
+    output_proposals_valid = ttnn.eq(valid_sum, four)
+    ttnn.deallocate(gt_lo)
+    ttnn.deallocate(lt_hi)
+    ttnn.deallocate(both)
+    ttnn.deallocate(valid_sum)
+    ttnn.deallocate(four)
+    one_minus = ttnn.add(ttnn.neg(output_proposals), 1.0)
+    ratio = ttnn.divide(output_proposals, ttnn.clamp(one_minus, min=1e-6))
+    ttnn.deallocate(one_minus)
+    log_proposals = ttnn.log(ttnn.clamp(ratio, min=1e-6))
+    ttnn.deallocate(ratio)
+    inf_tensor = ttnn.full(log_proposals.shape, 1e4, dtype=ttnn.bfloat16, device=device, memory_config=memory_config)
+    inf_broadcast = ttnn.where(output_proposals_valid, log_proposals, inf_tensor)
+    ttnn.deallocate(log_proposals)
+    ttnn.deallocate(inf_tensor)
+    return inf_broadcast, output_proposals_valid
 
 
 def gen_encoder_output_proposals(
     memory_torch: torch.Tensor,
     spatial_shapes: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Generate encoder output proposals (inference path: no memory_mask).
-    Matches mmdet DINO.gen_encoder_output_proposals with memory_mask=None.
-
-    Args:
-        memory_torch: [B, N, 256] float32 encoder output
-        spatial_shapes: [num_levels, 2] (H, W)
-
-    Returns:
-        output_proposals: [B, N, 4] inverse-sigmoid proposals (cx, cy, w, h)
-        output_proposals_valid: [B, N, 1] bool mask of valid proposals
-    """
     bs = memory_torch.shape[0]
     proposals = []
-    _cur = 0
     for lvl, (H, W) in enumerate(spatial_shapes.tolist()):
         H, W = int(H), int(W)
         scale = torch.tensor([[W, H]], dtype=torch.float32).view(1, 1, 1, 2)
@@ -108,14 +212,10 @@ def gen_encoder_output_proposals(
         wh = torch.ones_like(grid) * 0.05 * (2.0**lvl)
         proposal = torch.cat((grid, wh), -1).view(bs, -1, 4)
         proposals.append(proposal)
-        _cur += H * W
-
     output_proposals = torch.cat(proposals, 1)
     output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).sum(-1, keepdim=True) == 4
-
     output_proposals = torch.log(output_proposals / (1 - output_proposals))
     output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
-
     return output_proposals, output_proposals_valid
 
 
@@ -207,45 +307,49 @@ class TtDINO:
             num_points=num_points,
         )
 
-        # --- Pre-decoder weights (original float32 from checkpoint) ---
-        # Top-K selection is extremely sensitive to precision — using original
-        # float32 weights (not bfloat16-quantized) matches the PyTorch reference.
         pd = decoder_params["_torch_pre_decoder"]
-        self.memory_trans_fc_w_torch = pd["memory_trans_fc_w"]  # [out=256, in=256]
-        self.memory_trans_fc_b_torch = pd["memory_trans_fc_b"]  # [256]
-        self.memory_trans_norm_w_torch = pd["memory_trans_norm_w"]  # [256]
-        self.memory_trans_norm_b_torch = pd["memory_trans_norm_b"]  # [256]
-        self.query_embedding_torch = pd["query_embedding"]  # [900, 256]
-        self.cls_enc_w_torch = pd["cls_enc_w"]  # [out=80, in=256]
-        self.cls_enc_b_torch = pd["cls_enc_b"]  # [80]
+        self.memory_trans_fc_w_torch = pd["memory_trans_fc_w"]
+        self.memory_trans_fc_b_torch = pd["memory_trans_fc_b"]
+        self.memory_trans_norm_w_torch = pd["memory_trans_norm_w"]
+        self.memory_trans_norm_b_torch = pd["memory_trans_norm_b"]
+        self.query_embedding_torch = pd["query_embedding"]
+        self.cls_enc_w_torch = pd["cls_enc_w"]
+        self.cls_enc_b_torch = pd["cls_enc_b"]
         self.reg_enc_layers_torch = [(layer["weight"], layer["bias"]) for layer in pd["reg_enc_layers"]]
 
-        # Device-side weights still needed for detection heads
+        self._decoder_params = decoder_params
         self.cls_branches = decoder_params["cls_branches"]
         self.reg_branches_head = [
             TtRegBranch(decoder_params["reg_branches"][i], device) for i in range(decoder_num_layers)
         ]
 
-        # Cache for sine PE on device: key (H, W) -> ttnn.Tensor [1, H*W, 256]
         self._pe_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
+        self._pe_dim_t_cache = None
         self._dram_cfg = ttnn.DRAM_MEMORY_CONFIG
 
+    def _get_pe_dim_t(self):
+        if self._pe_dim_t_cache is None:
+            num_feats = self.embed_dims // 2
+            # Small tensor (128 elements) -> L1
+            l1_cfg = ttnn.L1_MEMORY_CONFIG
+            dim_t = ttnn.arange(0, num_feats, 1, dtype=ttnn.bfloat16, device=self.device, memory_config=l1_cfg)
+            dim_t = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=l1_cfg))
+            dim_t = ttnn.multiply(dim_t, 2.0, memory_config=l1_cfg)
+            dim_t = ttnn.divide(dim_t, float(num_feats), memory_config=l1_cfg)
+            self._pe_dim_t_cache = ttnn.pow(float(self.pe_temperature), dim_t, memory_config=l1_cfg)
+        return self._pe_dim_t_cache
+
     def _get_pe_tt(self, H: int, W: int) -> ttnn.Tensor:
-        """Return sine positional encoding [1, H*W, 256] on device (cached)."""
         key = (H, W)
         if key not in self._pe_cache:
-            pos_embed = sine_positional_encoding(
+            self._pe_cache[key] = sine_positional_encoding_ttnn(
+                self.device,
                 H,
                 W,
                 num_feats=self.embed_dims // 2,
                 temperature=self.pe_temperature,
-            )
-            pos_flat = pos_embed.flatten(2).permute(0, 2, 1)  # [1, H*W, 256]
-            self._pe_cache[key] = ttnn.from_torch(
-                pos_flat.to(torch.bfloat16),
-                device=self.device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=self._dram_cfg,
+                dim_t_cache=self._get_pe_dim_t(),
             )
         return self._pe_cache[key]
 
@@ -534,6 +638,65 @@ class TtDINO:
             "topk_indices": topk_indices,
         }
 
+    def pre_decoder_ttnn(
+        self,
+        memory_tt: ttnn.Tensor,
+        spatial_shapes: torch.Tensor,
+    ) -> Dict[str, Any]:
+        N = int(spatial_shapes.prod(1).sum().item())
+        B = memory_tt.shape[0]
+        mem = (
+            ttnn.slice(memory_tt, [0, 0, 0], [B, N, self.embed_dims], memory_config=self._dram_cfg)
+            if memory_tt.shape[1] > N
+            else memory_tt
+        )
+        output_proposals, output_proposals_valid = gen_encoder_output_proposals_ttnn(
+            self.device, mem, spatial_shapes, B, self._dram_cfg
+        )
+        zeros_mem = ttnn.zeros_like(mem, memory_config=self._dram_cfg)
+        output_memory = ttnn.where(output_proposals_valid, mem, zeros_mem)
+        ttnn.deallocate(zeros_mem)
+        mfc = self._decoder_params["memory_trans_fc"]
+        output_memory = ttnn.linear(output_memory, mfc["weight"], bias=mfc["bias"], memory_config=self._dram_cfg)
+        mnorm = self._decoder_params["memory_trans_norm"]
+        output_memory = ttnn.layer_norm(output_memory, weight=mnorm["weight"], bias=mnorm["bias"])
+        cls6 = self._decoder_params["cls_branches"][6]
+        enc_cls = ttnn.linear(output_memory, cls6["weight"], bias=cls6["bias"], memory_config=self._dram_cfg)
+        reg6 = self._decoder_params["reg_branches"][6]
+        reg_out = output_memory
+        for i, layer in enumerate(reg6):
+            reg_out = ttnn.linear(reg_out, layer["weight"], bias=layer["bias"], memory_config=self._dram_cfg)
+            if i < len(reg6) - 1:
+                reg_out = ttnn.relu(reg_out)
+        enc_coords_unact = ttnn.add(reg_out, output_proposals)
+        ttnn.deallocate(output_proposals)
+        ttnn.deallocate(reg_out)
+        max_scores = ttnn.max(enc_cls, dim=-1)
+        topk_vals, topk_indices = ttnn.topk(max_scores, k=self.num_queries, dim=1)
+        ttnn.deallocate(max_scores)
+        ttnn.deallocate(topk_vals)
+        topk_indices_4 = ttnn.reshape(topk_indices, (B, self.num_queries, 1))
+        topk_indices_4 = ttnn.repeat(topk_indices_4, (1, 1, 4))
+        topk_coords_unact = ttnn.gather(enc_coords_unact, 1, index=topk_indices_4)
+        ttnn.deallocate(enc_coords_unact)
+        ttnn.deallocate(topk_indices_4)
+        reference_points = ttnn.sigmoid(topk_coords_unact)
+        ttnn.deallocate(topk_coords_unact)
+        qemb = self._decoder_params["query_embedding"]
+        qemb = ttnn.reshape(qemb, (1, self.num_queries, self.embed_dims))
+        query_tt = ttnn.repeat(qemb, (B, 1, 1))
+        topk_indices_torch = ttnn.to_torch(topk_indices)
+        ttnn.deallocate(topk_indices)
+        if memory_tt.shape[1] > N:
+            ttnn.deallocate(mem)
+        return {
+            "query": query_tt,
+            "reference_points": reference_points,
+            "topk_score": None,
+            "topk_coords": reference_points,
+            "topk_indices": topk_indices_torch,
+        }
+
     def forward_heads(
         self,
         hidden_states: List[ttnn.Tensor],
@@ -646,10 +809,7 @@ class TtDINO:
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
 
-        pre_dec = self.pre_decoder(
-            memory_tt,
-            pre_trans["spatial_shapes"],
-        )
+        pre_dec = self.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
 
         logger.info("Running decoder...")
         hidden_states, references = self.decoder(
@@ -753,10 +913,7 @@ class TtDINO:
             N = pre_trans["spatial_shapes"].prod(1).sum().item()
             encoder_memory_torch = ttnn.to_torch(memory_tt).float()[:, :N, :]
 
-        pre_dec = self.pre_decoder(
-            memory_tt,
-            pre_trans["spatial_shapes"],
-        )
+        pre_dec = self.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
 
         logger.info("Running decoder...")
         hidden_states, references = self.decoder(
