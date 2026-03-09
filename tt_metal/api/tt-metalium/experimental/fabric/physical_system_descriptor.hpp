@@ -8,39 +8,28 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/utils/semver.hpp>
 #include <tt_stl/strong_type.hpp>
-#include <tt_stl/reflection.hpp>
 
 namespace YAML {
 class Node;
 }
 
-namespace tt::umd {
-class Cluster;
-}
-
 namespace tt {
-enum class TargetDevice: std::uint8_t;
-}
-
-namespace tt::llrt {
-class RunTimeOptions;
-}
-
-namespace tt::tt_metal::distributed::multihost {
-class DistributedContext;
+enum class TargetDevice : std::uint8_t;
 }
 
 namespace tt::tt_metal {
 
-class Hal;
+// Forward declaration for discovery setter interface
+namespace discovery_impl {
+class DiscoverySetter;
+}
 
 // Live Ethernet Link Metrics
 struct EthernetMetrics {
@@ -119,8 +108,13 @@ struct hash<tt::tt_metal::ExitNodeConnection> {
         uint8_t min_chan = std::min(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
         uint8_t max_chan = std::max(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
 
-        return ttsl::hash::hash_objects_with_default_seed(
-            min_node, max_node, min_chan, max_chan, conn.eth_conn.is_local);
+        // Use the same hash pattern as mesh_graph.hpp
+        std::size_t seed = std::hash<uint64_t>{}(min_node);
+        seed ^= std::hash<uint64_t>{}(max_node) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint8_t>{}(min_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint8_t>{}(max_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<bool>{}(conn.eth_conn.is_local) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        return seed;
     }
 };
 }  // namespace std
@@ -143,21 +137,11 @@ struct PhysicalConnectivityGraph {
 };
 
 // Top-Level Global System Descriptor Data-Structure.
-
 class PhysicalSystemDescriptor {
 public:
-    PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        const Hal* hal,
-        const tt::llrt::RunTimeOptions& rtoptions,
-        bool run_discovery = true);
-    PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        const Hal* hal,
-        tt::TargetDevice target_device_type,
-        bool run_discovery = true);
+    // Minimal constructor - takes only target device type
+    explicit PhysicalSystemDescriptor(tt::TargetDevice target_device_type);
+
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
     PhysicalSystemDescriptor(const std::string& mock_proto_desc_path);
@@ -172,7 +156,14 @@ public:
     PhysicalSystemDescriptor& operator=(const PhysicalSystemDescriptor&) = delete;
     PhysicalSystemDescriptor& operator=(PhysicalSystemDescriptor&&) = delete;
 
-    void run_discovery(bool run_global_discovery = true, bool run_live_discovery = true);
+    // Public methods for re-discovery scenarios
+    void clear();
+    void merge(PhysicalSystemDescriptor&& other);
+
+    // Discovery setter interface - allows discovery functions to set internal state
+    // without requiring friend declarations with MPI types in public header
+    void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique);
+
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
@@ -182,6 +173,7 @@ public:
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
+
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
     std::vector<ExitNodeConnection> get_connecting_exit_nodes(
@@ -215,7 +207,7 @@ public:
     }
 
     tt::TargetDevice get_target_device_type() const { return target_device_type_; }
-    LocalEthernetMetrics query_local_ethernet_metrics() const;
+    bool get_all_hostnames_unique() const { return all_hostnames_unique_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
@@ -231,34 +223,12 @@ public:
         return pcie_id_to_asic_location_;
     }
 
-    static const std::unique_ptr<tt::umd::Cluster> null_cluster;
-
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
     YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& file_path = std::nullopt) const;
 
 private:
-    void run_local_discovery(bool run_live_discovery);
-    void run_global_discovery();
-    void clear();
-    void merge(PhysicalSystemDescriptor&& other);
-    void exchange_metadata(bool issue_gather);
-    void generate_cross_host_connections();
-    uint32_t get_chip_id_for_asic(AsicID asic_id) const;
-    void remove_unresolved_nodes();
-    void resolve_hostname_uniqueness();
-    void validate_graphs();
-    void validate_eth_fw_versions(
-        const tt::umd::semver_t& peer_ethernet_firmware_version,
-        const std::string& my_host_name,
-        const std::string& peer_host_name);
-
-    const std::unique_ptr<tt::umd::Cluster>& cluster_;
-    std::unique_ptr<umd::ClusterDescriptor> cluster_desc_ = nullptr;
-
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
-    const Hal* hal_;
     tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
@@ -269,6 +239,10 @@ private:
     tt::umd::semver_t ethernet_firmware_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, ASICLocation>> pcie_id_to_asic_location_;
+
+    // Local hostname and rank set by discovery (for my_host_name())
+    std::string local_hostname_;
+    uint32_t local_rank_ = 0;
 };
 
 }  // namespace tt::tt_metal
