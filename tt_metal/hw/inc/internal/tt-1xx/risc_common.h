@@ -190,6 +190,7 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
 // risc_init function isn't required for TRISCS
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
+#include "api/debug/dprint.h"
 
 inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {

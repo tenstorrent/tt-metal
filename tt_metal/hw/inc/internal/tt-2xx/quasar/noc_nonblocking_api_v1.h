@@ -381,6 +381,8 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
+    DPRINT << "noc status read reg" << NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) << ENDL();
+    DPRINT << "noc nonposted writes" << noc_nonposted_writes_acked[noc] << ENDL();
     return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc]);
 }
 

@@ -356,7 +356,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
         while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
-            internal_::risc_context_switch();
+            internal_::risc_context_switch(false);
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
             if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -399,7 +399,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
                 while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
                     invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
-                    internal_::risc_context_switch();
+                    internal_::risc_context_switch(false);
 #endif
                     // If we've closed the device, we've now disabled printing on it, don't hang.
                     if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
