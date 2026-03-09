@@ -68,8 +68,7 @@ struct Rope {
     // Reader args (NCRISC): CB indices for sharded input signaling
     struct ReaderArgs {
         uint32_t in_cb;
-        uint32_t cos_cb;
-        uint32_t sin_cb;
+        uint32_t cos_sin_cb;
         uint32_t cos_tensor_address;
         uint32_t sin_tensor_address;
         uint32_t position_ids_tensor_address;
@@ -81,12 +80,10 @@ struct Rope {
     // Compute args (TRISC): CB indices as runtime args
     struct ComputeArgs {
         uint32_t in_cb;
-        uint32_t cos_cb;
-        uint32_t sin_cb;
+        uint32_t cos_sin_cb;
         uint32_t trans_mat_cb;
         uint32_t rotated_in_interm_cb;
-        uint32_t cos_interm_cb;
-        uint32_t sin_interm_cb;
+        uint32_t cos_sin_interm_cb;
         uint32_t out_cb;
         uint32_t trans_mat_address_override = 0;  // byte address; overrides trans_mat read ptr if > 0
     };
@@ -124,25 +121,20 @@ struct Rope {
 
             auto cos_accessor = TensorAccessor(
                 tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), args.cos_tensor_address, page_size);
-            cb_reserve_back(args.cos_cb, Wt);
-            uint32_t l1_write_addr = get_write_ptr(args.cos_cb);
+            cb_reserve_back(args.cos_sin_cb, Wt * 2);
+            uint32_t l1_write_addr = get_write_ptr(args.cos_sin_cb);
             for (uint32_t i = 0; i < Wt; i++) {
                 noc_async_read_page(start_page + i, cos_accessor, l1_write_addr);
                 l1_write_addr += page_size;
             }
-            noc_async_read_barrier();
-            cb_push_back(args.cos_cb, Wt);
-
             auto sin_accessor = TensorAccessor(
                 tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), args.sin_tensor_address, page_size);
-            cb_reserve_back(args.sin_cb, Wt);
-            l1_write_addr = get_write_ptr(args.sin_cb);
             for (uint32_t i = 0; i < Wt; i++) {
                 noc_async_read_page(start_page + i, sin_accessor, l1_write_addr);
                 l1_write_addr += page_size;
             }
             noc_async_read_barrier();
-            cb_push_back(args.sin_cb, Wt);
+            cb_push_back(args.cos_sin_cb, Wt * 2);
 
 #endif
 #if defined(COMPILE_FOR_TRISC)
@@ -160,8 +152,7 @@ struct Rope {
             } else {
                 cb_wait_front(args.trans_mat_cb, 1);  // Trans_mat: 1 tile, reused for all heads
             }
-            cb_wait_front(args.sin_cb, Wt);       // Sin: Wt tiles (reused for all heads)
-            cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles (reused for all heads)
+            cb_wait_front(args.cos_sin_cb, Wt * 2);  // Cos/Sin: Wt tiles (reused for all heads)
 
             // ================================================================
             // Main loop: process Ht heads, each head consumes Wt tiles
@@ -171,8 +162,7 @@ struct Rope {
 
                 // Reserve intermediate and output buffers
                 cb_reserve_back(args.rotated_in_interm_cb, Wt);
-                cb_reserve_back(args.sin_interm_cb, Wt);
-                cb_reserve_back(args.cos_interm_cb, Wt);
+                cb_reserve_back(args.cos_sin_interm_cb, Wt * 2);
                 cb_reserve_back(args.out_cb, Wt);
 
                 cb_wait_front(args.in_cb, Wt);
@@ -198,18 +188,18 @@ struct Rope {
                 // Step 2: sin_interm = rotated * sin (broadcast multiply)
                 // ============================================================
                 reconfig_data_format_srca<false, true>(args.rotated_in_interm_cb);
-                mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.sin_cb);
+                mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.cos_sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    mul_tiles_bcast<BroadcastType::ROW>(args.rotated_in_interm_cb, args.sin_cb, j, j, j);
+                    mul_tiles_bcast<BroadcastType::ROW>(args.rotated_in_interm_cb, args.cos_sin_cb, j, Wt + j, j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.sin_interm_cb, j);
+                    pack_tile(j, args.cos_sin_interm_cb);
                 }
                 tile_regs_release();
-                cb_push_back(args.sin_interm_cb, Wt);
+                cb_push_back(args.cos_sin_interm_cb, Wt);
                 cb_pop_front(args.rotated_in_interm_cb, Wt);
 
                 // ============================================================
@@ -217,26 +207,25 @@ struct Rope {
                 // ============================================================
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_cb, j, j, j);
+                    mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_sin_cb, j, j, j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.cos_interm_cb, j);
+                    pack_tile(j, args.cos_sin_interm_cb);
                 }
                 tile_regs_release();
-                cb_push_back(args.cos_interm_cb, Wt);
+                cb_push_back(args.cos_sin_interm_cb, Wt);
                 cb_pop_front(args.in_cb, Wt);
 
                 // ============================================================
                 // Step 4: output = cos_interm + sin_interm (add)
                 // ============================================================
-                cb_wait_front(args.sin_interm_cb, Wt);
-                cb_wait_front(args.cos_interm_cb, Wt);
-                add_tiles_init(args.cos_interm_cb, args.sin_interm_cb);
+                cb_wait_front(args.cos_sin_interm_cb, Wt * 2);
+                add_tiles_init(args.cos_sin_interm_cb, args.cos_sin_interm_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    add_tiles(args.cos_interm_cb, args.sin_interm_cb, j, j, j);
+                    add_tiles(args.cos_sin_interm_cb, args.cos_sin_interm_cb, j, Wt + j, j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -245,16 +234,14 @@ struct Rope {
                 }
                 tile_regs_release();
                 cb_push_back(args.out_cb, Wt);
-                cb_pop_front(args.sin_interm_cb, Wt);
-                cb_pop_front(args.cos_interm_cb, Wt);
+                cb_pop_front(args.cos_sin_interm_cb, Wt * 2);
             }
 
             // ================================================================
             // Cleanup: pop sin/cos (trans_mat is reused, not popped)
             // Note: sin/cos are reused for all heads, so only pop once after all heads processed
             // ================================================================
-            cb_pop_front(args.sin_cb, Wt);
-            cb_pop_front(args.cos_cb, Wt);
+            cb_pop_front(args.cos_sin_cb, Wt * 2);
 #endif
         }
     };
