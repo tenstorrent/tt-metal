@@ -68,7 +68,7 @@ void kernel_main() {
             };
 
     cb_stats_reduced_obj.wait_front(stats_tiles * block_h);
-    cb_ex_global_obj.reserve_back(block_h);
+    cb_ex_global_obj.reserve_back(stats_tiles * block_h);
     global_reduce_sender(cb_stats_reduced_obj, cb_ex_global_obj);
     cb_ex_global_obj.push_back(stats_tiles * block_h);
     cb_stats_reduced_obj.pop_front(stats_tiles * block_h);
