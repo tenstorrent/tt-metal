@@ -448,19 +448,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         positions: [B] int tensor
         returns: (rope_tensors, tt_positions)
         """
-        # Build RoPE tensors for current positions
-        rope_setup = RotarySetup(
-            device=self.mesh_device, batch_size_per_row=self.batch_size_per_row, hf_config=self.hf_config
-        )
-        rope_mats = rope_setup.get_rot_mats_table(seq_len=1)
+        rope_mats = self.rope_setup.get_rot_mats_table(seq_len=1)
         rope_tensors = {
             "cos_matrix": rope_mats["cos_matrix"],
             "sin_matrix": rope_mats["sin_matrix"],
             "trans_matrix": rope_mats["trans_matrix"],
         }
 
-        # Create TTNN position tensor as INT32 with the same sharding pattern used in tests
-        mesh_shape = list(self.mesh_device.shape)
         tt_positions = ttnn.from_torch(
             positions.to(torch.int32),
             device=self.mesh_device,

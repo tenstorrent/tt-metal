@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllBroadcastAsyncConfig,
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     ConcatConfig,
@@ -176,6 +175,33 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
 
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
+
+
+def _decode_shape_debug_enabled() -> bool:
+    return os.getenv("DEEPSEEK_MLA_DECODE_DEBUG", "").lower() in ("1", "true", "yes", "y")
+
+
+def _decode_site_env_enabled(env_name: str, site: str) -> bool:
+    value = os.getenv(env_name, "").strip().lower()
+    if value in ("1", "true", "yes", "y"):
+        return True
+    if not value:
+        return False
+    return site in {part.strip() for part in value.split(",") if part.strip()}
+
+
+def _decode_roundup_disabled(site: str) -> bool:
+    return _decode_site_env_enabled("DEEPSEEK_MLA_DISABLE_BATCH_ROUNDUP", site)
+
+
+def _decode_explicit_batch_pad_enabled(site: str) -> bool:
+    return _decode_site_env_enabled("DEEPSEEK_MLA_EXPLICIT_BATCH_PAD", site)
+
+
+def _decode_round_batch_height(height: int, site: str) -> int:
+    if _decode_roundup_disabled(site):
+        return height
+    return ttnn.core.roundup(height, ttnn.TILE_SIZE)
 
 
 class MLA1D(AbstractModule):
@@ -1148,8 +1174,10 @@ class MLA1D(AbstractModule):
         )
 
         # WO
-        wo_ag_config = AllBroadcastAsyncConfig(
+        wo_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
+            dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
@@ -1809,13 +1837,27 @@ class MLA1D(AbstractModule):
         kv_lora_rank: int,
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        pad_rows = 0
+        if _decode_explicit_batch_pad_enabled("wq_kv_a") and x.shape[-2] < ttnn.TILE_SIZE:
+            pad_rows = ttnn.TILE_SIZE - x.shape[-2]
+            x = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+            if _decode_shape_debug_enabled():
+                logger.info("MLA decode dbg wq_kv_a: explicit pad_rows={} padded_x.shape={}", pad_rows, tuple(x.shape))
+
         # Shard in0 to L1 WIDTH sharded for qkv_a matmul
         x_shard_shape = list(x.shape)
-        x_shard_shape[-2] = ttnn.core.roundup(x_shard_shape[-2], ttnn.TILE_SIZE)
+        x_shard_shape[-2] = _decode_round_batch_height(x_shard_shape[-2], "wq_kv_a")
         in0_memory_config = ttnn.create_sharded_memory_config(
             x_shard_shape,
             **cfg["wq_kv_a_in0_memory_config"],
         )
+        if _decode_shape_debug_enabled():
+            logger.info(
+                "MLA decode dbg wq_kv_a: x.shape={} rounded_shape={} in0_memcfg={}",
+                tuple(x.shape),
+                tuple(x_shard_shape),
+                in0_memory_config,
+            )
         x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
 
         # Fused wq_kv_a matmul
@@ -1831,6 +1873,14 @@ class MLA1D(AbstractModule):
             tt_q_kv,
             **cfg["wq_kv_a_r_decode"],
         )  # [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        if pad_rows:
+            tt_q_kv_unpadded = ttnn.slice(
+                tt_q_kv,
+                [0, 0, 0, 0],
+                [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            )
+            ttnn.deallocate(tt_q_kv)
+            tt_q_kv = tt_q_kv_unpadded
 
         # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
         tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, bsz, q_lora_rank], **cfg["q_slice_decode"])
@@ -1934,13 +1984,31 @@ class MLA1D(AbstractModule):
         qk_head_dim: int,
         qk_nope_head_dim: int,
     ) -> ttnn.Tensor:
+        pad_rows = 0
+        padded_bsz = bsz
+        if tt_q.shape[-2] < ttnn.TILE_SIZE:
+            pad_rows = ttnn.TILE_SIZE - tt_q.shape[-2]
+            padded_bsz = tt_q.shape[-2] + pad_rows
+            tt_q = ttnn.pad(tt_q, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+            if _decode_shape_debug_enabled():
+                logger.info(
+                    "MLA decode dbg wq_b: explicit pad_rows={} padded_tt_q.shape={}", pad_rows, tuple(tt_q.shape)
+                )
+
         # Shard in0 to L1 WIDTH sharded for wq_b matmul
         tt_q_shard_shape = list(tt_q.shape)
-        tt_q_shard_shape[-2] = ttnn.core.roundup(tt_q_shard_shape[-2], ttnn.TILE_SIZE)
+        tt_q_shard_shape[-2] = _decode_round_batch_height(tt_q_shard_shape[-2], "wq_b")
         wq_b_in0_memory_config = ttnn.create_sharded_memory_config(
             tt_q_shard_shape,
             **cfg["wq_b_in0_memory_config"],
         )
+        if _decode_shape_debug_enabled():
+            logger.info(
+                "MLA decode dbg wq_b: tt_q.shape={} rounded_shape={} in0_memcfg={}",
+                tuple(tt_q.shape),
+                tuple(tt_q_shard_shape),
+                wq_b_in0_memory_config,
+            )
         tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
         # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
@@ -1958,7 +2026,7 @@ class MLA1D(AbstractModule):
                 ),
             ),
         )
-        tt_q = ttnn.experimental.view(tt_q, (1, bsz, num_heads_local, qk_head_dim))
+        tt_q = ttnn.experimental.view(tt_q, (1, padded_bsz, num_heads_local, qk_head_dim))
         tt_q = ttnn.to_memory_config(tt_q, memory_config=ttnn.L1_MEMORY_CONFIG)
         tt_q = ttnn.tilize_with_zero_padding(tt_q)
 
@@ -2001,6 +2069,8 @@ class MLA1D(AbstractModule):
         # Concat Q Nope and Q Rope
         # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
+        if pad_rows:
+            tt_q = ttnn.slice(tt_q, [0, 0, 0, 0], [1, bsz, num_heads_local, tt_q.shape[-1]])
         # 1,32,16,576 L1 interleaved
         return tt_q
 
@@ -2082,8 +2152,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])
-        v_out = ttnn.concat(v_out, dim=2)
+        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         v_out = ttnn.tilize(v_out)
         # 1,1,32,16384 L1 interleaved
         return v_out
@@ -2093,11 +2162,18 @@ class MLA1D(AbstractModule):
         # 1,1,32,16384 L1 interleaved
         # Shard in0 to L1 WIDTH sharded for wo matmul
         v_out_shard_shape = list(v_out.shape)
-        v_out_shard_shape[-2] = ttnn.core.roundup(v_out_shard_shape[-2], ttnn.TILE_SIZE)
+        v_out_shard_shape[-2] = _decode_round_batch_height(v_out_shard_shape[-2], "wo")
         wo_in0_memory_config = ttnn.create_sharded_memory_config(
             v_out_shard_shape,
             **cfg["wo_in0_memory_config"],
         )
+        if _decode_shape_debug_enabled():
+            logger.info(
+                "MLA decode dbg wo: v_out.shape={} rounded_shape={} in0_memcfg={}",
+                tuple(v_out.shape),
+                tuple(v_out_shard_shape),
+                wo_in0_memory_config,
+            )
         v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
         out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)

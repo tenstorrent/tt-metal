@@ -18,6 +18,8 @@ from tests.scripts.common import get_updated_device_params
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
 RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS = 6 * 60 * 60
 DEEPSEEK_DEMO_NODEID_PREFIX = "models/demos/deepseek_v3/demo/"
+DEEPSEEK_TESTS_NODEID_PREFIX = "models/demos/deepseek_v3/tests/"
+MULTIHOST_WEIGHT_CACHE_TEST_TIMEOUT_SECONDS = 30 * 60
 
 # Shared test parametrization constants
 # Prefill sequence lengths: powers of 2 from 128 to 128K
@@ -375,6 +377,34 @@ def _maybe_extend_demo_timeout_for_weight_recalculation(config: pytest.Config, i
     )
 
 
+def _maybe_extend_test_timeout_for_multihost_weight_cache(current_device: str, item: pytest.Item) -> None:
+    if current_device not in {"TG", "DUAL", "QUAD"}:
+        return
+    if not item.nodeid.startswith(DEEPSEEK_TESTS_NODEID_PREFIX):
+        return
+    if "force_recalculate_weight_config" not in item.fixturenames:
+        return
+
+    timeout_marker = item.get_closest_marker("timeout")
+    current_timeout = None
+    if timeout_marker is not None:
+        current_timeout = timeout_marker.args[0] if timeout_marker.args else timeout_marker.kwargs.get("timeout")
+        try:
+            current_timeout = float(current_timeout)
+        except (TypeError, ValueError):
+            current_timeout = None
+
+    if current_timeout is not None and current_timeout >= MULTIHOST_WEIGHT_CACHE_TEST_TIMEOUT_SECONDS:
+        return
+
+    # Shared-cache publication/visibility for multihost DeepSeek tests regularly
+    # exceeds pytest's default 300s even when the code under test is healthy.
+    item.add_marker(
+        _get_timeout_override_marker(item, MULTIHOST_WEIGHT_CACHE_TEST_TIMEOUT_SECONDS),
+        append=False,
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """
     Check if tests have requires_device marker and skip them during collection if current device doesn't match.
@@ -387,6 +417,7 @@ def pytest_collection_modifyitems(config, items):
 
     for item in items:
         _maybe_extend_demo_timeout_for_weight_recalculation(config, item)
+        _maybe_extend_test_timeout_for_multihost_weight_cache(current_device, item)
 
         marker = item.get_closest_marker("requires_device")
         if marker:
