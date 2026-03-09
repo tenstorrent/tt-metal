@@ -12,7 +12,7 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
-#define BANDWIDTH_THRESHOLD 300.0
+#define BANDWIDTH_THRESHOLD 320.0
 
 namespace tt::tt_metal {
 
@@ -31,9 +31,9 @@ static bool run_test_bandwidth(
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
-    uint32_t num_bytes_per_send = 20000;
+    uint32_t num_bytes_per_send = 100 * 1024;
     uint32_t transfer_size = 200 * 1024;
-    uint32_t transfer_count = 1024;
+    uint32_t transfer_count = 10240;
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
