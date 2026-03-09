@@ -33,6 +33,8 @@ Tensor argmax(
     std::optional<Tensor> optional_output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return zero_volume_argmax(input_tensor, dim, keepdim, output_memory_config);
     }
