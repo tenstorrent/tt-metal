@@ -37,10 +37,37 @@ SHARDING_THRESHOLD = 384
 # ============================================================================
 
 
-def l1_width_sharded_memory(hidden_states):
+def _layernorm_core_grid(hidden_size: int, device) -> ttnn.CoreGrid:
+    """
+    Compute the core grid used for width-sharded LayerNorm.
+
+    The grid is chosen so that:
+    - total cores  == hidden_size // TILE_SIZE  (one tile-column per core)
+    - x            <= device compute-grid x      (stays inside the physical grid)
+
+    For hidden_size=768: num_cores=24, preferred x=8 (fits Wormhole 8x7 and
+    Blackhole 11x10), giving CoreGrid(y=3, x=8).
+    """
+    num_cores = hidden_size // ttnn.TILE_SIZE
+    device_x = device.compute_with_storage_grid_size().x
+    if num_cores % 8 == 0 and 8 <= device_x:
+        x = 8
+    else:
+        x = 1
+        for candidate in range(min(num_cores, device_x), 0, -1):
+            if num_cores % candidate == 0:
+                x = candidate
+                break
+    return ttnn.CoreGrid(y=num_cores // x, x=x)
+
+
+def l1_width_sharded_memory(hidden_states, device=None):
     """
     Convert tensor to L1 width sharded memory config.
     Matches decoder implementation for consistent sharding.
+
+    When *device* is supplied the core grid is chosen to fit within the
+    physical compute grid (required for Blackhole whose grid is 11x10).
     """
     # Calculate shard dimensions for width sharding
     if len(hidden_states.shape) == 4:
@@ -50,12 +77,15 @@ def l1_width_sharded_memory(hidden_states):
     else:
         raise ValueError(f"Unsupported shape: {hidden_states.shape}")
 
-    num_cores = hidden_size // ttnn.TILE_SIZE
-
-    if num_cores % 8 == 0:
-        core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
+    if device is not None:
+        core_grid = _layernorm_core_grid(hidden_size, device)
     else:
-        core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+        num_cores = hidden_size // ttnn.TILE_SIZE
+        if num_cores % 8 == 0:
+            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
+        else:
+            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+
     num_cores = core_grid.x * core_grid.y
     shard_width = (hidden_size + num_cores - 1) // num_cores  # Divide width across cores
 
@@ -230,7 +260,9 @@ class TTNNSpeechT5Attention:
 
         # Pre-compute specialized configs for Q/K/V/out projections
         # Shape: [seq_len, 768] @ [768, 768] -> [seq_len, 768]
-        self.core_grid = get_encoder_core_grid(device)
+        # Use the same core grid as the LayerNorm width sharding so that width-sharded
+        # input tensors (output of the previous block's LayerNorm) are compatible.
+        self.core_grid = _layernorm_core_grid(config.hidden_size, device)
         self.linear_compute_config = get_high_perf_compute_config(device)
 
         # Attention matmul config (Q@K^T, attn@V)
@@ -438,19 +470,14 @@ class TTNNSpeechT5EncoderBlock:
         else:
             batch_size, seq_len, hidden_size = shape
 
-        num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores for 768
-        if num_cores % 8 == 0:
-            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
-        else:
-            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+        core_grid = _layernorm_core_grid(hidden_size, self.device)
 
         actual_seq_len = seq_len * batch_size
         per_core_M = math.ceil(actual_seq_len / ttnn.TILE_SIZE)
 
-        # For width sharding, each core gets a portion of the width
         K_tiles = hidden_size // ttnn.TILE_SIZE
         total_cores = core_grid.x * core_grid.y
-        block_w = K_tiles // total_cores  # 24 / 24 = 1
+        block_w = K_tiles // total_cores
 
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -487,7 +514,7 @@ class TTNNSpeechT5EncoderBlock:
         hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Convert to width sharded for layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states)
+        hidden_states = l1_width_sharded_memory(hidden_states, self.device)
 
         # Get LayerNorm program config for sharded execution
         layernorm_program_config = self._get_layernorm_program_config(hidden_states)
@@ -516,7 +543,7 @@ class TTNNSpeechT5EncoderBlock:
         hidden_states = ttnn.add(residual_ffn, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Convert to width sharded for final layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states)
+        hidden_states = l1_width_sharded_memory(hidden_states, self.device)
 
         # Final layer norm with sharding
         hidden_states = ttnn.layer_norm(
@@ -590,19 +617,14 @@ class TTNNSpeechT5Encoder:
         else:
             batch_size, seq_len, hidden_size = shape
 
-        num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores for 768
-        if num_cores % 8 == 0:
-            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
-        else:
-            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+        core_grid = _layernorm_core_grid(hidden_size, self.device)
 
         actual_seq_len = seq_len * batch_size
         per_core_M = math.ceil(actual_seq_len / ttnn.TILE_SIZE)
 
-        # For width sharding, each core gets a portion of the width
         K_tiles = hidden_size // ttnn.TILE_SIZE
         total_cores = core_grid.x * core_grid.y
-        block_w = K_tiles // total_cores  # 24 / 24 = 1
+        block_w = K_tiles // total_cores
 
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -640,7 +662,7 @@ class TTNNSpeechT5Encoder:
         hidden_states = hidden_states + self.parameters["encode_positions_alpha"] * pe_slice
 
         # Convert to width sharded for pre-encoder layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states)
+        hidden_states = l1_width_sharded_memory(hidden_states, self.device)
 
         # Get LayerNorm program config for sharded execution
         layernorm_program_config = self._get_layernorm_program_config(hidden_states)
