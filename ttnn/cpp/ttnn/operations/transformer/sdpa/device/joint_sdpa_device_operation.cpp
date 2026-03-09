@@ -197,7 +197,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> JointSDPADeviceOpera
     const auto& v_shape = tensor_args.input_v.logical_shape();
     const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
 
-    CoreCoord grid = output_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
+                                                     : output_tensor.device()->compute_with_storage_grid_size();
     MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     const uint32_t B = q_shape[0];

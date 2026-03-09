@@ -301,7 +301,8 @@ RingDistributedSdpaDeviceOperation::create_op_performance_model(
     const auto& v_shape = tensor_args.v.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
-    CoreCoord grid = output_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
+                                                     : output_tensor.device()->compute_with_storage_grid_size();
     MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     // In chunked/paged-KV mode, k_shape[2] is the page block size, not the full KV sequence length.

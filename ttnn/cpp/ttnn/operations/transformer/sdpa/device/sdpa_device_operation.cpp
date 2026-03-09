@@ -457,7 +457,9 @@ SDPAOperation::create_op_performance_model(
     TT_ASSERT(q_shape[0] == k_shape[0], "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
     TT_ASSERT(q_shape[3] == k_shape[3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
 
-    CoreCoord compute_grid_dims = output_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_grid_dims = args.program_config.has_value()
+                                      ? args.program_config->compute_with_storage_grid_size
+                                      : output_tensor.device()->compute_with_storage_grid_size();
     MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
