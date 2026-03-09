@@ -5,9 +5,10 @@ target_link_libraries(
     precompile_fw
     PRIVATE
         tt_metal
-        jit_build
         yaml-cpp::yaml-cpp
 )
+
+target_include_directories(precompile_fw PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal)
 
 set_target_properties(
     precompile_fw
@@ -23,8 +24,6 @@ add_custom_command(
         ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
     COMMAND
         $<TARGET_FILE:precompile_fw>
-    COMMAND
-        ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled
     COMMAND
         ${CMAKE_COMMAND} -E touch ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
