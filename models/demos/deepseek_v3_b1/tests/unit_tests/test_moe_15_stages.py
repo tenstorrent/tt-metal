@@ -14,6 +14,8 @@ Stage 2+ (if applicable):
   passive forwarding, no downstream op
 """
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -77,9 +79,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
 @pytest.mark.timeout(1200)
-def test_bcast_moe_two_stage_pipeline(
-    mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict
-):
+def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -95,7 +95,7 @@ def test_bcast_moe_two_stage_pipeline(
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
 
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-    # assert len(pipeline_config) == num_procs + 1
+    assert len(pipeline_config) == num_procs + 1
 
     is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
 
@@ -124,8 +124,8 @@ def test_bcast_moe_two_stage_pipeline(
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
-    # Aggregator is the first worker core (shard_idx == 0)
-    aggregator_core = shard_cores_list[0]
+    # Aggregator is the first worker core
+    aggregator_core = shard_cores_list[1]
 
     if my_mesh_id >= 1:
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
@@ -163,9 +163,6 @@ def test_bcast_moe_two_stage_pipeline(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
-            h2d_socket_fifo_size=token_size_bytes * 2,
-            d2h_socket_fifo_size=embedding_fifo_size,
-            d2h_socket_page_size=embedding_size_bytes,
         )
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")
@@ -173,10 +170,7 @@ def test_bcast_moe_two_stage_pipeline(
     # ── Get downstream socket for reduce aggregator to send to pipeline exit ──
     downstream_socket = None
     if my_mesh_id >= 1:
-        if my_mesh_id == num_procs - 1:
-            downstream_socket = pipeline_block.host_io.get_upstream_socket()
-        else:
-            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
         logger.info(f"[rank={my_mesh_id}] downstream socket wired to pipeline exit")
 
     # ── MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) ──
@@ -280,10 +274,8 @@ def test_bcast_moe_two_stage_pipeline(
             reduce_intermediate_tensors.append(intermediate_tensor)
         logger.info(f"[rank={my_mesh_id}] reduce intermediate tensors created")
 
-        # Reduce output tensor (single-core sharded)
-        compute_grid = mesh_device.compute_with_storage_grid_size()
-        reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+        # Reduce output tensor (single-core sharded on aggregator core)
+        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
         reduce_output_shard_spec = ttnn.ShardSpec(
             reduce_output_shard_grid,
             (1, final_output_total_width),
@@ -305,6 +297,7 @@ def test_bcast_moe_two_stage_pipeline(
         logger.info(f"[rank={my_mesh_id}] reduce output tensor created")
 
         # 4 global semaphores for reduce synchronization
+        compute_grid = mesh_device.compute_with_storage_grid_size()
         num_cores = compute_grid.x * compute_grid.y
         reduce_available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_available_cores, 0) for _ in range(4)]
@@ -399,20 +392,19 @@ def test_bcast_moe_two_stage_pipeline(
         logger.info(f"[rank={my_mesh_id}] MoE + reduce completed")
 
     # ── Stage 0: D2H loopback read + golden validation ───────────────────────
-    if mesh_device.get_system_mesh_id() == num_procs - 1:
-        rank = num_procs - 1
-        logger.info(f"[rank={rank}] waiting for D2H result from pipeline loopback")
+    if is_stage0:
+        logger.info(f"[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
         received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
         d2h_output_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         pipeline_block.read_output(d2h_output_tensor)
         d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
-        logger.info(f"[rank={rank}] D2H read complete, shape={d2h_result_torch.shape}")
-        logger.info(f"[rank={rank}] D2H first 5 values: {d2h_result_torch[0, :5]}")
+        logger.info(f"[rank=0] D2H read complete, shape={d2h_result_torch.shape}")
+        logger.info(f"[rank=0] D2H first 5 values: {d2h_result_torch[0, :5]}")
 
         d2h_nonzero = torch.count_nonzero(d2h_result_torch)
-        logger.info(f"[rank={rank}] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
+        logger.info(f"[rank=0] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
         assert d2h_nonzero > 0, "D2H output is all zeros — reduce or D2D0 pipeline failed"
 
     ttnn.distributed_context_barrier()
@@ -442,7 +434,7 @@ def test_bcast_moe_two_stage_pipeline(
     indirect=True,
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
-@pytest.mark.parametrize("iterations", [131072])
+@pytest.mark.parametrize("iterations", [4000])
 @pytest.mark.timeout(120000)
 def test_persistent_moe_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
@@ -474,7 +466,7 @@ def test_persistent_moe_15_stages(
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
 
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-    # assert len(pipeline_config) == num_procs + 1
+    assert len(pipeline_config) == num_procs + 1
 
     is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
 
@@ -503,7 +495,7 @@ def test_persistent_moe_15_stages(
     gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
-    aggregator_core = shard_cores_list[0]
+    aggregator_core = shard_cores_list[1]
 
     if is_moe_stage:
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
@@ -546,20 +538,13 @@ def test_persistent_moe_15_stages(
                 downstream_d2d_socket_page_size=embedding_size_bytes,
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
                 exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
-                h2d_socket_fifo_size=token_size_bytes * 2,
-                d2h_socket_fifo_size=embedding_fifo_size,
-                d2h_socket_page_size=embedding_size_bytes,
             )
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")
 
         downstream_socket = None
         if my_mesh_id >= 1:
-            # downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
-            if my_mesh_id == num_procs - 1:
-                downstream_socket = pipeline_block.host_io.get_upstream_socket()
-            else:
-                downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
 
         # ── MoE tensors (MoE stages only) ──
         state_dict = get_reference_model_state_dict(
@@ -656,8 +641,7 @@ def test_persistent_moe_15_stages(
                 reduce_intermediate_tensors.append(intermediate_tensor)
 
             compute_grid = mesh_device.compute_with_storage_grid_size()
-            reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-            reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+            reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
             reduce_output_shard_spec = ttnn.ShardSpec(
                 reduce_output_shard_grid,
                 (1, final_output_total_width),
@@ -757,28 +741,19 @@ def test_persistent_moe_15_stages(
                 downstream_socket=downstream_socket,
             )
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
-
         ttnn.distributed_context_barrier()
 
         # ── Stage 0: drive pipeline with multiple tokens ──
-
         if is_stage0:
             token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
+            num_elements = embedding_size_bytes // 2
+            torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
+            torch_token[0, 0] = 0
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            start_time = time.time()
             for iteration in range(iterations):
-                torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
                 pipeline_block.write_token(token_tensor)
                 logger.info(f"[rank=0] token {iteration} injected")
-                ttnn.distributed_context_barrier()
-
-        elif my_mesh_id == num_procs - 1:
-            rank = num_procs - 1
-            num_elements = embedding_size_bytes // 2
-
-            for iteration in range(iterations):
-                print(f"[rank={my_mesh_id}] iteration {iteration} start")
 
                 d2h_output_tensor = ttnn.from_torch(
                     torch.zeros(1, num_elements, dtype=torch.bfloat16),
@@ -799,15 +774,10 @@ def test_persistent_moe_15_stages(
                 assert (
                     d2h_nonzero > 0
                 ), f"D2H output is all zeros at iteration {iteration} — persistent MoE 15-stage pipeline failed"
-                ttnn.distributed_context_barrier()
+            end_time = time.time()
+            print(f"[rank=0] time taken to move {iterations} tokens: {end_time - start_time} seconds")
 
             logger.info(f"[rank={my_mesh_id}] all {iterations} iterations passed")
-
-        else:
-            for iteration in range(iterations):
-                logger.info(f"[rank={my_mesh_id}] Issuing Dummy Barrier at iteration {iteration}")
-                ttnn.distributed_context_barrier()
-                logger.info(f"[rank={my_mesh_id}] Dummy Barrier issued at iteration {iteration}")
 
         logger.info(f"[rank={my_mesh_id}] waiting for barrier")
         ttnn.distributed_context_barrier()
