@@ -281,6 +281,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/rm_scaled_add/rm_scaled_add_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
@@ -678,6 +679,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
+        TTNN::Ops::Experimental::RmScaledAdd
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SliceWrite
@@ -920,6 +922,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/rm_scaled_add)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
 add_subdirectory(cpp/ttnn/operations/experimental/slice_write)

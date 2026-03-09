@@ -59,6 +59,7 @@
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/rm_scaled_add/rm_scaled_add_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -136,6 +137,7 @@ void py_module(nb::module_& mod) {
 
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
+    deepseek_prefill::detail::bind_rm_scaled_add_operation(mod);
 }
 
 }  // namespace ttnn::operations::experimental

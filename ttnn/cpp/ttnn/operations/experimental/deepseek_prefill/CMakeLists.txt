@@ -1,1 +1,1 @@
-# To be removed when adding new ops; Only stub for codeowner file to work.
+add_subdirectory(rm_scaled_add)
