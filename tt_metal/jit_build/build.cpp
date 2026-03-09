@@ -260,6 +260,12 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
+    if (!rtoptions.get_watcher_enabled() &&
+        !rtoptions.get_lightweight_kernel_asserts() &&
+        rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENV_LLK_INFRA ";
+    }
+
     if (rtoptions.get_disable_sfploadmacro()) {
         this->defines_ += "-DDISABLE_SFPLOADMACRO ";
     }
