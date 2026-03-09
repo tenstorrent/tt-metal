@@ -463,7 +463,7 @@ def test_bcast_moe_two_stage_pipeline(
     pipeline_core = MoEComputeStage.PIPELINE_CORE
     token_size_bytes = MoEComputeStage.TOKEN_SIZE_BYTES
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 4
 
     torch_embedding = torch.arange(vocab_size * K, dtype=torch.float32).reshape(1, 1, vocab_size, K).to(torch.bfloat16)
 
@@ -610,7 +610,7 @@ def test_persistent_moe_15_stages(
     pipeline_core = MoEComputeStage.PIPELINE_CORE
     token_size_bytes = MoEComputeStage.TOKEN_SIZE_BYTES
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 4
 
     torch.manual_seed(42)
     torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
