@@ -342,8 +342,7 @@ autograd::TensorPtr ring_attention_sdpa(
         value->add_grad(grad_V_accum);
     };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));
 
     return out;
 }

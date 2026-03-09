@@ -210,6 +210,8 @@ from ..._ttml.models.llama import (
     create_cpp_llama_model,
 )
 
+from .safetensors_loader import load_from_safetensors
+
 __all__ = [
     # C++ bindings
     "CppLlama",
@@ -219,4 +221,5 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "load_from_safetensors",
 ]
