@@ -9,8 +9,8 @@
 #include "experimental/llk_math_matmul_custom_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_AB_matmul_api.h"
 #include "experimental/llk_unpack_AB_matmul_custom_api.h"
+#include "llk_unpack_AB_matmul_api.h"
 #endif
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
