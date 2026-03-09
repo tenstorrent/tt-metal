@@ -329,7 +329,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false>
-inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
+inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output = 16) {
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
@@ -350,7 +350,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
         tile_c_dim,
-        num_faces);
+        num_faces,
+        false,   // partial_face
+        false);  // narrow_tile
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
