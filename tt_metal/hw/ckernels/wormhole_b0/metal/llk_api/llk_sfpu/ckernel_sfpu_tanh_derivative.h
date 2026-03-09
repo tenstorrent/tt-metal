@@ -158,7 +158,7 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // Accuracy: Max ULP = 1 across all 65,026 valid BF16 values (FP32 sim).
 // Performance: ~14 ops (core) or ~19 ops (tail) vs ~40-50 ops (old version).
 // =============================================================================
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_tanh_derivative_sech2() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
@@ -193,6 +193,11 @@ inline void calculate_tanh_derivative_sech2() {
             result = inline_exp_sech2_tail(a);
         }
         v_endif;
+
+        // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

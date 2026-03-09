@@ -40,7 +40,8 @@ ALWI void tanh_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void tanh_derivative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_tanh_derivative_sech2, RC, fast_and_approx, idst));
+    MATH(SFPU_TWO_PARAM_KERNEL(
+        calculate_tanh_derivative_sech2, fast_and_approx, DST_ACCUM_MODE, idst, (int)VectorMode::RC));
 }
 
 }  // namespace ckernel
