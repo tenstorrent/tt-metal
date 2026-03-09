@@ -5,7 +5,6 @@
 
 import pytest
 import ttnn
-from models.common.utility_functions import is_blackhole
 from tests.nightly.t3000.ccl.test_neighbor_pad_async import run_neighbor_pad_1d_impl, run_neighbor_pad_2d_impl
 
 
@@ -115,9 +114,6 @@ def test_neighbor_pad_async_1d(
     if is_ci_env:
         if skip_for_ci_env:
             pytest.skip("Skipping certain shapes in CI to reduce pipeline time")
-
-    if is_blackhole() and num_links > 2:
-        pytest.skip("Skipping num_links > 2 on BH (only 2 ethernet channels available)")
 
     run_neighbor_pad_1d_impl(
         mesh_device,

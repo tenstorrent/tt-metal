@@ -135,10 +135,6 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
             w_writer_args[0] = output.buffer()->address();
             w_writer_args[1] = output.buffer()->address();
             w_writer_args[13] = operation_attributes.w_neighbor_semaphore.address();
-            w_writer_args[14] = true;  // use_barrier_semaphore (W-axis startup barrier)
-            // Use h_neighbor_semaphore (not barrier_semaphore) — W reader on same core uses
-            // barrier_semaphore for Phase 2 barrier, so they must use different addresses.
-            w_writer_args[17] = operation_attributes.h_neighbor_semaphore.address();
         }
     }
 }
@@ -148,11 +144,9 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 // Input: [B,T,H,W,C] fractured across 2D mesh (H across rows, W across columns)
 // Output: [B,T,H+2pH,W+2pW,C]
 //
-// Phase 0 — Startup barrier (multicast sync across all devices):
-//   H fabric writers multicast barrier with all H-axis devices (same column).
-//   W fabric writers multicast barrier with all W-axis devices (same row).
-//   Together these transitively synchronize all devices, ensuring the previous
-//   dispatch has completed before any new fabric data is sent.
+// Phase 0 — H writer startup barrier (skipped when using persistent output buffers):
+//   H fabric writers do a pairwise semaphore exchange with their H neighbor via fabric
+//   to ensure both sides have allocated their output buffers before any fabric data is sent.
 //
 // Phase 1 — Interior copy + H halo exchange (all ~120 cores active):
 //   Local copy cores: read input sticks → write to output DRAM at (h+pH, w+pW) offset.
@@ -468,12 +462,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         ::ttnn::ccl::get_forward_backward_line_unicast_configuration(
             mesh_coordinate, forward_coord, backward_coord, mesh_device);
 
-    // Compute H fabric multicast barrier route configuration
-    auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
-        operation_attributes.ring_size, device_index, operation_attributes.topology, false);
-    auto [h_mcast_forward_args, h_mcast_backward_args] = ::ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
-
     // KERNEL CREATION
     std::vector<KernelHandle> reader_kernel_ids;
     std::vector<KernelHandle> writer_kernel_ids;
@@ -549,11 +537,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             const auto& h_unicast_args = direction ? h_unicast_backward_args : h_unicast_forward_args;
             writer_kernel_config.compile_args.insert(
                 writer_kernel_config.compile_args.end(), h_unicast_args.begin(), h_unicast_args.end());
-            // Barrier multicast route info (6 args) and ring_size for full-mesh startup barrier
-            const auto& h_mcast_args = direction ? h_mcast_backward_args : h_mcast_forward_args;
-            writer_kernel_config.compile_args.insert(
-                writer_kernel_config.compile_args.end(), h_mcast_args.begin(), h_mcast_args.end());
-            writer_kernel_config.compile_args.push_back(operation_attributes.ring_size);
             auto worker_writer_kernel_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -772,24 +755,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             num_sticks_per_halo_dim,
             operation_attributes.pad2_left);
 
-        // W-axis startup barrier: compute ring size, device index, and multicast routes.
-        // W writers use this barrier to synchronize with all W-axis devices (same row),
-        // ensuring the previous dispatch has completed before sending new fabric data.
-        const auto& mesh_view_w = mesh_device->get_view();
-        uint32_t w_ring_size =
-            (operation_attributes.pad2_cluster_axis.value() == 0) ? mesh_view_w.num_rows() : mesh_view_w.num_cols();
-        uint32_t w_device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-            tensor_args.input_tensor, mesh_coordinate, operation_attributes.pad2_cluster_axis);
-        auto [w_num_targets_forward, w_num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
-            w_ring_size, w_device_index, operation_attributes.topology, false);
-        auto [w_mcast_forward_args, w_mcast_backward_args] = ::ttnn::ccl::get_forward_backward_line_mcast_configuration(
-            mesh_coordinate,
-            w_forward_coord,
-            w_backward_coord,
-            w_num_targets_forward,
-            w_num_targets_backward,
-            mesh_device);
-
         for (uint32_t w_link = 0; w_link < pad2_num_links; w_link++) {
             // Per-link work distribution: split w_outer_dim_size rows across pad2_num_links
             uint32_t w_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
@@ -858,11 +823,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 uint32_t w_device_offset = w_direction ? w_backward_device_offset : w_forward_device_offset;
                 w_writer_kernel_config.compile_args.push_back(0);                // dst_mesh_id (unused for 1D)
                 w_writer_kernel_config.compile_args.push_back(w_device_offset);  // distance_in_hops
-                // W barrier multicast route info (6 args) + ring_size for W-axis startup barrier
-                const auto& w_mcast_args = w_direction ? w_mcast_backward_args : w_mcast_forward_args;
-                w_writer_kernel_config.compile_args.insert(
-                    w_writer_kernel_config.compile_args.end(), w_mcast_args.begin(), w_mcast_args.end());
-                w_writer_kernel_config.compile_args.push_back(w_ring_size);
                 auto w_writer_kernel_id = CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -886,13 +846,10 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_virtual_core.x,  // neighbor_sem_noc0_x
                     w_virtual_core.y,  // neighbor_sem_noc0_y
                     operation_attributes.w_neighbor_semaphore.address(),
-                    true,  // use_barrier_semaphore (W writers: W-axis startup barrier)
-                    w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,  // barrier_sem_noc0_x (opp W dir)
-                    w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y,  // barrier_sem_noc0_y (opp W dir)
-                    // Use h_neighbor_semaphore (not barrier_semaphore) for W startup barrier:
-                    // W reader (NCRISC) on the same core uses barrier_semaphore for Phase 2 barrier.
-                    // Using the same address would cause cross-contamination of increment counts.
-                    operation_attributes.h_neighbor_semaphore.address()};  // barrier_sem
+                    false,  // use_barrier_semaphore (W writers: no startup barrier)
+                    0,      // barrier_sem_noc0_x (unused)
+                    0,      // barrier_sem_noc0_y (unused)
+                    0};     // barrier_sem (unused)
                 // No Phase 2 signal targets (W writers ARE Phase 2)
                 constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
                 w_writer_rt_args.push_back(0);
