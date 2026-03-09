@@ -625,14 +625,6 @@ struct EdmChannelWorkerInterfaceTuple {
     }
 };
 
-// Helper to select connection semaphore pointer type based on channel index
-template <size_t ChannelIdx>
-using ConnectionSemaphorePtrTypeForChannel = std::conditional_t<
-    ChannelIdx == 0,
-    volatile tt_reg_ptr uint32_t*,
-    volatile tt_l1_ptr uint32_t*
->;
-
 // Heterogeneous tuple wrapper with channel_worker_interfaces member
 template <uint8_t WORKER_HANDSHAKE_NOC, typename TupleType>
 struct HeterogeneousEdmChannelWorkerInterfaceTuple {
@@ -656,7 +648,7 @@ auto make_heterogeneous_worker_interfaces_impl(std::index_sequence<Indices...>) 
         tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
             WORKER_HANDSHAKE_NOC,
             BufferSizes,
-            ConnectionSemaphorePtrTypeForChannel<Indices>>...
+            ChannelMemoryType<Indices>>...
     >;
     return HeterogeneousEdmChannelWorkerInterfaceTuple<WORKER_HANDSHAKE_NOC, TupleType>{};
 }
