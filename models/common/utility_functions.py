@@ -512,9 +512,15 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
 
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(golden)).item()
+    abs_diff = torch.abs(golden - calculated)
+    avg_atol = abs_diff.mean().item()
+    non_zero_mask = torch.abs(golden) > 1e-10
+    avg_rtol = (
+        (abs_diff[non_zero_mask] / torch.abs(golden[non_zero_mask])).mean().item() if non_zero_mask.any() else 0.0
+    )
     return (
         torch.allclose(golden, calculated, rtol, atol, True),
-        f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
+        f"Avg ATOL Delta:{avg_atol}, Max ATOL Delta: {atol_delta}, Avg RTOL Delta:{avg_rtol}, Max RTOL Delta: {rtol_delta}",
     )
 
 
@@ -644,9 +650,10 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
         ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
 
     ulp_tensor = torch.abs(calculated - golden) / ulp_value
+    avg_ulp = ulp_tensor.mean().item()
     ulp_delta = torch.max(ulp_tensor)
     within_threshold = ulp_delta <= ulp_threshold
-    message = f"Max ULP Delta: {ulp_delta}"
+    message = f"Avg ulp Delta: {avg_ulp}, Max ULP Delta: {ulp_delta}"
     if not within_threshold:
         ulp_index = torch.argmax(ulp_tensor)
         ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))

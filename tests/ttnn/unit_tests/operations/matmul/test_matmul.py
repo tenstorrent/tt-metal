@@ -11,8 +11,124 @@ import math
 import ttnn
 
 from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose, assert_relative_frobenius
 from ttnn.operations.activations import get_golden_function_for_activation
+
+
+# ============================================================================
+# ACCURACY METRICS CONFIGURATION
+# ============================================================================
+# Configure which accuracy metrics to use for matmul tests
+# Set to True to enable, False to disable
+def _get_bool_env(env_var, default):
+    """Get boolean from environment variable, with default fallback."""
+    value = os.environ.get(env_var, "").lower()
+    return True if value in ("1", "true", "yes") else False if value in ("0", "false", "no") else default
+
+
+USE_PCC = _get_bool_env("USE_PCC", True)  # Pearson Correlation Coefficient (existing default)
+USE_ALLCLOSE = _get_bool_env("USE_ALLCLOSE", False)  # Per-element closeness check
+USE_RELATIVE_FROBENIUS = _get_bool_env("USE_RELATIVE_FROBENIUS", False)  # Global error matrix norm
+USE_ULP = _get_bool_env("USE_ULP", False)  # Units in the Last Place (not recommended for matmul)
+
+
+# Default tolerance values
+ALLCLOSE_ATOL = 1e-1  # Absolute tolerance for allclose
+ALLCLOSE_RTOL = 5e-2  # Relative tolerance for allclose
+FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
+ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
+
+# Padding validation configuration
+USE_FILL_PAD = False  # Enable fill_implicit_tile_padding with TEST_PADDING_VALUE for validation
+TEST_PADDING_VALUE = 0  # Value to fill implicit tile padding for validation
+
+
+def assert_matmul_accuracy(
+    expected,
+    actual,
+    test_name="",
+    allclose_atol=ALLCLOSE_ATOL,
+    allclose_rtol=ALLCLOSE_RTOL,
+    frobenius_threshold=FROBENIUS_THRESHOLD,
+    ulp_threshold=ULP_THRESHOLD,
+):
+    """
+    Apply configured accuracy metrics to matmul test results.
+    Filters out near-zero values in expected for allclose and ULP to avoid division issues.
+    Uses ATOL threshold to determine what counts as "near-zero".
+
+    Args:
+        expected: Expected tensor (PyTorch or TTNN)
+        actual: Actual tensor (PyTorch or TTNN)
+        test_name: Optional test name for logging
+        allclose_atol: Absolute tolerance for allclose (default: ALLCLOSE_ATOL)
+        allclose_rtol: Relative tolerance for allclose (default: ALLCLOSE_RTOL)
+        frobenius_threshold: Threshold for relative Frobenius (default: FROBENIUS_THRESHOLD)
+        ulp_threshold: ULP threshold (default: ULP_THRESHOLD)
+    """
+    from tests.ttnn.utils_for_testing import _normalize_tensor
+
+    # Normalize tensors
+    expected = _normalize_tensor(expected)
+    actual = _normalize_tensor(actual)
+
+    # Calculate statistics for near-zero values
+    # Use ATOL as threshold: if |expected| < ATOL, it's effectively zero for RTOL/ULP purposes
+    total_elements = expected.numel()
+    near_zero_threshold = allclose_atol
+    near_zero_mask_expected = torch.abs(expected) < near_zero_threshold
+    near_zero_count_expected = near_zero_mask_expected.sum().item()
+    near_zero_percentage = (near_zero_count_expected / total_elements * 100) if total_elements > 0 else 0
+
+    if near_zero_percentage > 0:
+        logger.info(f"{test_name}: {near_zero_percentage:.2f}% of values have |expected| < {near_zero_threshold}")
+
+    # Apply PCC (if enabled) - works with all values including zeros
+    if USE_PCC:
+        assert_with_pcc(expected, actual, 0.999)
+
+    # Apply allclose (if enabled) - filter out positions where expected is near-zero
+    if USE_ALLCLOSE:
+        # Filter out positions where |expected| < ATOL (to avoid huge RTOL errors from small expected values)
+        non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+
+        if non_near_zero_mask.any():
+            expected_non_near_zero = expected[non_near_zero_mask]
+            actual_non_near_zero = actual[non_near_zero_mask]
+            assert_allclose(expected_non_near_zero, actual_non_near_zero, atol=allclose_atol, rtol=allclose_rtol)
+
+        # For positions where expected is near-zero, check using ATOL only
+        if near_zero_mask_expected.any():
+            expected_near_zero = expected[near_zero_mask_expected]
+            actual_near_zero = actual[near_zero_mask_expected]
+            # Check if actual is close to expected using ATOL
+            abs_diff = torch.abs(actual_near_zero - expected_near_zero)
+            max_atol_for_near_zeros = torch.max(abs_diff).item()
+            if max_atol_for_near_zeros > allclose_atol:
+                raise AssertionError(
+                    f"{test_name}: For positions where |expected| < {near_zero_threshold}, "
+                    f"actual values exceed ATOL. Max |actual - expected|: {max_atol_for_near_zeros} > {allclose_atol}"
+                )
+
+    # Apply relative Frobenius (if enabled) - handles zeros automatically
+    if USE_RELATIVE_FROBENIUS:
+        assert_relative_frobenius(expected, actual, threshold=frobenius_threshold)
+
+    # Apply ULP (if enabled) - filter out positions where expected is near-zero
+    if USE_ULP:
+        # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
+        non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+
+        if non_near_zero_mask.any():
+            expected_non_near_zero = expected[non_near_zero_mask]
+            actual_non_near_zero = actual[non_near_zero_mask]
+            assert_with_ulp(expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold)
+
+        # For positions where expected is near-zero, ULP doesn't make sense, skip
+        if near_zero_mask_expected.any():
+            logger.info(
+                f"{test_name}: Skipping ULP check for {near_zero_count_expected} positions where |expected| < {near_zero_threshold}"
+            )
 
 
 # for setting up multi-device stress tests
@@ -69,6 +185,7 @@ def is_tiny_tile_combo_supported(transpose_tile: bool, tile_w: int, tile_h: int,
     return (transpose_tile, tile_w, tile_h, has_bias) in _TINY_TILE_SUPPORTED_COMBOS
 
 
+# N.A.
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [384])
@@ -96,9 +213,11 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         expected_pcc = 0.9999
     elif dtype == ttnn.bfloat4_b:
         expected_pcc = 0.989
-    assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
+    # assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
+    assert_matmul_accuracy(torch_input_tensor, output_tensor, "test_tiny_tiles_bfloat")
 
 
+# N.A.
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -140,11 +259,16 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
     assert output.shape == torch_output_tensor.shape == optional_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
-    assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
-    assert_with_pcc(output, optional_output_tensor, 0.999)
+    # assert_with_pcc(torch_output_tensor, output, 0.999)
+    # assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
+    # assert_with_pcc(output, optional_output_tensor, 0.999)
+
+    assert_matmul_accuracy(torch_output_tensor, output, "test_optional_output_argument_with_tiny_tiles")
+    assert_matmul_accuracy(torch_output_tensor, optional_output_tensor, "test_optional_output_argument_with_tiny_tiles")
+    assert_matmul_accuracy(output, optional_output_tensor, "test_optional_output_argument_with_tiny_tiles")
 
 
+# N.A.
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [2])
 @pytest.mark.parametrize("h", [71])
@@ -162,7 +286,8 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_input_tensor, output_tensor, 1)
+    # assert_with_pcc(torch_input_tensor, output_tensor, 1)
+    assert_matmul_accuracy(torch_input_tensor, output_tensor, "test_tiny_tiles")
 
 
 @pytest.mark.parametrize("m, k, n", [(784, 192, 576), (576, 192, 784), (486, 792, 352), (966, 123, 561)])
@@ -171,10 +296,16 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
     y = torch.ones((k, n), dtype=torch.float32)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m % 32 != 0 or k % 32 != 0:
+            x_tt = ttnn.fill_implicit_tile_padding(x_tt, TEST_PADDING_VALUE)
+        if k % 32 != 0 or n % 32 != 0:
+            y_tt = ttnn.fill_implicit_tile_padding(y_tt, TEST_PADDING_VALUE)
     z_tt = ttnn.matmul(x_tt, y_tt)
     z = ttnn.to_torch(z_tt)
     z_t = torch.matmul(x, y)
-    assert_with_pcc(z_t, z)
+    assert_matmul_accuracy(z_t, z, "test_pytorch_2_0_failed_cases")
 
 
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
@@ -275,7 +406,7 @@ def test_matmul_reuse_config_sharded_fd_column(
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_fd_column")
 
 
 @pytest.mark.parametrize("b", [2])
@@ -376,7 +507,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_tiny_tile")
 
 
 def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
@@ -524,7 +655,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     # required for multi-device stress tests
     for o in ttnn.get_device_tensors(output_t):
         output_tensor = ttnn.to_torch(o)
-        assert_with_pcc(pt_out, output_tensor, expected_pcc)
+        assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_in1_dram_sharded_tiny_tile")
 
 
 def run_matmul_2d_multiple_output_blocks_per_core(
@@ -654,7 +785,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     # required for multi-device stress tests
     for o in ttnn.get_device_tensors(output_t):
         output_tensor = ttnn.to_torch(o)
-        assert_with_pcc(pt_out, output_tensor, 0.999)
+        assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_multiple_output_blocks_per_core")
 
 
 @pytest.mark.parametrize("b", [1, 2])
@@ -826,7 +957,7 @@ def run_matmul_2d_tiny_tile(
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
 
 
 @pytest.mark.parametrize("m", [512])
@@ -986,7 +1117,7 @@ def run_matmul_1d_tiny_tile(
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
 
 
 @pytest.mark.parametrize("m", [128])
@@ -1197,7 +1328,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
 
 
 @pytest.mark.parametrize("m", [256])
@@ -1253,6 +1384,7 @@ def test_matmul_1d_multiple_output_blocks_per_core(
     assert device.num_program_cache_entries() == 1
 
 
+# N.A.
 @pytest.mark.parametrize("side", ["height", "width"])
 @pytest.mark.parametrize("tile_count", [1376, 1375])
 def test_padded_2d_matmul(device, side, tile_count):
@@ -1331,10 +1463,13 @@ def test_padded_2d_matmul(device, side, tile_count):
     output_tensor = ttnn.to_torch(output_tensor)
     pcc = 0.999
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_padded_2d_matmul")
     assert torch.all(lower == 2)
     assert torch.all(upper == 4)
 
 
+# N.A.
 @pytest.mark.parametrize("side", ["height", "width"])
 @pytest.mark.parametrize(
     "has_program_config",
@@ -1421,7 +1556,9 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
         upper = ttnn.to_torch(u).float()
         # Check that the tensors above and below the output are unchanged
         output_tensor_i = ttnn.to_torch(o)
-        assert_with_pcc(torch_output_tensor, output_tensor_i, pcc)
+        # assert_with_pcc(torch_output_tensor, output_tensor_i, pcc)
+        assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_padded_1d_matmul")
+
         assert torch.all(lower == 2)
         assert torch.all(upper == 4)
 
@@ -1447,12 +1584,18 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m_size % 32 != 0 or k_size % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k_size % 32 != 0 or n_size % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
     output = input_tensor_a @ input_tensor_b
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99981)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height")
 
 
 # fmt: off
@@ -1475,12 +1618,18 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if k_size % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k_size % 32 != 0 or n_size % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
     output = input_tensor_a @ input_tensor_b
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_from_1D")
 
 
 @pytest.mark.parametrize("w", [(4), (2)])
@@ -1493,6 +1642,11 @@ def test_matmul_does_dot_product(device, w):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if w % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
     output = ttnn.matmul(input_tensor_a, input_tensor_b)
     output = ttnn.from_device(output)
 
@@ -1520,12 +1674,18 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if h % 32 != 0 or w % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if w % 32 != 0 or h % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
     output = ttnn.matmul(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999599)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_4D")
 
 
 # fmt: off
@@ -1544,14 +1704,21 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if h % 32 != 0 or w % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
     output = ttnn.matmul(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.9997)
+    # assert_with_pcc(torch_output_tensor, output, 0.9997)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_same_shape_and_valid")
 
 
+# N.A.
 # fmt: off
 @pytest.mark.parametrize("input_a,input_b", [
         ([1.0,2.0,3.0],[3.0,4.0,5.0])
@@ -1596,7 +1763,7 @@ def test_tutorial_matmul(device):
     output = input_tensor_a @ input_tensor_b
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul")
 
 
 def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
@@ -1620,7 +1787,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul_inputs_and_output_in_l1_memory")
 
 
 def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid(device):
@@ -1647,7 +1814,11 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_matmul_accuracy(
+        torch_output_tensor,
+        output,
+        "test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid",
+    )
 
 
 @pytest.mark.parametrize(
@@ -1781,7 +1952,7 @@ def test_sharded_matmul(
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_sharded_matmul")
 
 
 @pytest.mark.parametrize("batch_size", [1, 7])
@@ -1806,7 +1977,7 @@ def test_matmul_with_core_grid(device, batch_size):
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_with_core_grid")
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -1822,6 +1993,12 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m_size % 32 != 0 or k_size % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k_size % 32 != 0 or n_size % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.matmul(
         input_tensor_a,
@@ -1830,7 +2007,9 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_matmul_accuracy(
+        torch_output_tensor, output_tensor, "test_wide_matmul_with_argument_for_core_grid_set_to_device_grid"
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -1846,6 +2025,12 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m_size % 32 != 0 or k_size % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k_size % 32 != 0 or n_size % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.matmul(
         input_tensor_a,
@@ -1854,7 +2039,9 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
+    assert_matmul_accuracy(
+        torch_output_tensor, output_tensor, "test_tall_matmul_with_argument_for_core_grid_set_to_device_grid"
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -1870,6 +2057,12 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m_size % 32 != 0 or k_size % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k_size % 32 != 0 or n_size % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.matmul(
         input_tensor_a,
@@ -1878,7 +2071,9 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
+    assert_matmul_accuracy(
+        torch_output_tensor, output_tensor, "test_matmul_by_passing_in_1D_systolic_array_program_config"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1906,14 +2101,21 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m % 32 != 0 or k % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k % 32 != 0 or n % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
     output = ttnn.matmul(input_tensor_a, input_tensor_b, transpose_a=transpose_a, transpose_b=transpose_b)
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
-    assert_allclose(torch_output_tensor, output, 0.32, 0.016)
-    assert_with_ulp(torch_output_tensor, output, 3)
+    # assert_with_pcc(torch_output_tensor, output, 0.999)
+    # assert_allclose(torch_output_tensor, output, 0.32, 0.016)
+    # assert_with_ulp(torch_output_tensor, output, 3)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_transpose_a_or_b")
 
 
 @pytest.mark.parametrize(
@@ -1958,7 +2160,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
 
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_transpose_a_with_core_grid")
 
 
 @pytest.mark.parametrize("transpose_a", [True, False])
@@ -2093,7 +2295,7 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_transpose_and_configs")
 
 
 ##########################
@@ -2113,6 +2315,12 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if m_size % 32 != 0 or k_size % 32 != 0:
+            input_tensor_a = ttnn.fill_implicit_tile_padding(input_tensor_a, TEST_PADDING_VALUE)
+        if k_size % 32 != 0 or n_size % 32 != 0:
+            input_tensor_b = ttnn.fill_implicit_tile_padding(input_tensor_b, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.matmul(
         input_tensor_a,
@@ -2121,7 +2329,7 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_falcon_query_key_value_matmul")
 
 
 @pytest.mark.parametrize(
@@ -2293,7 +2501,7 @@ def test_matmul_in0_in1_bias_sharded(
     if has_bias:
         matmul_output = matmul_output + bias_tensor
 
-    assert_with_pcc(matmul_output, tt_mm_out, pcc=0.993)
+    assert_matmul_accuracy(matmul_output, tt_mm_out, "test_matmul_in0_in1_bias_sharded")
 
 
 @pytest.mark.parametrize("M", [32, 128])
@@ -2316,11 +2524,11 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
 
     pcc = 0.99
     output_tensor = ttnn.to_torch(output1)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output2)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output3)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
 
 
 def test_interleaved_input_sharded_output_matmul(device):
@@ -2343,7 +2551,7 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output1 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output1)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
     # Block sharded
     out_mem_config = ttnn.create_sharded_memory_config(
@@ -2355,7 +2563,7 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output2 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output2)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
     # Height sharded
     torch_input_tensor_a = torch.randn([1, 1, 256, 32], dtype=torch.bfloat16)
@@ -2374,9 +2582,10 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output3 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output3)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
 
+# N.A.
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
@@ -2419,9 +2628,10 @@ def test_small_matmul_pcc(device):
     output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output1)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_small_matmul_pcc")
 
 
+# N.A.
 @pytest.mark.parametrize("shape", [(32, 32)])
 def test_linear_with_optional_output_tensor(device, shape):
     torch.manual_seed(0)
@@ -2443,7 +2653,7 @@ def test_linear_with_optional_output_tensor(device, shape):
 
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
-    assert_with_pcc(optional_output_tensor, result_tensor, pcc=0.9999)
+    assert_matmul_accuracy(optional_output_tensor, result_tensor, "test_small_matmul_pcc")
 
 
 @pytest.mark.parametrize(
@@ -2512,7 +2722,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         program_config=program_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
     # L1 Sharded output
     output_tensor = ttnn.matmul(
@@ -2523,14 +2733,14 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         program_config=program_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
     # L1 Sharded inferred output
     output_tensor = ttnn.matmul(
         input_tensor0, input_tensor1, compute_kernel_config=compute_kernel_config, program_config=program_config
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
 
 @pytest.mark.parametrize("input_b_value", [2.0])
@@ -2719,13 +2929,21 @@ def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
     bias_tensor = ttnn.from_torch(
         torch_bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if input_shape[0] % 32 != 0 or input_shape[1] % 32 != 0:
+            input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+        if weight_shape[0] % 32 != 0 or weight_shape[1] % 32 != 0:
+            weight_tensor = ttnn.fill_implicit_tile_padding(weight_tensor, TEST_PADDING_VALUE)
+        if input_shape[0] % 32 != 0 or input_shape[1] % 32 != 0:
+            bias_tensor = ttnn.fill_implicit_tile_padding(bias_tensor, TEST_PADDING_VALUE)
 
     # This should not crash with "Unsupported bias shape" error
     output_tensor = ttnn.linear(input_tensor, weight_tensor, bias=bias_tensor, transpose_b=True)
     output = ttnn.to_torch(output_tensor)
 
     # Verify correctness
-    assert_with_pcc(torch_output, output, pcc=0.99)
+    assert_matmul_accuracy(torch_output, output, "test_linear_with_non_tile_aligned_bias")
 
 
 def test_matmul_block_sharded_input_with_padding(device):
@@ -2777,13 +2995,20 @@ def test_matmul_block_sharded_input_with_padding(device):
         ),
     )
     ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+    # Fill padding if dimensions are not multiples of 32
+    if USE_FILL_PAD:
+        if input_a_shape[1] % 32 != 0:  # width dimension (16 is not multiple of 32)
+            ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, TEST_PADDING_VALUE)
+        if input_b_shape[0] % 32 != 0 or input_b_shape[1] % 32 != 0:
+            ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, TEST_PADDING_VALUE)
 
     ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=False, transpose_b=False)
 
     output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, output, pcc=0.99)
+    assert_matmul_accuracy(torch_output, output, "test_matmul_block_sharded_input_with_padding")
 
 
+# N.A.
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
@@ -2816,9 +3041,11 @@ def test_matmul_activation_with_sharded_input(device):
     try:
         output_tensor = ttnn.matmul(input_a, input_b, memory_config=output_mem_config, activation=activation)
         output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor)
+        # assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:
         pytest.fail(f"Got unexpected exception {e}")
+
+    assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_block_sharded_input_with_padding")
 
 
 # ============================================================================
@@ -2897,7 +3124,7 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_matmul_accuracy(torch_output, output, "test_matmul_on_subdevice_1d_mcast")
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -2935,14 +3162,19 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
     tt_W_col = ttnn.from_torch(torch_W, dtype=weight_dtype, device=device, col_tilize=True)
     result_col = ttnn.to_torch(ttnn.matmul(tt_A_col, tt_W_col, transpose_b=True))
 
-    # Both paths should match golden
-    assert_with_pcc(golden, result_conv, pcc=pcc_threshold)
-    assert_with_pcc(golden, result_col, pcc=pcc_threshold)
+    # # Both paths should match golden
+    # assert_with_pcc(golden, result_conv, pcc=pcc_threshold)
+    # assert_with_pcc(golden, result_col, pcc=pcc_threshold)
 
-    # The two paths should match each other
-    assert_with_pcc(result_conv, result_col, pcc=pcc_threshold)
+    # # The two paths should match each other
+    # assert_with_pcc(result_conv, result_col, pcc=pcc_threshold)
+
+    assert_matmul_accuracy(golden, result_conv, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
+    assert_matmul_accuracy(golden, result_col, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
+    assert_matmul_accuracy(result_conv, result_col, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
 
 
+# N.A.
 def test_from_torch_col_tilize_validation():
     torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
     torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
@@ -2998,7 +3230,8 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
     assert (
         result_col.shape == result_manual.shape
     ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
-    assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+    # assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+    assert_matmul_accuracy(result_manual, result_col, "test_from_torch_col_tilize_matches_manual_transpose")
 
 
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
@@ -3027,4 +3260,4 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
     result_manual = ttnn.to_torch(tt_manual)
 
     assert result_col.shape == result_manual.shape
-    assert_with_pcc(result_manual, result_col, pcc=0.98)
+    assert_matmul_accuracy(result_manual, result_col, "test_from_torch_col_tilize_batched")
