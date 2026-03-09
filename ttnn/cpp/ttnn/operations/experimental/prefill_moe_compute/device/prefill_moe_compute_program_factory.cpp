@@ -605,11 +605,19 @@ PrefillMoeComputeMeshFactory::create_at(
         auto local_recv_buf_addr = tensor_args.reduce_recv_buf->buffer()->address();
         auto remote_recv_buf_addr = local_recv_buf_addr;
 
+        // ---- Compute reduce hop count from dispatch target ----
+        uint32_t reduce_num_hops = 1;  // default: immediate neighbor
+        if (!attributes.dispatch_target_cols.empty()) {
+            uint32_t reduce_target_col = attributes.dispatch_target_cols[device_index];
+            reduce_num_hops =
+                (reduce_target_col > coord_col) ? (reduce_target_col - coord_col) : (coord_col - reduce_target_col);
+        }
+
         // ---- Fabric reduce kernel CT args ----
         std::vector<uint32_t> reduce_ct_args;
         TensorAccessorArgs(tensor_args.output.buffer()).append_to(reduce_ct_args);
         reduce_ct_args.push_back(num_output_tiles);
-        reduce_ct_args.push_back(1);  // NUM_HOPS = 1 (direct neighbor in 1xN mesh)
+        reduce_ct_args.push_back(reduce_num_hops);
 
         // ---- Create fabric_reduce kernel ----
         CoreRangeSet reduce_core_set(std::vector<CoreRange>{CoreRange(reduce_core_logical, reduce_core_logical)});
