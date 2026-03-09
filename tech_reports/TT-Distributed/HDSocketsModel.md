@@ -95,7 +95,7 @@ Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`
 
 The host writes data directly into the device's L1 FIFO through a TLB-mapped PCIe posted write. The device kernel polls for new pages and acknowledges consumption by writing `bytes_acked` back to host-pinned memory.
 
-![H2D HOST_PUSH sequence diagram](asdasd/host_push_diag.png)
+![H2D HOST_PUSH sequence diagram](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/host_push_diag.png?raw=true)
 
 *Steps #1--#3 run on the host and are nearly non-blocking: #1 reads `bytes_acked` from Pinned RAM locally (no PCIe), #2 and #3 are PCIe posted writes requiring no completion TLP -- the host does not wait for the device to acknowledge receipt before moving on. The L1 FIFO on the device is the ring buffer here; Pinned RAM plays no role in the data path. The host only stalls at #1 if the L1 FIFO is full. Step #4 is the device polling `bytes_sent` in L1 until a new page is detected. Step #5 is `socket_pop_pages`: the kernel advances the read pointer to mark the FIFO slot consumed -- no data copy occurs, the page is already in L1 from #2. Step #6 is the only device-to-host PCIe crossing: the kernel writes `bytes_acked` back to Pinned RAM via a NOC write, which unblocks the host at #1. The host CPU driving successive TLB writes (#2--#3 per page) is the throughput bottleneck.*
 
@@ -105,7 +105,7 @@ The host writes data to a pinned host buffer and updates `bytes_sent` in device 
 
 The sequence diagram below shows one full iteration of the per-page loop:
 
-![H2D DEVICE_PULL sequence diagram](asdasd/device_pull_diag.png)
+![H2D DEVICE_PULL sequence diagram](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/device_pull_diag.png?raw=true)
 
 *Steps #1--#3 run on the host and are nearly non-blocking: #1 reads `bytes_acked` directly from Pinned RAM (no PCIe), #2 memcpys the page into a FIFO slot in that same Pinned RAM (no PCIe), and #3 is a single TLB write to update `bytes_sent` in device L1. The FIFO ring buffer in Pinned RAM is the key structural difference from HOST\_PUSH: the host writes into it locally and the device fetches from it. The host immediately re-enters the loop for the next page; it only stalls at #1 if the FIFO is full. Steps #5--#6 are pipelined: the device issues multiple outstanding NOC reads from the FIFO slots before any completion arrives -- the NOC reads deposit data directly into L1 with no intermediate copy, which is the mechanism that lets DEVICE\_PULL exceed HOST\_PUSH throughput at large page sizes despite the per-TLP overhead of non-posted reads. Step #7 marks when all completions have landed and the page is fully in L1; `socket_pop_pages` advances the read pointer with no data copy, identical to HOST\_PUSH step #5. Step #8 is the only device-to-host PCIe crossing: the kernel writes `bytes_acked` back to Pinned RAM via a NOC write, which unblocks the host at #1.*
 
@@ -115,7 +115,7 @@ This mode frees the host CPU from driving the bulk DMA. PCIe read completions ad
 
 The device is always the initiator. It waits for FIFO space, issues chunked NOC writes into the pinned host FIFO, then notifies the host by writing `bytes_sent` to host-pinned memory. The host polls `bytes_sent`, copies data out, and writes `bytes_acked` back to release FIFO space.
 
-![D2H sequence diagram](asdasd/d2h_diag.png)
+![D2H sequence diagram](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/d2h_diag.png?raw=true)
 
 *The device and host run independent concurrent loops: the device loop covers #1--#4 and the host loop covers #5--#8, decoupled by the FIFO ring buffer in Pinned RAM. Steps #2 and #4 are the two device-to-host PCIe crossings per page: #2 writes the payload into the Pinned RAM FIFO slot, #4 writes `bytes_sent` to notify the host (both are PCIe posted writes, no completion required). Steps #5 and #6 are entirely host-local: the CPU polls `bytes_sent` from its own Pinned RAM and memcpys the FIFO slot into a user buffer without touching PCIe. Step #7 advances the read pointer locally. Step #8 is the only host-to-device PCIe crossing: the host writes `bytes_acked` to device L1 via a TLB write, which unblocks the device at #1 when the FIFO slot is free.*
 
@@ -448,30 +448,30 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 **Throughput vs page size at maximum FIFO size.** Each line is one total-transfer-data size. Shows how throughput saturates as pages get larger and as more data is transferred in a single run.
 
-![D2H Throughput vs Page Size - Gen 4 x8](asdasd/x8_d2h_throughput.png)
+![D2H Throughput vs Page Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_d2h_throughput.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![D2H Throughput vs Page Size - Gen 4 x1](asdasd/x1_d2h_throughput.png)
+![D2H Throughput vs Page Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_d2h_throughput.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs page size at maximum total-data size, spread across all FIFO sizes.** The shaded band shows the min-max range; solid line is median, dashed is mean. Use this to see how sensitive throughput is to FIFO size at each page size.
 
-![D2H Throughput Mean/Spread vs Page Size - Gen 4 x8](asdasd/x8_d2h_throughput_mean.png)
+![D2H Throughput Mean/Spread vs Page Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_d2h_throughput_mean.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![D2H Throughput Mean/Spread vs Page Size - Gen 4 x1](asdasd/x1_d2h_throughput_mean.png)
+![D2H Throughput Mean/Spread vs Page Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_d2h_throughput_mean.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs socket FIFO size at maximum total-data size.** Each line is one page size. The key chart for choosing a FIFO size: throughput climbs steeply then plateaus once the FIFO is large enough that the sender is never back-pressured.
 
-![D2H Throughput vs FIFO Size - Gen 4 x8](asdasd/x8_d2h_tp_vs_fifo.png)
+![D2H Throughput vs FIFO Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_d2h_tp_vs_fifo.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![D2H Throughput vs FIFO Size - Gen 4 x1](asdasd/x1_d2h_tp_vs_fifo.png)
+![D2H Throughput vs FIFO Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_d2h_tp_vs_fifo.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
@@ -480,10 +480,10 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 **p50 round-trip latency (us) vs page size.** The band shows min/median/max of p50 across all FIFO sizes. Log-log scale makes both the protocol-overhead floor (small pages) and the DMA-time slope (large pages) visible.
 
-![D2H Round-Trip Latency - Gen 4 x8](asdasd/x8_d2h_latency.png)
+![D2H Round-Trip Latency - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_d2h_latency.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![D2H Round-Trip Latency - Gen 4 x1](asdasd/x1_d2h_latency.png)
+![D2H Round-Trip Latency - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_d2h_latency.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
@@ -492,40 +492,40 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 **Throughput vs page size, `HOST_PUSH` vs `DEVICE_PULL` overlaid.** Measured at the maximum FIFO size and maximum total-data size (median across repeated configurations). The primary chart for comparing the two transfer modes head-to-head.
 
-![H2D Throughput vs Page Size - Gen 4 x8](asdasd/x8_h2d_throughput.png)
+![H2D Throughput vs Page Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_h2d_throughput.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![H2D Throughput vs Page Size - Gen 4 x1](asdasd/x1_h2d_throughput.png)
+![H2D Throughput vs Page Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_h2d_throughput.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs page size at maximum total-data size, `HOST_PUSH` and `DEVICE_PULL` in separate panels.** The shaded band shows min-max across all FIFO sizes; solid line is median, dashed is mean. Shows how much FIFO size matters for each mode.
 
-![H2D Throughput Mean/Spread vs Page Size - Gen 4 x8](asdasd/x8_h2d_throughput_mean.png)
+![H2D Throughput Mean/Spread vs Page Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_h2d_throughput_mean.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![H2D Throughput Mean/Spread vs Page Size - Gen 4 x1](asdasd/x1_h2d_throughput_mean.png)
+![H2D Throughput Mean/Spread vs Page Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_h2d_throughput_mean.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs socket FIFO size at maximum total-data size, `HOST_PUSH` (left) and `DEVICE_PULL` (right).** Each line is one page size. Shows whether the two modes need the same FIFO depth to reach their respective throughput plateaus.
 
-![H2D Throughput vs FIFO Size - Gen 4 x8](asdasd/x8_h2d_tp_vs_fifo.png)
+![H2D Throughput vs FIFO Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_h2d_tp_vs_fifo.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![H2D Throughput vs FIFO Size - Gen 4 x1](asdasd/x1_h2d_tp_vs_fifo.png)
+![H2D Throughput vs FIFO Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_h2d_tp_vs_fifo.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs page size at maximum FIFO size, `HOST_PUSH` (left) and `DEVICE_PULL` (right).** Each line is one total-transfer-data size. Analogous to the D2H throughput chart but split by mode so the convergence of throughput with transfer size is visible for each.
 
-![H2D Throughput at Max FIFO vs Page Size - Gen 4 x8](asdasd/x8_h2d_tp_at_max_fifo.png)
+![H2D Throughput at Max FIFO vs Page Size - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_h2d_tp_at_max_fifo.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![H2D Throughput at Max FIFO vs Page Size - Gen 4 x1](asdasd/x1_h2d_tp_at_max_fifo.png)
+![H2D Throughput at Max FIFO vs Page Size - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_h2d_tp_at_max_fifo.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
@@ -534,10 +534,10 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 **p50 round-trip latency (us) vs page size, `HOST_PUSH` (left) and `DEVICE_PULL` (right) in separate panels.** Each panel shows min/median/max of p50 across all FIFO sizes on a log-log scale. The primary chart for mode selection: lower latency at small pages favours `HOST_PUSH`; the gap narrows as page size grows.
 
-![H2D Round-Trip Latency - Gen 4 x8](asdasd/x8_h2d_latency.png)
+![H2D Round-Trip Latency - Gen 4 x8](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x8_h2d_latency.png?raw=true)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
-![H2D Round-Trip Latency - Gen 4 x1](asdasd/x1_h2d_latency.png)
+![H2D Round-Trip Latency - Gen 4 x1](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/x1_h2d_latency.png?raw=true)
 *Gen 4 x1 - low-bandwidth chip*
 
 ---
@@ -548,11 +548,11 @@ All 32 chips are swept by `BM_D2HSocketMultiChipThroughput` and `BM_H2DSocketMul
 
 **D2H  -  all chips x FIFO size (256 KB pages, 1 GB total):**
 
-![D2H Multi-Chip Throughput by Chip](asdasd/d2h_mc_throughput_bar.png)
+![D2H Multi-Chip Throughput by Chip](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/d2h_mc_throughput_bar.png?raw=true)
 
 **H2D (DEVICE\_PULL)  -  all chips x FIFO size (256 KB pages, 1 GB total):**
 
-![H2D Multi-Chip Throughput by Chip](asdasd/h2d_mc_throughput_bar.png)
+![H2D Multi-Chip Throughput by Chip](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/tech_reports/TT-Distributed/images/h2d_mc_throughput_bar.png?raw=true)
 
 ---
 

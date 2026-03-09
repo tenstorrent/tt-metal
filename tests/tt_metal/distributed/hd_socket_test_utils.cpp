@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hd_socket_test_utils.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -13,12 +14,11 @@ bool is_device_coord_mmio_mapped(const std::shared_ptr<MeshDevice>& mesh_device,
 }
 
 PhysicalSystemDescriptor make_physical_system_descriptor() {
-    return PhysicalSystemDescriptor(
-        MetalContext::instance().get_cluster().get_driver(),
+    auto& driver = const_cast<tt::umd::Cluster&>(*MetalContext::instance().get_cluster().get_driver());
+    return run_physical_system_discovery(
+        driver,
         MetalContext::instance().get_distributed_context_ptr(),
-        &MetalContext::instance().hal(),
-        MetalContext::instance().rtoptions(),
-        true);
+        MetalContext::instance().rtoptions().get_target_device());
 }
 
 std::shared_ptr<MeshBuffer> make_l1_mesh_buffer(MeshDevice* mesh_device, const CoreCoord& core, DeviceAddr size) {
