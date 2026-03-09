@@ -54,14 +54,13 @@ void kernel_main() {
     fill_cb_with_value(cb_id_one, one_u);
 
     // momentum
-    cb_id_momentum_obj.reserve_back(onetile);
-#ifdef FILL_WITH_VALUE_FLOAT
     float momentum_f = 0;
     std::memcpy(&momentum_f, &momentum, sizeof(float));  // Alternative for std::bit_cast
-    FILL_WITH_VALUE_FLOAT(cb_id_momentum, momentum_f);
-#endif
-#ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(cb_id_momentum, momentum);
+    cb_id_momentum_obj.reserve_back(onetile);
+#ifdef FILL_MOMENTUM_FP32
+    fill_with_val<1024, float>(cb_id_momentum, momentum_f);
+#else
+    fill_with_val_bfloat16(cb_id_momentum, momentum);
 #endif
     cb_id_momentum_obj.push_back(onetile);
 

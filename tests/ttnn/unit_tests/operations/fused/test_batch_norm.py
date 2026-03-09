@@ -90,37 +90,40 @@ def test_batch_norm_tests(
         if check_var:
             tt_updated_var = ttnn.to_torch(var_tensor)
 
+    # PyTorch batch_norm does not support mixed dtypes; use float32 reference then cast back
+    in_ref = in_data.float()
+    mean_ref = mean_data.float() if mean_data is not None else None
+    var_ref = var_data.float() if var_data is not None else None
+    weight_ref = weight_data.float() if weight_data is not None else None
+    bias_ref = bias_data.float() if bias_data is not None else None
     torch_result = torch.nn.functional.batch_norm(
-        input=in_data,
-        running_mean=mean_data,
-        running_var=var_data,
-        weight=weight_data,
-        bias=bias_data,
+        input=in_ref,
+        running_mean=mean_ref,
+        running_var=var_ref,
+        weight=weight_ref,
+        bias=bias_ref,
         training=training,
         eps=eps,
         momentum=momentum,
     )
+    torch_result = torch_result.to(tt_output.dtype)
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     if training:
         channels = input_shapes[1]
         if check_mean:
+            mean_compare = mean_ref.view(1, channels, 1, 1).to(mean_data.dtype)
             comp_BN_running_mean = compare_results_batch_norm(
-                [tt_updated_mean], [mean_data.view(1, channels, 1, 1)], stats=True
+                [tt_updated_mean], [mean_compare], stats=True
             )  # Check Updated running mean
         else:
-            if tt_updated_mean is None:
-                comp_BN_running_mean = True
-            else:
-                comp_BN_running_mean = False
+            comp_BN_running_mean = tt_updated_mean is None
         if check_var:
+            var_compare = var_ref.view(1, channels, 1, 1).to(var_data.dtype)
             comp_BN_running_var = compare_results_batch_norm(
-                [tt_updated_var], [var_data.view(1, channels, 1, 1)], stats=True
+                [tt_updated_var], [var_compare], stats=True
             )  # Check Updated running var
         else:
-            if tt_updated_var is None:
-                comp_BN_running_var = True
-            else:
-                comp_BN_running_var = False
+            comp_BN_running_var = tt_updated_var is None
         comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
     assert comp_BN_Output
 
