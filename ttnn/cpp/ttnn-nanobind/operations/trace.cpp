@@ -64,6 +64,21 @@ void py_module(nb::module_& mod) {
         [](MeshDevice* device, MeshTraceId trace_id) { ttnn::operations::trace::release_trace(device, trace_id); },
         nb::arg("mesh_device"),
         nb::arg("trace_id"));
+
+    mod.def(
+        "mark_allocations_safe",
+        [](MeshDevice* device) { ttnn::operations::trace::mark_allocations_safe(device); },
+        nb::arg("mesh_device"));
+
+    mod.def(
+        "mark_allocations_unsafe",
+        [](MeshDevice* device) { ttnn::operations::trace::mark_allocations_unsafe(device); },
+        nb::arg("mesh_device"));
+
+    mod.def(
+        "allocations_unsafe",
+        [](MeshDevice* device) { return ttnn::operations::trace::allocations_unsafe(device); },
+        nb::arg("mesh_device"));
 }
 
 } // namespace ttnn::operations::trace
