@@ -636,6 +636,10 @@ class DispatcherData:
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
             elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
                 kernel_offset = kernel_text_offset
+            elif block_type == "dram":
+                # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
+                # not at address 0 like Tensix kernels, so no base adjustment is needed.
+                kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
