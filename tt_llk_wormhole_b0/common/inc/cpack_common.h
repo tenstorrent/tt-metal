@@ -42,12 +42,12 @@ typedef struct
     std::uint32_t uncompress              : 1;
     std::uint32_t add_l1_dest_addr_offset : 1;
     std::uint32_t reserved_0              : 2;
-    std::uint32_t out_data_format         : 4;
-    std::uint32_t in_data_format          : 4;
-    std::uint32_t reserved_1              : 4;
-    std::uint32_t src_if_sel              : 1;
-    std::uint32_t pack_per_xy_plane       : 7;
-    std::uint32_t l1_src_addr             : 8;
+    std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT;
+    std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;
+    std::uint32_t reserved_1        : 4;
+    std::uint32_t src_if_sel        : 1;
+    std::uint32_t pack_per_xy_plane : 7;
+    std::uint32_t l1_src_addr       : 8;
     // word 3
     std::uint32_t downsample_mask                    : 16;
     std::uint32_t downsample_shift_count             : 3;
@@ -237,7 +237,7 @@ inline void set_packer_config(
     }
 
     config.f.exp_section_size =
-        ((pack_dst_format == to_underlying(DataFormat::Lf8)) || ((pack_dst_format & 0xF) == to_underlying(DataFormat::Int8)))
+        ((pack_dst_format == to_underlying(DataFormat::Lf8)) || (masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8)))
             ? 0
             : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
@@ -471,7 +471,7 @@ inline void reconfig_packer_data_format(
             TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP2);
         }
     }
-    else if ((pack_dst_format == to_underlying(DataFormat::Lf8)) || ((pack_dst_format & 0xF) == to_underlying(DataFormat::Int8)))
+    else if ((pack_dst_format == to_underlying(DataFormat::Lf8)) || (masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8)))
     {
         TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
         TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
@@ -866,8 +866,9 @@ inline bool are_packers_configured_correctly(
         const std::uint32_t pack_src_format_i         = config_vec[i].in_data_format;
         const std::uint32_t pack_dst_format_i         = config_vec[i].out_data_format;
         const std::uint32_t pack_reads_per_xy_plane_i = counters_vec[i].pack_reads_per_xy_plane;
-        const bool isDataFormatCorrect                = (pack_src_format_i == pack_src_format && pack_dst_format_i == pack_dst_format);
-        const bool isFaceRDimCorrect                  = (program_type == PackerProgramType::ProgramByTile) ? true : (pack_reads_per_xy_plane_i == face_r_dim);
+        const bool isDataFormatCorrect =
+            (pack_src_format_i == masked_data_format(pack_src_format)) && (pack_dst_format_i == masked_data_format(pack_dst_format));
+        const bool isFaceRDimCorrect = (program_type == PackerProgramType::ProgramByTile) ? true : (pack_reads_per_xy_plane_i == face_r_dim);
         if (!isDataFormatCorrect || !isFaceRDimCorrect)
         {
             return false;

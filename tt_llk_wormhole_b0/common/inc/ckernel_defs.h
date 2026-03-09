@@ -102,6 +102,20 @@ constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DE
 constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
 static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
+// Number of bits used to represent data format in unpacker/packer config.
+// The reason we keep only the bottom 4 bits is because the HW only has 4 bits to represent the dataformat.
+// Essentially, only using the bottom 4 bits when programming the HW dataformats is not a bug, because
+// the higher bits should be used to program other registers.
+// Also, uint32 does not require special handling because both int32 and uint32 are stored the same way in DEST
+// (just the highest bit is interpreted as a sign bit vs. a magnitude bit by the user). So when the packer
+// needs to read DEST in order to pack the data out it reads the same data either way and just moves 32bits in both cases.
+// Uint8 requires special handling because when int8 is put into DEST, the sign bit actually gets put
+// to the MSB of the 32bit container, rather than to bit 8. So for int8 the packer will read the 7 LSBs + 1 MSB,
+// but for uint8 the packer will read the 8 LSBs.
+constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 4;
+// Mask to extract data format bits
+constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
+
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
@@ -114,9 +128,14 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
+inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+{
+    return data_format & DATA_FORMAT_CONFIG_MASK;
+}
+
 constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
 {
-    switch (format & 0xF)
+    switch (masked_data_format(format))
     {
         case (to_underlying(DataFormat::Int32)):
         case (to_underlying(DataFormat::Float32)):
@@ -143,7 +162,7 @@ constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
 
 constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
 {
-    switch (format & 0xF)
+    switch (masked_data_format(format))
     {
         case (to_underlying(DataFormat::Bfp8)):
         case (to_underlying(DataFormat::Bfp8_b)):
@@ -159,7 +178,7 @@ constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
 
 constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
 {
-    switch (format & 0xF)
+    switch (masked_data_format(format))
     {
         case (to_underlying(DataFormat::Bfp8)):
         case (to_underlying(DataFormat::Bfp4)):
@@ -172,7 +191,7 @@ constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
 
 constexpr static bool IS_A_FORMAT(std::uint32_t format)
 {
-    switch (format & 0xF)
+    switch (masked_data_format(format))
     {
         case (to_underlying(DataFormat::Lf8)):
         case (to_underlying(DataFormat::Float16)):
@@ -187,7 +206,7 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
 
 constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
-    switch (static_cast<DataFormat>(format & 0xF))
+    switch (static_cast<DataFormat>(masked_data_format(format)))
     {
         case DataFormat::Int32:
         case DataFormat::Float32:

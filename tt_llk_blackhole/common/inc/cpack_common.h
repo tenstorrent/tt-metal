@@ -32,12 +32,12 @@ typedef struct
     // word 1
     std::uint32_t l1_dest_addr : 32;
     // word 2
-    std::uint32_t uncompress                          : 1;
-    std::uint32_t add_l1_dest_addr_offset             : 1;
-    std::uint32_t disable_pack_zero_flag              : 1;
-    std::uint32_t reserved_0                          : 1;
-    std::uint32_t out_data_format                     : 4;
-    std::uint32_t in_data_format                      : 4;
+    std::uint32_t uncompress              : 1;
+    std::uint32_t add_l1_dest_addr_offset : 1;
+    std::uint32_t disable_pack_zero_flag  : 1;
+    std::uint32_t reserved_0              : 1;
+    std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT;
+    std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;
     std::uint32_t dis_shared_exp_assembler            : 1;
     std::uint32_t auto_set_last_pacr_intf_sel         : 1;
     std::uint32_t enable_out_fifo                     : 1;
@@ -217,8 +217,8 @@ inline void set_packer_config(
     // Get pointer to registers for current state ID
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
 
-    const std::uint32_t pack_output_src_format = static_cast<std::uint32_t>(pack_src_format) & 0xF;
-    const std::uint32_t pack_output_dst_format = static_cast<std::uint32_t>(pack_dst_format) & 0xF;
+    const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
+    const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
 
     // Set packer config
     pack_config_u config;
@@ -319,8 +319,8 @@ inline void reconfig_packer_data_format(
     const bool partial_face)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const std::uint32_t pack_output_src_format = static_cast<std::uint32_t>(pack_src_format) & 0xF;
-    const std::uint32_t pack_output_dst_format = static_cast<std::uint32_t>(pack_dst_format) & 0xF;
+    const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
+    const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
 
     // Configure packers
     pack_config_u config;
@@ -423,7 +423,7 @@ inline void configure_pack(
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t pack_output_src_format = static_cast<std::uint32_t>(pack_src_format) & 0xF;
+    const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
     set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
 
@@ -693,8 +693,9 @@ inline bool are_packers_configured_correctly(
         const std::uint32_t pack_src_format_i         = config_vec[i].in_data_format;
         const std::uint32_t pack_dst_format_i         = config_vec[i].out_data_format;
         const std::uint32_t pack_reads_per_xy_plane_i = counters_vec[i].pack_reads_per_xy_plane;
-        const bool isDataFormatCorrect                = (pack_src_format_i == pack_src_format && pack_dst_format_i == pack_dst_format);
-        const bool isFaceRDimCorrect                  = (program_type == PackerProgramType::ProgramByTile) ? true : (pack_reads_per_xy_plane_i == face_r_dim);
+        const bool isDataFormatCorrect =
+            (pack_src_format_i == masked_data_format(pack_src_format)) && (pack_dst_format_i == masked_data_format(pack_dst_format));
+        const bool isFaceRDimCorrect = (program_type == PackerProgramType::ProgramByTile) ? true : (pack_reads_per_xy_plane_i == face_r_dim);
         if (!isDataFormatCorrect || !isFaceRDimCorrect)
         {
             return false;
