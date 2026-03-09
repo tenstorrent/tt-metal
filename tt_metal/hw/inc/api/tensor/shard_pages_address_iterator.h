@@ -86,7 +86,7 @@ public:
         }
 
         do {
-            current_noc_addr += accessor.page_size;
+            current_noc_addr += accessor.get_aligned_page_size();
             current_page_id_in_shard++;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;
@@ -110,7 +110,7 @@ public:
         }
 
         do {
-            current_noc_addr += steps * accessor.page_size;
+            current_noc_addr += steps * accessor.get_aligned_page_size();
             current_page_id_in_shard += steps;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;

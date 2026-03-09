@@ -837,7 +837,11 @@ struct CatAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            fill_zeros_async(dst_addr, first_reader.page_size);
+            if constexpr (has_get_aligned_page_size_v<FirstReaderType>) {
+                fill_zeros_async(dst_addr, first_reader.get_aligned_page_size());
+            } else {
+                fill_zeros_async(dst_addr, first_reader.page_size);
+            }
             return 1;
         }
     }
@@ -874,7 +878,11 @@ struct PaddedAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            fill_zeros_async(dst_addr, reader.page_size);
+            if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+                fill_zeros_async(dst_addr, reader.get_aligned_page_size());
+            } else {
+                fill_zeros_async(dst_addr, reader.page_size);
+            }
             return 1;
         }
     }

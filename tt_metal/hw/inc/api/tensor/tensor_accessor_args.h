@@ -39,8 +39,12 @@ struct TensorAccessorArgs {
         !is_sharded || !num_banks_is_crta || (num_banks_is_crta && bank_coords_is_crta),
         "If num_banks is runtime, bank_coords must also be runtime");
 
+    // aligned_page_size is always at CTA_OFFSET + 1
+    static constexpr uint32_t AlignedPageSizeCTAOffset = CTA_OFFSET + 1;
+    static constexpr uint32_t AlignedPageSize = get_compile_time_arg_val(AlignedPageSizeCTAOffset);
+
     // Calculate offsets for compile-time arguments
-    static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 1;
+    static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 2;
     static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (rank_is_crta ? 0 : 1);
 
     static constexpr uint32_t RankCT = [] {
@@ -69,7 +73,7 @@ struct TensorAccessorArgs {
     static constexpr uint32_t BankCoordsCTAOffset = ShardShapeCTAOffset + (shard_shape_is_crta ? 0 : RankCT);
 
     static constexpr uint32_t NumArgsCT =
-        is_sharded ? (BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET) : 1;
+        is_sharded ? (BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET) : 2;
 
 private:
     uint32_t crta_offset_rt_;
@@ -86,6 +90,8 @@ public:
             return crta_offset_rt_;
         }
     }
+
+    static constexpr uint32_t get_aligned_page_size() { return AlignedPageSize; }
 
     constexpr uint32_t rank_crta_offset() const { return crta_offset(); }
     constexpr uint32_t num_banks_crta_offset() const { return crta_offset() + rank_is_crta; }
