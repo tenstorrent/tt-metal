@@ -264,7 +264,7 @@ class DecoderBlock:
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for ctx in decoder_per_device_contexts:
             unified_kernel = UnifiedKernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder/kernels/decoder_kernel.cpp",
+                kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,
                 ncrisc_compile_time_args=ctx["ncrisc_compile_time_args"],
                 brisc_compile_time_args=ctx["brisc_compile_time_args"],

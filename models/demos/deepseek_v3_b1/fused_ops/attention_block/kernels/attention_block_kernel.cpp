@@ -894,8 +894,9 @@ void kernel_main() {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
-        get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(0),   // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),      // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(15),  // rmsnorm2_gamma_addr
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -941,6 +942,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("qrope_cos_interm_cb"),
         get_named_compile_time_arg_val("qrope_sin_interm_cb"),
         get_named_compile_time_arg_val("qrope_output_cb"),
+        get_common_arg_val<uint32_t>(14),  // qrope_trans_mat_addr
     };
 
     // CreateQHeads compute args (tilization on SDPA input cores)
@@ -979,8 +981,9 @@ void kernel_main() {
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_common_arg_val<uint32_t>(0),  // epsilon
-        get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
+        get_common_arg_val<uint32_t>(0),   // epsilon
+        get_common_arg_val<float>(3),      // kv_scalar (1/sqrt(512))
+        get_common_arg_val<uint32_t>(16),  // kv_rmsnorm_gamma_addr
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::
@@ -1006,6 +1009,7 @@ void kernel_main() {
         .cos_interm_cb = krope_cos_interm_cb,
         .sin_interm_cb = krope_sin_interm_cb,
         .out_cb = krope_output_cb,
+        .trans_mat_address_override = get_common_arg_val<uint32_t>(14),
     };
 
     deepseek_b1_ops::KVCacheUpdate::ComputeArgs kv_cache_update_args{
@@ -1140,9 +1144,9 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
 
             // RMSNorm2 gamma buffer (3 tiles of 16x32)
-            constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
-            constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
-            unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
+            // constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
+            // constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
+            // unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
         }
         // if constexpr (Core::is_qnope_core) {
         //     // Matmul3 CB indices and parameters from named compile-time args
@@ -1154,22 +1158,22 @@ void kernel_main() {
         //     unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
         // }
 
-        if constexpr (Core::is_qrope_core) {
-            constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
-            unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
-        }
+        // if constexpr (Core::is_qrope_core) {
+        //     constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
+        //     unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
+        // }
 
-        if constexpr (Core::is_kv_rmsnorm_core) {
-            // RMSNorm gamma (sharded weights)
-            constexpr uint32_t kv_rmsnorm_gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
-            constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
-            unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
-        }
+        // if constexpr (Core::is_kv_rmsnorm_core) {
+        //     // RMSNorm gamma (sharded weights)
+        //     constexpr uint32_t kv_rmsnorm_gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
+        //     constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
+        //     unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
+        // }
 
-        if constexpr (Core::is_krope_core) {
-            constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
-            unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
-        }
+        // if constexpr (Core::is_krope_core) {
+        //     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+        //     unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
+        // }
 
         // if constexpr (Core::is_matmul4_core) {
         //     constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
