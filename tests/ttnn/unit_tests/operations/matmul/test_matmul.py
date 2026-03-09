@@ -11,7 +11,7 @@ import math
 import ttnn
 
 from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 from ttnn.operations.activations import get_golden_function_for_activation
 
 
@@ -1890,8 +1890,10 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
-        (1, 1, 2, 3, 4),
+        (2, 2, 2, 3, 4),
         (1, 1, 1024, 64, 512),
+        (1, 1, 512, 8, 256),
+        (1, 1, 583, 7, 227),
     ],
 )
 @pytest.mark.parametrize("transpose_b", [True, False])
@@ -1916,6 +1918,8 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_allclose(torch_output_tensor, output, 0.32, 0.016)
+    assert_with_ulp(torch_output_tensor, output, 3)
 
 
 @pytest.mark.parametrize(
