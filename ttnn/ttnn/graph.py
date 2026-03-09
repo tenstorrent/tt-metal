@@ -303,7 +303,7 @@ def pretty_format(captured_graph):
         elif node["node_type"] == "function_end":
             node_string = format_string.format("Function End:   " + node["params"]["name"])
         elif node["node_type"] == "tensor":
-            node_string = format_string.format("Add Tensor: " + node["params"]["tensor_id"])
+            node_string = format_string.format("Add Tensor: " + str(node["params"]["tensor_id"]))
         elif node["node_type"] == "circular_buffer_allocate":
             node_string = format_string.format("Allocate Circular Buffer")
         elif node["node_type"] == "circular_buffer_deallocate_all":

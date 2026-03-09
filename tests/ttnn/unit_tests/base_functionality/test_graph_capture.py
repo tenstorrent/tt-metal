@@ -24,10 +24,11 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     captured_graph = ttnn.graph.end_graph_capture()
     calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
-    assert "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
+    assert "ttnn.from_torch" in calltrace or "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
-    assert captured_graph[1]["params"]["name"] == "ttnn::convert_python_tensor_to_tt_tensor"
+    first_op = captured_graph[1]["params"]["name"]
+    assert first_op in ("ttnn.from_torch", "ttnn::convert_python_tensor_to_tt_tensor")
     assert captured_graph[-1]["node_type"] == "capture_end"
 
     ttnn.graph.pretty_print(captured_graph)
@@ -629,9 +630,9 @@ def test_full_tensor_info_captured(device, mode):
 
                 # For device tensors, check device-specific fields
                 if "device_id" in params:
-                    assert isinstance(params["device_id"], str)
+                    assert isinstance(params["device_id"], (int, str))
                     assert "address" in params
-                    assert isinstance(params["address"], str)
+                    assert isinstance(params["address"], (int, str))
 
     assert found_tensor_with_full_info, "Expected at least one tensor with full info"
 
