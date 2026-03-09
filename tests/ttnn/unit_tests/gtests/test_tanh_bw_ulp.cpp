@@ -72,12 +72,18 @@ constexpr uint16_t BF16_MANTISSA_MASK = 0x007F;
 constexpr uint16_t BF16_SIGN_MASK = 0x8000;
 constexpr uint16_t BF16_POS_INF = 0x7F80;
 constexpr uint16_t BF16_NEG_INF = 0xFF80;
+constexpr uint16_t BF16_POS_ZERO = 0x0000;
+constexpr uint16_t BF16_NEG_ZERO = 0x8000;
+constexpr uint16_t BF16_MAGNITUDE_MASK = 0x7FFF;  // Sign bit cleared
+constexpr uint16_t BF16_ALL_BITS = 0xFFFF;
+constexpr uint16_t BF16_EXP_FIELD_MASK = 0xFF;  // 8-bit exponent after shifting
+constexpr uint32_t BF16_RNE_BIAS = 0x7FFF;      // Round-to-nearest-even bias
 
 inline uint16_t float_to_bf16_bits(float f) {
     uint32_t f32_bits;
     std::memcpy(&f32_bits, &f, sizeof(float));
     // Round-to-nearest-even (RNE): add rounding bias before truncating
-    uint32_t rounding_bias = ((f32_bits >> 16) & 1) + 0x7FFF;
+    uint32_t rounding_bias = ((f32_bits >> 16) & 1) + BF16_RNE_BIAS;
     f32_bits += rounding_bias;
     return static_cast<uint16_t>(f32_bits >> 16);
 }
@@ -89,14 +95,16 @@ inline float bf16_bits_to_float(uint16_t bits) {
     return f;
 }
 
-inline bool is_bf16_denormal(uint16_t bits) { return ((bits >> 7) & 0xFF) == 0 && (bits & BF16_MANTISSA_MASK) != 0; }
+inline bool is_bf16_denormal(uint16_t bits) {
+    return ((bits >> 7) & BF16_EXP_FIELD_MASK) == 0 && (bits & BF16_MANTISSA_MASK) != 0;
+}
 
 inline uint16_t bf16_daz_normalize(uint16_t bits) {
     if (is_bf16_denormal(bits)) {
-        return 0x0000;
+        return BF16_POS_ZERO;
     }
-    if (bits == 0x8000) {
-        return 0x0000;  // -0 -> +0
+    if (bits == BF16_NEG_ZERO) {
+        return BF16_POS_ZERO;  // -0 -> +0
     }
     return bits;
 }
@@ -105,9 +113,9 @@ inline float bf16_daz_normalize(float f) { return bf16_bits_to_float(bf16_daz_no
 
 inline int32_t bf16_value_order_index_daz(uint16_t bits) {
     bits = bf16_daz_normalize(bits);
-    uint16_t exp = (bits >> 7) & 0xFF;
+    uint16_t exp = (bits >> 7) & BF16_EXP_FIELD_MASK;
     uint16_t mantissa = bits & BF16_MANTISSA_MASK;
-    if (exp == 0xFF && mantissa != 0) {
+    if (exp == BF16_EXP_FIELD_MASK && mantissa != 0) {
         return -1;  // NaN
     }
     if (bits == BF16_POS_INF) {
@@ -116,11 +124,11 @@ inline int32_t bf16_value_order_index_daz(uint16_t bits) {
     if (bits == BF16_NEG_INF) {
         return -1;
     }
-    if (bits == 0x0000) {
+    if (bits == BF16_POS_ZERO) {
         return 32640;  // Zero
     }
     if (bits & BF16_SIGN_MASK) {
-        return 0x7FFF - (bits & 0x7FFF);
+        return BF16_MAGNITUDE_MASK - (bits & BF16_MAGNITUDE_MASK);
     }
     return 32640 + bits - BF16_MANTISSA_MASK;
 }
@@ -142,7 +150,7 @@ inline int32_t ulp_distance_bf16_daz(float a, float b) {
 inline std::vector<float> all_valid_bf16_values() {
     std::vector<float> values;
     values.reserve(65536);
-    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+    for (uint32_t bits = 0; bits <= BF16_ALL_BITS; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
         if ((bf16_bits & BF16_EXP_MASK) == BF16_EXP_MASK) {
             continue;  // NaN/Inf
