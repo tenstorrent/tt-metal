@@ -1027,9 +1027,7 @@ if constexpr (!Core::skip_ccl) {
         // ====================================================================
         {
             DeviceZoneScopedN("FLASH_MLA");
-            deepseek_b1_ops::FlashMLADecode::
-                Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>
-                    flash_mla;
+            deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core> flash_mla;
             flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
             flash_mla(flash_mla_args);
         }
