@@ -770,9 +770,9 @@ static void sdpa_inner_loop_step(
         }
 
         // Ring mask: L1-accumulate partial-tile mask onto cb_qkt_im for this row group.
-        // Full-tile padding masking is no longer needed: reduce is narrowed to active_Sk,
-        // sub_exp only processes active_Sk tiles, and V matmul is narrowed to v_matmul_dim.
-        // Only partial tiles (where some columns within a tile are padding) still need masking.
+        // Full-tile padding handled by active_Sk narrowing (reduce/sub_exp/V skip padded tiles),
+        // but num_padded must still reflect the actual count so boundary_col places the partial
+        // mask at active_Sk-1 instead of Sk_chunk_t-1.
         if constexpr (use_ring_mask) {
             if (apply_mask && lw_partial_tile_idx > 0) {
                 copy_tile_to_dst_init_short(cb_mask_in);
@@ -781,8 +781,8 @@ static void sdpa_inner_loop_step(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
-                    0,     // no full-tile padding needed
-                    true,  // has_partial — guaranteed by outer guard (lw_partial_tile_idx > 0)
+                    Sk_chunk_t - active_Sk,  // padded tile count for correct boundary_col
+                    true,                    // has_partial — guaranteed by outer guard (lw_partial_tile_idx > 0)
                     lw_partial_tile_idx,
                     sbh);
                 PACK((llk_pack_reconfig_l1_acc(0)));
