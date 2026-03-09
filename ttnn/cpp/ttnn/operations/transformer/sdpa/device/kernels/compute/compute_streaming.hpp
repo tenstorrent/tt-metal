@@ -452,10 +452,10 @@ void normalize_row_streaming(
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
-            MATH((recip_tile<false>(0)));
+            MATH((recip_tile<false>(0, (int)VectorMode::C)));
 #else
             recip_tile_init();
-            MATH((recip_tile(0)));
+            MATH((recip_tile_first_column(0)));
 #endif
             tile_regs_commit();
 
