@@ -173,13 +173,14 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
+          TEST_SKU: ${{ matrix.test-group.sku }}
         run: |
           # For single-card wormhole tests, source the test functions
-          if [[ "${{ matrix.test-group.sku }}" =~ ^wh_n150 || "${{ matrix.test-group.sku }}" =~ ^wh_n300 ]]; then
+          if [[ "$TEST_SKU" =~ ^wh_n150 || "$TEST_SKU" =~ ^wh_n300 ]]; then
             source tests/scripts/single_card/run_single_card_demo_tests.sh
           fi
           # For T3000 tests, source the test functions
-          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" || "${{ matrix.test-group.sku }}" == "wh_llmbox_perf_release" ]]; then
+          if [[ "$TEST_SKU" == "wh_llmbox_perf" || "$TEST_SKU" == "wh_llmbox_perf_release" ]]; then
             source tests/scripts/t3000/run_t3000_demo_tests.sh
           fi
           # Execute the command
