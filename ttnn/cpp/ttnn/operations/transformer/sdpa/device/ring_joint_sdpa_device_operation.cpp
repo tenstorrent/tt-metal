@@ -233,23 +233,23 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     stats_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
 
     return {
-        .output = TensorSpec(
+        TensorSpec(
             input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        .joint_output = TensorSpec(
+        TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        .stats_output = TensorSpec(
-            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
-        .output = create_device_tensor(output_specs.output, tensor_args.input_q.device()),
-        .joint_output = create_device_tensor(output_specs.joint_output, tensor_args.joint_q.device()),
-        .stats_output = create_device_tensor(output_specs.stats_output, tensor_args.input_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.joint_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 
@@ -279,8 +279,7 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     );
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<RingJointSDPAResult>
-RingJointSDPADeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {
         tensor_args.input_q,
@@ -292,12 +291,13 @@ RingJointSDPADeviceOperation::create_op_performance_model(
         tensor_args.gathered_k,
         tensor_args.gathered_v};
 
-    auto arch = output_tensors.output.storage_type() == StorageType::DEVICE ? output_tensors.output.device()->arch()
-                                                                            : ttnn::GetDefaultDevice()->arch();
+    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
 
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "RingJointSDPA perf model does not support arch '{}'", enchantum::to_string(arch));
-        return operation::OpPerformanceModelGeneral<RingJointSDPAResult>(input_tensors, output_tensors, 0);
+        return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, 0);
     }
 
     const auto& q_shape = tensor_args.input_q.logical_shape();
@@ -305,7 +305,7 @@ RingJointSDPADeviceOperation::create_op_performance_model(
     const auto& v_shape = tensor_args.gathered_v.logical_shape();
     const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
 
-    CoreCoord grid = output_tensors.output.device()->compute_with_storage_grid_size();
+    CoreCoord grid = output_tensor.device()->compute_with_storage_grid_size();
     MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     const uint32_t B = q_shape[0];
@@ -325,7 +325,7 @@ RingJointSDPADeviceOperation::create_op_performance_model(
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         B, NQH, cat_Sq, cat_Sk, DH, DV, false, fidelity, grid.x * grid.y);
 
-    return operation::OpPerformanceModelGeneral<RingJointSDPAResult>(input_tensors, output_tensors, ideal_cycles);
+    return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
 
 }  // namespace ttnn::prim
