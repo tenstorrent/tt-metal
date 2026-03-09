@@ -622,7 +622,7 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
 
     if not _comp_nonfinite(golden, calculated):
         return False, "Tensors are not finite at the same positions"
-    # nonfinite elments can intefere with ULP error calculation
+    # nonfinite elements can interfere with ULP error calculation
     # To avoid this, replace nan, +inf, -inf with 0
     # (we have already checked that both tensors have the same nonfinite elements)
     mask_finite = ~torch.isfinite(golden)
@@ -1044,9 +1044,7 @@ def is_watcher_enabled():
 
 def is_llk_assert_enabled():
     llk_assert = os.environ.get("TT_METAL_LLK_ASSERTS")
-    watcher = os.environ.get("TT_METAL_WATCHER")
-    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
-    return ((watcher is not None and watcher != "") or lightweight_asserts == "1") and llk_assert == "1"
+    return llk_assert == "1"
 
 
 def is_n300():

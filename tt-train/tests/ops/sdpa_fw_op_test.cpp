@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -25,6 +24,10 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/generators/xbuilder.hpp"

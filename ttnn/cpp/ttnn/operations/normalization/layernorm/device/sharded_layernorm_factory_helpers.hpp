@@ -32,10 +32,12 @@ struct CoreRanges;
 
 void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt);
 
-std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
+std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
+get_cb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     bool fp32_dest_acc_en);
 
 //////////////////////////////////////////////////////////////////////////////
@@ -149,6 +151,7 @@ struct CBSizeParams {
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
     uint32_t beta_single_tile_size = 0;
+    uint32_t stats_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
     uint32_t reciprocal_CB_size_bytes = 0;
     uint32_t num_rows_per_all_to_all_worker = 0;
@@ -322,6 +325,7 @@ struct CBConfig {
     tt::DataFormat out_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat stats_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
     // Tile sizes
@@ -330,6 +334,7 @@ struct CBConfig {
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
     uint32_t beta_single_tile_size = 0;
+    uint32_t stats_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
 
     // Buffers

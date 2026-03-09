@@ -17,7 +17,7 @@ namespace tt::tt_metal::experimental {
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  * | address        | Address of the semaphore to create                     | uint64_t                                                  |              | Yes      |

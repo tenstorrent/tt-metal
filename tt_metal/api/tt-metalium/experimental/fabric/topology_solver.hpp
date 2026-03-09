@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
@@ -87,6 +88,7 @@ private:
 };
 
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph);
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraphDescriptor& mgd);
 
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType cluster_type,

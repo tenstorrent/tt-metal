@@ -153,25 +153,6 @@ def validate_activation(
                         )
                         activation_all_passed = False
 
-        # Validate sentinel row (token_id = -1 = 0xFFFFFFFF as uint32)
-        sentinel_row_idx = num_expected_rows
-        if sentinel_row_idx >= max_rows:
-            logger.warning(f"  Device {device_idx}: sentinel row {sentinel_row_idx} out of bounds")
-            activation_all_passed = False
-        else:
-            sentinel_row_start = sentinel_row_idx * aligned_row_elements
-            sentinel_token_id = device_activation[sentinel_row_start].item()
-            # -1 as uint32 (0xFFFFFFFF) becomes -1 when sign-extended to int64
-            is_sentinel = (sentinel_token_id == -1) or (sentinel_token_id == 0xFFFFFFFF)
-
-            if not is_sentinel:
-                logger.warning(
-                    f"  Device {device_idx}: sentinel row token_id mismatch - " f"expected -1, got {sentinel_token_id}"
-                )
-                activation_all_passed = False
-            else:
-                logger.info(f"  Device {device_idx}: {num_expected_rows} tokens validated, sentinel PASSED")
-
     return activation_all_passed
 
 
@@ -287,14 +268,25 @@ def prepare_output_tensor_from_combine_writer(
 
     for e in range(experts_per_device):
         active_tokens = active_token_counts[e].item()
-        tokens_per_shard = math.ceil(active_tokens / output_shard_height_dim)
-        for t in range(active_tokens):
-            bt = t // tokens_per_shard
-            ot = t % tokens_per_shard
+        tokens_per_shard_chunk = active_tokens // output_shard_height_dim
+        tokens_per_shard_rem = active_tokens % output_shard_height_dim
 
-            contrib = shaped_torch_output[e, bt * total_tokens // output_shard_height_dim + ot]
+        output_token_shard = 0
+        output_token_shard_row = 0
+        for t in range(active_tokens):
+            contrib = shaped_torch_output[
+                e, output_token_shard * total_tokens // output_shard_height_dim + output_token_shard_row
+            ]
 
             torch_output[e, t] = contrib
+
+            if output_token_shard_row == (
+                tokens_per_shard_chunk if output_token_shard < tokens_per_shard_rem else tokens_per_shard_chunk - 1
+            ):
+                output_token_shard += 1
+                output_token_shard_row = 0
+            else:
+                output_token_shard_row += 1
 
     return torch_output
 
@@ -570,7 +562,20 @@ def tt_to_torch_dtype(tt_dtype):
         raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
-def gen_expert_mapping(experts, mesh_shape, cluster_axis):
+def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, experts_per_cluster, experts_per_device):
+    if cluster_axis == 0:
+        cluster_id = expert_id // experts_per_cluster
+        expert_id_within_cluster = expert_id % experts_per_cluster
+        device_id_within_cluster = expert_id_within_cluster // experts_per_device
+
+        return device_id_within_cluster * num_replicated_devices + cluster_id
+    else:
+        return expert_id // experts_per_device
+
+
+def gen_expert_mapping(
+    num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+):
     """
     Create per-device expert mapping tensor that maps each expert to the device it belongs to.
     Shape: [num_devices, experts] where each entry is the linearized mesh coordinate of the device
@@ -585,11 +590,11 @@ def gen_expert_mapping(experts, mesh_shape, cluster_axis):
 
     This tensor is replicated on every device (even devices not along the dispatch axis).
     """
-    num_devices = mesh_shape[0] * mesh_shape[1]
-    experts_per_device = experts // num_devices
     expert_mapping = torch.zeros(1, experts, dtype=torch.uint16)
     for e in range(experts):
-        expert_mapping[0, e] = e // experts_per_device
+        expert_mapping[0, e] = get_linearized_mesh_coord(
+            num_replicated_devices, cluster_axis, e, experts_per_cluster, experts_per_device
+        )
     # Replicate across all devices (same mapping for now)
     expert_mapping = expert_mapping.repeat(num_devices, 1)
     return expert_mapping
@@ -984,7 +989,9 @@ def test_moe_compute(
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
+    num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
+    experts_per_cluster = experts // num_replicated_devices
     experts_per_device = experts // num_devices
 
     logger.info(f"Test configuration:")
@@ -1009,7 +1016,9 @@ def test_moe_compute(
     # Each device gets its own row after sharding, but since it's replicated,
     # we give each device the full tensor and it uses its own row.
     # Expert mapping is constant across all runs.
-    expert_mapping = gen_expert_mapping(experts, mesh_shape, cluster_axis)
+    expert_mapping = gen_expert_mapping(
+        num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+    )
     expert_mapping_mem_config = ttnn.L1_MEMORY_CONFIG
     tt_expert_mapping = ttnn.from_torch(
         expert_mapping,

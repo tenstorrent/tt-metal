@@ -5,9 +5,11 @@
 """Python modules package for ttml."""
 
 # C++ bindings from _ttml.modules
-from .._ttml.modules import InferenceMode, LinearLayer, ModuleBase, RunMode
+from .._ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
+from .linear import LinearLayer
+from .lora import LoraConfig, LoraLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
@@ -16,6 +18,9 @@ __all__ = [
     "Buffer",
     "InferenceMode",
     "LinearLayer",
+    "LoraConfig",
+    "LoraLinear",
+    "LoraModel",
     "ModuleBase",
     "ModuleDict",
     "ModuleList",
