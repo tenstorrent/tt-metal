@@ -9,7 +9,7 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
@@ -86,14 +86,18 @@ def test_crossattnup(
     pcc,
     debug_mode,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_unet_location,
     reset_seeds,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()
