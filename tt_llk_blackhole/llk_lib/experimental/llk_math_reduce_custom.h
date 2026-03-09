@@ -75,12 +75,19 @@ inline void reduce_max_row_configure_addrmod()
         .set(ADDR_MOD_3);
 }
 
-inline void reduce_max_row_configure_addrmod_reinit()
+// Minimal reinit: ADDR_MOD_1 + ADDR_MOD_2 (clobbered by matmul) and ADDR_MOD_6
+// (clobbered by sub_exp runtime). Skips ADDR_MOD_3 which is preserved from the
+// previous reduce (matmul doesn't touch 3, sub_exp custom doesn't touch 3,
+// copy_tile_custom_v2 doesn't touch 3).
+inline void reduce_max_row_configure_addrmod_reinit_minimal()
 {
-    // ADDR_MOD_1: Face-to-face advancement mode used with GMPOOL operations
-    // Increments SrcA by 16 rows to advance to the next face (F0->F1, F2->F3)
-    // Clears SrcB counter to prepare for subsequent MOVD2B operations that write transposed results
-    // This allows processing pairs of faces (F0+F1, then F2+F3) efficiently
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb     = {.incr = 0, .clr = 0, .cr = 0},
+        .dest     = {.incr = 0, .clr = 0, .cr = 0},
+        .fidelity = {.incr = 0, .clr = 1}}
+        .set(ADDR_MOD_6);
+
     addr_mod_t {
         .srca = {.incr = 16, .clr = 0, .cr = 1},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
@@ -88,10 +95,6 @@ inline void reduce_max_row_configure_addrmod_reinit()
     }
         .set(ADDR_MOD_1);
 
-    // ADDR_MOD_2: Sequential 4-row write mode used with MOVB2D operations
-    // Increments DEST by 4 rows after each operation (writes to rows 0, 4, 8, 12 within a face)
-    // This distributes the transposed 1x16 reduction result across the first face (rows 0-15)
-    // by writing 4 rows to every 4th row, matching the tile face layout
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
@@ -198,6 +201,31 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
     static constexpr std::uint32_t end_op_1 = TT_OP_REPLAY(0, 2, 0, 0);
     // Clear A valid bit to get another operand tile (scaler face stays the same)
     static constexpr std::uint32_t end_op_2 = TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+
+    ckernel::ckernel_template mop_template(outer_loop, inner_loop, inner_loop_op);
+    mop_template.set_start_op(start_op);
+    mop_template.set_end_ops(end_op_1, end_op_2);
+    mop_template.program();
+}
+
+/**
+ * Reprograms only the MOP registers for reduce_max_row, without re-recording the replay buffer.
+ * The replay buffer at positions 0-14 must still contain the reduce GMPOOL+transpose sequence
+ * from the original _llk_math_reduce_block_max_row_mop_config_ call.
+ * Use when the MOP was clobbered (e.g., by eltwise binary ops) but the replay buffer is intact.
+ */
+template <std::uint32_t block_ct_dim>
+inline void _llk_math_reduce_block_max_row_mop_reprogram_only_()
+{
+    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+
+    constexpr std::uint32_t outer_loop = block_ct_dim;
+    constexpr std::uint32_t inner_loop = 4;
+
+    constexpr std::uint32_t start_op      = TT_OP_REPLAY(0, 2, 0, 0);
+    constexpr std::uint32_t inner_loop_op = TT_OP_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    constexpr std::uint32_t end_op_1      = TT_OP_REPLAY(0, 2, 0, 0);
+    constexpr std::uint32_t end_op_2      = TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
 
     ckernel::ckernel_template mop_template(outer_loop, inner_loop, inner_loop_op);
     mop_template.set_start_op(start_op);
