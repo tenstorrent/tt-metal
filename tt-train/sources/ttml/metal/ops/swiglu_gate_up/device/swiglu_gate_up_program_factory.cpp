@@ -4,7 +4,7 @@
 
 #include "swiglu_gate_up_program_factory.hpp"
 
-#include <tt_metal/common/tt_rounding.h>
+#include <common/tt_rounding.h>
 
 #include <algorithm>
 #include <tt-metalium/data_types.hpp>
