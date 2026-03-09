@@ -23,7 +23,7 @@ add_custom_command(
     OUTPUT
         ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
     COMMAND
-        $<TARGET_FILE:precompile_fw>
+        ${CMAKE_COMMAND} -E env ASAN_OPTIONS=detect_odr_violation=0 $<TARGET_FILE:precompile_fw>
     COMMAND
         ${CMAKE_COMMAND} -E touch ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
