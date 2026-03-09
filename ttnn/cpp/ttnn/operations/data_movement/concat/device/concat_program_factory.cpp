@@ -65,6 +65,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             single_page_size = tt::tile_size(cb_data_format);
         }
     }
+    std::cout << " output pages " << num_output_pages << "  single_page_size" << single_page_size
+              << "  nu pages in row " << num_pages_in_row << "\n";
 
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
@@ -180,15 +182,20 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
+                std::cout << "tensor " << i << "  page size" << page_size_per_tensor[i] << "  num_accum_pages "
+                          << num_pages_per_block[i] << "\n";
             } else {
-                uint32_t dim_pages = input_tensors[i].padded_shape()[dim];
-                num_pages_per_block[i] = num_accum_pages * dim_pages;
-                num_output_pages_per_block += num_accum_pages * dim_pages;
+                const uint32_t dim_pages = input_tensors[i].padded_shape()[dim];
+                num_pages_per_block[i] = num_accum_pages * dim_pages * num_pages_in_row;
+                num_output_pages_per_block += num_pages_per_block[i];
+                std::cout << "tensor " << i << "  page size" << page_size_per_tensor[i] << " pages per block "
+                          << num_output_pages_per_block << "\n";
             }
         }
         if (dim == num_dims - 1) {
             num_output_pages_per_block = 1;
         }
+        std::cout << "result pages per block " << num_output_pages_per_block << "\n";
     } else {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto* const buffer = input_tensors[i].buffer();
@@ -204,6 +211,12 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_pages_per_block.cbegin(), num_pages_per_block.cend());
 
+    std::cout << "num pages per block";
+    std::for_each(num_pages_per_block.cbegin(), num_pages_per_block.cend(), [&](const uint32_t value) {
+        std::cout << ", " << value;
+    });
+    std::cout << "\n";
+
     // Reader compile-time args
     // Data is 32 byte aligned
     std::vector<uint32_t> reader_compile_time_args = {
@@ -218,6 +231,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     if (rm_layout && dim == num_dims - 1) {
         concat_defines["WIDTH_CONCAT"] = "1";
+        std::cout << "WIDTH_CONCAT is in\n";
     }
 
     std::vector<uint32_t> writer_compile_time_args;
