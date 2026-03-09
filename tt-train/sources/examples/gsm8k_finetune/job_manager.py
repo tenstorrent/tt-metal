@@ -144,8 +144,8 @@ SLURM_SCRIPT_TEMPLATE = """#!/bin/bash
 {nodelist_directive}
 
 # Set environmental variables
-export HOME="/data/${{USER}}/llama"
-export TT_METAL_HOME="/data/${{USER}}/llama/tt-metal"
+export HOME="/data/${{USER}}"
+export TT_METAL_HOME="/data/${{USER}}/tt-metal"
 export TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME
 export PYTHONPATH="${{TT_METAL_HOME}}"
 source ${{TT_METAL_HOME}}/python_env/bin/activate
