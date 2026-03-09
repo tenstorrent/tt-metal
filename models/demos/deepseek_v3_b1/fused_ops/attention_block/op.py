@@ -3615,8 +3615,9 @@ class AttentionBlock:
                     matmul4_weights_addr,  # idx 12
                     matmul5_weights_addr,  # idx 13
                     qrope_trans_mat_addr,  # idx 14
-                    rmsnorm2_gamma_addr,  # idx 15
-                    kv_rmsnorm_gamma_addr,  # idx 16
+                    gamma_addr,  # idx 15
+                    rmsnorm2_gamma_addr,  # idx 16
+                    kv_rmsnorm_gamma_addr,  # idx 17
                 ]
 
                 qrope_ncrisc_addr_args = [
