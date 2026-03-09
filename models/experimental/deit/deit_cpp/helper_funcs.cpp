@@ -109,6 +109,8 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
     TT_ASSERT(tt::tt_metal::is_cpu_tensor(tt_tensor), "Tensor must be on host for padding");
 
     const auto& tensor_spec = tt_tensor.tensor_spec();
+    auto buffer = tt::tt_metal::host_buffer::get_host_buffer(tt_tensor);
+
     auto convert_to_logical = [&tensor_spec, padded_output](const tt::tt_metal::HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
@@ -149,25 +151,7 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
         }
     };
 
-    return convert_to_logical(std::visit(
-        tt::stl::overloaded{
-            [](const tt::tt_metal::HostStorage& storage) {
-                std::vector<tt::tt_metal::HostBuffer> buffers;
-                storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
-                    "to concatenate multi-device shards.",
-                    storage.buffer().shape());
-                return buffers.front();
-            },
-            [&tt_tensor](auto&&) -> tt::tt_metal::HostBuffer {
-                TT_THROW(
-                    "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
-            },
-        },
-        tt_tensor.storage()));
+    return convert_to_logical(buffer);
 }
 
 ttnn::Tensor from_torch(const at::Tensor& tensor,

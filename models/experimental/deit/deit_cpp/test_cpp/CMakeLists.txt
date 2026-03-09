@@ -218,3 +218,35 @@ if(BUILD_DEIT_OPENCV)
             ${CMAKE_BINARY_DIR}
     )
 endif()
+
+# Optimized E2E performance test
+add_executable(
+    test_deit_e2e_optimized
+    test_deit_e2e_optimized.cpp
+    ${MODEL_SOURCES}
+    ../inference/deit_e2e_performance.cpp
+    ../helper_funcs.cpp
+)
+
+set_target_properties(
+    test_deit_e2e_optimized
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/test_deit
+        CXX_STANDARD
+            17
+        CXX_STANDARD_REQUIRED
+            ON
+)
+
+target_link_libraries(test_deit_e2e_optimized ${COMMON_LIBRARIES_BASIC})
+
+target_include_directories(
+    test_deit_e2e_optimized
+    PRIVATE
+        ${COMMON_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+        ${CMAKE_BINARY_DIR}
+)
+
+target_compile_options(test_deit_e2e_optimized PRIVATE ${COMMON_COMPILE_OPTIONS})
