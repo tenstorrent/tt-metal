@@ -137,7 +137,6 @@ class DeepseekMinimalAllReduce:
         compute_cb_in1 = 1  # For remote data (standard tiles, intermediate tensor)
         compute_cb_in2 = 2  # For local data (standard tiles, re-interpreted input)
         compute_cb_out = 3  # For output (standard tiles, re-interpreted output)
-        packet_header_cb_id = 4  # For fabric packet headers
         packet_cb_id = 5  # For fabric packets
         compute_cb_residual = 6  # For fused residual add
         compute_cb_temp = 7
@@ -231,7 +230,6 @@ class DeepseekMinimalAllReduce:
                 ]
 
                 sender_brisc_ct_args = [
-                    ("packet_header_cb_id", packet_header_cb_id),
                     ("packet_cb_id", src0_cb_index),
                     ("l1_alignment", l1_alignment),
                     ("input_num_tiles", input_num_pages),
@@ -327,18 +325,6 @@ class DeepseekMinimalAllReduce:
                     )
                 ]
 
-                # CB4: Packet headers
-                cb4_format = ttnn.CBFormatDescriptor(
-                    buffer_index=packet_header_cb_id,
-                    data_format=ttnn.uint32,
-                    page_size=packet_header_size_bytes,
-                )
-                cb4_desc = ttnn.CBDescriptor(
-                    total_size=2 * packet_header_size_bytes,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[cb4_format],
-                )
-
                 # CB5: Packet data for sender
                 cb5_format = ttnn.CBFormatDescriptor(
                     buffer_index=packet_cb_id,
@@ -350,7 +336,7 @@ class DeepseekMinimalAllReduce:
                     core_ranges=worker_core_set,
                     format_descriptors=[cb5_format],
                 )
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc]
                 if residual_tensor_mesh is not None:
                     cb6_desc = ttnn.cb_descriptor_from_sharded_tensor(
                         compute_cb_residual, residual_tensors_per_device[device_idx]
