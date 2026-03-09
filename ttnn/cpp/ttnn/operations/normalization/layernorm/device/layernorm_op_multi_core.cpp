@@ -387,7 +387,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
     if (input_is_row_major) {
-        // For rm_input readers: element size of input tensor for address stride calculations
+        // Merged readers need W (for page size) and element_size (for stride calculations).
+        reader_compile_time_args.push_back(W);
         reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
     } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
