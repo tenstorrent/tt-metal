@@ -47,7 +47,6 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding,
-    uint32_t pipeline_depth_tiles = 0);
+    ttml::metal::StochasticRounding stochastic_rounding);
 
 }  // namespace ttnn::prim

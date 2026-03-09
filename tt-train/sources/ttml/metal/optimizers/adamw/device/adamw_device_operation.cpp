@@ -106,14 +106,8 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto pipeline_depth_tiles = args.pipeline_depth_tiles;
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad,
-        stochastic_rounding,
-        max_exp_avg_sq_initialized,
-        pipeline_depth_tiles,
-        param_tensor.dtype(),
-        param_logical_shape);
+        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }
@@ -136,8 +130,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding,
-    uint32_t pipeline_depth_tiles) {
+    ttml::metal::StochasticRounding stochastic_rounding) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -150,7 +143,6 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .weight_decay = weight_decay,
         .amsgrad = amsgrad,
         .stochastic_rounding = stochastic_rounding,
-        .pipeline_depth_tiles = pipeline_depth_tiles,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .param = param,
