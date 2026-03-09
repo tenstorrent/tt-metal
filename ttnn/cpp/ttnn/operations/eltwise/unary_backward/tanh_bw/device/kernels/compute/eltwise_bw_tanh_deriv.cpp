@@ -12,8 +12,6 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/binary_bitwise_sfpu.h"
-#include "api/compute/binary_shift.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/tanh_derivative.h"
 
