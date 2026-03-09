@@ -187,7 +187,7 @@ class TtRoutedExpert(LightweightModule):
         # up_out = x @ up_proj
         up_out = ttnn.matmul(x, up_proj, compute_kernel_config=self.compute_kernel_config)
 
-        # activated = silu(gate_out) * up_out (fused)
+        # activated = silu(gate_out) * up_out - SiLU fused with multiply
         activated = ttnn.mul(gate_out, up_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
 
         # output = activated @ down_proj

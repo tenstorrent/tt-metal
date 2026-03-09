@@ -55,9 +55,10 @@ def run_torch_routed_experts(
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
+        # DeepSeek V3 routed expert dims: emb_dim=7168, hidden_dim=2048
         (3200, 7168, 2048, 8, 4, 2),  # 8 experts per chip, isl=3200
     ],
-    ids=["isl3200-8exp"],
+    ids=["deepseek-v3-dims"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -183,7 +184,7 @@ def test_ttnn_routed_expert(
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
     )
     logger.info(f"TTNN input shape: {dispatched_buffer_tt.shape}")
 
@@ -201,8 +202,8 @@ def test_ttnn_routed_expert(
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         torch_weights=expert_weights_for_device,
-        activations_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
     )
 
     # Run TTNN forward
@@ -238,7 +239,8 @@ def test_ttnn_routed_expert(
     avg_pcc = sum(pcc_values) / len(pcc_values)
     logger.info(f"\nMin PCC: {min_pcc:.6f}, Avg PCC: {avg_pcc:.6f}")
 
-    pcc_threshold = 0.98
+    # Threshold for bfp8/bfp4 precision (actual PCC ~0.98)
+    pcc_threshold = 0.97
     assert min_pcc >= pcc_threshold, f"PCC {min_pcc:.6f} below threshold {pcc_threshold}"
 
     # Verify no NaN/Inf
