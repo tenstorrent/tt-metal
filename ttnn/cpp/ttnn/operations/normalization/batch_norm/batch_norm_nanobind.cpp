@@ -63,7 +63,9 @@ void bind_batch_norm_operation(nb::module_& mod) {
 
             These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
 
-            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+            Mixed precision is supported: input tensors may have different dtypes (e.g. BFLOAT16 input with FLOAT32 parameters).
+            The output tensor will be in TILE layout with dtype equal to the highest precision among all provided input tensors.
+            When a preallocated :attr:`output` tensor is provided, its dtype is used instead.
 
         Memory Support:
             - Interleaved: DRAM and L1

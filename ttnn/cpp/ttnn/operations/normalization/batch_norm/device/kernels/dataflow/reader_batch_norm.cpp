@@ -42,14 +42,13 @@ void kernel_main() {
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
-    cb_id_eps_obj.reserve_back(onetile);
-#ifdef FILL_WITH_VALUE_FLOAT
     float eps_f = 0;
     std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
-    FILL_WITH_VALUE_FLOAT(cb_id_eps, eps_f);
-#endif
-#ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(cb_id_eps, eps);
+    cb_id_eps_obj.reserve_back(onetile);
+#ifdef FILL_EPS_FP32
+    fill_with_val<1024, float>(cb_id_eps, eps_f);
+#else
+    fill_with_val_bfloat16(cb_id_eps, eps);
 #endif
     cb_id_eps_obj.push_back(onetile);
 
