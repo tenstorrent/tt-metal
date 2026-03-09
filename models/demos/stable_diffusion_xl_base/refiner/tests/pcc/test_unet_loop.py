@@ -10,7 +10,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
