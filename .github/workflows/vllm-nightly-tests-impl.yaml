@@ -34,6 +34,7 @@ jobs:
         run: |
           # Owner mapping:
           # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama models
+          # Djordje Ivanovic (U053W15B6JF) - Qwen3-32B models
           # Gongyu Wang (U07RY6B5FLJ) - Qwen 2.5 VL models
           # Sarva Sanjay (U08H31YMN4Q) - Qwen 3 VL models
           # Ambrose Ling (U08GELBB1AP) - BH tests
@@ -229,6 +230,21 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
+              "name": "[WH-GLX] Qwen3-32B device with sampling-tests",
+              "model": "Qwen/Qwen3-32B",
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
+              "runner-label": "topology-6u",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "TG",
+              "tt-qwen3-text-ver": "qwen3_32b_galaxy",
+              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
+              "sampling-tests": true,
+              "multimodal": false,
+              "co-owner-1-id": "U053W15B6JF"
+            },
+            {
               "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
               "server-timeout": 12,
@@ -389,6 +405,9 @@ jobs:
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
+          fi
+          if [ -n "${{ matrix.test-group.tt-qwen3-text-ver }}" ]; then
+            export TT_QWEN3_TEXT_VER="${{ matrix.test-group.tt-qwen3-text-ver }}"
           fi
 
           # Keep TT cache separate from HF hub

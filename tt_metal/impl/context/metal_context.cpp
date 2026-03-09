@@ -2,13 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
+#include <memory>
 #include <mutex>
 #include <future>
+#include <set>
 #include <vector>
 #include <unordered_set>
 #include <unistd.h>
@@ -19,6 +22,7 @@
 
 #include "metal_context.hpp"
 #include "core_coord.hpp"
+#include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "firmware_capability.hpp"
 #include "hal.hpp"
@@ -402,6 +406,7 @@ void MetalContext::destroy_instance(bool check_device_count) {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    system_mesh_.reset();
     control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
@@ -569,7 +574,8 @@ void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
-    // Reset the control plane, since it was initialized with custom parameters.
+    // Reset the system mesh and control plane, since they were initialized with custom parameters.
+    system_mesh_.reset();
     control_plane_.reset();
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
@@ -682,6 +688,7 @@ void MetalContext::set_fabric_config(
             "Fabric config changed from {} to {}, reinitializing control plane",
             this->get_control_plane().get_fabric_config(),
             this->fabric_config_);
+        system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
 }
@@ -869,6 +876,16 @@ void MetalContext::initialize_control_plane_impl() {
     }
 }
 
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
+MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+
 bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     ChipId id = *cluster_->all_chip_ids().begin();
     if (core_type == CoreType::ACTIVE_ETH || core_type == CoreType::IDLE_ETH) {
@@ -927,16 +944,6 @@ void MetalContext::on_dispatch_timeout_detected() {
             }
         }
     }
-}
-
-// Command queue id stack for thread
-thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
-
-MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
-    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 }  // namespace tt::tt_metal

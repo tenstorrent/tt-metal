@@ -1826,6 +1826,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
+    hash_str += std::to_string(get_llk_asserts());
     return hash_str;
 }
 

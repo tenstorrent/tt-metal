@@ -51,7 +51,10 @@ Tensor reduce_min(
     Tensor input = input_tensor;
     if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
-        input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
+        // Changing layout to TILE with +inf padding
+        auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
+        input =
+            ttnn::tilize_with_val_padding(input, pad_shape, std::numeric_limits<float>::infinity(), output_mem_config);
     }
     return detail::reduce(
         input,
