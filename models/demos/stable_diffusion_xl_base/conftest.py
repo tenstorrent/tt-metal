@@ -189,6 +189,7 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
             f"LoRA path must be an existing .safetensors file: {lora_weights_cli_path}. "
             f"Provide a full path to the file (not a directory)."
         )
+        return
 
     if not (hf_repo_id and hf_filename):
         logger.warning(
@@ -208,3 +209,4 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
             f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "
             f"Use --lora-weights for a local file path, or ensure network/cache for HF."
         )
+        return

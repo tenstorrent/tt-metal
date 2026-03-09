@@ -13,6 +13,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import profiler
+from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     batch_encode_prompt_on_device,
@@ -27,7 +28,7 @@ from models.demos.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
-from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
+
 
 @dataclass
 class TtSDXLPipelineConfig:
@@ -72,7 +73,7 @@ class TtSDXLPipeline(LightweightModule):
             "`_debug_mode` and `capture_trace` cannot both be enabled at the same time. "
             "Please set only one of them to True."
         )
-        assert len(torch_pipeline.get_list_adapters()) == 0, (
+        assert not any(torch_pipeline.get_list_adapters().values()), (
             "Torch pipeline must not have LoRA weights loaded. " "Use TtSDXLPipeline interface to manage LoRA weights."
         )
 

@@ -1,6 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import re
-from loguru import logger
 from collections import defaultdict
+
+from loguru import logger
+
 import ttnn
 
 
@@ -18,6 +24,8 @@ class TtLoRAWeightsManager:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+        self._is_fused = False
 
     def prepare_lora_linear_params(self, device, weights, bias, dtype, name, permute_weights=True):
         if permute_weights:
@@ -79,6 +87,10 @@ class TtLoRAWeightsManager:
             logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
             return
 
+        if self._is_fused:
+            logger.info("LoRA weights already fused. Skipping fusion.")
+            return
+
         lora_params = self._get_lora_params()
         if not lora_params:
             logger.info("No LoRA parameters affecting the UNet were found. LoRA will have no effect.")
@@ -100,10 +112,10 @@ class TtLoRAWeightsManager:
                 attn_path, component = layer_path.rsplit(".", 1)
                 if f"{attn_path}.to_qkv.weight" in self._base_weights_device:
                     lora_a_tt = ttnn.from_torch(
-                        lora_a_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT
+                        lora_a_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT
                     )
                     lora_b_tt = ttnn.from_torch(
-                        lora_b_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT
+                        lora_b_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT
                     )
                     delta_tt = ttnn.mul(
                         ttnn.matmul(lora_a_tt, lora_b_tt, compute_kernel_config=self._mm_compute_config), scale
@@ -117,14 +129,12 @@ class TtLoRAWeightsManager:
                 and f"{layer_path}.linear_2.weight" in self._base_weights_device
             ):
                 lora_b1_T, lora_b2_T = lora_b_T.chunk(2, dim=-1)
-                lora_a_tt = ttnn.from_torch(
-                    lora_a_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT
-                )
+                lora_a_tt = ttnn.from_torch(lora_a_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT)
                 lora_b1_tt = ttnn.from_torch(
-                    lora_b1_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT
+                    lora_b1_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT
                 )
                 lora_b2_tt = ttnn.from_torch(
-                    lora_b2_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT
+                    lora_b2_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT
                 )
                 delta_1 = ttnn.mul(
                     ttnn.matmul(lora_a_tt, lora_b1_tt, compute_kernel_config=self._mm_compute_config), scale
@@ -137,14 +147,15 @@ class TtLoRAWeightsManager:
                 continue
 
             # Process cross-attn Q/K/V, to_out, proj_in/out, ff.net.2 weights
-            lora_a_tt = ttnn.from_torch(lora_a_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT)
-            lora_b_tt = ttnn.from_torch(lora_b_T, dtype=ttnn.bfloat8_b, device=self._device, layout=ttnn.TILE_LAYOUT)
+            lora_a_tt = ttnn.from_torch(lora_a_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT)
+            lora_b_tt = ttnn.from_torch(lora_b_T, dtype=ttnn.bfloat16, device=self._device, layout=ttnn.TILE_LAYOUT)
             delta_tt = ttnn.mul(ttnn.matmul(lora_a_tt, lora_b_tt, compute_kernel_config=self._mm_compute_config), scale)
             self._apply_delta(f"{layer_path}.weight", delta_tt)
 
         self._apply_qkv_deltas(self_attention_matrices)
 
         ttnn.synchronize_device(self._device)
+        self._is_fused = True
 
     def _get_lora_params(self):
         unet = self._torch_pipeline.unet
@@ -200,3 +211,4 @@ class TtLoRAWeightsManager:
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
         self._torch_pipeline.unload_lora_weights()
+        self._is_fused = False

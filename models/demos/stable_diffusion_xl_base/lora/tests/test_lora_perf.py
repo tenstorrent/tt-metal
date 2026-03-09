@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -6,12 +6,12 @@ import os
 os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = "15000"
 
 import gc
+
 import pytest
 import torch
-import ttnn
-
 from diffusers import DiffusionPipeline
 
+import ttnn
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
@@ -70,7 +70,7 @@ def test_lora_fuse(
     [
         (
             "pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py::test_lora_fuse",
-            102_565_757,
+            166_329_976,
             "sdxl_lora_fuse",
             "sdxl_lora_fuse",
             1,

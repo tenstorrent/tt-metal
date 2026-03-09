@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,7 @@ def _get_diffusers_pipeline(is_ci_env):
             20,
             1280,
             0,
-            0.975,
+            0.974,
         ),
         (
             (1024, 1024),

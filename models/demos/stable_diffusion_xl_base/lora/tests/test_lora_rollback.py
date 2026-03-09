@@ -1,27 +1,24 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 import torch
 from diffusers import DiffusionPipeline
-from transformers import CLIPTextModelWithProjection, CLIPTextModel
+from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
+import ttnn
+from conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
+    CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    MAX_SEQUENCE_LENGTH,
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
-    determinate_min_batch_size,
-    MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
-    CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    determinate_min_batch_size,
     prepare_device,
 )
-from conftest import is_galaxy
-from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import (
-    TtSDXLPipeline,
-    TtSDXLPipelineConfig,
-)
+from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
