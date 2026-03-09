@@ -4,12 +4,17 @@
 
 #include "swiglu_op.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
+#include <ttnn/operations/eltwise/unary/unary.hpp>
+#include <ttnn/operations/matmul/matmul.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/swiglu_fw/swiglu_fw.hpp"
+#include "metal/ops/swiglu_gate_up/swiglu_gate_up.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -19,6 +24,10 @@
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
+
+// GateUp = production default. Composite and FullFusion kept for further tests and development.
+// FullFusion saves memory (no materialized M) but runtime is heavily suboptimal.
+constexpr SwigluFwPath kDefaultSwigluFwPath = SwigluFwPath::GateUp;
 
 autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,
@@ -30,8 +39,34 @@ autograd::TensorPtr swiglu(
         throw std::runtime_error("swiglu only supports rank-4 input tensors.");
     }
 
-    ttnn::Tensor swiglu_fw_result =
-        ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
+    ttnn::Tensor swiglu_fw_result;
+    switch (kDefaultSwigluFwPath) {
+        case SwigluFwPath::Composite: {
+            // Same math as LlamaMLP composite. Kept for further tests and development.
+            log_warning(tt::LogOp, "SwiGLU Composite path (for tests and development). Default is GateUp (2-step).");
+            auto xw1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value());
+            auto xw3 = ttnn_fixed::matmul(tensor->get_value(), w3->get_value());
+            auto swished = ttnn::silu(xw1);
+            auto gated = ttnn::multiply(swished, xw3);
+            swiglu_fw_result = ttnn_fixed::matmul(gated, w2->get_value());
+            break;
+        }
+        case SwigluFwPath::GateUp: {
+            // 2-step: fused gate-up then matmul(M, W2).
+            ttnn::Tensor M = ttml::metal::swiglu_gate_up(tensor->get_value(), w1->get_value(), w3->get_value());
+            swiglu_fw_result = ttnn::matmul(M, w2->get_value());
+            break;
+        }
+        case SwigluFwPath::FullFusion:
+            // FullFusion saves memory (no materialized M) but runtime is heavily suboptimal.
+            log_warning(
+                tt::LogOp,
+                "SwiGLU FullFusion path (saves memory, runtime suboptimal). Do NOT use in production. "
+                "Use GateUp (2-step) for production.");
+            swiglu_fw_result =
+                ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
+            break;
+    }
     auto out = autograd::create_tensor(swiglu_fw_result);
 
     autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {
