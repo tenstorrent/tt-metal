@@ -340,6 +340,19 @@ class WanCausalConv3d(Module):
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        #
+        # There is no post-conv masking to zero the padded rows, which after Conv3D contain (pad_value + conv_bias).
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (line 155: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        #
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or LayerNorm
+        #   (which normalize across spatial dimensions), the post-conv mask would become
+        #   necessary again to prevent padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
@@ -730,9 +743,23 @@ class WanConv2d(Module):
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
+
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        #
+        # There is no post-conv masking to zero the padded rows, which after Conv3D contain (pad_value + conv_bias).
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (line 155: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        #
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or LayerNorm
+        #   (which normalize across spatial dimensions), the post-conv mask would become
+        #   necessary again to prevent padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
