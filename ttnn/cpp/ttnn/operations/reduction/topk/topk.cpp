@@ -196,41 +196,82 @@ std::vector<Tensor> topk(
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+
     // Analyze input tensor properties to determine required transformations
     std::size_t rank_st = input_tensor.logical_shape().rank();
     TT_FATAL(rank_st <= std::numeric_limits<int8_t>::max(), "Rank is too large to convert to int8_t");
     const int8_t rank = static_cast<int8_t>(rank_st);
 
     TT_FATAL(
-        (dim >= -rank && dim <= (rank - 1)),
+        (dim >= -rank && dim <= (rank - 1)) || (rank == 0 && (dim == 0 || dim == -1)),
         "Dimension for topk is out of range (expected to be in range of [{}, {}])",
         -rank,
         rank - 1);
 
-    const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
+    const bool is_dim_last_idx = (dim == -1 || dim == rank - 1 || (rank == 0 && dim == 0));
     const bool is_rank_le_4d = rank <= 4;
 
     // Normalize negative dimension index and validate K parameter
-    const auto adjusted_dim = dim < 0 ? dim + rank : dim;
+    // Rank 0 means scalar, so the only valid dimension is 0.
+    const int8_t adjusted_dim = (rank == 0) ? 0 : ((dim < 0) ? (dim + rank) : dim);
+
     TT_FATAL(
-        input_tensor.logical_shape()[adjusted_dim] >= k,
+        (rank == 0 && k <= 1) || input_tensor.logical_shape()[adjusted_dim] >= k,
         "K cannot be larger than the dimension size! K={}, dimension size={}",
         k,
-        input_tensor.logical_shape()[adjusted_dim]);
+        (rank == 0) ? 1 : input_tensor.logical_shape()[adjusted_dim]);
     ttnn::Shape desired_final_shape = original_lshape;
-    desired_final_shape[adjusted_dim] = k;
+    if (rank != 0) {
+        desired_final_shape[adjusted_dim] = k;
+    }
 
     if (preallocated_output_tensors.has_value()) {
+        const Tensor& preallocated_values = std::get<0>(preallocated_output_tensors.value());
+        const Tensor& preallocated_indices = std::get<1>(preallocated_output_tensors.value());
+        TT_FATAL(is_device_tensor(preallocated_values), "Preallocated output values tensor must be on device");
+        TT_FATAL(is_device_tensor(preallocated_indices), "Preallocated output indices tensor must be on device");
+
         TT_FATAL(
-            std::get<0>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
+            preallocated_values.logical_shape() == desired_final_shape,
             "Preallocated values tensor has incorrect shape! Got : {}, expected: {}",
-            std::get<0>(preallocated_output_tensors.value()).logical_shape(),
+            preallocated_values.logical_shape(),
             desired_final_shape);
         TT_FATAL(
-            std::get<1>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
+            preallocated_indices.logical_shape() == desired_final_shape,
             "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
-            std::get<1>(preallocated_output_tensors.value()).logical_shape(),
+            preallocated_indices.logical_shape(),
             desired_final_shape);
+    }
+
+    // When input is a scalar, PyTorch returns the copy of the input tensor (that is the 1 top element)
+    // as values. This happens when k = 1 (which makes sense), but also when k = 0 (which is unusual,
+    // but for now we simply match its behavior).
+    if (rank == 0 && (k == 1 || k == 0)) {
+        // Caller requested top 1 elements from a scalar tensor.
+        // We need to return the input tensor as is (that is the 1 top element), and a scalar tensor
+        // containing a single 0 as the index (matches what PyTorch does).
+        if (!preallocated_output_tensors.has_value()) {
+            return {
+                input_tensor,
+                ttnn::full(
+                    desired_final_shape,
+                    0,
+                    tt::tt_metal::DataType::UINT16,
+                    input_tensor.layout(),
+                    *(input_tensor.device()),
+                    memory_config.value_or(input_tensor.memory_config()))};
+        } else {
+            // If the output tensors were preallocated, they should already have
+            // the correct shapes (validated above), so fill the values with the input tensor
+            // and a zero as the index and return.
+            auto& [values, indices] = preallocated_output_tensors.value();
+            copy_to_device(input_tensor.cpu(), values);
+            copy_to_device(
+                Tensor(HostBuffer(std::vector<uint32_t>{0}), desired_final_shape, DataType::UINT16, indices.layout()),
+                indices);
+            return {values, indices};
+        }
     }
 
     // For a zero volume input tensor, return a zero volume tensor with the shape adjusted for k.
@@ -300,11 +341,12 @@ std::vector<Tensor> topk(
     // Preprocess optional output tensors if provided
     std::optional<std::tuple<Tensor, Tensor>> output_tensors = std::nullopt;
     if (preallocated_output_tensors.has_value()) {
-        const auto values_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+        const auto preallocated_values = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
             std::get<0>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
-        const auto indices_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
-            std::get<1>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
-        output_tensors = {values_tensor, indices_tensor};
+        const auto preallocated_indices =
+            operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+                std::get<1>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
+        output_tensors = {preallocated_values, preallocated_indices};
     } else {
         output_tensors = std::optional<std::tuple<Tensor, Tensor>>{std::nullopt};
     }
