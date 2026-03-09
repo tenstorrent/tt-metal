@@ -101,7 +101,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     auto& output_tensor = output_tensors.output;
     auto& joint_output_tensor = output_tensors.joint_output;
-    auto& lse_output_tensor = output_tensors.lse_output;
+    auto& stats_output_tensor = output_tensors.stats_output;
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -419,11 +419,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
+        (std::uint32_t)use_streaming_compute,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Early format check: when all data formats are identical, reconfig calls can be skipped.
     const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -472,6 +473,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
+        q_per_core,
     };
 
     std::map<std::string, std::string> defines;
@@ -569,7 +571,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
-    // lse input
+    // stats input
     auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
                             .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
@@ -629,7 +631,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                              .set_page_size(tt::CBIndex::c_16, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
-    // lse output
+    // stats output
     auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
@@ -642,6 +644,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
     }
 
+    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
+    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
+    // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
+    if (use_streaming_compute) {
+        auto c_sum_out_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
+                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_sum_out_config);
+
+        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
+                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_sum_in_config);
+    }
+
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
     uint32_t v_addr = input_tensor_v.buffer()->address();
@@ -652,7 +668,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
     uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
-    uint32_t lse_addr = lse_output_tensor.buffer()->address();
+    uint32_t stats_addr = stats_output_tensor.buffer()->address();
 
     /**
      * Build chain selection for store-and-forward across cores per (batch, head).
@@ -881,7 +897,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         std::vector<uint32_t> writer_args = {
             out_addr,
             joint_out_addr,
-            lse_addr,
+            stats_addr,
             global_q_start,
             global_q_end,
         };
@@ -964,7 +980,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         // Get addresses for output tensors
         auto* out_buffer = output_tensors.output.buffer();
         auto* joint_out_buffer = output_tensors.joint_output.buffer();
-        auto* lse_buffer = output_tensors.lse_output.buffer();
+        auto* stats_buffer = output_tensors.stats_output.buffer();
 
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();
@@ -976,7 +992,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         uint32_t joint_v_addr = joint_v_buffer->address();
         uint32_t out_addr = out_buffer->address();
         uint32_t joint_out_addr = joint_out_buffer->address();
-        uint32_t lse_addr = lse_buffer->address();
+        uint32_t stats_addr = stats_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
@@ -1000,7 +1016,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
             // Update writer args
             writer_args[0] = out_addr;
             writer_args[1] = joint_out_addr;
-            writer_args[2] = lse_addr;
+            writer_args[2] = stats_addr;
         }
     }
 }
