@@ -15,6 +15,7 @@ from typing import Optional
 import torch
 
 import ttnn
+from tests.nightly.tg.ccl.test_all_to_all_dispatch_metadata_6U import gen_expert_mapping_new_format_from_old
 
 
 @dataclass
@@ -322,10 +323,14 @@ class FusedMoeGptConfig:
     tt_w0_w1: object  # ttnn.Tensor
     tt_w2: object  # ttnn.Tensor
 
-    # Routing mapping tensor (shared by dispatch and moe_gpt)
-    # Shape [total_devices, num_experts] uint16, DRAM.
-    # mapping[d, e] = e // experts_per_device  (same for all d)
+    # Routing mapping tensor for dispatch (DRAM)
+    # Shape [total_devices, experts_per_ring] uint16, DRAM.
+    # Uses ring-local expert IDs: mapping[d, e] = (e // E) * mesh_cols + (d % mesh_cols)
     tt_dispatch_mapping: object  # ttnn.Tensor
+
+    # Routing mapping tensor for moe_gpt (L1)
+    # Same data as tt_dispatch_mapping but in L1 memory (required by moe_gpt kernel).
+    tt_moe_gpt_mapping: object  # ttnn.Tensor
 
     # Pre-allocated dispatch output tensors
     dispatch_sparse: object  # ttnn.Tensor, DRAM
@@ -348,17 +353,17 @@ class FusedMoeGptConfig:
 
 def create_expert_mapping_tensors(
     num_devices: int,
-    num_experts_per_device: int,
+    num_experts_global: int,
     mesh_device,
-    cluster_axis: Optional[int] = None,
-    mesh_shape: tuple[int, int] = None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    new_format: bool = False,
+    return_torch: bool = False,
 ) -> ttnn.Tensor:
     """Create expert-to-device mapping tensors for all_to_all operations.
 
     Args:
         num_devices: Total number of devices
-        num_experts_per_device: Experts per device
+        num_experts_global: Number of global experts
         mesh_device: TTNN mesh device
 
     Returns:
@@ -366,12 +371,18 @@ def create_expert_mapping_tensors(
     """
     # Create identity matrix showing which device owns which expert
     # Shape: [num_experts, num_devices] where mapping[e, d] = 1 if expert e is on device d
+    num_experts_per_device = num_experts_global // num_devices
     mapping = (
         torch.eye(num_devices, dtype=torch.int32)
         .repeat_interleave(num_experts_per_device, dim=0)
         .unsqueeze(0)
         .unsqueeze(0)
     )
+    if new_format:
+        mapping = gen_expert_mapping_new_format_from_old(mapping, mesh_device.shape)
+
+    if return_torch:
+        return mapping
 
     return ttnn.from_torch(
         mapping,

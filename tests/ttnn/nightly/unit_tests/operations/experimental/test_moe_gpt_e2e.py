@@ -48,9 +48,9 @@ from models.demos.gpt_oss.tt.experts_throughput.weights import (
     _FUSED_PAD_CORES as PAD_CORES,
     _prepare_w0_w1_tensor as prepare_w0_w1_tensor,
     _prepare_w2_tensor as prepare_w2_tensor,
+    _build_ring2cores as build_ring2cores,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_gpt_single_device import (
-    gen_expert_mapping,
     gen_controlled_sparse_buffer,
     verify_device_output,
     create_torch_w0,
@@ -60,6 +60,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_gpt_single_d
     get_accuracy_metrics,
     PCC_THRESHOLD,
 )
+from models.demos.gpt_oss.tt.experts_throughput.config import create_expert_mapping_tensors
 
 # Single-iteration values for Tracy device profiling (TT_METAL_DEVICE_PROFILER=1).
 # A single warmup compiles/caches the program; a single measure is profiled.
@@ -197,6 +198,399 @@ def compute_e2e_reference(
 
 
 # ---------------------------------------------------------------------------
+# Dispatch-only test
+# ---------------------------------------------------------------------------
+
+
+def run_test_dispatch(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total):
+    """Test all_to_all_dispatch_metadata in isolation.
+
+    Verifies that each device's sparse buffer contains exactly the tokens that
+    route to experts owned by that device, based on the expert_indices tensor.
+    """
+    torch.manual_seed(42)
+    cluster_axis = 0
+    total_mesh_devices = mesh_device.get_num_devices()
+    mesh_cols = mesh_device.shape[1]
+
+    # Expert mapping: mapping[d, e] = linearized target device ID for expert e
+    mapping = create_expert_mapping_tensors(
+        num_devices=total_mesh_devices,
+        num_experts_global=experts_total,
+        mesh_device=mesh_device,
+        new_format=True,
+        return_torch=True,
+    )
+    tt_mapping = ttnn.from_torch(
+        mapping,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    # Raw input: [1, 1, tokens_global, hidden_size], sharded across mesh rows, replicated across cols
+    raw_input_torch = torch.rand(1, 1, tokens_global, hidden_size, dtype=torch.bfloat16) - 0.5
+
+    # Expert routing: each token picks selected_experts_k unique global expert IDs
+    indices_list = [
+        torch.randperm(experts_total)[:selected_experts_k].sort().values.to(torch.int32) for _ in range(tokens_global)
+    ]
+    expert_indices = torch.stack(indices_list).reshape(1, 1, tokens_global, selected_experts_k)
+    scores_list = [torch.rand(selected_experts_k, dtype=torch.float32) for _ in range(tokens_global)]
+    expert_scores = torch.stack([s / s.sum() for s in scores_list]).reshape(1, 1, tokens_global, selected_experts_k)
+
+    # HEIGHT_SHARDED L1 config for input indices/scores (required by dispatch kernel)
+    num_cores_y = min(8, tokens_global // mesh_device.shape[0])
+    num_cores_x = (tokens_global // mesh_device.shape[0] + num_cores_y - 1) // num_cores_y
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+        [1, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_indices_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    shard_2d = dict(
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+    )
+    tt_raw_input = ttnn.from_torch(
+        raw_input_torch, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, **shard_2d
+    )
+    tt_indices = ttnn.from_torch(
+        expert_indices.to(torch.int16), dtype=ttnn.uint16, memory_config=input_indices_mem, **shard_2d
+    )
+    tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
+
+    # Pre-allocate dispatch outputs
+    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    drain_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
+        [tokens_global, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    drain_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, drain_shard_spec)
+
+    tt_sparse_out = ttnn.from_torch(
+        torch.zeros(mesh_device.shape[0], tokens_global, hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **shard_2d,
+    )
+    tt_indices_out = ttnn.from_torch(
+        torch.zeros(1, tokens_global, selected_experts_k, dtype=torch.int16),
+        dtype=ttnn.uint16,
+        memory_config=drain_mem,
+        **shard_2d,
+    )
+    tt_scores_out = ttnn.from_torch(
+        torch.zeros(1, tokens_global, selected_experts_k, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        memory_config=drain_mem,
+        **shard_2d,
+    )
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.synchronize_device(mesh_device)
+
+    (output_tensor, indices_tensor, scores_tensor) = ttnn.experimental.all_to_all_dispatch_metadata(
+        tt_input_l1,
+        tt_indices,
+        tt_scores,
+        tt_mapping,
+        cluster_axis=cluster_axis,
+        num_links=4,
+        output_tensors=(tt_sparse_out, tt_indices_out, tt_scores_out),
+        cross_device_semaphore=semaphore,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Verify: device d receives token (0, token_idx) at slot token_idx
+    # iff that token routes to any expert owned by device d
+    sparse_per_device = ttnn.get_device_tensors(output_tensor)
+    indices_per_device = ttnn.get_device_tensors(indices_tensor)
+    scores_per_device = ttnn.get_device_tensors(scores_tensor)
+    all_passing = True
+    for device_idx in range(total_mesh_devices):
+        actual = ttnn.to_torch(sparse_per_device[device_idx]).reshape(tokens_global, hidden_size).bfloat16()
+
+        expected = torch.zeros(tokens_global, hidden_size, dtype=torch.bfloat16)
+        for token_idx in range(tokens_global):
+            for expert_idx in expert_indices[0, 0, token_idx]:
+                if int(mapping[0, expert_idx]) == device_idx:
+                    expected[token_idx] = raw_input_torch[0, 0, token_idx]
+
+        if not torch.equal(actual, expected):
+            mismatch_slots = (actual != expected).any(dim=-1).nonzero(as_tuple=True)[0].tolist()
+            logger.warning(
+                f"Device {device_idx}): " f"FAILED at {len(mismatch_slots)} slots, first few: {mismatch_slots[:8]}"
+            )
+            all_passing = False
+        else:
+            logger.info(f"Device {device_idx}): Passed")
+
+    return all_passing
+
+
+# ---------------------------------------------------------------------------
+# Dispatch+Compute test
+# ---------------------------------------------------------------------------
+
+
+def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total):
+    """Test all_to_all_dispatch_metadata → moe_gpt pipeline.
+
+    Verifies per-expert W2 outputs against torch reference.
+    Expert mapping uses global IDs: mapping[d, e] = e // experts_per_device (0..total_devices-1).
+    """
+    torch.manual_seed(42)
+    cluster_axis = 0
+    ring_devices = mesh_device.shape[cluster_axis]  # 4
+    total_mesh_devices = mesh_device.get_num_devices()  # 32
+    total_tokens = tokens_global  # 128
+    M = tokens_global // ring_devices  # 32 tokens per ring device
+    E = experts_total // total_mesh_devices  # 4 local experts per device
+    N = hidden_size  # 2880 (intermediate_size = hidden_size for GPT-OSS)
+    L = 1
+    tokens_per_chunk = 32
+
+    # --- Expert mapping: global format, mapping[d, e] = e // E (linearized device ID) ---
+    expert_mapping_torch = create_expert_mapping_tensors(
+        num_devices=total_mesh_devices,
+        num_experts_global=experts_total,
+        mesh_device=mesh_device,
+        new_format=True,
+        return_torch=True,
+    )
+    tt_dispatch_mapping = ttnn.from_torch(
+        expert_mapping_torch.to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_moe_gpt_mapping = ttnn.from_torch(
+        expert_mapping_torch.to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Weights: random torch tensors prepared in DRAM HEIGHT_SHARDED format ---
+    torch_w0 = torch.randn(1, E, hidden_size, N, dtype=torch.bfloat16) * 0.01
+    torch_w1 = torch.randn(1, E, hidden_size, N, dtype=torch.bfloat16) * 0.01
+    torch_w2 = torch.randn(1, E, N, hidden_size, dtype=torch.bfloat16) * 0.01
+
+    ring2cores = build_ring2cores(mesh_device)
+    num_cores = len(ring2cores)
+    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
+
+    tt_w0_w1 = ttnn.from_torch(
+        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                dram_core_range_set,
+                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_w2 = ttnn.from_torch(
+        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Raw input and expert routing (same layout as run_test_dispatch) ---
+    raw_input_torch = torch.rand(1, 1, tokens_global, hidden_size, dtype=torch.bfloat16) - 0.5
+    indices_list = [
+        torch.randperm(experts_total)[:selected_experts_k].sort().values.to(torch.int32) for _ in range(tokens_global)
+    ]
+    expert_indices = torch.stack(indices_list).reshape(1, 1, tokens_global, selected_experts_k)
+    expert_scores = torch.stack(
+        [s / s.sum() for s in [torch.rand(selected_experts_k, dtype=torch.float32) for _ in range(tokens_global)]]
+    ).reshape(1, 1, tokens_global, selected_experts_k)
+
+    num_cores_y = min(8, tokens_global // mesh_device.shape[0])
+    num_cores_x = (tokens_global // mesh_device.shape[0] + num_cores_y - 1) // num_cores_y
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+        [1, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_indices_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    shard_2d = dict(
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+    )
+    tt_raw_input = ttnn.from_torch(
+        raw_input_torch, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, **shard_2d
+    )
+    tt_indices = ttnn.from_torch(
+        expert_indices.to(torch.int16), dtype=ttnn.uint16, memory_config=input_indices_mem, **shard_2d
+    )
+    tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
+
+    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    drain_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
+        [total_tokens, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    drain_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, drain_shard_spec)
+
+    tt_sparse_out = ttnn.from_torch(
+        torch.zeros(1, total_tokens, hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    tt_indices_out = ttnn.from_torch(
+        torch.zeros(1, total_tokens, selected_experts_k, dtype=torch.int16),
+        dtype=ttnn.uint16,
+        memory_config=drain_mem,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    tt_scores_out = ttnn.from_torch(
+        torch.zeros(1, total_tokens, selected_experts_k, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        memory_config=drain_mem,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.synchronize_device(mesh_device)
+
+    # --- Dispatch ---
+    (tt_sparse, tt_idx, tt_sc) = ttnn.experimental.all_to_all_dispatch_metadata(
+        tt_input_l1,
+        tt_indices,
+        tt_scores,
+        tt_dispatch_mapping,
+        cluster_axis=cluster_axis,
+        num_links=4,
+        output_tensors=(tt_sparse_out, tt_indices_out, tt_scores_out),
+        cross_device_semaphore=semaphore,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Verify: device d receives token (0, token_idx) at slot token_idx
+    # iff that token routes to any expert owned by device d
+    sparse_per_device = ttnn.get_device_tensors(tt_sparse)
+    indices_per_device = ttnn.get_device_tensors(tt_idx)
+    scores_per_device = ttnn.get_device_tensors(tt_sc)
+    all_passing = True
+    for device_idx in range(total_mesh_devices):
+        actual = ttnn.to_torch(sparse_per_device[device_idx]).reshape(tokens_global, hidden_size).bfloat16()
+
+        expected = torch.zeros(tokens_global, hidden_size, dtype=torch.bfloat16)
+        for token_idx in range(tokens_global):
+            for expert_idx in expert_indices[0, 0, token_idx]:
+                if int(expert_mapping_torch[0, expert_idx]) == device_idx:
+                    expected[token_idx] = raw_input_torch[0, 0, token_idx]
+
+        if not torch.equal(actual, expected):
+            mismatch_slots = (actual != expected).any(dim=-1).nonzero(as_tuple=True)[0].tolist()
+            logger.warning(
+                f"Device {device_idx}): " f"FAILED at {len(mismatch_slots)} slots, first few: {mismatch_slots[:8]}"
+            )
+            all_passing = False
+        else:
+            logger.info(f"Device {device_idx}): Passed")
+
+    # Convert sparse to L1 and reshape to 2D for moe_gpt
+    breakpoint()
+    tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [total_tokens, hidden_size])
+
+    # --- moe_gpt: pass HEIGHT_SHARDED indices/scores from dispatch directly ---
+    moe_gpt_outputs = ttnn.experimental.moe_gpt(
+        tt_sparse_l1,
+        expert_indices=tt_idx,
+        expert_scores=tt_sc,
+        expert_mapping=tt_moe_gpt_mapping,
+        w0_w1_tensor=tt_w0_w1,
+        w2_tensor=tt_w2,
+        cluster_axis=cluster_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+    breakpoint()
+
+    # --- Verify per-device moe_gpt output against torch reference ---
+    tt_output = moe_gpt_outputs[4]  # ROW_MAJOR view of BLOCK_SHARDED combine output
+    output_per_device = ttnn.get_device_tensors(tt_output)
+    all_passing = True
+    for dev_idx in range(total_mesh_devices):
+        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)[: E * M, :]
+        dispatch_sparse_torch = ttnn.to_torch(sparse_per_device[dev_idx]).reshape(-1, hidden_size)
+        dispatch_indices_torch = ttnn.to_torch(indices_per_device[dev_idx]).reshape(-1, selected_experts_k)
+
+        passing_dev, _ = verify_device_output(
+            tt_output_result=tt_output_result,
+            device_idx=dev_idx,
+            sparse_torch=dispatch_sparse_torch,
+            indices_torch=dispatch_indices_torch,
+            expert_mapping_torch=expert_mapping_torch,
+            torch_w0=torch_w0,
+            torch_w1=torch_w1,
+            torch_w2=torch_w2,
+            E=E,
+            M=M,
+            K=hidden_size,
+            total_tokens=total_tokens,
+            tokens_per_chunk=tokens_per_chunk,
+        )
+        if not passing_dev:
+            all_passing = False
+            logger.warning(f"Device {dev_idx}: FAILED")
+        else:
+            logger.info(f"Device {dev_idx}: Passed")
+
+    for t in moe_gpt_outputs:
+        ttnn.deallocate(t)
+
+    return all_passing
+
+
+# ---------------------------------------------------------------------------
 # Main e2e test function
 # ---------------------------------------------------------------------------
 
@@ -304,7 +698,9 @@ def run_test_moe_gpt_e2e(
     # On a (4,8) mesh with cluster_axis=0, each column is an independent ring.
     # For (1,6) mesh (6U test), device_id == ring_pos so both formats coincide,
     # but on (4,8) they differ: ring_pos=0..3 vs linearized_id=0,8,16,24 (col 0).
-    expert_mapping_torch = gen_expert_mapping(experts_total, ring_devices, mesh_cols)
+    expert_mapping_torch = create_expert_mapping_tensors(
+        num_devices=32, num_experts_per_device=4, mesh_device=mesh_device
+    )
 
     # Dispatch mapping: replicated on all mesh devices (each device reads its own row by linearized ID)
     tt_dispatch_mapping = ttnn.from_torch(
@@ -883,3 +1279,49 @@ def test_moe_gpt_e2e_perf(
     assert passing, "E2E dispatch+moe_gpt accuracy check failed for one or more devices"
     if perf_us is not None:
         logger.info(f"PERF RESULT: E2E avg latency = {perf_us:.1f} us")
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
+@pytest.mark.parametrize("tokens_global", [128])
+@pytest.mark.parametrize("hidden_size", [2880])
+@pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.parametrize("experts_total", [128])
+def test_dispatch(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, device_params):
+    """Test all_to_all_dispatch_metadata: verifies sparse buffer correctness per device."""
+    mesh_device.disable_and_clear_program_cache()
+    passing = run_test_dispatch(
+        mesh_device=mesh_device,
+        tokens_global=tokens_global,
+        hidden_size=hidden_size,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+    )
+    assert passing, "Dispatch sparse buffer mismatch on one or more devices"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
+@pytest.mark.parametrize("tokens_global", [128])
+@pytest.mark.parametrize("hidden_size", [2880])
+@pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.parametrize("experts_total", [128])
+def test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, device_params):
+    """Test all_to_all_dispatch_metadata: verifies sparse buffer correctness per device."""
+    mesh_device.disable_and_clear_program_cache()
+    passing = run_test_dispatch_compute(
+        mesh_device=mesh_device,
+        tokens_global=tokens_global,
+        hidden_size=hidden_size,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+    )
+    assert passing, "Dispatch sparse buffer mismatch on one or more devices"

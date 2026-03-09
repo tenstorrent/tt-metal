@@ -192,12 +192,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
 
     const uint32_t num_devices_total = mesh_view.num_devices();
 
-    // Number of devices in the ring cluster (dispatch ring along cluster_axis).
-    // batch_size = total ring tokens (tokens_per_device * num_devices_cluster), so we divide
-    // to get tokens_per_device for the CB size calculation.
-    const uint32_t num_devices_cluster =
-        axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
-
     // this should eventually be variable per device
     const uint32_t experts_per_device = experts / num_devices_total;
 
@@ -233,11 +227,8 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     // buffer padding NOT supported because we don't rely on tensor shapes to represent the data layout
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
-    // total_tokens = batch_size = total ring tokens (tokens_per_device * num_devices_cluster).
-    // CB holds tokens_per_device tokens per expert, not total ring tokens.
-    const auto tokens_per_device = total_tokens / num_devices_cluster;
     const auto expert_token_segment_buffer_block_size_bytes =
-        token_segment_buffer_size_bytes * tokens_per_device / num_token_parallel_cores;
+        token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
     const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());

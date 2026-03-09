@@ -779,25 +779,33 @@ def create_fused_moe_gpt_config(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # --- Expert routing mapping: [total_devices, num_experts] uint16, DRAM ---
-    # Both all_to_all_dispatch_metadata and moe_gpt expect [D, E] format where
-    # mapping[d, e] = linearized device ID that owns global expert e.
-    # Formula: mapping[d, e] = e // experts_per_device  (same for all d)
-    # Values are global linearized device IDs (0..total_devices-1).
-    # Dispatch (cluster_axis=0) routes only within-column experts; off-column experts are
-    # silently skipped by is_configured_target. moe_gpt identifies local experts by
-    # scanning for entries equal to its own linearized_mesh_coord.
-    # moe_gpt has no L1 requirement for the mapping — DRAM works fine.
-    num_experts = config.num_experts
-    mapping_data = torch.zeros(total_devices, num_experts, dtype=torch.int16)
-    for e in range(num_experts):
-        mapping_data[:, e] = e // experts_per_device
+    # --- Expert routing mapping: [total_devices, experts_per_ring] uint16 ---
+    # Uses ring-local expert IDs (0..experts_per_ring-1), matching the e2e test format.
+    # mapping[d, e] = (e // experts_per_device) * mesh_cols + (d % mesh_cols)
+    # This gives the linearized device ID of the device in the same column ring
+    # that owns ring-local expert e.
+    mesh_cols = total_devices // ring_devices
+    mapping_data = torch.zeros(total_devices, experts_per_ring, dtype=torch.int16)
+    for d in range(total_devices):
+        col = d % mesh_cols
+        for e in range(experts_per_ring):
+            mapping_data[d, e] = (e // experts_per_device) * mesh_cols + col
     tt_dispatch_mapping = ttnn.from_torch(
         mapping_data,
         device=mesh_device,
         dtype=ttnn.uint16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # moe_gpt mapping: same data but in L1 (required by moe_gpt kernel)
+    tt_moe_gpt_mapping = ttnn.from_torch(
+        mapping_data,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
@@ -874,6 +882,7 @@ def create_fused_moe_gpt_config(
         tt_w0_w1=tt_w0_w1,
         tt_w2=tt_w2,
         tt_dispatch_mapping=tt_dispatch_mapping,
+        tt_moe_gpt_mapping=tt_moe_gpt_mapping,
         dispatch_sparse=tt_dispatch_sparse,
         dispatch_indices=tt_dispatch_indices,
         dispatch_scores=tt_dispatch_scores,
