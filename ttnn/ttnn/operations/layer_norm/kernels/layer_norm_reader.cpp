@@ -64,6 +64,7 @@ void kernel_main() {
         const auto gamma_accessor = InterleavedAddrGenFast</*is_dram=*/true>{
             .bank_base_address = gamma_addr,
             .page_size = tile_bytes,
+            .data_format = get_dataformat(cb_gamma),
         };
 
         cb_reserve_back(cb_gamma, Wt);
@@ -82,6 +83,7 @@ void kernel_main() {
         const auto beta_accessor = InterleavedAddrGenFast</*is_dram=*/true>{
             .bank_base_address = beta_addr,
             .page_size = tile_bytes,
+            .data_format = get_dataformat(cb_beta),
         };
 
         cb_reserve_back(cb_beta, Wt);
