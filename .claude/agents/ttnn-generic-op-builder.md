@@ -53,6 +53,21 @@ This places operations within the `ttnn` package for direct import as `from ttnn
 
 ## Core APIs Reference
 
+### Entry Point Signature Convention
+
+**All operation inputs MUST be regular positional parameters.** Use `None` defaults for optional ones. Do NOT use `*,` to make inputs keyword-only.
+
+```python
+# CORRECT — all inputs are positional, optional ones have defaults:
+def my_op(input_tensor: ttnn.Tensor, gamma: ttnn.Tensor = None, beta: ttnn.Tensor = None, epsilon: float = 1e-5, memory_config=None) -> ttnn.Tensor:
+
+# WRONG — do not make inputs keyword-only:
+def my_op(input_tensor: ttnn.Tensor, *, gamma: ttnn.Tensor = None, epsilon: float = 1e-5):
+
+# WRONG — do not make optional inputs required:
+def my_op(input_tensor: ttnn.Tensor, gamma: ttnn.Tensor, beta: ttnn.Tensor):
+```
+
 ### Entry Point Pattern
 ```python
 def my_op(input_tensor: ttnn.Tensor, *, device=None, memory_config=None) -> ttnn.Tensor:
@@ -392,7 +407,9 @@ def test_{op_name}_runs(device):
 
 ## Critical Rules
 
-1. **Test execution**: Always run tests using pytest. Never open devices manually; use the `device` fixture from conftest.
+1. **Function signature convention**: All operation inputs are positional parameters (`None` default if optional). Do not use `*,` to make any inputs keyword-only. This ensures callers can pass args positionally or by keyword.
+
+2. **Test execution**: Always run tests using pytest. Never open devices manually; use the `device` fixture from conftest.
 
 2. **Output tensor position**: Output tensor MUST be last in `generic_op([..., output_tensor], ...)`
 
