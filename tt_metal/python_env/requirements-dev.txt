@@ -33,6 +33,12 @@ protobuf==3.20.2
 
 # For TT-Transformers Qwen3 support
 transformers == 4.53.0
+# [ Need Cap below 5.0 because several files still import ``AutoModelForVision2Seq``
+# (e.g. ``models/tt_transformers/tt/model_config.py`` and the multimodal
+# ``models/tt_transformers/tests/multimodal/test_llama_*.py`` tests). The class
+# was deprecated in 4.x and removed in transformers 5.0; remove this ceiling
+# once every usage of ``AutoModelForVision2Seq`` has been migrated to
+# ``AutoModelForImageTextToText``. ]
 huggingface-hub >= 0.30.0
 
 # testing
@@ -42,8 +48,8 @@ pytest-timeout==2.4.0
 pytest-split==0.10.0
 pytest-benchmark==5.1.0
 jsbeautifier==1.14.7
-datasets==2.9.0
-pyarrow==20.0.0
+datasets>=4.7.0
+pyarrow>=21.0.0
 torch==2.7.1 ; platform_machine == 'aarch64'
 networkx==3.1
 torchvision==0.22.1 ; platform_machine == 'aarch64'
