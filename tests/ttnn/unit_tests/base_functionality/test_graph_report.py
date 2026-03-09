@@ -2566,7 +2566,6 @@ class TestLinearModelE2E:
         conn.close()
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.fixture
 def imagenet_label_dict():
     import ast
@@ -2577,6 +2576,7 @@ def imagenet_label_dict():
         return ast.literal_eval(f.read())
 
 
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
