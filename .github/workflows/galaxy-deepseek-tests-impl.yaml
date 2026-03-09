@@ -208,6 +208,7 @@ jobs:
           )'
           CI_FUSED_OP_DEVICE_PERF_K_EXPR="$(printf '%s' "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
           pytest models/demos/deepseek_v3/tests/fused_op_unit_tests -k "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" --timeout 600 --durations=0
+
           echo "=============================================="
           echo "All device perf tests completed!"
           echo "=============================================="
