@@ -71,11 +71,12 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     const double pcc_threshold = 0.95;
 
     // Initialize device
-    auto device = ttnn::MeshDevice::create_unit_mesh(0,
-                                                    /*l1_small_size=*/24576,
-                                                    /*trace_region_size=*/6434816,
-                                                    /*num_command_queues=*/2,
-                                                    /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
+    auto device = ttnn::MeshDevice::create_unit_mesh(
+        0,
+        /*l1_small_size=*/24576,
+        /*trace_region_size=*/6434816,
+        /*num_command_queues=*/2,
+        /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
 
     // Setup base address
     std::string base_address = "model.";
@@ -84,7 +85,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     auto [state_dict, model] = load_deit_image_classification_with_teacher_model(model_path);
 
     // Use a sample image path for testing (you can replace this with any valid image file)
-    std::string test_image_path ="models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
+    std::string test_image_path = "models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
 
     torch::Tensor pixel_values = image_utils::load_and_preprocess_image(test_image_path);
 
@@ -103,9 +104,9 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
         // The output structure depends on the traced model format
         if (output.isTuple()) {
             auto output_tuple = output.toTuple();
-            torch_averaged_logits = output_tuple->elements()[0].toTensor(); // Averaged logits
-            torch_cls_logits = output_tuple->elements()[1].toTensor(); // CLS logits
-            torch_distillation_logits = output_tuple->elements()[2].toTensor(); // Distillation logits
+            torch_averaged_logits = output_tuple->elements()[0].toTensor();      // Averaged logits
+            torch_cls_logits = output_tuple->elements()[1].toTensor();           // CLS logits
+            torch_distillation_logits = output_tuple->elements()[2].toTensor();  // Distillation logits
         } else {
             // If only one output, assume it's the averaged logits
             torch_averaged_logits = output.toTensor();
@@ -133,7 +134,19 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     // Convert input to TT tensor
     // Permute to NHWC for Conv2d input (required by TtDeiTPatchEmbeddings)
     auto pixel_values_nhwc = pixel_values.permute({0, 2, 3, 1}).contiguous();
-    auto tt_input = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR).to_device(device.get());
+
+    // Pad channel dimension to 16 if needed (required for TILE layout)
+    if (pixel_values_nhwc.size(3) < 16) {
+        auto options = torch::TensorOptions().dtype(pixel_values_nhwc.dtype()).device(pixel_values_nhwc.device());
+        auto padded = torch::zeros(
+            {pixel_values_nhwc.size(0), pixel_values_nhwc.size(1), pixel_values_nhwc.size(2), 16}, options);
+        using namespace torch::indexing;
+        padded.index_put_({Slice(), Slice(), Slice(), Slice(0, pixel_values_nhwc.size(3))}, pixel_values_nhwc);
+        pixel_values_nhwc = padded;
+    }
+
+    auto tt_input = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR)
+                        .to_device(device.get(), ttnn::L1_MEMORY_CONFIG);
 
     // Run TT model inference
     std::optional<ttnn::Tensor> head_mask = std::nullopt;
@@ -141,13 +154,13 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     bool output_hidden_states = false;
     bool return_dict = true;
 
-    auto [tt_averaged_logits, tt_cls_logits, tt_distillation_logits, attention_weights, hidden_states] = tt_model.forward(
-        tt_input,
-        head_mask.has_value() ? &head_mask.value() : nullptr,
-        output_attentions,
-        output_hidden_states,
-        return_dict
-    );
+    auto [tt_averaged_logits, tt_cls_logits, tt_distillation_logits, attention_weights, hidden_states] =
+        tt_model.forward(
+            tt_input,
+            head_mask.has_value() ? &head_mask.value() : nullptr,
+            output_attentions,
+            output_hidden_states,
+            return_dict);
 
     // Convert TT outputs back to torch tensors
     auto tt_averaged_logits_host = ttnn::from_device(tt_averaged_logits);
@@ -161,7 +174,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
 
     // Ensure output shapes match for comparison
     if (tt_averaged_output_torch.dim() > torch_averaged_logits.dim()) {
-        tt_averaged_output_torch = tt_averaged_output_torch.squeeze(0); // Remove batch dimension if needed
+        tt_averaged_output_torch = tt_averaged_output_torch.squeeze(0);  // Remove batch dimension if needed
     }
     if (tt_cls_output_torch.dim() > torch_cls_logits.dim()) {
         tt_cls_output_torch = tt_cls_output_torch.squeeze(0);
@@ -172,8 +185,11 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
 
     // Compute PCC between PyTorch and TT outputs
     double pcc_averaged = helper_funcs::compute_pcc(torch_averaged_logits, tt_averaged_output_torch);
-    double pcc_cls = torch_cls_logits.defined() ? helper_funcs::compute_pcc(torch_cls_logits, tt_cls_output_torch) : 0.0;
-    double pcc_distillation = torch_distillation_logits.defined() ? helper_funcs::compute_pcc(torch_distillation_logits, tt_distillation_output_torch) : 0.0;
+    double pcc_cls =
+        torch_cls_logits.defined() ? helper_funcs::compute_pcc(torch_cls_logits, tt_cls_output_torch) : 0.0;
+    double pcc_distillation = torch_distillation_logits.defined()
+                                  ? helper_funcs::compute_pcc(torch_distillation_logits, tt_distillation_output_torch)
+                                  : 0.0;
 
     // Log results
     std::cout << "PCC between PyTorch and TT averaged logits: " << pcc_averaged << std::endl;
@@ -216,24 +232,28 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
 
     // Warmup run
     {
-         tt_model.forward(
+        tt_model.forward(
             tt_input,
             head_mask.has_value() ? &head_mask.value() : nullptr,
             output_attentions,
             output_hidden_states,
-            return_dict
-        );
+            return_dict);
     }
 
     // Trace Capture
     auto tid = ttnn::operations::trace::begin_trace_capture(device.get(), ttnn::QueueId(0));
-    auto [tt_averaged_logits_trace, tt_cls_logits_trace, tt_distillation_logits_trace, attention_weights_trace, hidden_states_trace] = tt_model.forward(
-        tt_input,
-        head_mask.has_value() ? &head_mask.value() : nullptr,
-        output_attentions,
-        output_hidden_states,
-        return_dict
-    );
+    auto
+        [tt_averaged_logits_trace,
+         tt_cls_logits_trace,
+         tt_distillation_logits_trace,
+         attention_weights_trace,
+         hidden_states_trace] =
+            tt_model.forward(
+                tt_input,
+                head_mask.has_value() ? &head_mask.value() : nullptr,
+                output_attentions,
+                output_hidden_states,
+                return_dict);
     ttnn::operations::trace::end_trace_capture(device.get(), tid, ttnn::QueueId(0));
 
     // Events for 2CQ
@@ -265,7 +285,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
 
     double inference_time_total = profiler.get("inference_time");
     double sync_time_total = profiler.get("sync_output");
-    double inference_time_avg = (inference_time_total) / 10.0;
+    double inference_time_avg = (inference_time_total + sync_time_total) / 10.0;
     double fps = batch_size / inference_time_avg;
 
     std::cout << std::fixed << std::setprecision(6);
@@ -278,8 +298,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     device->close();
 }
 
-
-} // anonymous namespace
+}  // anonymous namespace
 
 int main(int argc, char** argv) {
     try {

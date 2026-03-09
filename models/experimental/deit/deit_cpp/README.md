@@ -42,8 +42,6 @@
   - [bin2pt.py](deit_model/bin2pt.py) — downloads Hugging Face models and exports TorchScript files used by the C++ tests
 
 ## Run
-- End-to-end model:
-  - ./build/test_deit/test_deit_model models/experimental/deit/deit_cpp/deit_model/deit_classifier_model.pt
 - Image classification:
   - ./build/test_deit/test_deit_for_image_classification models/experimental/deit/deit_cpp/deit_model/deit_classifier_model.pt
 - Distilled teacher variant:
@@ -53,4 +51,5 @@
 
 
 ## Result
-- ttnn_deit_224x224_batch_size_1. One inference iteration time (sec): 0.012335, FPS: 81.07, inference time (sec): 0.077563, sync output time(sec): 0.045783
+- Test Perf:
+  - ttnn_deit_224x224_batch_size_1. One inference iteration time (sec): 0.012335, FPS: 81.07, inference time (sec): 0.077563, sync output time(sec): 0.045783
