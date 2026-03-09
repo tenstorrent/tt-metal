@@ -911,7 +911,7 @@ def test_group_norm_negative_tests(
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
     [
-        (1, 480, 8, 8, 32),
+        (1, 480, 8, 8, 16),
         (1, 320, 32, 32, 32),
         (1, 1280, 16, 16, 32),
     ],
@@ -963,6 +963,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
         core_grid=grid_size,
         inplace=False,
         num_out_blocks=1,
+        use_welford=True,
     )
 
     tt_output = ttnn.from_device(tt_output)
