@@ -66,6 +66,18 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+#ifdef FUSE_PRE_ADD
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+#endif
+#ifdef FUSE_GAMMA
+    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+#endif
+#ifdef FUSE_BETA
+    experimental::CircularBuffer cb_beta(cb_id_beta);
+#endif
+
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
     constexpr auto src0_args = TensorAccessorArgs<2>();
@@ -133,16 +145,16 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #else
         // TILE: read input a and b (if present) interleaved per block.
         for (auto block : generic::blocks(Wt, block_size)) {
             const uint32_t flat_offset = curr_tile_row * Wt + block.start();
-            layernorm_dataflow_utils::read_block_to_cb(cb_id_in0, src_a, src0_page_bytes, flat_offset, block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, cb_in0, src_a, src0_page_bytes, flat_offset, block);
 #ifdef FUSE_PRE_ADD
-            layernorm_dataflow_utils::read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, flat_offset, block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, cb_in1, src_b, src1_tile_bytes, flat_offset, block);
 #endif
         }
 #endif
@@ -152,10 +164,10 @@ void kernel_main() {
         if (ncht == 0) {
             for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef FUSE_GAMMA
-                layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(noc, cb_gamma, addrg, gamma_tile_bytes, block.start(), block);
 #endif
 #ifdef FUSE_BETA
-                layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(noc, cb_beta, addrb, beta_tile_bytes, block.start(), block);
 #endif
             }  // wt loop
         }
