@@ -4016,6 +4016,7 @@ class MoeOp:
         reconfig_moe_cbs=False,
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        cb_id_context=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -4023,8 +4024,11 @@ class MoeOp:
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
 
-        self.cb_id_manager = CircularBufferIdManager()
-        cb_id_context = self.cb_id_manager.create_context()
+        if cb_id_context is None:
+            self.cb_id_manager = CircularBufferIdManager()
+            cb_id_context = self.cb_id_manager.create_context()
+        else:
+            self.cb_id_manager = cb_id_context._manager
 
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             shared_residual_mcast_src_tensor,
