@@ -267,8 +267,24 @@ Tensor convert_python_tensor_to_tt_tensor(
         device.value_or(nullptr),
         preserve_nan_values);
 
-    output = ttnn::to_layout(output, layout);
-    output = ttnn::typecast(output, dst_dtype);
+    auto set_layout = [&](Layout target) {
+        if (output.layout() != target) {
+            output = ttnn::to_layout(output, target);
+        }
+    };
+
+    if (device) {
+        output = output.to_device(device.value(), memory_config, cq_id);
+        if (output.dtype() != dst_dtype) {
+            // Need to perform final data conversion on device, typecast requires TILE layout.
+            set_layout(Layout::TILE);
+            output = ttnn::typecast(output, dst_dtype);
+        }
+
+        set_layout(layout);
+    } else {
+        set_layout(layout);
+    }
 
     GraphTracker::instance().track_function_end(output);
     return output;
