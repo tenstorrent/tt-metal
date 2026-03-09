@@ -224,9 +224,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_device_role"),
         get_named_compile_time_arg_val("reduce_num_tiles"),
         get_named_compile_time_arg_val("reduce_local_cb"),
-        get_named_compile_time_arg_val("reduce_received_cb_r1"),
-        get_named_compile_time_arg_val("reduce_received_cb_r2"),
-        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
         get_named_compile_time_arg_val("is_reduce_fabric_core")>;
 
     // Reader runtime args
@@ -598,9 +596,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_device_role"),
         get_named_compile_time_arg_val("reduce_num_tiles"),
         get_named_compile_time_arg_val("reduce_local_cb"),
-        get_named_compile_time_arg_val("reduce_received_cb_r1"),
-        get_named_compile_time_arg_val("reduce_received_cb_r2"),
-        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
         get_named_compile_time_arg_val("reduce_output_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("is_reduce_fabric_core")>;
