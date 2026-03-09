@@ -65,18 +65,21 @@ def load_neck_weights(
 
     params: Dict = {"convs": {}, "extra_convs": {}}
 
-    # Main 1x1 convolutions (P2-P5)
     for i in range(len(in_channels)):
         prefix = f"neck.convs.{i}"
-        conv_w = _get(sd, f"{prefix}.conv.weight")  # [out, in, 1, 1]
-        conv_b = torch.zeros(1, 1, 1, out_channels)
-        gn_w = _get(sd, f"{prefix}.gn.weight")  # [256]
-        gn_b = _get(sd, f"{prefix}.gn.bias")  # [256]
+        conv_w = _get(sd, f"{prefix}.conv.weight")
+        gn_w = _get(sd, f"{prefix}.gn.weight")
+        gn_b = _get(sd, f"{prefix}.gn.bias")
 
         params["convs"][i] = {
             "conv": {
                 "weight": ttnn.from_torch(conv_w, dtype=ttnn.bfloat16),
-                "bias": ttnn.from_torch(conv_b, dtype=ttnn.bfloat16),
+                "bias": ttnn.zeros(
+                    (1, 1, 1, out_channels),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                ),
             },
             "gn": {
                 "_torch_w": gn_w,
@@ -84,17 +87,20 @@ def load_neck_weights(
             },
         }
 
-    # Extra 3x3 stride-2 conv (P6)
     prefix = "neck.extra_convs.0"
-    conv_w = _get(sd, f"{prefix}.conv.weight")  # [256, 1536, 3, 3]
-    conv_b = torch.zeros(1, 1, 1, out_channels)
+    conv_w = _get(sd, f"{prefix}.conv.weight")
     gn_w = _get(sd, f"{prefix}.gn.weight")
     gn_b = _get(sd, f"{prefix}.gn.bias")
 
     params["extra_convs"][0] = {
         "conv": {
             "weight": ttnn.from_torch(conv_w, dtype=ttnn.bfloat16),
-            "bias": ttnn.from_torch(conv_b, dtype=ttnn.bfloat16),
+            "bias": ttnn.zeros(
+                (1, 1, 1, out_channels),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            ),
         },
         "gn": {
             "_torch_w": gn_w,
