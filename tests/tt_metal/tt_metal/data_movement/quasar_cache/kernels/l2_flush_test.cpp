@@ -6,6 +6,7 @@
 // Writes values to cacheable memory and flushes using various L2 flush functions.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "risc_common.h"
 
 void kernel_main() {
@@ -17,11 +18,15 @@ void kernel_main() {
     uint32_t value = get_common_arg_val<uint32_t>(0);
     uint32_t num_words = get_common_arg_val<uint32_t>(1);
 
+    DPRINT << "START mode=" << test_mode << " words=" << num_words << ENDL();
+
     // Write values to cacheable addresses
     volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)base_addr;
     for (uint32_t i = 0; i < num_words; i++) {
         ptr[i] = value + i;
     }
+
+    DPRINT << "WRITES DONE" << ENDL();
 
     // Flush based on test mode
     switch (test_mode) {
@@ -40,4 +45,6 @@ void kernel_main() {
             flush_l2_cache_full();
             break;
     }
+
+    DPRINT << "FLUSH DONE" << ENDL();
 }
