@@ -457,7 +457,7 @@ typename device_operation_t::tensor_return_value_t launch(
 
         if (!custom_topologies.empty()) {
             // Use custom topologies provided by the op
-            tt::stl::reflection::visit_object_of_type<Tensor>(
+            tt::stl::reflection::update_object_of_type<Tensor>(
                 [&custom_topologies, topology_idx = size_t{0}](Tensor& output_tensor) mutable {
                     TT_FATAL(
                         topology_idx < custom_topologies.size(),
@@ -471,7 +471,7 @@ typename device_operation_t::tensor_return_value_t launch(
             auto output_topology_result =
                 detail::compute_output_placements_and_shape(input_tensors, first_tensor.value());
 
-            tt::stl::reflection::visit_object_of_type<Tensor>(
+            tt::stl::reflection::update_object_of_type<Tensor>(
                 [&output_topology_result](Tensor& output_tensor) {
                     auto topology = tt::tt_metal::TensorTopology(
                         output_topology_result.second,
