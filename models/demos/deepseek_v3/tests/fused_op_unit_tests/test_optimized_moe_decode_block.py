@@ -31,12 +31,24 @@ def tt_to_torch_dtype(tt_dtype):
         raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
+def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, experts_per_cluster, experts_per_device):
+    if cluster_axis == 0:
+        cluster_id = expert_id // experts_per_cluster
+        expert_id_within_cluster = expert_id % experts_per_cluster
+        device_id_within_cluster = expert_id_within_cluster // experts_per_device
+
+        return device_id_within_cluster * num_replicated_devices + cluster_id
+    else:
+        return expert_id // experts_per_device
+
+
 def create_torch_w0_tensors(L, E, H, N):
     torch_w0_tensors = []
     for e in range(E):
         torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
         torch_w0_tensors.append(torch_w0)
 
+    # [E, L, 1, H, N]
     return torch_w0_tensors
 
 
@@ -46,6 +58,7 @@ def create_torch_w1_tensors(L, E, H, N):
         torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
         torch_w1_tensors.append(torch_w1)
 
+    # [E, L, 1, H, N]
     return torch_w1_tensors
 
 
@@ -55,35 +68,77 @@ def create_torch_w2_tensors(L, E, N, H):
         torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
         torch_w2_tensors.append(torch_w2)
 
+    # [E, L, 1, N, H]
     return torch_w2_tensors
 
 
-def gen_torch_expert_mapping_tensor(experts_per_cluster, dispatch_devices, devices, experts, experts_per_device, dtype):
-    replicated_devices = devices // dispatch_devices
+def determine_compute_matmul_cores(mesh_device):
+    MATMUL_FULL_CORES = {0, 3, 6, 9}
+    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
 
-    torch_expert_mapping_tensor = torch.empty(experts, dtype=tt_to_torch_dtype(dtype))
+    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
+    core2dram = {}
+    for dram_bank_id, core_coords in enumerate(in0_core_coords):
+        core2dram[core_coords] = dram_bank_id
+
+    in0_num_cores = len(in0_core_coords)
+
+    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
+
+    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
+    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+    return ring2cores, dram_core_range_set
+
+
+def create_torch_prepared_compute_matmul_weight_tensors(
+    torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
+):
+    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
+    torch_w0_w1_reordered = prepare_w0_w1_tensor(
+        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+    )
+
+    # Prepare w2 tensor (padded and reordered)
+    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+
+    return torch_w0_w1_reordered, torch_w2_reordered
+
+
+def create_torch_expert_mapping_tensor(
+    num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device, dtype
+):
+    torch_expert_mapping_tensor = torch.empty((1, experts), dtype=tt_to_torch_dtype(dtype))
     for e in range(experts):
-        cluster = e // experts_per_cluster
-        expert_id_within_cluster = e % experts_per_cluster
-        device_id_within_cluster = expert_id_within_cluster // experts_per_device
+        torch_expert_mapping_tensor[0, e] = get_linearized_mesh_coord(
+            num_replicated_devices, cluster_axis, e, experts_per_cluster, experts_per_device
+        )
 
-        linearized_mesh_coord = device_id_within_cluster * replicated_devices + cluster
-        torch_expert_mapping_tensor[e] = linearized_mesh_coord
+    torch_expert_mapping_tensor = torch_expert_mapping_tensor.repeat(num_devices, 1)
 
-    torch_expert_mapping_tensor = torch_expert_mapping_tensor.unsqueeze(0).repeat(devices, 1)
+    # [num_devices, experts]
     return torch_expert_mapping_tensor
 
 
-def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
+def create_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
     tokens = []
     for _ in range(batch):
         for _ in range(seq):
             tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) - 0.5)
     res = torch.cat(tokens, dim=0)
+
+    # [batch, 1, seq, hidden_size]
     return res.reshape(batch, 1, seq, hidden_size)
 
 
-def gen_torch_dispatch_input_expert_indices_tensor(
+def create_torch_dispatch_input_expert_indices_tensor(
     scheme,
     devices,
     experts,
@@ -110,20 +165,16 @@ def gen_torch_dispatch_input_expert_indices_tensor(
             token += 1
             for k in range(selected_experts_k):
                 if scheme == "sequential":
-                    expert = b // 2
-                    expert += k
-                    expert %= 256
-                    expert_indices[b, 0, s, k] = expert
-
-                    # TODO: (GR)
-                    # expert_indices[b, 0, s, k] = current_expert % experts
-                    # current_expert += 1 + (k % 2)
+                    expert_indices[b, 0, s, k] = current_expert % experts
+                    current_expert += 1 + (k % 2)
                 elif scheme == "random" or scheme == "random_sequential_experts":
                     # need to ensure a set of unique indices
                     current_indices = expert_indices[b, 0, s, :].tolist()
                     expert_indices[b, 0, s, k] = random.choice(
                         list(filter(lambda e: e not in current_indices, range(experts)))
                     )
+                elif scheme == "sliding_window":
+                    expert_indices[b, 0, s, k] = ((b // experts_per_device) + k) % experts
                 elif scheme == "avg_perf":
                     # Random selection but each expert is capped at max_tokens_per_expert
                     # to simulate average performance case
@@ -269,10 +320,11 @@ def gen_torch_dispatch_input_expert_indices_tensor(
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
 
+    # [batch, 1, seq, selected_experts_k]
     return expert_indices
 
 
-def gen_torch_dispatch_input_export_scores_tensor(dispatch_input_expert_indices_shape, dtype):
+def create_torch_dispatch_input_export_scores_tensor(dispatch_input_expert_indices_shape, dtype):
     # Generate expert scores (same shape as expert_indices)
     # Normalize scores so they sum to 1 per token (softmax-like)
     torch_dispatch_input_expert_scores_tensor = torch.rand(dispatch_input_expert_indices_shape, dtype=torch.float32).to(
@@ -283,54 +335,6 @@ def gen_torch_dispatch_input_export_scores_tensor(dispatch_input_expert_indices_
     )
 
     return torch_dispatch_input_expert_scores_tensor
-
-
-def gen_compute_matmul_cores(mesh_device):
-    MATMUL_FULL_CORES = {0, 3, 6, 9}
-    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
-
-    return ring2cores, dram_core_range_set
-
-
-def gen_torch_compute_matmul_weight_tensors(num_layers, experts, hidden_size, N):
-    torch_w0_tensors = create_torch_w0_tensors(num_layers, experts, hidden_size, N)
-    torch_w1_tensors = create_torch_w1_tensors(num_layers, experts, hidden_size, N)
-    torch_w2_tensors = create_torch_w2_tensors(num_layers, experts, N, hidden_size)
-
-    return torch_w0_tensors, torch_w1_tensors, torch_w2_tensors
-
-
-def gen_torch_prepared_compute_matmul_weight_tensors(
-    torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
-):
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
-    )
-
-    # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
-
-    return torch_w0_w1_reordered, torch_w2_reordered
 
 
 def gen_matmul_golden(torch_input_token, torch_w0, torch_w1, torch_w2):
@@ -576,14 +580,14 @@ def test_optimized_moe_decode_block(
     torch.manual_seed(2005)
     random.seed(2005)
 
-    devices = mesh_shape[0] * mesh_shape[1]
-    dispatch_devices = mesh_shape[cluster_axis]
-    rs_devices = devices // dispatch_devices
-    batch = batches_per_device * dispatch_devices
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    num_dispatch_devices = mesh_shape[cluster_axis]
+    num_replicated_devices = num_devices // num_dispatch_devices
+    batch = batches_per_device * num_dispatch_devices
     total_tokens = batch * seq
-    tokens_per_device = batch // dispatch_devices
-    experts_per_device = experts // devices
-    experts_per_cluster = experts // (devices // dispatch_devices)
+    tokens_per_device = batch // num_dispatch_devices
+    experts_per_device = experts // num_devices
+    experts_per_cluster = experts // num_replicated_devices
 
     if cluster_axis == 1:
         shard_dims = (None, shard_dim)
@@ -615,8 +619,14 @@ def test_optimized_moe_decode_block(
     logger.info(f"Begin creating constant input tensors")
 
     expert_mapping_dtype = ttnn.uint16
-    torch_expert_mapping = gen_torch_expert_mapping_tensor(
-        experts_per_cluster, dispatch_devices, devices, experts, experts_per_device, expert_mapping_dtype
+    torch_expert_mapping = create_torch_expert_mapping_tensor(
+        num_devices,
+        num_replicated_devices,
+        cluster_axis,
+        experts,
+        experts_per_cluster,
+        experts_per_device,
+        expert_mapping_dtype,
     )
     tt_expert_mapping = ttnn.from_torch(
         torch_expert_mapping,
@@ -630,10 +640,11 @@ def test_optimized_moe_decode_block(
     # ------------------------------------------------------------------------
     # Matmul weights
     # ------------------------------------------------------------------------
-    ring2cores, compute_matmul_dram_core_range_set = gen_compute_matmul_cores(mesh_device)
-    torch_w0_tensors, torch_w1_tensors, torch_w2_tensors = gen_torch_compute_matmul_weight_tensors(
-        num_layers, experts, hidden_size, matmul_N
-    )
+    torch_w0_tensors = create_torch_w0_tensors(num_layers, experts, hidden_size, matmul_N)
+    torch_w1_tensors = create_torch_w1_tensors(num_layers, experts, hidden_size, matmul_N)
+    torch_w2_tensors = create_torch_w2_tensors(num_layers, experts, matmul_N, hidden_size)
+
+    ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
     # Merge the weight tensors that belong to different experts on the same device
     # Then reorder the merged weights into their sharded format
@@ -644,7 +655,7 @@ def test_optimized_moe_decode_block(
         torch_w1 = torch.cat([torch_w1_tensors[i], torch_w1_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
         torch_w2 = torch.cat([torch_w2_tensors[i], torch_w2_tensors[i + 1]], dim=1)  # (L, 1, N, H) -> (L, E/D, N, H)
 
-        torch_w0_w1_reordered, torch_w2_reordered = gen_torch_prepared_compute_matmul_weight_tensors(
+        torch_w0_w1_reordered, torch_w2_reordered = create_torch_prepared_compute_matmul_weight_tensors(
             torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, matmul_N, ring2cores
         )
 
@@ -750,12 +761,12 @@ def test_optimized_moe_decode_block(
         dispatch_input_expert_indices_dtype = ttnn.uint16
         dispatch_input_expert_scores_dtype = ttnn.bfloat16
 
-        torch_dispatch_input_tensor = gen_torch_dispatch_input_tensor(
+        torch_dispatch_input_tensor = create_torch_dispatch_input_tensor(
             scheme, batch, seq, hidden_size, dispatch_input_dtype
         )
-        torch_dispatch_input_expert_indices_tensor = gen_torch_dispatch_input_expert_indices_tensor(
+        torch_dispatch_input_expert_indices_tensor = create_torch_dispatch_input_expert_indices_tensor(
             scheme,
-            devices,
+            num_devices,
             experts,
             total_tokens,
             experts_per_device,
@@ -765,7 +776,7 @@ def test_optimized_moe_decode_block(
             select_experts_k,
             dispatch_input_expert_indices_dtype,
         )
-        torch_dispatch_input_expert_scores_tensor = gen_torch_dispatch_input_export_scores_tensor(
+        torch_dispatch_input_expert_scores_tensor = create_torch_dispatch_input_export_scores_tensor(
             torch_dispatch_input_expert_indices_tensor.shape, dispatch_input_expert_scores_dtype
         )
 
@@ -832,7 +843,7 @@ def test_optimized_moe_decode_block(
     logger.info(f"Begin creating persistent dispatch output tensors")
 
     dispatch_output_sparse_buffer_dtype = ttnn.bfloat16
-    dispatch_output_sparse_buffer_shape = [dispatch_devices, total_tokens, hidden_size]
+    dispatch_output_sparse_buffer_shape = [num_dispatch_devices, total_tokens, hidden_size]
     tt_preallocated_dispatch_output_sparse_buffer = ttnn.from_torch(
         torch.zeros(dispatch_output_sparse_buffer_shape, dtype=tt_to_torch_dtype(dispatch_output_sparse_buffer_dtype)),
         device=mesh_device,
@@ -858,7 +869,7 @@ def test_optimized_moe_decode_block(
         dispatch_output_shard_spec,
     )
     dispatch_output_expert_indices_dtype = ttnn.uint16
-    disptach_output_expert_indices_shape = [dispatch_devices, total_tokens, select_experts_k]
+    disptach_output_expert_indices_shape = [num_dispatch_devices, total_tokens, select_experts_k]
     tt_preallocated_dispatch_output_expert_indices = ttnn.from_torch(
         torch.zeros(
             disptach_output_expert_indices_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_indices_dtype)
@@ -879,7 +890,7 @@ def test_optimized_moe_decode_block(
         dispatch_output_shard_spec,
     )
     dispatch_output_expert_scores_dtype = ttnn.bfloat16
-    disptach_output_expert_scores_shape = [dispatch_devices, total_tokens, select_experts_k]
+    disptach_output_expert_scores_shape = [num_dispatch_devices, total_tokens, select_experts_k]
     tt_preallocated_dispatch_output_expert_scores = ttnn.from_torch(
         torch.zeros(disptach_output_expert_scores_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_scores_dtype)),
         device=mesh_device,
@@ -1055,7 +1066,7 @@ def test_optimized_moe_decode_block(
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
             tt_scaled_output,
             dim=0,
-            split_size=int(tt_scaled_output.shape[-1] // rs_devices),
+            split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
             output_memory_config=fast_reduce_output_memory_config,
         )
 
