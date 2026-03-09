@@ -25,7 +25,9 @@
  */
 
 #include <gtest/gtest.h>
+#ifdef HAVE_MPFR
 #include <mpfr.h>
+#endif
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
@@ -231,6 +233,7 @@ inline float tanh_expected_bf16_daz(float x) {
 // tanh reference: MPFR-256 (platinum)
 // =============================================================================
 
+#ifdef HAVE_MPFR
 inline float tanh_mpfr256_bf16_daz(float x) {
     float x_daz = bf16_ulp_tanh_fw::bf16_daz_normalize(x);
 
@@ -248,6 +251,7 @@ inline float tanh_mpfr256_bf16_daz(float x) {
 
     return bf16_ulp_tanh_fw::bf16_daz_normalize(result);
 }
+#endif  // HAVE_MPFR
 
 // =============================================================================
 // Test Fixture
@@ -725,6 +729,8 @@ TEST_F(TanhFwUlpTest, UlpCalculatorVerification) {
 // Validates that our fp64 golden reference (std::tanh) produces the same
 // BF16 result as the MPFR-256 platinum reference across all valid BF16 values.
 // Any disagreement means the golden reference has insufficient precision.
+// Requires libmpfr-dev; skipped when MPFR is not available.
+#ifdef HAVE_MPFR
 TEST_F(TanhFwUlpTest, PlatinumReferenceVerification) {
     auto all_values = bf16_ulp_tanh_fw::all_valid_bf16_values();
 
@@ -767,5 +773,6 @@ TEST_F(TanhFwUlpTest, PlatinumReferenceVerification) {
                              << "Last mismatch at x=" << worst_x << ": golden=" << worst_golden
                              << " platinum=" << worst_platinum;
 }
+#endif  // HAVE_MPFR
 
 }  // namespace ttnn::test

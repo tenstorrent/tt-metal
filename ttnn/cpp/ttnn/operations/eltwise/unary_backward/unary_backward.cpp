@@ -291,7 +291,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
     DataType output_dtype = input.dtype();
