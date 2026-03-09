@@ -42,7 +42,7 @@
 //
 // =============================================================================
 
-#define NOC_API_V1
+#define NOC_API_V2
 
 #if !defined(NOC_API_V2)
 #include "noc_nonblocking_api_v1.h"

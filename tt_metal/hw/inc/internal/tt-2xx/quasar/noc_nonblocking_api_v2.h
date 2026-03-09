@@ -83,7 +83,7 @@ constexpr uint64_t CMD_BUF_MISC_PATH_RES_DISABLE = (1 << 18);   // bit 18: path 
 // Pre-defined MISC register values for common transaction types
 // ============================================================================
 // Read transaction: write_trans=0, atomic_trans=0, posted=0 → all bits clear
-constexpr uint64_t CMD_BUF_MISC_READ = 0;
+constexpr uint64_t CMD_BUF_MISC_READ = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;
 
 // Unicast write: write_trans=1
 constexpr uint64_t CMD_BUF_MISC_WRITE = CMD_BUF_MISC_WRITE_TRANS;
