@@ -13,6 +13,7 @@
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#include "api/compute/experimental/tile_move_copy_custom.h"
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -120,7 +121,13 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
  * Per-row-group max reduction with optional eltwise_max against prev values.
  * Reads from in0_cb at row group offset, writes to out_cb sequentially.
  */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t ROW_STRIDE = cols>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t scale_cb,
+    uint32_t cols,
+    uint32_t ROW_STRIDE = cols,
+    bool respect_trigger = false>
 void reduce_c_row_group(
     uint32_t in0_cb,
     uint32_t out_cb,
@@ -128,8 +135,7 @@ void reduce_c_row_group(
     uint32_t row_group_index,
     bool do_eltwise_max,
     uint32_t SBH,
-    uint32_t reduce_cols = cols,
-    bool respect_trigger = false) {
+    uint32_t reduce_cols = cols) {
     const uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
@@ -144,9 +150,10 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         cb_wait_front(prev_cb, cumulative_prev_tiles);
-        sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
+        // sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-            copy_tile(prev_cb, row_start + i, i);
+            // copy_tile(prev_cb, row_start + i, i);
+            copy_tile_custom(prev_cb, row_start + i, i);
         }
     }
 
@@ -159,12 +166,43 @@ void reduce_c_row_group(
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+    // if (do_eltwise_max) {
+    //     reduce_block_max_row_reinit_runtime(reduce_cols, respect_trigger);
+    // } else {
+    //     reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+    // }
+#ifdef ARCH_BLACKHOLE
+    if (!do_eltwise_max) {
+        reduce_block_max_row_init<cols, respect_trigger>();
+    } else if (row_group_index == 0) {
+        // After sub_exp + matmul, need full MOP reprogramming
+        reduce_block_max_row_reinit_short<cols, respect_trigger>();
+    } else {
+        // Within same K chunk, sub_exp custom + mm_no_mop doesn't disturb reduce MOP
+        reduce_block_max_row_reinit_minimal<cols, respect_trigger>();
+    }
+#endif
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+        reduce_block_max_row<cols, respect_trigger>(in0_cb, scale_cb, input_tile_start, i);
     }
-    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
+    reduce_block_max_row_uninit<false, respect_trigger>(in0_cb);
+    // #ifdef ARCH_BLACKHOLE
+    //     if (!do_eltwise_max) {
+    //         reduce_block_max_row_init_runtime(cols, respect_trigger);
+    //     } else if (row_group_index == 0) {
+    //         // After sub_exp + matmul, need full MOP reprogramming
+    //         reduce_block_max_row_reinit_short_runtime(cols, respect_trigger);
+    //     } else {
+    //         // Within same K chunk, sub_exp custom + mm_no_mop doesn't disturb reduce MOP
+    //         reduce_block_max_row_reinit_minimal_runtime(cols, respect_trigger);
+    //     }
+    // #endif
+    //     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+    //         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
+    //         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+    //     }
+    //     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -827,15 +865,24 @@ static void sdpa_inner_loop_step(
 #endif
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, KT_stride>(
-                cb_qkt_im,
-                cur_max,
-                prev_max,
-                q_subblock,
-                !is_first_iter /*do_eltwise_max*/,
-                sbh,
-                active_Sk,
-                reduce_trigger);
+            // Generate both code paths for compile-time optimization.
+            if (reduce_trigger) {
+                reduce_c_row_group<
+                    PoolType::MAX,
+                    ReduceDim::REDUCE_ROW,
+                    cb_identity_scale_in,
+                    Sk_chunk_t,
+                    KT_stride,
+                    true>(cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/, sbh, active_Sk);
+            } else {
+                reduce_c_row_group<
+                    PoolType::MAX,
+                    ReduceDim::REDUCE_ROW,
+                    cb_identity_scale_in,
+                    Sk_chunk_t,
+                    KT_stride,
+                    false>(cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/, sbh, active_Sk);
+            }
             cb_push_back(cur_max, sbh);
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
