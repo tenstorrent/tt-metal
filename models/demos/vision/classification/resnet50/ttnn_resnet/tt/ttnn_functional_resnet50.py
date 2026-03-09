@@ -128,7 +128,7 @@ class resnet50Bottleneck:
                     enable_act_double_buffer=True if not (is_blackhole_p100(device) and batch_size > 16) else False,
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     full_inner_dim=True,
-                    enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
+                    enable_activation_reuse=True if height_sharding and self.stride == 1 and batch_size > 1 else False,
                 ),
             }
 
@@ -238,7 +238,7 @@ class resnet50Bottleneck:
                 enable_act_double_buffer=True,
                 enable_weights_double_buffer=True,
                 full_inner_dim=True,
-                enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
+                enable_activation_reuse=True if height_sharding and self.stride == 1 and batch_size > 1 else False,
             ),
         }
 
@@ -491,7 +491,13 @@ class resnet50:
         )
         num_cores_x = 8
         num_cores_y = 8
-        if self.batch_size == 16:
+        if self.batch_size == 1:
+            num_cores_x = 8
+            num_cores_y = 8
+            self.fold_compute_grid_size = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+            )
+        elif self.batch_size == 16:
             num_cores_x = 8
             num_cores_y = 8
             self.fold_compute_grid_size = ttnn.CoreRangeSet(
@@ -665,7 +671,10 @@ class resnet50:
         x_width = 56
 
         if is_wormhole_b0():
-            core_range_set = ttnn.CoreGrid(x=8, y=7)
+            if self.batch_size == 1:
+                core_range_set = ttnn.CoreGrid(x=7, y=7)
+            else:
+                core_range_set = ttnn.CoreGrid(x=8, y=7)
             mem_config = ttnn.create_sharded_memory_config_(
                 x.shape,
                 core_range_set,
@@ -760,9 +769,21 @@ class resnet50:
         reshard = is_blackhole()
         height_shard = is_blackhole()
         if is_wormhole_b0():
-            x = ttnn.to_memory_config(
-                x, ttnn.create_sharded_memory_config(x.shape, ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.BLOCK)
-            )
+            if self.batch_size == 1:
+                grid_size = (8, 7)
+                block_mem_config = ttnn.create_sharded_memory_config_(
+                    [nearest_32(x.shape[2] // grid_size[1]), x.shape[3] // grid_size[0]],
+                    ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    tile_layout=True,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                x = ttnn.to_memory_config(x, block_mem_config)
+            else:
+                x = ttnn.to_memory_config(
+                    x, ttnn.create_sharded_memory_config(x.shape, ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.BLOCK)
+                )
 
         logger.debug(f"==== Running layer 3 module 1")
         x, x_height, x_width = self.layer3_module1(
@@ -830,12 +851,24 @@ class resnet50:
         height_shard = False
 
         if is_wormhole_b0():
-            block_mem_config = ttnn.create_sharded_memory_config(
-                x.shape,
-                ttnn.CoreGrid(x=8, y=7),
-                ttnn.ShardStrategy.BLOCK,
-            )
-            x = ttnn.to_memory_config(x, block_mem_config)
+            if self.batch_size == 1:
+                grid_size = (8, 7)
+                block_mem_config = ttnn.create_sharded_memory_config_(
+                    [nearest_32(x.shape[2] // grid_size[1]), x.shape[3] // grid_size[0]],
+                    ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    tile_layout=True,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                x = ttnn.to_memory_config(x, block_mem_config)
+            else:
+                block_mem_config = ttnn.create_sharded_memory_config(
+                    x.shape,
+                    ttnn.CoreGrid(x=8, y=7),
+                    ttnn.ShardStrategy.BLOCK,
+                )
+                x = ttnn.to_memory_config(x, block_mem_config)
         if is_blackhole():
             grid_size = (8, 10)
             block_mem_config = ttnn.create_sharded_memory_config_(
