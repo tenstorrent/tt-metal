@@ -15,7 +15,29 @@ Phase 0: Discovery ─► Phase 1: Analysis ─► Phase 2: Design
 
 ─► Phase 3: Build ─► Phase 4: TDD Kernels ─► Phase 5: Report
    (generic-op-builder)  (stage-gated loop)
+─► Phase 5: Report
+   (generic-op-builder)  (stage-gated loop)
+─► Phase 6: Self-Reflection
+(self-reflection agent)
 ```
+
+---
+
+## Spec Detection
+
+Before parsing input, check if a spec already exists:
+
+1. Extract the operation name from the user's message (snake_case identifier)
+2. Look for `ttnn/ttnn/operations/{op_name}/op_spec.md`
+3. **If found**:
+   - Read it and use its contents as the operation requirements
+   - Extract all fields (math, tensors, parameters, test criteria, hardware preferences)
+   - Skip interactive questions for information already in the spec
+   - Phase 0 still runs for reference discovery (unless references are specified in the spec)
+   - Pass spec contents to the architect in Phase 2 as structured requirements
+   - Log: "Using existing op_spec.md from ttnn/ttnn/operations/{op_name}/op_spec.md"
+4. **If not found**:
+   - Proceed with normal input parsing below
 
 ---
 
@@ -86,6 +108,7 @@ ttnn/ttnn/operations/{op_name}/
 ├── op_design.md                            # Operation design doc (Phase 2)
 ├── .tdd_state.json                         # TDD pipeline state
 ├── REPORT.md                               # Build report (Phase 5)
+├── self_reflection.md                      # Self-reflection analysis (Phase 6)
 └── agent_logs/                             # Breadcrumbs (if logging enabled)
 ```
 
@@ -268,6 +291,32 @@ Commit the report.
 
 ---
 
+## Phase 6: Self-Reflection
+
+**Goal**: Analyze the entire pipeline run and produce actionable improvement insights.
+
+Launch `ttnn-self-reflection` with:
+- The operation path
+
+```
+Task: ttnn-self-reflection
+  Prompt: |
+    Analyze the pipeline run for {op_name}.
+    Operation path: {op_path}
+```
+
+The agent:
+1. Reads all breadcrumbs, execution logs, REPORT.md, op_design.md, .tdd_state.json, and git history
+2. Identifies confusion points, time sinks, inter-agent communication issues
+3. Cross-references findings with `.claude/pipeline-improvements.md`
+4. Produces `{op_path}/self_reflection.md`
+5. Appends any newly discovered issues to `.claude/pipeline-improvements.md`
+6. Commits all outputs (enforced by Stop hook)
+
+This phase always runs — no interactive checkpoint. It does not modify operation code, only produces analysis.
+
+---
+
 ## Critical Rules
 
 These rules apply across all phases. Violating them causes subtle bugs.
@@ -306,6 +355,7 @@ When a helper uses `NoWaitNoPop`, it does NOT pop the input CB. The caller MUST 
 | `ttnn-generic-op-builder` | Opus | Python infrastructure + stub kernels |
 | `ttnn-kernel-writer` | Opus | Implement kernels following design |
 | `ttnn-riscv-debugger` | Sonnet | Debug kernel issues (hangs, wrong output) |
+| `ttnn-self-reflection` | Opus | Post-pipeline analysis and improvement recommendations |
 
 ### Dependency Graph
 ```
@@ -316,6 +366,9 @@ analyzer(s) ──► architect ──► op_design.md + .tdd_state.json
                                       │
                                       ▼
                     kernel_writer (invoked per TDD stage)
+                                      │
+                                      ▼
+                         REPORT.md ──► self_reflection (reads all logs + git history)
 ```
 
 ### When to use the debugger
