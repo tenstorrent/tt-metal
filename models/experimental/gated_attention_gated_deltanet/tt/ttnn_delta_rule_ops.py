@@ -364,22 +364,15 @@ def fused_decay_and_write_ttnn(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        packer_l1_acc=False,
     )
-
-    prog_cfg = None
-    if device is not None:
-        try:
-            prog_cfg = _recurrent_outer_product_program_config(device, K, V)
-        except Exception:
-            prog_cfg = None
 
     outer = ttnn.matmul(
         k_col,
         d_row,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=matmul_compute_cfg,
-        program_config=prog_cfg,
+        program_config=None,
     )
 
     # apply beta
