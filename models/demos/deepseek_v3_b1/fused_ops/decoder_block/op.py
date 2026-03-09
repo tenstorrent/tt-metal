@@ -14,7 +14,11 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeSem
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
+    PerCoreRuntimeArgsDescriptor,
+    UnifiedKernelDescriptor,
+)
 
 
 class DecoderBlock:
@@ -231,6 +235,7 @@ class DecoderBlock:
         )
 
         moe._build_descriptors()
+        moe_ctx = moe.ctx
 
         io_tensors = []
         cb_metadata = record_cb_metadata(decoder_cbs)
@@ -260,33 +265,114 @@ class DecoderBlock:
             sdpa_out_interm_buffer,
             attention_block_output_tensor,
         ]
+        io_tensors += moe.io_tensors
+
+        def _patch_named_compile_time_args(named_args, overrides):
+            """Replace selected named compile-time args while preserving order."""
+            return [(name, overrides.get(name, value)) for name, value in named_args]
+
+        def _adapt_moe_ct_args(named_args):
+            """Rename/filter MoE CT args that conflict with attention CT args."""
+            result = []
+            for name, value in named_args:
+                if name == "num_iterations":
+                    continue
+                if name == "reconfig_cb_config_l1_addr":
+                    result.append(("moe_reconfig_cb_config_l1_addr", value))
+                else:
+                    result.append((name, value))
+            return result
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for ctx in decoder_per_device_contexts:
+            mesh_coord = ctx["mesh_coord"]
+            row = mesh_coord[0]
+            col = mesh_coord[1]
+            chip_id = row * moe_ctx.mesh_cols + col
+
+            # ── MoE per-device setup ──
+            moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, mesh_coord, row, col)
+
+            moe_ncrisc_ct = _adapt_moe_ct_args(moe.ncrisc_args)
+            moe_brisc_ct = _adapt_moe_ct_args(moe.brisc_args)
+            moe_trisc_ct = _adapt_moe_ct_args(moe.trisc_args)
+
+            attn_ncrisc_common = ctx["ncrisc_common_runtime_args"]
+            attn_trisc_common = ctx["trisc_common_runtime_args"]
+            moe_ncrisc_ct = _patch_named_compile_time_args(
+                moe_ncrisc_ct, {"reduce_ncrisc_common_rt_arg_base": len(attn_ncrisc_common)}
+            )
+            moe_trisc_ct = _patch_named_compile_time_args(
+                moe_trisc_ct, {"moe_rmsnorm_trisc_common_rt_arg_base": len(attn_trisc_common)}
+            )
+
+            attn_per_core_brisc = ctx["per_core_brisc_args"]
+            attn_brisc_prefix_len_by_core = {}
+            for core_coord, args in attn_per_core_brisc:
+                core_key = (core_coord.x, core_coord.y)
+                attn_brisc_prefix_len_by_core[core_key] = attn_brisc_prefix_len_by_core.get(core_key, 0) + len(args)
+
+            brisc_base_overrides = []
+            moe_per_core_brisc = moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []
+            for core_coord, _ in moe_per_core_brisc:
+                base = attn_brisc_prefix_len_by_core.get((core_coord.x, core_coord.y), 0)
+                if base != 0:
+                    brisc_base_overrides.append((core_coord, base))
+
+            merged_ucd = ctx["unified_compile_time_core_descriptors"] + moe.device_unified_core_descs
+            merged_pcd = ctx["per_core_compile_time_descriptors"] + moe.device_per_core_descs
+            if brisc_base_overrides:
+                merged_pcd = merged_pcd + [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="reduce_brisc_rt_arg_base",
+                        core_values=brisc_base_overrides,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="reduce_brisc_fabric_rt_arg_base",
+                        core_values=brisc_base_overrides,
+                        other_value=0,
+                    ),
+                ]
+
+            mesh_coord_args = [("mesh_row", row), ("mesh_col", col)]
+
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,
                 ncrisc_compile_time_args=ctx["ncrisc_compile_time_args"],
                 brisc_compile_time_args=ctx["brisc_compile_time_args"],
-                ncrisc_named_compile_time_args=ctx["ncrisc_named_compile_time_args"]
+                ncrisc_named_compile_time_args=mesh_coord_args
+                + ctx["ncrisc_named_compile_time_args"]
+                + moe_ncrisc_ct
                 + additional_named_compile_time_args,
-                ncrisc_common_runtime_args=ctx["ncrisc_common_runtime_args"],
-                brisc_named_compile_time_args=ctx["brisc_named_compile_time_args"] + additional_named_compile_time_args,
+                ncrisc_common_runtime_args=ctx["ncrisc_common_runtime_args"] + moe.ncrisc_common_rt_args,
+                brisc_named_compile_time_args=mesh_coord_args
+                + ctx["brisc_named_compile_time_args"]
+                + moe_brisc_ct
+                + additional_named_compile_time_args,
                 brisc_common_runtime_args=ctx["brisc_common_runtime_args"],
-                trisc_named_compile_time_args=ctx["trisc_named_compile_time_args"] + additional_named_compile_time_args,
-                trisc_common_runtime_args=ctx["trisc_common_runtime_args"],
+                trisc_named_compile_time_args=mesh_coord_args
+                + ctx["trisc_named_compile_time_args"]
+                + moe_trisc_ct
+                + additional_named_compile_time_args,
+                trisc_common_runtime_args=ctx["trisc_common_runtime_args"]
+                + [moe_ctx.rmsnorm_epsilon_packed, moe_ctx.rmsnorm_scalar_packed],
                 trisc_compute_config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                     math_approx_mode=False,
                     fp32_dest_acc_en=fp32_dest_acc_en,
                     dst_full_sync_en=fp32_dest_acc_en,
                 ),
-                unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
-                per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
+                unified_compile_time_core_descriptors=merged_ucd,
+                per_core_compile_time_descriptors=merged_pcd,
                 per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                    ncrisc_args=ctx["per_core_ncrisc_args"],
-                    brisc_args=ctx["per_core_brisc_args"],
-                    trisc_args=ctx["per_core_trisc_args"],
+                    ncrisc_args=ctx["per_core_ncrisc_args"]
+                    + (moe.device_rt_args_desc.ncrisc_args if moe.device_rt_args_desc else []),
+                    brisc_args=ctx["per_core_brisc_args"]
+                    + (moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []),
+                    trisc_args=ctx["per_core_trisc_args"]
+                    + (moe.device_rt_args_desc.trisc_args if moe.device_rt_args_desc else []),
                 ),
                 noc_mode=noc_mode,
             )
@@ -295,10 +381,9 @@ class DecoderBlock:
             program = ttnn.ProgramDescriptor(
                 kernels=kernel_result.kernels,
                 cbs=cbs_list,
-                semaphores=ctx["semaphore_list"],
+                semaphores=ctx["semaphore_list"] + moe.device_sem_descs,
             )
 
-            mesh_coord = ctx["mesh_coord"]
             broadcast_worker_core = ctx["broadcast_worker_core"]
             dst_nodes = ctx["dst_nodes"]
             if not skip_ccl and len(dst_nodes) > 0:
@@ -423,6 +508,9 @@ class DecoderBlock:
                 receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
                     gather_core.y
                 ]
+
+            # MoE fabric connections (reduce-to-one)
+            moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
         print("Running DecoderBlock op")
