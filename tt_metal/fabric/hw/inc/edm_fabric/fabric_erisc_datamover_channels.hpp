@@ -639,7 +639,7 @@ struct HeterogeneousEdmChannelWorkerInterfaceTuple {
     TupleType channel_worker_interfaces;
 
     template <size_t I>
-    decltype(auto) get() {
+    FORCE_INLINE decltype(auto) get() {
         return std::get<I>(channel_worker_interfaces);
     }
 
