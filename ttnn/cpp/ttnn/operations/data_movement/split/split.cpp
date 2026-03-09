@@ -95,9 +95,19 @@ std::vector<ttnn::Tensor> split(
     bool fits_in_core_grid =
         input_shape.rank() >= 2 && (input_shape[0] * input_shape[1] <
                                     grid_size_x);  // special case parallelizes across first 2 dims without wrapping
+    // The SplitDeviceOperation kernel requires the number of output tiles in the
+    // split dimension to be even (divisible by TWO_CHUNKS). When the padded tile
+    // count is odd (e.g. 23 tiles from a 720-wide tensor padded to 736), the
+    // program factory sets num_cores_c=1, causing each writer to attempt writing
+    // to both output buffers. The reader only produces tiles for one output's
+    // worth of data, so the writer deadlocks on cb_wait_front waiting for tiles
+    // that will never arrive. Fall back to slice-based split in this case.
+    uint32_t padded_tiles_in_split_dim = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    bool output_tiles_evenly_split = (padded_tiles_in_split_dim % detail::TWO_CHUNKS == 0);
     if (split_sizes.size() == detail::TWO_CHUNKS && dim == input_shape.rank() - 1 &&
         input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
-        input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2) {
+        input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2 &&
+        output_tiles_evenly_split) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {
             input_tensor_4d = operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
