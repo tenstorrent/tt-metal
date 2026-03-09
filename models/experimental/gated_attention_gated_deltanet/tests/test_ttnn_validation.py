@@ -753,6 +753,89 @@ def benchmark_gated_deltanet(warmup=3, iterations=10, seq_len=16, mode="recurren
     print(f"{'='*60}\n")
 
 
+def benchmark_fused_chunked_delta_rule(
+    warmup=3, iterations=10, seq_len=256, chunk_size=64, batch_size=2, num_heads=4, head_k_dim=64, head_v_dim=128
+):
+    """Benchmark torch vs TTNN for Fused Chunked Delta Rule."""
+    try:
+        import ttnn
+    except ImportError:
+        print("SKIP: benchmark_fused_chunked_delta_rule (ttnn not available)")
+        return
+
+    from torch_functional.delta_rule_ops import chunk_gated_delta_rule
+    from tt.fused_chunked_delta_rule_placeholder import fused_chunked_delta_rule_ttnn
+
+    # Create test inputs
+    q = torch.randn(batch_size, seq_len, num_heads, head_k_dim, dtype=torch.float32)
+    k = torch.randn(batch_size, seq_len, num_heads, head_k_dim, dtype=torch.float32)
+    v = torch.randn(batch_size, seq_len, num_heads, head_v_dim, dtype=torch.float32)
+    beta = torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32)
+    g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2  # negative log-decay
+
+    # --- Torch benchmark ---
+    for _ in range(warmup):
+        chunk_gated_delta_rule(q, k, v, g, beta, chunk_size=chunk_size, use_qk_l2norm=True)
+
+    torch_times = []
+    for _ in range(iterations):
+        t0 = time.perf_counter()
+        chunk_gated_delta_rule(q, k, v, g, beta, chunk_size=chunk_size, use_qk_l2norm=True)
+        torch_times.append(time.perf_counter() - t0)
+
+    torch_avg = sum(torch_times) / len(torch_times)
+    torch_min = min(torch_times)
+
+    # --- Fused TTNN benchmark ---
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Convert to TTNN
+        q_ttnn = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        k_ttnn = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        v_ttnn = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        beta_ttnn = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        g_ttnn = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        for _ in range(warmup):
+            _ = fused_chunked_delta_rule_ttnn(
+                q_ttnn, k_ttnn, v_ttnn, beta_ttnn, g_ttnn, chunk_size=chunk_size, device=device
+            )
+            ttnn.synchronize_device(device)
+
+        fused_times = []
+        for _ in range(iterations):
+            t0 = time.perf_counter()
+            _ = fused_chunked_delta_rule_ttnn(
+                q_ttnn, k_ttnn, v_ttnn, beta_ttnn, g_ttnn, chunk_size=chunk_size, device=device
+            )
+            ttnn.synchronize_device(device)
+            fused_times.append(time.perf_counter() - t0)
+
+        fused_avg = sum(fused_times) / len(fused_times)
+        fused_min = min(fused_times)
+    except Exception as e:
+        print(f"  ERROR: Fused TTNN implementation failed: {str(e)[:100]}...")
+        print(f"  Configuration: T={seq_len}, chunk_size={chunk_size}, B={batch_size}, H={num_heads}")
+        fused_avg = None
+        fused_min = None
+    finally:
+        ttnn.close_device(device)
+
+    # Print results
+    print(f"\n{'='*60}")
+    print(f"  Fused Chunked Delta Rule Benchmark (T={seq_len}, chunk_size={chunk_size}, {iterations} iters)")
+    print(f"{'='*60}")
+    print(f"  Torch  (CPU):  avg={torch_avg*1000:.2f} ms  min={torch_min*1000:.2f} ms")
+
+    if fused_avg is not None:
+        print(f"  Fused TTNN:    avg={fused_avg*1000:.2f} ms  min={fused_min*1000:.2f} ms")
+        print(f"  Speedup:       {torch_avg/fused_avg:.2f}x (avg)  {torch_min/fused_min:.2f}x (min)")
+    else:
+        print(f"  Fused TTNN:    N/A (failed)")
+
+    print(f"{'='*60}\n")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -776,6 +859,8 @@ if __name__ == "__main__":
     parser.add_argument("--chunk-size", type=int, default=64, help="Chunk size for chunked mode")
     parser.add_argument("--batch-size", type=int, default=2, help="Batch size for fused delta rule test")
     parser.add_argument("--num-heads", type=int, default=4, help="Number of heads for fused delta rule test")
+    parser.add_argument("--head-k-dim", type=int, default=64, help="Key/query head dimension for fused delta rule test")
+    parser.add_argument("--head-v-dim", type=int, default=128, help="Value head dimension for fused delta rule test")
     args = parser.parse_args()
 
     run_attention = args.module in (None, "attention")
@@ -809,4 +894,15 @@ if __name__ == "__main__":
                 seq_len=args.seq_len,
                 mode=args.mode,
                 chunk_size=args.chunk_size,
+            )
+        if run_fused_delta:
+            benchmark_fused_chunked_delta_rule(
+                warmup=args.warmup,
+                iterations=args.iterations,
+                seq_len=args.seq_len,
+                chunk_size=args.chunk_size,
+                batch_size=args.batch_size,
+                num_heads=args.num_heads,
+                head_k_dim=args.head_k_dim,
+                head_v_dim=args.head_v_dim,
             )
