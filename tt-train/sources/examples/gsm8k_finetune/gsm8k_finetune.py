@@ -597,23 +597,24 @@ def train():
             postfix["val_loss"] = f"{float(last_val_loss):.4f}"
         bar.set_postfix(postfix, refresh=False)
 
+        # Disable validation by commenting out for demo
         # Validation every eval_every steps
-        if (
-            total_steps % training_config.eval_every == 0
-            or total_steps + 1 == training_config.steps
-        ):
-            last_val_loss = validate(
-                tt_model,
-                tokenizer,
-                val_batch_generator,
-                testing_data,
-                loss_fn,
-                causal_mask,
-                logits_mask_tensor,
-                max_sequence_length,
-                total_steps,
-            )
-            val_losses.append(last_val_loss)
+        # if (
+        #     total_steps % training_config.eval_every == 0
+        #     or total_steps + 1 == training_config.steps
+        # ):
+        #     last_val_loss = validate(
+        #         tt_model,
+        #         tokenizer,
+        #         val_batch_generator,
+        #         testing_data,
+        #         loss_fn,
+        #         causal_mask,
+        #         logits_mask_tensor,
+        #         max_sequence_length,
+        #         total_steps,
+        #     )
+        #     val_losses.append(last_val_loss)
 
         with open("output.txt", "a") as f:
             f.write(
@@ -638,7 +639,11 @@ def train():
     axs.set_ylabel("Loss")
     axs.legend()
     plt.savefig("training_curves.png")
-    plt.show()
+    # Don't show when called from dashboard - breaks repeatable jobs on one machine
+    # plt.show()
+
+    # Cleanup
+    ttml.autograd.AutoContext.get_instance().close_device()
 
 
 if __name__ == "__main__":

@@ -83,8 +83,8 @@ PARTITION_DEVICE_MAPPING = {
 
 # Available Galaxy nodes for non-lb partitions
 GALAXY_NODES = [
-    # "bh-glx-c01u02",
-    # "bh-glx-c01u08",
+    "bh-glx-c01u02",
+    "bh-glx-c01u08",
     "bh-glx-c02u02",
     "bh-glx-c02u08",
 ]
@@ -144,8 +144,8 @@ SLURM_SCRIPT_TEMPLATE = """#!/bin/bash
 {nodelist_directive}
 
 # Set environmental variables
-export HOME="/data/${{USER}}"
-export TT_METAL_HOME="/data/${{USER}}/tt-metal"
+export HOME="/data/${{USER}}/llama"
+export TT_METAL_HOME="/data/${{USER}}/llama/tt-metal"
 export TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME
 export PYTHONPATH="${{TT_METAL_HOME}}"
 source ${{TT_METAL_HOME}}/python_env/bin/activate
@@ -312,8 +312,8 @@ class JobManager:
 
         # For non-lb partitions, add nodelist directive if a node is selected
         nodelist_directive = ""
-        if not is_lb_partition and selected_node:
-            nodelist_directive = f"#SBATCH --nodelist={selected_node}"
+        if not is_lb_partition:
+            nodelist_directive = f"#SBATCH --nodelist={','.join(GALAXY_NODES)}"
 
         # Paths to job-specific config files
         mesh_graph_desc_path = output_dir / "mesh_graph_descriptor.textproto"
