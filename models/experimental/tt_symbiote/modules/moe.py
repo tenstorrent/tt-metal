@@ -39,6 +39,7 @@ def _make_sparse_matmul_program_config(
     out_subblock_h: int = 1,
     out_subblock_w: int = 1,
     per_core_M: int = 1,
+    override: bool = False,
 ):
     grid = device.compute_with_storage_grid_size()
     core_x = int(getattr(grid, "x"))
@@ -50,7 +51,7 @@ def _make_sparse_matmul_program_config(
     num_cores = max(1, core_x * core_y)
     per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        compute_with_storage_grid_size=ttnn.CoreCoord(7, 4) if override else ttnn.CoreCoord(core_x, core_y),
         in0_block_w=int(in0_block_w),
         out_subblock_h=int(out_subblock_h),
         out_subblock_w=int(out_subblock_w),
@@ -997,7 +998,7 @@ class TTNNExperts(TTNNModule):
 
         # w2 (down): (num_experts, hidden_size, intermediate_size)
         self.tt_w2_proj = ttnn.from_torch(
-            self.torch_w2_proj.to(torch.bfloat16),
+            self.torch_w2_proj.to(torch.bfloat16).permute(0, 2, 1),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
@@ -1021,6 +1022,7 @@ class TTNNExperts(TTNNModule):
         """Move preprocessed weights to device and create mapping tensors."""
 
         self.num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
+        print("num_experts_per_device: ", self.num_experts_per_device)
         self.num_devices = self.device.get_num_devices()
         self.num_dispatch_devices = self.device.shape[1]
 
@@ -1145,12 +1147,14 @@ class TTNNExperts(TTNNModule):
             out_features=int(self.intermediate_size),
             in0_block_w=1,
             per_core_M=1,
+            override=True,
         )
         down_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.hidden_size),
             in0_block_w=1,
             per_core_M=1,
+            # override=True,
         )
 
         # w1 and w3 projections
@@ -1228,6 +1232,15 @@ class TTNNExperts(TTNNModule):
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
         topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
+        topk_experts_weights_rm = ttnn.reshape(
+            topk_experts_weights_rm,
+            shape=(
+                topk_experts_weights_rm.shape[0],
+                topk_experts_weights_rm.shape[1],
+                topk_experts_weights_rm.shape[3],
+                topk_experts_weights_rm.shape[4],
+            ),
+        )
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
@@ -1245,6 +1258,7 @@ class TTNNExperts(TTNNModule):
             # Slice to remove padding: final_output shape is (1, 1, batch_size_per_device*seq_len, hidden_size)
             # We need to slice the seq dimension from [0:original_num_tokens]
             final_output = ttnn.slice(final_output, (0, 0, 0, 0), (1, 1, original_num_tokens, self.hidden_size))
+            print("here here")
 
         return final_output
 
@@ -1444,19 +1458,27 @@ class TTNNDeepseekV2MoE(TTNNModule):
         print("hidden_states : ", hidden_states.shape)
         print("hidden_states_4d : ", hidden_states_4d.shape)
         topk_idx, topk_weight, _ = self.gate(hidden_states)
-        hidden_states_4d = ttnn.experimental.reduce_scatter_minimal_async(
-            hidden_states_4d,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            cluster_axis=1,
-            topology=ttnn.Topology.Ring,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+        torch.save(
+            topk_idx.to_torch,
+            "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/dump_file/topk_idx_ttnn.pt",
         )
+        torch.save(
+            topk_weight.to_torch,
+            "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/dump_file/topk_weight_ttnn.pt",
+        )
+        # hidden_states_4d = ttnn.experimental.reduce_scatter_minimal_async(
+        #     hidden_states_4d,
+        #     persistent_output_buffers=None,
+        #     dim=3,
+        #     multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+        #     barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+        #     num_links=1,
+        #     cluster_axis=1,
+        #     topology=ttnn.Topology.Ring,
+        #     chunks_per_sync=10,
+        #     num_workers_per_link=2,
+        #     num_buffers_per_channel=2,
+        # )
 
         # hidden_states_4d = ttnn.experimental.all_gather_async(
         #     hidden_states_4d,
@@ -1466,10 +1488,11 @@ class TTNNDeepseekV2MoE(TTNNModule):
         #     multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
         #     num_links=1
         # )
-        composer = ttnn.concat_mesh_to_tensor_composer(self.device, dim=-1)
-        hidden_states_4d = ttnn.aggregate_tensor(hidden_states_4d, composer)
+        # composer = ttnn.concat_mesh_to_tensor_composer(self.device, dim=-1)
+        # hidden_states_4d = ttnn.aggregate_tensor(hidden_states_4d, composer)
         print("hidden_states_4d after reduce_scatter_minimal_async : ", hidden_states_4d.shape)
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
+        print("routed_output : ", routed_output.shape)
         if hasattr(routed_output, "to_ttnn"):
             routed_output = routed_output.to_ttnn
         if self.shared_experts is not None:
