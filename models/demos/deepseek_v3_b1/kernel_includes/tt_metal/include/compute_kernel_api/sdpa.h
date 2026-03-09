@@ -10,6 +10,7 @@
 #include "api/compute/pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
@@ -27,8 +28,6 @@
 #endif
 
 namespace ckernel {
-
-constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
 
 template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles, bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(uint32_t icb0) {
@@ -241,6 +240,7 @@ template <
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
+    uint32_t cb_mask,
     uint32_t cb_out,
     uint32_t mm1_dst_offset,
     uint32_t mm2_dst_offset,
@@ -248,14 +248,16 @@ void compute_sdpa_chunk(
     uint32_t sum_dst_offset,
     uint32_t corr_exp_dst_offset,
     bool first_chunk,
-    bool last_chunk) {
+    bool last_chunk,
+    bool mask_chunk) {
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size);
+    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
+
     // Reduce Max (SFPU)
     PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size>(
         mm1_dst_offset, max_dst_offset, !first_chunk)));

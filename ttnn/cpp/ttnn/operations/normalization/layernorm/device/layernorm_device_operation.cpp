@@ -32,7 +32,19 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& beta = tensor_args.bias;
     const auto& stats = tensor_args.stats;
 
-    TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
+    TT_FATAL(
+        a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
+        "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
+        a.layout());
+    TT_FATAL(
+        !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
+    if (a.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            a.logical_shape()[-1] % TILE_WIDTH == 0,
+            "ROW_MAJOR input requires W ({}) to be a multiple of TILE_WIDTH ({})",
+            a.logical_shape()[-1],
+            TILE_WIDTH);
+    }
     TT_FATAL(
         a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
@@ -146,6 +158,18 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
             TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
         }
+        const auto shard_spec = a.shard_spec().value();
+        const auto bbox = shard_spec.grid.bounding_box();
+        uint32_t bbox_num_cores =
+            (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
+        TT_FATAL(
+            shard_spec.grid.num_cores() == bbox_num_cores,
+            "Sharded layernorm does not support non-rectangular core grids. "
+            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
+            shard_spec.grid.num_cores(),
+            bbox_num_cores,
+            bbox.end_coord.x - bbox.start_coord.x + 1,
+            bbox.end_coord.y - bbox.start_coord.y + 1);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -172,6 +196,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 stats.value().padded_shape()[-1] % TILE_WIDTH == 0,
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
+    }
+    if (operation_attributes.fused_activation.has_value()) {
+        TT_FATAL(
+            operation_attributes.norm_type == LayerNormType::RMSNORM,
+            "Fused activation only supported for fused rms norm + unary");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "Fused activation is not supported for distributed layernorm");
     }
     std::visit(
         [&](const auto& program_config) {
@@ -377,10 +409,11 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_shape,
                         output_padded_shape));
             } else {
+                const auto output_layout = input_tensor.layout();
                 return TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
+                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);
@@ -416,7 +449,8 @@ Tensor layer_norm(
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
-    const std::optional<const Tensor>& recip_tensor) {
+    const std::optional<const Tensor>& recip_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -425,7 +459,7 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
-    };
+        .fused_activation = fused_activation};
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,

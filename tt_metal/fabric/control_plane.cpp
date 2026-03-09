@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 #include <yaml-cpp/yaml.h>
+#include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -40,7 +41,6 @@
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
-#include "host_api.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
@@ -55,8 +55,8 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
-#include "tt_stl/small_vector.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -307,10 +307,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
-    // When unset, assume host rank 0.
+    // When unset, use UNSET sentinel value.
     const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
     const MeshHostRankId host_rank = (host_rank_str == nullptr)
-                                         ? MeshHostRankId{0}
+                                         ? MESH_HOST_RANK_UNSET
                                          : MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
 
     // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
@@ -356,12 +356,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // Validate host rank (only if mesh_id is valid)
     const auto& host_ranks = this->mesh_graph_->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
     if (host_rank_str == nullptr) {
-        local_mesh_binding.host_rank = MeshHostRankId{0};
-        TT_FATAL(
-            host_ranks.size() == 1 && *host_ranks.front() == 0,
-            "TT_MESH_HOST_RANK must be set when multiple host ranks are present in the mesh graph descriptor for mesh "
-            "ID {}",
-            *local_mesh_binding.mesh_ids[0]);
+        local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
     } else {
         TT_FATAL(
             std::find(host_ranks.begin(), host_ranks.end(), local_mesh_binding.host_rank) != host_ranks.end(),
@@ -462,20 +457,22 @@ void ControlPlane::init_control_plane(
     const auto& rtoptions = this->rtoptions_.get();
     auto fabric_config = this->get_fabric_config();
 
-    // Numbert of hosts
+    // Number of hosts
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &this->hal_.get(), rtoptions);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto psd =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
-        topology_mapping_timeout = std::chrono::duration<float>(60.0f);
+        topology_mapping_timeout = std::chrono::duration<float>(120.0f);
     }
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
@@ -568,8 +565,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
         world_size);
 
     // Initialize physical system descriptor
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &this->hal_.get(), rtoptions);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto psd =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Generate Mesh graph based on physical system descriptor
     // Reliability mode is obtained from MetalContext inside the function
@@ -1043,7 +1042,7 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                         num_available_routing_planes,
                         fabric_node_id.mesh_id,
                         fabric_node_id.chip_id,
-                        direction,
+                        static_cast<int>(direction),
                         directional_eth_chans.at(direction).size());
                     bool trim = directional_eth_chans.at(direction).size() > num_available_routing_planes;
                     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
@@ -1055,7 +1054,7 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                             physical_chip_id,
                             fabric_node_id.mesh_id,
                             fabric_node_id.chip_id,
-                            direction,
+                            static_cast<int>(direction),
                             directional_eth_chans.at(direction).size(),
                             num_available_routing_planes);
                     }
@@ -1077,7 +1076,7 @@ size_t ControlPlane::get_num_live_routing_planes(
         this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction),
         "Routing direction {} not found in router port directions to num routing planes map for fabric node id "
         "(mesh={}, chip={})",
-        routing_direction,
+        static_cast<int>(routing_direction),
         fabric_node_id.mesh_id,
         fabric_node_id.chip_id);
     return this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
@@ -1135,7 +1134,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     const auto& connected_chips_and_eth_cores =
                         this->cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
-                    // If connected_chips_and_eth_cores contains physical_connected_chip_id then atleast one connection
+                    // If connected_chips_and_eth_cores contains physical_connected_chip_id then at least one connection
                     // exists to physical_connected_chip_id
                     bool connections_exist = connected_chips_and_eth_cores.contains(physical_connected_chip_id);
                     TT_FATAL(
@@ -1629,13 +1628,21 @@ void write_to_worker_or_fabric_tensix_cores(
         return CoreType::Worker;
     };
 
+    auto core_type_to_string = [](CoreType c) {
+        switch (c) {
+            case CoreType::Worker: return "Worker";
+            case CoreType::FabricTensixExtension: return "FabricTensixExtension";
+            case CoreType::DispatcherMux: return "DispatcherMux";
+            default: return "Unknown";
+        }
+    };
     auto select_data = [&](CoreType core_type) -> const void* {
         if (tensix_config_enabled) {
             switch (core_type) {
                 case CoreType::FabricTensixExtension: return worker_data;
                 case CoreType::DispatcherMux: return dispatcher_data;
                 case CoreType::Worker: return tensix_extension_data;
-                default: TT_THROW("unknown core type: {}", core_type);
+                default: TT_THROW("unknown core type: {}", core_type_to_string(core_type));
             }
         } else {
             return worker_data;
@@ -1979,7 +1986,7 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
             "Not enough active fabric eth channels for node {} in direction {}. Requested {} routing planes but only "
             "have {} eth channels",
             fabric_node_id,
-            routing_direction,
+            static_cast<int>(routing_direction),
             num_routing_planes,
             eth_chans.size());
         eth_chans.resize(num_routing_planes);
@@ -2229,7 +2236,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip = this->cluster_.get().get_fabric_ethernet_channels(*this, physical_chip_id);
 
-    // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+    // TODO: add logic here to disable unused routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
     } else {
@@ -2264,7 +2271,21 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     return local_mesh_ids;
 }
 
-MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
+MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const {
+    // TODO: Change mesh id to use topology mapper as well please
+    // Get host rank from topology mapper based on current host instead of using local_mesh_binding
+    // This ensures we use the actual mapped host rank rather than potentially UNSET values
+    // Use the first local mesh ID to get the host rank
+    const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
+    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found");
+    auto host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[0]);
+    TT_FATAL(
+        host_rank.has_value(),
+        "ControlPlane: Could not determine local host rank for mesh {}. "
+        "This may happen if the topology mapping has not been completed yet.",
+        local_mesh_ids[0].get());
+    return host_rank.value();
+}
 
 MeshCoordinate ControlPlane::get_local_mesh_offset() const {
     auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);

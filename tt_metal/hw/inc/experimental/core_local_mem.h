@@ -6,6 +6,8 @@
 
 #include "experimental/noc.h"
 #include "experimental/lock.h"
+#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 
 namespace experimental {
 
@@ -76,7 +78,7 @@ public:
      * @return Reference to the element at the given index
      */
     T& operator[](uint32_t index) const {
-        DEBUG_SANITIZE_L1_ADDR(address_ + (index + 1) * sizeof(T), sizeof(T));
+        DEBUG_SANITIZE_L1_ADDR(address_ + index * sizeof(T), sizeof(T));
         return get_unsafe_ptr()[index];
     }
 
@@ -141,8 +143,15 @@ public:
         return byte_diff / sizeof(T);
     }
 
-    [[nodiscard]] auto scoped_lock() {
-        return Lock([this]() { release_scoped_lock(); });
+    /** @brief Lock a region of num_elements for the duration of the returned guard (same as scoped_lock(); size for
+     * future debug/profiler use). */
+    [[nodiscard]] auto scoped_lock(size_t num_elements) {
+        uint32_t addr = static_cast<uint32_t>(get_address());
+        uint32_t num_bytes = static_cast<uint32_t>(num_elements * sizeof(T));
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
+        return Lock([this, addr, num_bytes]() {
+            RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_UNLOCK, addr, num_bytes);
+        });
     }
 
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
@@ -154,10 +163,6 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
-
     AddressType address_;
 };
 

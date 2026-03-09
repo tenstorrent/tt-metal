@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "batch_norm_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt_stl/assert.hpp>

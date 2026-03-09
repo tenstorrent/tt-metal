@@ -5,7 +5,6 @@
 #include "rmsnorm_op.hpp"
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -16,6 +15,10 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -58,8 +61,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
         }
     };
 
-    auto links = autograd::get_links(tensor, gamma);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
 
     return out;
 }
@@ -224,7 +226,7 @@ autograd::TensorPtr rmsnorm_composite(
             false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast); checked by add_grad
         auto dL_dg = ttnn::sum(
             dL_dg_components,
-            /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
+            /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
             /* keep_dim */ true,
             /* output_mem_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // [B,1,S,C] -> [1,1,1,C]
@@ -232,8 +234,7 @@ autograd::TensorPtr rmsnorm_composite(
         gamma->add_grad(dL_dg);
     };
 
-    auto links = autograd::get_links(tensor, gamma);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
 
     return out;
 }

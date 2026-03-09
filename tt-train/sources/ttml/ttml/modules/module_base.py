@@ -4,7 +4,7 @@
 
 """Python module base inheriting from C++ ModuleBase with auto-registration."""
 
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union, overload
+from typing import Any, Iterable, Iterator, Optional, Union, overload
 from .._ttml.modules import ModuleBase as CppModuleBase
 from .parameter import Buffer, Parameter
 
@@ -24,41 +24,51 @@ class AbstractModuleBase(CppModuleBase):
         if "_buffers" not in self.__dict__:
             return
 
-        # Auto-register modules
+        # Auto-register modules and tensors
         if isinstance(value, CppModuleBase):
-            try:
-                self.register_module(value, name)
-            except RuntimeError:
-                self.override_module(value, name)
+            self._bind_module(value, name)
             return
 
-        # Auto-register tensors
-        tensor = None
         if isinstance(value, Parameter):
-            tensor = value.tensor
-        elif isinstance(value, Buffer):
-            self._buffers[name] = value.tensor
+            self._bind_parameter(value.tensor, name)
             return
-        elif hasattr(value, "get_value"):
-            tensor = value
 
-        if tensor is not None:
-            try:
-                self.register_tensor(tensor, name)
-            except RuntimeError:
-                self.override_tensor(tensor, name)
+        if isinstance(value, Buffer):
+            self._bind_buffer(value.tensor, name)
+            return
+
+        if hasattr(value, "get_value"):
+            self._bind_parameter(value, name)
 
     def __delattr__(self, name: str) -> None:
         self._buffers.pop(name, None)
         object.__delattr__(self, name)
 
-    def named_parameters(self, prefix: str = "") -> Iterator[Tuple[str, Any]]:
+    def _bind_module(self, module, name: str) -> None:
+        """Register or override a child module by name."""
+        try:
+            self.register_module(module, name)
+        except RuntimeError:
+            self.override_module(module, name)
+
+    def _bind_parameter(self, tensor, name: str) -> None:
+        """Register or override a tensor parameter by name."""
+        try:
+            self.register_tensor(tensor, name)
+        except RuntimeError:
+            self.override_tensor(tensor, name)
+
+    def _bind_buffer(self, buffer, name: str) -> None:
+        """Register a buffer by name."""
+        self._buffers[name] = buffer
+
+    def named_parameters(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
         """Yield (name, parameter) pairs."""
         for name, tensor in self.parameters().items():
             short = name.split("/", 1)[-1].replace("/", ".")
             yield (f"{prefix}.{short}" if prefix else short, tensor)
 
-    def named_modules(self, prefix: str = "") -> Iterator[Tuple[str, Any]]:
+    def named_modules(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
         """Yield (name, module) pairs."""
         yield (prefix or "", self)
         for name, attr in self.__dict__.items():
@@ -69,13 +79,13 @@ class AbstractModuleBase(CppModuleBase):
                 else:
                     yield (child, attr)
 
-    def named_children(self) -> Iterator[Tuple[str, Any]]:
+    def named_children(self) -> Iterator[tuple[str, Any]]:
         """Yield (name, module) pairs for direct children."""
         for name, attr in self.__dict__.items():
             if isinstance(attr, CppModuleBase):
                 yield (name, attr)
 
-    def named_buffers(self, prefix: str = "") -> Iterator[Tuple[str, Any]]:
+    def named_buffers(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
         """Yield (name, buffer) pairs."""
         for name, buf in self._buffers.items():
             yield (f"{prefix}.{name}" if prefix else name, buf)
@@ -95,7 +105,7 @@ class AbstractModuleBase(CppModuleBase):
         """Yield all buffers."""
         return (b for _, b in self.named_buffers())
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         """Return state dictionary."""
         return {**dict(self.named_parameters()), **dict(self.named_buffers())}
 
@@ -129,7 +139,7 @@ class ModuleList(AbstractModuleBase):
             modules: Optional iterable of modules to add.
         """
         super().__init__()
-        self._modules_list: List[CppModuleBase] = []
+        self._modules_list: list[CppModuleBase] = []
         if modules is not None:
             for module in modules:
                 self.append(module)
@@ -194,6 +204,21 @@ class ModuleList(AbstractModuleBase):
             lines.append(f"  ({idx}): {module_name}")
         lines.append(")")
         return "\n".join(lines)
+
+    def named_modules(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
+        """Yield (name, module) pairs for all modules, indexed by position."""
+        yield (prefix or "", self)
+        for idx, module in enumerate(self._modules_list):
+            child = f"{prefix}.{idx}" if prefix else str(idx)
+            if isinstance(module, AbstractModuleBase):
+                yield from module.named_modules(child)
+            else:
+                yield (child, module)
+
+    def named_children(self) -> Iterator[tuple[str, Any]]:
+        """Yield (name, module) pairs for direct children, indexed by position."""
+        for idx, module in enumerate(self._modules_list):
+            yield (str(idx), module)
 
     def _rebuild_registrations(self) -> None:
         """Rebuild all module registrations after structural change."""
@@ -305,7 +330,7 @@ class ModuleDict(AbstractModuleBase):
     def __init__(
         self,
         modules: Optional[
-            Union[Dict[str, CppModuleBase], Iterable[Tuple[str, CppModuleBase]]]
+            Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]
         ] = None,
     ) -> None:
         """Initialize ModuleDict.
@@ -314,7 +339,7 @@ class ModuleDict(AbstractModuleBase):
             modules: Optional dict or iterable of (name, module) pairs.
         """
         super().__init__()
-        self._modules_dict: Dict[str, CppModuleBase] = {}
+        self._modules_dict: dict[str, CppModuleBase] = {}
         if modules is not None:
             if isinstance(modules, dict):
                 for key, module in modules.items():
@@ -341,6 +366,20 @@ class ModuleDict(AbstractModuleBase):
         Note: Due to C++ backend limitations, the registration remains.
         """
         del self._modules_dict[key]
+
+    def named_modules(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
+        """Yield (name, module) pairs for all modules, indexed by key."""
+        yield (prefix or "", self)
+        for key, module in self._modules_dict.items():
+            child = f"{prefix}.{key}" if prefix else key
+            if isinstance(module, AbstractModuleBase):
+                yield from module.named_modules(child)
+            else:
+                yield (child, module)
+
+    def named_children(self) -> Iterator[tuple[str, Any]]:
+        """Yield (name, module) pairs for direct children, indexed by key."""
+        yield from self._modules_dict.items()
 
     def __len__(self) -> int:
         """Return number of modules."""
@@ -375,7 +414,7 @@ class ModuleDict(AbstractModuleBase):
         """Return iterator over modules."""
         return iter(self._modules_dict.values())
 
-    def items(self) -> Iterator[Tuple[str, CppModuleBase]]:
+    def items(self) -> Iterator[tuple[str, CppModuleBase]]:
         """Return iterator over (key, module) pairs."""
         return iter(self._modules_dict.items())
 
@@ -387,7 +426,7 @@ class ModuleDict(AbstractModuleBase):
 
     def update(
         self,
-        modules: Union[Dict[str, CppModuleBase], Iterable[Tuple[str, CppModuleBase]]],
+        modules: Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]],
     ) -> None:
         """Update dict with modules from another dict or iterable."""
         if isinstance(modules, dict):

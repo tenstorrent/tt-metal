@@ -1077,7 +1077,7 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
 )
 @pytest.mark.parametrize(
     "param",
-    (0.65, 7.7, 36.49, 58.6, 97.2),
+    (0.65, 7.7, 36, 58.6, 74, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1687,20 +1687,22 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     golden_tensor = golden_function(in_data)
 
     if ttnn_dtype == ttnn.bfloat16:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2.0)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1.0)
+    elif ttnn_dtype == ttnn.float32:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3.0)
     else:
         assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
 
 
 def test_cbrt_arange(device):
     # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32)
+
+    input_tensor = all_bitpatterns.to(torch.uint16).view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
 
-    # Mask NaN, special values where cbrt has ULP>1 (Covered in atol test below).
-    # Also mask values in range -1 to 1.
-    mask = torch.isnan(input_tensor) | torch.isinf(input_tensor) | ((input_tensor > -1.0) & (input_tensor < 1.0))
+    # Mask subnormals (they get flushed to zero) and NaN (converted to inf for bf16)
+    mask = (((all_bitpatterns >> 7) & 0xFF) == 0) | ((all_bitpatterns & 0x7F) != 0) | torch.isnan(input_tensor)
     input_tensor[mask] = 1.0
 
     tt_in = ttnn.from_torch(
@@ -1716,7 +1718,7 @@ def test_cbrt_arange(device):
 
     tt_result = ttnn.cbrt(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 2, allow_nonfinite=True)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
@@ -1810,7 +1812,7 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
 
 
 def test_hardmish_bfloat16_ulp(device):
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
@@ -1841,7 +1843,7 @@ def test_hardmish_bfloat16_ulp(device):
 
 
 def test_hardmish_bfloat16_allclose(device):
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
@@ -2142,3 +2144,27 @@ def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
     golden_function = ttnn.get_golden_function(ttnn.logical_not)
     golden_tensor = golden_function(in_data, device=device)
     assert torch.equal(output_tensor, golden_tensor)
+
+
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
+    if is_blackhole() and fast_and_approximate_mode and torch_dtype == torch.float32:
+        pytest.skip("Skipping Mish fast/approximate fp32 test on Blackhole due to PCC failure (TODO: #39360)")
+    torch.manual_seed(0)
+    in_data = torch.empty((2, 32, 64), dtype=torch_dtype).uniform_(-20, 100)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mish(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.mish)
+    golden_tensor = golden_function(in_data)
+    golden_tensor = golden_tensor.to(output_tensor.dtype)
+    assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)

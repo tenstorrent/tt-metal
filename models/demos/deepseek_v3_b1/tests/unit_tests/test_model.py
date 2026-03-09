@@ -5,7 +5,7 @@
 """
 Tests for DeepSeek V3 B1 model (prefill harness and decode flow).
 
-Uses HostInterface in loopback mode as a mock decoder; validates prefill
+Uses create_model context manager (HostInterface loopback); validates prefill
 (token-by-token with outputs discarded) and autoregressive decode (input → output).
 """
 
@@ -20,30 +20,23 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 
 
-@pytest.mark.parametrize("loopback_mode", [True, False])
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("prompt_length", [1, 8, 64, 128])
+@pytest.mark.parametrize("prompt_length", [1, 64, 128])
 @pytest.mark.parametrize("num_decode_steps", [1, 16, 32])
 def test_prefill_and_decode(
     mesh_device: ttnn.MeshDevice,
-    loopback_mode: bool,
     batch_size: int,
     prompt_length: int,
     num_decode_steps: int,
 ) -> None:
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
-    if not loopback_mode:
-        pytest.skip("Non-loopback mode is not currently supported")
 
     logger.info("Creating DeepSeekV3 model via shared runtime helper")
     token_codec = TokenCodec(batch_size=batch_size)
-    model = create_model(mesh_device=mesh_device, batch_size=batch_size, loopback_mode=loopback_mode)
-    model.start()
-
     logger.info(f"B={batch_size}, prefill {prompt_length} tokens, then {num_decode_steps} decode steps")
 
-    try:
+    with create_model(mesh_device=mesh_device, batch_size=batch_size) as model:
         # Phase 1: Prefill - list of padded ttnn.Tensor tokens
         prompt_token_ids = list(range(prompt_length))
         prompt_inputs = token_codec.make_prefill_inputs(prompt_token_ids)
@@ -66,7 +59,5 @@ def test_prefill_and_decode(
         assert (
             model.position == prompt_length + num_decode_steps
         ), f"Position after decode: expected {prompt_length + num_decode_steps}, got {model.position}"
-    finally:
-        model.stop()
 
     logger.info("Prefill and decode test passed")

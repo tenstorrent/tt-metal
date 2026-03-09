@@ -163,7 +163,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
         tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
-        # below the same input to tt model is inputed to reference HF model
+        # below the same input to tt model is inputted to reference HF model
         tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             0, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)

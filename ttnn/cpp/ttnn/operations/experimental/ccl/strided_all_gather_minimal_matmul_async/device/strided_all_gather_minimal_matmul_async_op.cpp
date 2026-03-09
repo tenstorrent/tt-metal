@@ -16,7 +16,7 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         attributes.strided_all_gather_async_struct.dim == 3,
-        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operaitons.");
+        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operations.");
     TT_FATAL(
         tensor_args.input_tensor.padded_shape()[0] == 1 && tensor_args.input_tensor.padded_shape()[1] == 1,
         "StridedAllGatherMinimalMatmulAsync requires input tensor to have batch size of 1.");

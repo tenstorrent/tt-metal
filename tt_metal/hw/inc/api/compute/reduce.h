@@ -23,7 +23,7 @@ namespace ckernel {
  * If another reduce op is needed which uses different CB IDs, then another reduce_init needs to be called as a part of that reduce operation.
  *
  * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
- * factors is to populate first row of each face with the followin values:
+ * factors is to populate first row of each face with the following values:
  * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
  * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
  * in which case the scaling factor should be 1/sqrt(N)).
@@ -51,6 +51,10 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
     state_configure(icb, icb_scaler, ocb, call_line);
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
+    if constexpr (enforce_fp32_accumulation) {
+        MATH((tensix_sync()));
+        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
+    }
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 }
 
@@ -90,7 +94,7 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  * dimension(s) to be reduced in size to 1. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
- * factors is to populate first row of each face with the followin values:
+ * factors is to populate first row of each face with the following values:
  * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
  * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
  * in which case the scaling factor should be 1/sqrt(N)).
