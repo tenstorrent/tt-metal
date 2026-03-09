@@ -6,6 +6,7 @@
 
 #include "dev_mem_map.h"
 #include "api/compute/common.h"
+#include "api/debug/dprint.h"
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 
@@ -41,8 +42,13 @@ class Semaphore {
 public:
     explicit Semaphore(uint32_t semaphore_id) :
         local_l1_addr_(
-            MEM_L1_UNCACHED_BASE + sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] +
-            semaphore_id * L1_ALIGNMENT) {}
+            MEM_L1_UNCACHED_BASE +
+            (uintptr_t)(sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] + semaphore_id * L1_ALIGNMENT)) {
+        DPRINT << "Semaphore ID: " << semaphore_id << ENDL();
+        DPRINT << "Semaphore base address: " << sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] << ENDL();
+        DPRINT << "L1 alignment: " << L1_ALIGNMENT << ENDL();
+        DPRINT << "Semaphore address: " << local_l1_addr_ << ENDL();
+    }
 
     /**
      * @brief Increment the semaphore by the specified value.
@@ -52,7 +58,9 @@ public:
      */
     void up(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        DPRINT << "Incrementing semaphore by " << value << ENDL();
         *sem_addr += value;
+        DPRINT << "Semaphore incremented to " << *sem_addr << ENDL();
     }
 
     /**
@@ -81,9 +89,11 @@ public:
     void wait(uint32_t value) {
         WAYPOINT("TSWW");
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
-        do {
-            // invalidate_l1_cache();
-        } while ((*sem_addr) != value);
+        DPRINT << "Waiting for semaphore to be set to " << value << ENDL();
+        while ((*sem_addr) != value) {
+            DPRINT << "Current semaphore value: " << *sem_addr << ENDL();
+        }
+        DPRINT << "Semaphore set to " << *sem_addr << ENDL();
         WAYPOINT("TSWD");
     }
 
