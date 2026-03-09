@@ -45,6 +45,21 @@
 #include "../../../unified_kernels/all_reduce_sender.hpp"
 #include "../../../unified_kernels/all_reduce_receiver.hpp"
 
+#include "../../../unified_kernels/moe_gather.hpp"
+#include "../../../unified_kernels/deepseek_moe_gate.hpp"
+#if defined(COMPILE_FOR_TRISC)
+#undef REDUCE_OP
+#undef REDUCE_DIM
+#endif
+#include "../../../unified_kernels/dram_streaming_matmul.hpp"
+#include "../../../unified_kernels/eltwise_mul.hpp"
+#include "../../../unified_kernels/eltwise_add.hpp"
+#include "../../../unified_kernels/gated_reduce.hpp"
+#include "../../../unified_kernels/residual_add.hpp"
+#ifdef ENABLE_REDUCE_TO_ONE
+#include "../../../unified_kernels/reduce_to_one_b1.hpp"
+#endif
+
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
 struct Core {
@@ -91,6 +106,28 @@ struct Core {
     static constexpr bool is_ccl_sender_core = get_named_compile_time_arg_val("is_ccl_sender_core") == 1;
     // CCL receiver core = gather core (12, 9) - receives remote data, performs reduction
     static constexpr bool is_ccl_receiver_core = get_named_compile_time_arg_val("is_ccl_receiver_core") == 1;
+
+    // MoE core roles
+    static constexpr bool is_sender_core = get_named_compile_time_arg_val("is_sender_core") == 1;
+    static constexpr bool is_mcast_grid_core = get_named_compile_time_arg_val("is_mcast_grid_core") == 1;
+
+    struct Routed {
+        static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
+        static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
+    };
+    struct Shared {
+        static constexpr bool is_compute_core = get_named_compile_time_arg_val("is_shared_compute_core") == 1;
+        static constexpr bool is_gate_compute_core = get_named_compile_time_arg_val("is_shared_gate_compute_core") == 1;
+        static constexpr bool is_up_compute_core = get_named_compile_time_arg_val("is_shared_up_compute_core") == 1;
+        static constexpr bool is_gated_reduce_core = get_named_compile_time_arg_val("is_shared_gated_reduce_core") == 1;
+        static constexpr bool is_mcast_receiver_core =
+            get_named_compile_time_arg_val("is_shared_mcast_receiver_core") == 1;
+    };
+    static constexpr bool is_input_mcast_receiver =
+        Routed::is_gate_mm_core || Routed::is_gate_proj_core || Shared::is_compute_core;
+
+    static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
+    static constexpr bool is_reduce_fabric_core = get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
 };
 
 void kernel_main() {
@@ -465,6 +502,204 @@ void kernel_main() {
             .sender_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
     }
+
+    // ========================================================================
+    // MoE NCRISC arguments (instantiated only, not called)
+    // ========================================================================
+    struct Moe {
+        struct Routed {
+            using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+            deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("moe_mcast_dst_cb"),
+                get_named_compile_time_arg_val("moe_mcast_dst_num_pages"),
+            };
+
+#ifdef ENABLE_ROUTING
+            using GateMMCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+            deepseek_b1_ops::Matmul::ReaderArgs gate_mm_args{};
+
+            deepseek_b1_ops::MoeGather::ReceiverArgs gather_args{
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            };
+
+            using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs;
+
+            deepseek_b1_ops::Mcast::ReceiverArgs index_mcast_args{
+                get_named_compile_time_arg_val("index_mcast_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_index"),
+                get_named_compile_time_arg_val("index_mcast_num_pages"),
+            };
+
+            deepseek_b1_ops::Mcast::ReceiverArgs expert_scale_mcast_args{
+                get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("mul_cb_scalar_src"),
+                get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
+            };
+#endif
+
+            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+                get_named_compile_time_arg_val("gate_proj_cb_in1"),
+                get_named_compile_time_arg_val("gate_proj_cb_out"),
+                get_named_compile_time_arg_val("gate_proj_in1_tensor_addr"),
+                get_named_compile_time_arg_val("gate_proj_in1_page_size"),
+                get_named_compile_time_arg_val("gate_proj_in1_num_pages"),
+                get_named_compile_time_arg_val("gate_proj_subblock_k"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
+                get_named_compile_time_arg_val("gate_proj_in1_block_size_bytes"),
+                get_named_compile_time_arg_val("gate_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("gate_proj_bank_id"),
+                get_named_compile_time_arg_val("gate_proj_vc"),
+                get_named_compile_time_arg_val("enable_routing"),
+                get_named_compile_time_arg_val("gate_proj_cb_index"),
+                get_named_compile_time_arg_val("gate_proj_index_offset"),
+                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+
+            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+                get_named_compile_time_arg_val("up_proj_cb_in1"),
+                get_named_compile_time_arg_val("up_proj_cb_mm_out"),
+                get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
+                get_named_compile_time_arg_val("up_proj_in1_page_size"),
+                get_named_compile_time_arg_val("up_proj_in1_num_pages"),
+                get_named_compile_time_arg_val("up_proj_subblock_k"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
+                get_named_compile_time_arg_val("up_proj_in1_block_size_bytes"),
+                get_named_compile_time_arg_val("up_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("up_proj_bank_id"),
+                get_named_compile_time_arg_val("up_proj_vc"),
+                get_named_compile_time_arg_val("enable_routing"),
+                get_named_compile_time_arg_val("up_proj_cb_index"),
+                get_named_compile_time_arg_val("up_proj_index_offset"),
+                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+
+            using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
+
+            deepseek_b1_ops::MoeGather::ReceiverArgs down_proj_gather_args{
+                get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+            };
+
+            deepseek_b1_ops::Mcast::ReceiverArgs down_proj_mcast_args{
+                get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("down_proj_mcast_dst_cb"),
+                get_named_compile_time_arg_val("down_proj_mcast_dst_num_pages"),
+            };
+
+            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+                get_named_compile_time_arg_val("down_proj_cb_in1"),
+                get_named_compile_time_arg_val("down_proj_cb_out"),
+                get_named_compile_time_arg_val("down_proj_in1_tensor_addr"),
+                get_named_compile_time_arg_val("down_proj_in1_page_size"),
+                get_named_compile_time_arg_val("down_proj_in1_num_pages"),
+                get_named_compile_time_arg_val("down_proj_subblock_k"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
+                get_named_compile_time_arg_val("down_proj_in1_block_size_bytes"),
+                get_named_compile_time_arg_val("down_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("down_proj_bank_id"),
+                get_named_compile_time_arg_val("down_proj_vc"),
+                get_named_compile_time_arg_val("enable_routing"),
+                get_named_compile_time_arg_val("down_proj_cb_index"),
+                get_named_compile_time_arg_val("down_proj_index_offset"),
+                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+
+            using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
+
+            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+            deepseek_b1_ops::Mcast::ReceiverArgs residual_mcast_args{
+                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_residual_cb"),
+                get_named_compile_time_arg_val("shared_residual_num_pages"),
+            };
+
+            using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+            deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
+
+#ifdef ENABLE_REDUCE_TO_ONE
+            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ReaderCTArgs<
+                get_named_compile_time_arg_val("reduce_device_role"),
+                get_named_compile_time_arg_val("reduce_num_tiles"),
+                get_named_compile_time_arg_val("reduce_local_cb"),
+                get_named_compile_time_arg_val("reduce_received_cb_r1"),
+                get_named_compile_time_arg_val("reduce_received_cb_r2"),
+                get_named_compile_time_arg_val("reduce_received_cb_r3"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+            deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 0),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
+            };
+#endif
+        } routed;
+
+        struct Shared {
+            using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ReaderCTArgs;
+            deepseek_b1_ops::KNSlicedMatmul::ReaderArgs gu_matmul_args{};
+
+            deepseek_b1_ops::MoeGather::ReceiverArgs ag_args{
+                get_named_compile_time_arg_val("shared_ag_noc0_num_senders"),
+                0,
+                get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_ag_dst_cb"),
+                get_named_compile_time_arg_val("shared_ag_dst_num_pages"),
+            };
+
+            deepseek_b1_ops::MoeGather::ReceiverArgs bg_args{
+                get_named_compile_time_arg_val("shared_bg_noc0_num_senders"),
+                0,
+                get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_bg_dst_cb"),
+                get_named_compile_time_arg_val("shared_bg_dst_num_pages"),
+            };
+
+            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
+            deepseek_b1_ops::GatedReduce::ReaderArgs gated_reduce_args{};
+
+            using DownMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+            deepseek_b1_ops::Mcast::ReceiverArgs down_mcast_args{
+                get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_down_mcast_dst_cb"),
+                get_named_compile_time_arg_val("shared_down_mcast_dst_num_pages"),
+            };
+
+            using DownMatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+            deepseek_b1_ops::Matmul::ReaderArgs down_matmul_args{};
+
+            using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::ReaderCTArgs;
+            deepseek_b1_ops::ResidualAdd::ReaderArgs residual_add_args{};
+
+            deepseek_b1_ops::MoeGather::ReceiverArgs og_args{
+                get_named_compile_time_arg_val("shared_og_noc0_num_senders"),
+                get_named_compile_time_arg_val("shared_og_noc1_num_senders"),
+                get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_og_dst_cb"),
+                get_named_compile_time_arg_val("shared_og_dst_num_pages"),
+            };
+
+            using OutputMcastCTArgs = Routed::McastCTArgs;
+            deepseek_b1_ops::Mcast::ReceiverArgs output_mcast_args{
+                get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("add_cb_in1"),
+                get_named_compile_time_arg_val("shared_output_mcast_dst_num_pages"),
+            };
+        } shared;
+    } moe;
+
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -826,6 +1061,277 @@ void kernel_main() {
         per_core_rta_arg_idx += fabric_args_offset;
     }
 
+    // ========================================================================
+    // MoE BRISC arguments (instantiated only, not called)
+    // ========================================================================
+    struct Moe {
+        struct Routed {
+            using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+                get_named_compile_time_arg_val("moe_mcast_num_cores"),
+                get_named_compile_time_arg_val("moe_mcast_is_part_of_receiver_grid"),
+                Core::is_sender_core && Core::is_mcast_grid_core>;
+            deepseek_b1_ops::Mcast::SenderArgs mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("moe_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("moe_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("moe_mcast_src_cb"),
+                get_named_compile_time_arg_val("moe_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("moe_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("moe_mcast_dst_cb")),
+            };
+
+#ifdef ENABLE_ROUTING
+            using GateMMCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+            deepseek_b1_ops::Matmul::WriterArgs gate_mm_args{};
+
+            deepseek_b1_ops::MoeGather::SenderArgs gather_args{
+                get_named_compile_time_arg_val("gather_dest_noc_x"),
+                get_named_compile_time_arg_val("gather_dest_noc_y"),
+                get_named_compile_time_arg_val("gather_data_size_bytes"),
+                get_named_compile_time_arg_val("gather_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("gather_src_cb"),
+                get_named_compile_time_arg_val("gather_src_num_pages"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather_row_major"),
+                get_named_compile_time_arg_val("gather_receiver_data_addr"),
+                0,
+            };
+
+            using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::WriterCTArgs<
+                get_named_compile_time_arg_val("gate_output_cb"),
+                get_named_compile_time_arg_val("gate_output_indices_cb")>;
+
+            deepseek_b1_ops::Mcast::SenderArgs index_mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("index_mcast_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("index_mcast_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("gate_output_indices_cb"),
+                get_named_compile_time_arg_val("index_mcast_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("gate_output_indices_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("gate_proj_cb_index")),
+            };
+
+            deepseek_b1_ops::Mcast::SenderArgs expert_scale_mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("gate_output_cb"),
+                get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("gate_output_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("mul_cb_scalar_src")),
+            };
+#endif
+
+            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+
+            using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
+                get_named_compile_time_arg_val("mul_cb_out"),
+                get_named_compile_time_arg_val("mul_num_tiles"),
+                get_named_compile_time_arg_val("mul_cb_scalar"),
+                get_named_compile_time_arg_val("mul_cb_scalar_src"),
+                get_named_compile_time_arg_val("mul_scalar_index_offset"),
+                get_named_compile_time_arg_val("enable_routing")>;
+
+            deepseek_b1_ops::MoeGather::SenderArgs down_proj_gather_args{
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
+                get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("down_proj_gather_src_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("down_proj_gather_row_major"),
+                get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_idx"),
+            };
+
+            deepseek_b1_ops::Mcast::SenderArgs down_proj_mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("down_proj_mcast_src_cb"),
+                get_named_compile_time_arg_val("down_proj_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("down_proj_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("down_proj_mcast_dst_cb")),
+            };
+
+            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+
+            using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
+
+            using ResidualMcastCTArgs = McastCTArgs;
+            deepseek_b1_ops::Mcast::SenderArgs residual_mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("shared_residual_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("shared_residual_mcast_dst_cb")),
+            };
+
+            using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+            deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
+
+#ifdef ENABLE_REDUCE_TO_ONE
+            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::WriterCTArgs<
+                get_named_compile_time_arg_val("reduce_device_role"),
+                get_named_compile_time_arg_val("reduce_num_tiles"),
+                get_named_compile_time_arg_val("reduce_payload_size_bytes"),
+                get_named_compile_time_arg_val("reduce_local_cb"),
+                get_named_compile_time_arg_val("reduce_scratch_cb"),
+                get_named_compile_time_arg_val("reduce_packet_cb"),
+                get_named_compile_time_arg_val("reduce_packet_header_cb"),
+                get_named_compile_time_arg_val("reduce_num_hops"),
+                get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
+                get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
+                get_named_compile_time_arg_val("reduce_output_core_noc_x"),
+                get_named_compile_time_arg_val("reduce_output_core_noc_y"),
+                get_named_compile_time_arg_val("reduce_num_workers"),
+                get_named_compile_time_arg_val("reduce_slot_size_bytes"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base")>;
+
+            deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
+#endif
+        } routed;
+
+        struct Shared {
+            using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
+            deepseek_b1_ops::KNSlicedMatmul::WriterArgs gu_matmul_args{};
+
+            deepseek_b1_ops::MoeGather::SenderArgs ag_args{
+                get_named_compile_time_arg_val("shared_ag_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_ag_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_ag_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_ag_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_ag_src_cb"),
+                get_named_compile_time_arg_val("shared_ag_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_named_compile_time_arg_val("shared_ag_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_ag_sender_idx"),
+            };
+
+            deepseek_b1_ops::MoeGather::SenderArgs bg_args{
+                get_named_compile_time_arg_val("shared_bg_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_bg_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_bg_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_bg_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_bg_src_cb"),
+                get_named_compile_time_arg_val("shared_bg_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_named_compile_time_arg_val("shared_bg_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_bg_sender_idx"),
+            };
+
+            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
+            deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
+
+            using DownMcastCTArgs = Routed::McastCTArgs;
+            deepseek_b1_ops::Mcast::SenderArgs down_mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("shared_down_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_down_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_down_mcast_src_cb"),
+                get_named_compile_time_arg_val("shared_down_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("shared_down_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("shared_down_mcast_dst_cb")),
+            };
+
+            using DownMatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+            deepseek_b1_ops::Matmul::WriterArgs down_matmul_args{};
+
+            using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::WriterCTArgs;
+            deepseek_b1_ops::ResidualAdd::WriterArgs residual_add_args{};
+
+            deepseek_b1_ops::MoeGather::SenderArgs og_args{
+                get_named_compile_time_arg_val("shared_og_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_og_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_og_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_og_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_og_src_cb"),
+                get_named_compile_time_arg_val("shared_og_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_residual_add_core_idx"),
+            };
+
+            using OutputMcastCTArgs = Routed::McastCTArgs;
+            deepseek_b1_ops::Mcast::SenderArgs output_mcast_args{
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("shared_output_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("shared_output_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_output_mcast_src_cb"),
+                get_named_compile_time_arg_val("shared_output_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("shared_output_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("add_cb_in1")),
+            };
+        } shared;
+    } moe;
+
+#ifdef ENABLE_REDUCE_TO_ONE
+    constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
+    if constexpr (Core::is_reduce_worker_core) {
+        moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),
+        };
+    }
+#endif
+
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
@@ -1120,6 +1626,190 @@ void kernel_main() {
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0>;
     // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
+
+    // ========================================================================
+    // MoE TRISC arguments (instantiated only, not called)
+    // ========================================================================
+    struct Moe {
+        struct Routed {
+            using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
+
+#ifdef ENABLE_ROUTING
+            using GateMMCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
+                get_named_compile_time_arg_val("gate_mm_out_w"),
+                false,
+                get_named_compile_time_arg_val("gate_mm_fused_activation")>;
+            deepseek_b1_ops::Matmul::ComputeArgs gate_mm_args{
+                get_named_compile_time_arg_val("gate_mm_in0"),
+                get_named_compile_time_arg_val("gate_mm_in1"),
+                get_named_compile_time_arg_val("gate_mm_out"),
+                get_named_compile_time_arg_val("gate_mm_k_num_tiles"),
+            };
+
+            deepseek_b1_ops::MoeGather::ComputeArgs gather_args{};
+
+            using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ComputeCTArgs<
+                get_named_compile_time_arg_val("gate_input_cb"),
+                get_named_compile_time_arg_val("gate_bias_cb"),
+                get_named_compile_time_arg_val("gate_input_indices_cb"),
+                get_named_compile_time_arg_val("gate_output_cb"),
+                get_named_compile_time_arg_val("gate_output_indices_cb"),
+                get_named_compile_time_arg_val("gate_eps"),
+                get_named_compile_time_arg_val("gate_scaling_factor"),
+                get_named_compile_time_arg_val("gate_enable_sigmoid")>;
+
+            deepseek_b1_ops::Mcast::ComputeArgs index_mcast_args{};
+            deepseek_b1_ops::Mcast::ComputeArgs expert_scale_mcast_args{};
+#endif
+
+            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+                get_named_compile_time_arg_val("gate_proj_cb_in0"),
+                get_named_compile_time_arg_val("gate_proj_cb_in1"),
+                get_named_compile_time_arg_val("gate_proj_cb_out"),
+                get_named_compile_time_arg_val("gate_proj_subblock_k"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
+                get_named_compile_time_arg_val("gate_proj_subblock_w"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("gate_proj_tile_r_dim"),
+                get_named_compile_time_arg_val("gate_proj_fuse_silu"),
+                get_named_compile_time_arg_val("gate_proj_fp32_dest_acc_en")>;
+
+            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+                get_named_compile_time_arg_val("up_proj_cb_in0"),
+                get_named_compile_time_arg_val("up_proj_cb_in1"),
+                get_named_compile_time_arg_val("up_proj_cb_mm_out"),
+                get_named_compile_time_arg_val("up_proj_subblock_k"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
+                get_named_compile_time_arg_val("up_proj_subblock_w"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("up_proj_tile_r_dim"),
+                get_named_compile_time_arg_val("up_proj_fuse_silu"),
+                get_named_compile_time_arg_val("up_proj_fp32_dest_acc_en")>;
+
+            using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
+                get_named_compile_time_arg_val("mul_cb_in0"),
+                get_named_compile_time_arg_val("mul_cb_in1"),
+                get_named_compile_time_arg_val("mul_cb_out"),
+                get_named_compile_time_arg_val("mul_num_tiles"),
+                get_named_compile_time_arg_val("up_proj_cb_mm_out"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
+                get_named_compile_time_arg_val("gate_proj_cb_out"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
+                get_named_compile_time_arg_val("mul_cb_scalar"),
+                get_named_compile_time_arg_val("mul_fp32_dest_acc_en"),
+                get_named_compile_time_arg_val("enable_routing")>;
+
+            deepseek_b1_ops::MoeGather::ComputeArgs down_proj_gather_args{};
+            deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
+
+            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+                get_named_compile_time_arg_val("down_proj_cb_in0"),
+                get_named_compile_time_arg_val("down_proj_cb_in1"),
+                get_named_compile_time_arg_val("down_proj_cb_out"),
+                get_named_compile_time_arg_val("down_proj_subblock_k"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
+                get_named_compile_time_arg_val("down_proj_subblock_w"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("down_proj_tile_r_dim"),
+                get_named_compile_time_arg_val("down_proj_fuse_silu"),
+                get_named_compile_time_arg_val("down_proj_fp32_dest_acc_en")>;
+
+            using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
+                get_named_compile_time_arg_val("add_cb_in0"),
+                get_named_compile_time_arg_val("add_cb_in1"),
+                get_named_compile_time_arg_val("add_cb_out"),
+                get_named_compile_time_arg_val("add_num_tiles"),
+                get_named_compile_time_arg_val("down_proj_cb_out"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
+                get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
+                get_named_compile_time_arg_val("add_sender_index"),
+                get_named_compile_time_arg_val("add_slice_size_bytes")>;
+
+            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs residual_mcast_args{};
+
+            using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+                get_named_compile_time_arg_val("moe_rmsnorm_fp32_acc") == 1,
+                get_named_compile_time_arg_val("moe_rmsnorm_num_tiles"),
+                get_named_compile_time_arg_val("moe_rmsnorm_rsqrt_fast_approx") == 1,
+                get_named_compile_time_arg_val("moe_rmsnorm_input_cb"),
+                get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
+                get_named_compile_time_arg_val("moe_rmsnorm_output_cb")>;
+            deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
+                get_common_arg_val<uint32_t>(
+                    get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 0),
+                get_common_arg_val<float>(get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 1),
+            };
+
+#ifdef ENABLE_REDUCE_TO_ONE
+            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ComputeCTArgs<
+                get_named_compile_time_arg_val("reduce_device_role"),
+                get_named_compile_time_arg_val("reduce_num_tiles"),
+                get_named_compile_time_arg_val("reduce_local_cb"),
+                get_named_compile_time_arg_val("reduce_received_cb_r1"),
+                get_named_compile_time_arg_val("reduce_received_cb_r2"),
+                get_named_compile_time_arg_val("reduce_received_cb_r3"),
+                get_named_compile_time_arg_val("reduce_output_cb"),
+                get_named_compile_time_arg_val("reduce_scratch_cb"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+            deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
+#endif
+        } routed;
+
+        struct Shared {
+            using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<>;
+            deepseek_b1_ops::KNSlicedMatmul::ComputeArgs gu_matmul_args{
+                get_named_compile_time_arg_val("shared_gu_act_cb"),
+                get_named_compile_time_arg_val("shared_gu_weights_cb"),
+                get_named_compile_time_arg_val("shared_gu_out_cb"),
+                get_named_compile_time_arg_val("shared_gu_k_offset"),
+                get_named_compile_time_arg_val("shared_gu_k_per_core"),
+                get_named_compile_time_arg_val("shared_gu_act_total_tiles"),
+            };
+
+            deepseek_b1_ops::MoeGather::ComputeArgs ag_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs bg_args{};
+
+            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
+                get_named_compile_time_arg_val("shared_gated_reduce_tiles_per_k"),
+                get_named_compile_time_arg_val("shared_gated_reduce_k_num_tiles")>;
+            deepseek_b1_ops::GatedReduce::ComputeArgs gated_reduce_args{
+                get_named_compile_time_arg_val("shared_gated_reduce_group1_cb"),
+                get_named_compile_time_arg_val("shared_gated_reduce_group2_cb"),
+                get_named_compile_time_arg_val("shared_gated_reduce_intermed_cb"),
+                get_named_compile_time_arg_val("shared_gated_reduce_mcast_src_cb"),
+            };
+
+            using DownMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs down_mcast_args{};
+
+            using DownMatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val(
+                "shared_down_matmul_out_w_per_core")>;
+            deepseek_b1_ops::Matmul::ComputeArgs down_matmul_args{
+                get_named_compile_time_arg_val("shared_down_matmul_in0"),
+                get_named_compile_time_arg_val("shared_down_matmul_in1"),
+                get_named_compile_time_arg_val("shared_down_matmul_out"),
+                get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles"),
+            };
+
+            using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::ComputeCTArgs<get_named_compile_time_arg_val(
+                "shared_residual_add_out_w")>;
+            deepseek_b1_ops::ResidualAdd::ComputeArgs residual_add_args{
+                get_named_compile_time_arg_val("shared_residual_add_in0"),
+                get_named_compile_time_arg_val("shared_residual_add_in1"),
+                get_named_compile_time_arg_val("shared_residual_add_out"),
+                get_named_compile_time_arg_val("shared_residual_add_total_in1_tiles"),
+                get_named_compile_time_arg_val("shared_residual_add_core_idx"),
+            };
+
+            deepseek_b1_ops::MoeGather::ComputeArgs og_args{};
+
+            using OutputMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs output_mcast_args{};
+        } shared;
+    } moe;
 
     deepseek_compute_kernel_init();
 #endif
