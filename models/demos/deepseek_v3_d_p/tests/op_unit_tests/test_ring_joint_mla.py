@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pathlib
+
 import pytest
 import torch
 from loguru import logger
@@ -10,6 +12,35 @@ import ttnn
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+
+
+def get_cache_file_path(cache_path, name, dtype, layout):
+    """Generate the cache file path that ttnn.as_tensor would create."""
+    dtype_name = dtype.name if dtype is not None else "None"
+    layout_name = layout.name if layout is not None else "None"
+    return cache_path / f"{name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
+
+
+def check_all_caches_exist(cache_path, tensor_configs):
+    """Check if all required cache files exist."""
+    if cache_path is None:
+        return False
+
+    for name, dtype, layout in tensor_configs:
+        cache_file = get_cache_file_path(cache_path, name, dtype, layout)
+        if not cache_file.exists():
+            logger.debug(f"Cache miss: {cache_file}")
+            return False
+
+    logger.info(f"All {len(tensor_configs)} cache files exist!")
+    return True
+
+
+def load_cached_tensor(cache_path, name, dtype, layout, device, memory_config):
+    """Load a tensor directly from cache without creating PyTorch tensor."""
+    cache_file = get_cache_file_path(cache_path, name, dtype, layout)
+    logger.debug(f"Loading cached tensor from: {cache_file}")
+    return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(cache_file), device=device)
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -110,6 +141,7 @@ def run_ring_joint_sdpa(
     max_mse=None,
     is_causal=False,
     is_balanced=False,
+    cache_path=None,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -138,6 +170,20 @@ def run_ring_joint_sdpa(
     kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis
     kv_shard_dims[up_axis] = 1  # UP shards on heads dim1
 
+    # Define all tensor cache configs upfront
+    tensor_cache_configs = [
+        ("padded_Q", q_dtype, ttnn.TILE_LAYOUT),
+        ("padded_K", kv_dtype, ttnn.TILE_LAYOUT),
+        ("padded_V", kv_dtype, ttnn.TILE_LAYOUT),
+    ]
+    # Add persistent buffers
+    for i in range(n_iters):
+        tensor_cache_configs.append((f"persistent_k_buffer_{i}", kv_dtype, ttnn.TILE_LAYOUT))
+        tensor_cache_configs.append((f"persistent_v_buffer_{i}", kv_dtype, ttnn.TILE_LAYOUT))
+
+    # Check if all caches exist - if so, skip torch tensor creation entirely
+    all_caches_exist = check_all_caches_exist(cache_path, tensor_cache_configs)
+
     # Create persistent output buffers
     # Check sharding on these
     ag_output_shape_k = (b, nhk, padded_seq_len, head_dim_k)
@@ -147,29 +193,46 @@ def run_ring_joint_sdpa(
     if nhk != 1:
         persistent_k_output_shard_dims[up_axis] = 1
 
-    persistent_output_buffers = [
-        [
-            ttnn.from_torch(
-                torch.zeros(ag_output_shape_k),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=kv_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
+    if all_caches_exist:
+        # Load persistent buffers directly from cache
+        persistent_output_buffers = [
+            [
+                load_cached_tensor(
+                    cache_path, f"persistent_k_buffer_{i}", kv_dtype, ttnn.TILE_LAYOUT, submesh, ttnn.DRAM_MEMORY_CONFIG
                 ),
-            ),
-            ttnn.from_torch(
-                torch.zeros(ag_output_shape_v),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=kv_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
-            ),
+                load_cached_tensor(
+                    cache_path, f"persistent_v_buffer_{i}", kv_dtype, ttnn.TILE_LAYOUT, submesh, ttnn.DRAM_MEMORY_CONFIG
+                ),
+            ]
+            for i in range(n_iters)
         ]
-        for _ in range(n_iters)
-    ]
+    else:
+        # Create with torch and cache
+        persistent_output_buffers = [
+            [
+                ttnn.as_tensor(
+                    torch.zeros(ag_output_shape_k),
+                    device=submesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=kv_dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_file_name=cache_path / f"persistent_k_buffer_{i}" if cache_path else None,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
+                    ),
+                ),
+                ttnn.as_tensor(
+                    torch.zeros(ag_output_shape_v),
+                    device=submesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=kv_dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_file_name=cache_path / f"persistent_v_buffer_{i}" if cache_path else None,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+                ),
+            ]
+            for i in range(n_iters)
+        ]
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -185,24 +248,33 @@ def run_ring_joint_sdpa(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
-    K = fa_rand(b, nhk, base_seq_len, head_dim_k)
-    V = fa_rand(b, nhv, base_seq_len, head_dim_v)
+    if not all_caches_exist:
+        # Need to create torch tensors for caching
+        logger.info("Creating PyTorch tensors (cache miss)")
+        Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
+        K = fa_rand(b, nhk, base_seq_len, head_dim_k)
+        V = fa_rand(b, nhv, base_seq_len, head_dim_v)
 
-    padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
-    padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
-    padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
+        padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
+        padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
+        padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
 
-    # Apply balanced reordering if requested
-    chunk_order = None
-    if is_balanced:
-        rp_factor = submesh.shape[rp_axis]
-        chunk_order = create_balanced_chunk_order(rp_factor)
-        logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
+        # Apply balanced reordering if requested
+        chunk_order = None
+        if is_balanced and skip_check == False:
+            # Do not reorder if skipping pcc check
+            rp_factor = submesh.shape[rp_axis]
+            chunk_order = create_balanced_chunk_order(rp_factor)
+            logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
 
-        padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
-        padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
-        padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
+            padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
+            padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
+            padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
+    else:
+        logger.info("Skipping PyTorch tensor creation - loading from cache")
+        padded_Q = None  # Will load directly from cache
+        padded_K = None
+        padded_V = None
 
     # Always create joint tensors (use dummy tensors when joint_seq_len = 0)
     joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
@@ -212,12 +284,12 @@ def run_ring_joint_sdpa(
     logger.debug(f"jointK: {joint_K.shape}")
     logger.debug(f"jointV: {joint_V.shape}")
 
-    # Print shapes of all inputs along with input names
-    logger.debug(f"padded_Q: {padded_Q.shape}")
-    logger.debug(f"padded_K: {padded_K.shape}")
-    logger.debug(f"padded_V: {padded_V.shape}")
-    if is_balanced:
-        logger.debug(f"Balanced reordering applied with chunk order: {chunk_order}")
+    if not all_caches_exist:
+        logger.debug(f"padded_Q: {padded_Q.shape}")
+        logger.debug(f"padded_K: {padded_K.shape}")
+        logger.debug(f"padded_V: {padded_V.shape}")
+        if is_balanced:
+            logger.debug(f"Balanced reordering applied with chunk order: {chunk_order}")
 
     sdpa_input_shard_dims = [None, None]
     sdpa_input_shard_dims[rp_axis] = 2  # sequence dim
@@ -234,27 +306,48 @@ def run_ring_joint_sdpa(
     else:
         sdpa_k_input_shard_dims[up_axis] = 1  # head dim
 
-    tt_Q = ttnn.from_torch(
-        padded_Q,
-        dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
-    )
-    tt_K = ttnn.from_torch(
-        padded_K,
-        dtype=kv_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
-    )
-    tt_V = ttnn.from_torch(
-        padded_V,
-        dtype=kv_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
-    )
+    logger.debug("Creating tt_Q")
+    if all_caches_exist:
+        tt_Q = load_cached_tensor(cache_path, "padded_Q", q_dtype, ttnn.TILE_LAYOUT, submesh, ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        tt_Q = ttnn.as_tensor(
+            padded_Q,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_path / "padded_Q" if cache_path else None,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+        )
+
+    logger.debug("Creating tt_K")
+    if all_caches_exist:
+        tt_K = load_cached_tensor(cache_path, "padded_K", kv_dtype, ttnn.TILE_LAYOUT, submesh, ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        tt_K = ttnn.as_tensor(
+            padded_K,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_path / "padded_K" if cache_path else None,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
+        )
+
+    logger.debug("Creating tt_V")
+    if all_caches_exist:
+        tt_V = load_cached_tensor(cache_path, "padded_V", kv_dtype, ttnn.TILE_LAYOUT, submesh, ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        tt_V = ttnn.as_tensor(
+            padded_V,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_path / "padded_V" if cache_path else None,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+        )
+
     # Always convert joint tensors to ttnn (including dummy tensors)
     tt_joint_Q = ttnn.from_torch(
         joint_Q,
@@ -283,7 +376,6 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
-
     tt_out_list = []
 
     def run_iters(tt_out_list):
@@ -401,6 +493,10 @@ def run_ring_joint_sdpa(
                 passing = passing and out_pass
 
                 assert passing
+    else:
+        logger.info("Starting synchronize call")
+        ttnn.synchronize_device(submesh)
+        logger.info("Synchronize call ended")
 
 
 #  Note: seq_len and nhq_v will be scaled down to the hw test runs on, inputs are for 32x4 devices configuration
@@ -496,6 +592,8 @@ def test_mla_sdpa(
 
     joint_seq_len = 0  # causality is enabled only for non-joint cases
 
+    # Setup cache directory for tensor data
+    cache_path = None
     run_ring_joint_sdpa(
         submesh,
         b,
@@ -522,4 +620,124 @@ def test_mla_sdpa(
         0.999,
         is_causal=True,
         is_balanced=is_balanced,
+        cache_path=cache_path,
+    )
+
+
+@pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
+@pytest.mark.parametrize(
+    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size",
+    [
+        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128),
+    ],
+)
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [
+        (1, False, True),
+    ],
+    ids=["no_trace"],
+)
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 8)],
+    ids=["4x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [1, 8, 0, 4],
+    ],
+    ids=[
+        "8rpx4up",
+    ],
+)
+def test_mla_sdpa_bh_galaxy(
+    mesh_device,
+    b,
+    nhq,
+    nhk,
+    nhv,
+    base_seq_len,
+    head_dim_q,
+    head_dim_k,
+    head_dim_v,
+    q_chunk_size,
+    k_chunk_size,
+    q_dtype,
+    kv_dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    all_gather_topology,
+    skip_check,
+    is_balanced,
+    reset_seeds,
+):
+    if is_blackhole() == False:
+        pytest.skip("This test only runs on Blackhole galaxy todo add galaxy")
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
+
+    joint_seq_len = 0  # causality is enabled only for non-joint cases
+
+    # Setup cache directory for tensor data
+    cache_path = pathlib.Path(f"/tmp/ttnn_tensor_cache/test_mla_sdpa_bh_galaxy_{base_seq_len}")
+    cache_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Using tensor cache directory: {cache_path}")
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nhq,
+        nhk,
+        nhv,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        head_dim_q,
+        head_dim_k,
+        head_dim_v,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        kv_dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        0.999,
+        is_causal=True,
+        is_balanced=is_balanced,
+        cache_path=cache_path,
     )
