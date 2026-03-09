@@ -681,9 +681,10 @@ def create_fused_moe_gpt_config(
     Builds all tensors and semaphores required by fused_decode_forward:
       all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
 
-    The fused flow operates on ring-local experts (experts_per_device × ring_devices).
-    Weights from the first ring_local_experts of state_dict are prepared and
-    replicated to all mesh devices (each column ring runs identically for testing).
+    Uses global expert IDs (0..num_experts-1) and a global mapping tensor of shape
+    [total_devices, num_experts] with mapping[d, e] = e // experts_per_device (all rows
+    identical). Weights for this device's experts_per_device local experts are loaded
+    from state_dict and replicated to all mesh devices (each column ring runs identically).
 
     Args:
         mesh_device: TTNN mesh device (e.g., (4,8) Galaxy mesh).
@@ -702,24 +703,25 @@ def create_fused_moe_gpt_config(
     from .config import FusedMoeGptConfig
 
     ring_devices = mesh_device.shape[cluster_axis]
-    mesh_cols = mesh_device.shape[1 - cluster_axis]
     total_devices = mesh_device.get_num_devices()
-    ring_local_experts = config.num_experts_per_device * ring_devices  # e.g., 4 * 4 = 16
-    experts_per_device = config.num_experts_per_device  # e.g., 4
+    experts_per_ring = config.num_experts_per_device * ring_devices  # e.g., 1*4=4 (20b) or 4*4=16 (120b)
+    experts_per_device = config.num_experts_per_device  # e.g., 1 (20b) or 4 (120b)
     total_tokens = tokens_per_device * ring_devices  # e.g., 32 * 4 = 128
     K = config.hidden_size
     N = config.intermediate_size
-    E = ring_local_experts
+    E = experts_per_device
 
-    # --- Extract ring-local weights from state_dict ---
+    # --- Extract per-device weights from state_dict ---
+    # Slice only experts_per_device experts for the weight tensor (local experts only).
+    # The mapping tensor covers all num_experts (global) to route all experts correctly.
     if "gate_up_proj" in state_dict:
-        gate_up = state_dict["gate_up_proj"][:ring_local_experts]  # [E, K, 2N] interleaved
+        gate_up = state_dict["gate_up_proj"][:E]  # [E, K, 2N] interleaved
         w0 = gate_up[..., ::2].contiguous()  # gate [E, K, N]
         w1 = gate_up[..., 1::2].contiguous()  # up   [E, K, N]
     else:
-        w0 = state_dict["gate_proj"][:ring_local_experts].contiguous()  # [E, K, N]
-        w1 = state_dict["up_proj"][:ring_local_experts].contiguous()  # [E, K, N]
-    w2 = state_dict["down_proj"][:ring_local_experts].contiguous()  # [E, N, K]
+        w0 = state_dict["gate_proj"][:E].contiguous()  # [E, K, N]
+        w1 = state_dict["up_proj"][:E].contiguous()  # [E, K, N]
+    w2 = state_dict["down_proj"][:E].contiguous()  # [E, N, K]
 
     # Convert to float32 for weight preparation (quantized on upload)
     w0 = w0.float()
@@ -777,29 +779,25 @@ def create_fused_moe_gpt_config(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # --- Expert routing mappings ---
-    # mapping[d, e] = (e // experts_per_device) * mesh_cols + (d % mesh_cols)
-    # This encodes: expert e is owned by the device at ring-position (e // E_per_dev)
-    # in the same mesh column as device d.
-    mapping = torch.zeros(total_devices, ring_local_experts, dtype=torch.int16)
-    for d in range(total_devices):
-        for e in range(ring_local_experts):
-            mapping[d, e] = int((e // experts_per_device) * mesh_cols + (d % mesh_cols))
-
+    # --- Expert routing mapping: [total_devices, num_experts] uint16, DRAM ---
+    # Both all_to_all_dispatch_metadata and moe_gpt expect [D, E] format where
+    # mapping[d, e] = linearized device ID that owns global expert e.
+    # Formula: mapping[d, e] = e // experts_per_device  (same for all d)
+    # Values are global linearized device IDs (0..total_devices-1).
+    # Dispatch (cluster_axis=0) routes only within-column experts; off-column experts are
+    # silently skipped by is_configured_target. moe_gpt identifies local experts by
+    # scanning for entries equal to its own linearized_mesh_coord.
+    # moe_gpt has no L1 requirement for the mapping — DRAM works fine.
+    num_experts = config.num_experts
+    mapping_data = torch.zeros(total_devices, num_experts, dtype=torch.int16)
+    for e in range(num_experts):
+        mapping_data[:, e] = e // experts_per_device
     tt_dispatch_mapping = ttnn.from_torch(
-        mapping,
-        dtype=ttnn.uint16,
+        mapping_data,
         device=mesh_device,
+        dtype=ttnn.uint16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    tt_moe_gpt_mapping = ttnn.from_torch(
-        mapping,
-        dtype=ttnn.uint16,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
@@ -863,21 +861,19 @@ def create_fused_moe_gpt_config(
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
 
     # --- Pre-allocate combine output ---
-    # selective_reduce_combine output: [ring_local_experts, tokens_per_device, K] per device
+    # selective_reduce_combine output: [experts_per_ring, tokens_per_device, K] per device
     tt_combine_preallocated = ttnn.from_torch(
-        torch.zeros(ring_local_experts, tokens_per_device, K, dtype=torch.bfloat16),
+        torch.zeros(experts_per_ring, tokens_per_device, K, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-
     return FusedMoeGptConfig(
         tt_w0_w1=tt_w0_w1,
         tt_w2=tt_w2,
         tt_dispatch_mapping=tt_dispatch_mapping,
-        tt_moe_gpt_mapping=tt_moe_gpt_mapping,
         dispatch_sparse=tt_dispatch_sparse,
         dispatch_indices=tt_dispatch_indices,
         dispatch_scores=tt_dispatch_scores,

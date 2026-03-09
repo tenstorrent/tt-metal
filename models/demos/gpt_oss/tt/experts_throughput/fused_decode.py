@@ -19,12 +19,15 @@ Key differences:
   - moe_gpt only processes tokens actually routed to each expert (sparse, not dense)
   - W0/W1/SwiGLU/A2A ring/W2/combine are fused into a single kernel
   - No need to repeat input across the expert dimension
+  - selective_reduce_combine aliases moe_gpt's BLOCK_SHARDED combine output directly
+    via set_globally_allocated_address — no TM ops needed between moe_gpt and combine
 
 The existing decode_forward (dense flow) is unchanged; this module adds an alternative
 path that the ThroughputExperts class can route to when fused_config is provided.
 """
 
 from math import prod
+from typing import Optional
 
 import ttnn
 
@@ -38,6 +41,7 @@ def fused_decode_forward(
     config: ThroughputExpertConfig,
     fused_config: FusedMoeGptConfig,
     mesh_device,
+    routing_weight_map: Optional[ttnn.Tensor] = None,
 ) -> ttnn.Tensor:
     """Fused decode: all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
 
@@ -51,12 +55,16 @@ def fused_decode_forward(
         config: ThroughputExpertConfig with model dimensions.
         fused_config: FusedMoeGptConfig with pre-allocated resources and weight tensors.
         mesh_device: TTNN mesh device.
+        routing_weight_map: Optional pre-computed routing weight map [1, experts_per_ring, M, 1]
+            in TILE_LAYOUT on device. If provided, each expert's output is scaled by the
+            token's routing weight for that expert before summing across experts.
+            Build with: weight_map[e, m] = scores[m, k] where indices[m, k] == e.
+            If None, an unweighted sum is used (output scale will differ from reference).
 
     Returns:
         Tensor [1, 1, tokens_per_device, H] in L1, compatible with decode_forward's
-        return format. Routing weights are NOT applied (unweighted sum across expert dim),
-        so PCC vs. a reference with bias+weighting will be off — expected until
-        proper routing-weight application is implemented.
+        return format. With routing_weight_map provided, PCC vs. reference without bias
+        should be reasonably good. Without it, outputs are an unweighted expert sum.
     """
     # Ensure hidden_states is in ROW_MAJOR L1 (all_to_all_dispatch_metadata requires both).
     # In production the prior layer outputs TILE_LAYOUT; dispatch needs ROW_MAJOR.
@@ -74,7 +82,7 @@ def fused_decode_forward(
     # global_experts = config.num_experts (total experts across all devices, e.g., 128 for GPT-OSS).
     # num_clusters = number of independent rings = mesh_cols for cluster_axis=0.
     # selective_reduce_combine needs global_experts to compute experts_per_device = 128/32 = 4 ✓.
-    # ring_local_experts = global_experts // num_clusters = 128 // 8 = 16 (experts visible per ring).
+    # experts_per_ring = global_experts // num_clusters = 128 // 8 = 16 (experts processed per ring).
     global_experts = config.num_experts  # total global experts (e.g., 128 for GPT-OSS)
     num_clusters = prod(mesh_device.shape) // num_dispatch_devices  # 8 independent rings for (4,8)
 
@@ -121,12 +129,13 @@ def fused_decode_forward(
     # Performs: tilize → W0/W1 matmul → SwiGLU → A2A ring → W2 matmul → combine
     # Indices/scores are HEIGHT_SHARDED L1 from dispatch (no format conversion needed;
     # moe_gpt reads them via TensorAccessorArgs which handles HEIGHT_SHARDED buffers).
+    # Output[3] is BLOCK_SHARDED L1 on the combine core rectangle.
     # ------------------------------------------------------------------
     moe_gpt_outputs = ttnn.experimental.moe_gpt(
         tt_sparse_l1,
         expert_indices=tt_indices,
         expert_scores=tt_scores,
-        expert_mapping=fused_config.tt_moe_gpt_mapping,
+        expert_mapping=fused_config.tt_dispatch_mapping,
         w0_w1_tensor=fused_config.tt_w0_w1,
         w2_tensor=fused_config.tt_w2,
         cluster_axis=cluster_axis,
@@ -143,18 +152,21 @@ def fused_decode_forward(
     # ------------------------------------------------------------------
     # Step 3: selective_reduce_combine
     # Routes combined expert outputs back to tokens' originating devices.
-    # Output shape per device: [ring_local_experts, M, H]
-    # where ring_local_experts = global_experts // num_clusters = 128 // 8 = 16 for GPT-OSS.
+    # Takes moe_gpt_outputs[3] directly (BLOCK_SHARDED L1) — no TM ops needed.
+    # selective_reduce_combine uses set_globally_allocated_address to alias
+    # its input CB to moe_gpt's combine shard, just like in test_moe_gpt_e2e.py.
+    # Output shape per device: [experts_per_ring, M, H]
+    # where experts_per_ring = global_experts // num_clusters = 128 // 8 = 16 for GPT-OSS.
     # experts_per_device = global_experts / total_devices = 128 / 32 = 4 ✓
     # ------------------------------------------------------------------
-    ring_local_experts = global_experts // num_clusters  # 16 for GPT-OSS
+    experts_per_ring = global_experts // num_clusters  # 16 for GPT-OSS
     tt_combine_output = ttnn.experimental.selective_reduce_combine(
-        moe_gpt_outputs[3],  # dense_input_tensor:      combine output from moe_gpt
+        moe_gpt_outputs[3],  # dense_input_tensor: BLOCK_SHARDED combine output from moe_gpt
         moe_gpt_outputs[1],  # dense_metadata_tensor:   expert activation metadata
         moe_gpt_outputs[2],  # dense_token_maps_tensor: token indices per expert
         moe_gpt_outputs[0],  # dense_token_counts_tensor: per-expert token counts
         hidden_size=config.hidden_size,
-        batch_size=tokens_per_device,  # per-device token count (ring handles full routing)
+        batch_size=tokens_per_device,  # per-device token count (M), NOT total_tokens
         seq_size=1,
         select_experts_k=config.num_experts_per_tok,
         experts=global_experts,  # total global experts: 128 for GPT-OSS
@@ -169,35 +181,43 @@ def fused_decode_forward(
         optional_cross_device_semaphore=fused_config.combine_semaphore,
     )
 
-    # Deallocate moe_gpt intermediate outputs (output[3] and [4] alias the same buffer)
-    for i in range(3):
+    # Deallocate all moe_gpt intermediate outputs (outputs[3] and [4] alias the same buffer)
+    for i in range(4):
         ttnn.deallocate(moe_gpt_outputs[i])
 
     # ------------------------------------------------------------------
     # Post-processing: reduce combine output to [1, 1, M, H] for compatibility
     # with the dense decode_forward return format.
     #
-    # combine_output: [ring_local_experts, M, H] (3D, DRAM ROW_MAJOR)
+    # combine_output: [experts_per_ring, M, H] (3D, DRAM ROW_MAJOR)
     # Step 1: Convert to TILE_LAYOUT for ttnn.sum
-    # Step 2: Reshape to 4D [1, ring_local_experts, M, H]
-    # Step 3: Sum over expert dim → [1, 1, M, H]
-    #   Note: routing weights NOT applied here (requires expert→k-slot matching).
-    #   PCC vs. reference will be off (expected; caller can add weighting later).
-    # Step 4: All-reduce across columns (cluster_axis=1) to aggregate results
+    # Step 2: Reshape to 4D [1, experts_per_ring, M, H]
+    # Step 3 (optional): Apply routing_weight_map [1, E, M, 1] via element-wise mul
+    #   to scale each expert's output by its routing weight before summing.
+    # Step 4: Sum over expert dim → [1, 1, M, H]
+    # Step 5: All-reduce across columns (cluster_axis=1) to aggregate results
     #   from the 8 independent column rings.
     # ------------------------------------------------------------------
     tt_combine_tile = ttnn.to_layout(tt_combine_output, ttnn.TILE_LAYOUT)
     ttnn.deallocate(tt_combine_output)
 
-    tt_4d = ttnn.reshape(tt_combine_tile, [1, ring_local_experts, tokens_per_device, config.hidden_size])
-    ttnn.deallocate(tt_combine_tile)
+    tt_4d = ttnn.reshape(tt_combine_tile, [1, experts_per_ring, tokens_per_device, config.hidden_size])
+    # Note: ttnn.reshape returns a view sharing the same buffer — do NOT deallocate tt_combine_tile here.
+
+    if routing_weight_map is not None:
+        # routing_weight_map: [1, experts_per_ring, M, 1] broadcasts over hidden_size dim
+        tt_4d_weighted = ttnn.mul(tt_4d, routing_weight_map)
+        ttnn.deallocate(tt_4d)
+        tt_4d = tt_4d_weighted
 
     tt_sum = ttnn.sum(tt_4d, dim=1, keepdim=True)  # [1, 1, M, H]
     ttnn.deallocate(tt_4d)
 
+    # cluster_axis=1 (row direction) has fewer physical Ethernet links than cluster_axis=0.
+    # rms_norm.py uses num_links=1 for cluster_axis=1; fused_config.num_links (=4) is for axis=0.
     tt_output = ttnn.all_reduce(
         tt_sum,
-        num_links=fused_config.num_links,
+        num_links=1,
         topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,
