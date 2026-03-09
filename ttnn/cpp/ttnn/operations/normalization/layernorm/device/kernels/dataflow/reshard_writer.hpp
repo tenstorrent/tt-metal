@@ -37,7 +37,8 @@ inline void write_resharded_data(
 
         uint32_t src_offset = worker_core_read_offset;
         uint32_t dst_addr = cb_out_resharded.get_write_ptr();
-        if (i == 0) {
+        if (i == 0) {  // For the first segment we need to add the start offset; the following segments will start at 0
+                       // offset
             dst_addr += storage_core_start_offset;
         }
 

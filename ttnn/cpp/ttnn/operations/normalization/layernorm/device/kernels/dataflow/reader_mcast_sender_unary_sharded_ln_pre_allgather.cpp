@@ -94,8 +94,11 @@ void kernel_main() {
                     num_tiles_per_partial_result = 1;
                 }
 
+                // global reduce
+                // wait for local data ready
                 cb_partial_obj.wait_front(num_tiles_per_partial_result * block_h);
 
+                // inc semaphore of other cores, tell other all-to-all workers to start
                 if constexpr (num_blocks > 1) {
                     reduce_sender_sem.set(VALID);
                     reduce_receiver_sem.wait(num_blocks - 1);
@@ -109,6 +112,7 @@ void kernel_main() {
                         num_blocks - 1);
                 }
 
+                // read data from other cores
                 uint32_t l1_read_addr_ex_par = cb_partial_obj.get_read_ptr();
                 uint32_t l1_read_addr_ex = 0;
                 uint32_t block_index_stride = 0;
@@ -141,6 +145,7 @@ void kernel_main() {
                     noc.async_read_barrier();
                     cb_external_obj.push_back(num_tiles_per_partial_result * num_blocks_first_stage);
 
+                    // sync with second-stage all-to-all workers
                     if constexpr (use_two_stage_reduce) {
                         if (i == 0) {
                             reduce_second_stage_sem.wait(num_blocks_second_stage - 1);
@@ -165,7 +170,10 @@ void kernel_main() {
                         }
                         l1_read_addr_ex += single_tile_size_bytes;
                         noc.async_read_barrier();
-                        cb_external_obj.push_back(num_tiles_per_partial_result * (num_blocks_second_stage - 1));
+                        cb_external_obj.push_back(
+                            num_tiles_per_partial_result *
+                            (num_blocks_second_stage -
+                             1));  // push back partials from all cores -> compute can start reducing now
                     }
                 }
             };

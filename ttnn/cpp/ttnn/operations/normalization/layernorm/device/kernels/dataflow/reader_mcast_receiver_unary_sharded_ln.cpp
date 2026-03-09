@@ -142,6 +142,13 @@ void kernel_main() {
 
         // ============================================================================
         // Combine partial results
+        // Read from the partial buffers into the external buffer `cb_external`.
+        // Will read a total of:
+        // (num_blocks_first_stage + num_blocks_second_stage - 1) * num_tiles_scaler
+        // tiles for each assigned tile row (or column, if not row-major).
+        // For the second stage, read from `cb_reduce_first_stage` instead of `cb_partial`,
+        // as it will contain the combined results from the first stage.
+        // Combined results written to `cb_ex`.
         // ============================================================================
         if constexpr (is_all_to_all_worker) {
             uint32_t l1_read_addr_ex_par = cb_partial_obj.get_read_ptr();
@@ -168,6 +175,9 @@ void kernel_main() {
                 noc.async_read_barrier();
                 cb_external_obj.push_back(num_blocks_first_stage * num_tiles_scaler);
 
+                // ---------------------------------------------------------------------------
+                // Handle the two-stage reduce
+                // ---------------------------------------------------------------------------
                 if constexpr (use_two_stage_reduce) {
                     if (is_second_stage_reader) {
                         if (i == 0) {
@@ -192,6 +202,9 @@ void kernel_main() {
                         noc.async_read_barrier();
                         cb_external_obj.push_back((num_blocks_second_stage - 1) * num_tiles_scaler);
                     } else {
+                        // If we're not a second stage reader (i.e. we're not in the top
+                        // row of cores), we don't do any additional combines, so we just
+                        // do a dummy push so that we move in lockstep with the other cores
                         cb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
                         cb_external_obj.push_back((num_blocks_second_stage - 1) * num_tiles_scaler);
                     }

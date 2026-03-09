@@ -170,12 +170,14 @@ void kernel_main() {
                 noc.async_read_barrier();
                 cb_external_obj.push_back(num_tiles_per_partial_result * num_blocks_first_stage);
 
+                // read data from other cores - reduce first stage
                 if constexpr (use_two_stage_reduce) {
-                    if (is_second_stage_reader) {
+                    if (is_second_stage_reader) {  // gather data from a column of cores (if row major)
                         if (i == 0) {
                             reduce_second_stage_sem.wait(num_blocks_second_stage - 1);
                             reduce_second_stage_sem.set(0);
                         }
+                        // read data from other cores - second stage reduce
 
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {

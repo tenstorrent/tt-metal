@@ -99,6 +99,9 @@ void kernel_main() {
 
     // ============================================================================
     // Main kernel worker function
+    // Performs partial reduction for its assigned tiles, coordinates
+    // the waiting on partial and combined results for all cores, and performs
+    // the multicast of the final results to all cores
     // ============================================================================
     const auto& global_reduce_sender = [&](const uint32_t cb_partial_id,
                                            const uint32_t cb_external_id,
@@ -133,8 +136,18 @@ void kernel_main() {
 
         // ============================================================================
         // Combine partial results
+        // Read from the partial buffers into the external buffer `cb_external`.
+        // Will read a total of:
+        // (num_blocks_first_stage + num_blocks_second_stage - 1) * num_tiles_scaler
+        // tiles for each assigned tile row (or column, if not row-major).
+        // For the second stage, read from `cb_reduce_first_stage` instead of `cb_partial`,
+        // as it will contain the combined results from the first stage.
+        // Combined results written to `cb_ex`.
         // ============================================================================
 
+        // ---------------------------------------------------------------------------
+        // Read remote partial data
+        // ---------------------------------------------------------------------------
         uint32_t l1_read_addr_ex_par = cb_partial_obj.get_read_ptr();
         uint32_t l1_read_addr_ex = 0;
         uint32_t block_index_stride = 0;
@@ -162,6 +175,9 @@ void kernel_main() {
             noc.async_read_barrier();
             cb_external_obj.push_back(num_blocks_first_stage * num_tiles_scaler);
 
+            // ---------------------------------------------------------------------------
+            // Handle the two-stage reduce
+            // ---------------------------------------------------------------------------
             if constexpr (use_two_stage_reduce) {
                 if (i == 0) {
                     reduce_second_stage_sem.wait(num_blocks_second_stage - 1);
@@ -202,6 +218,7 @@ void kernel_main() {
 
         // ============================================================================
         // Gather all final combined results and multicast to all cores.
+        // Read from `cb_ex` into `cb_ex_global`, multicast `cb_ex_global` to all cores
         // ============================================================================
 
         uint32_t l1_read_addr_ex_remote = cb_ex_obj.get_read_ptr();

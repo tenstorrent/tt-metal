@@ -173,6 +173,9 @@ inline void read_block_to_cb(
     const uint32_t tile_bytes,
     const uint32_t offset,
     const Block& block) {
+    // Need to reserve/push on intervals that nicely
+    // divide the CB size. The CB and block size has been
+    // configured to ensure this in the program setup
     cb.reserve_back(block.full_block_size());
     uint32_t idx = 0;
     for (auto r : block.local()) {
