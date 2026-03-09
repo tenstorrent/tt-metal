@@ -424,9 +424,6 @@ def run_ring_joint_sdpa(
     "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
     [
         (1, 64, 1, 64, 4 * 4 * 1024, 576, 576, 128),
-        # (1, 64, 1, 64, 4 * 32, 64, 64, 32),
-        # # base case
-        # (1, 2, 1, 2, 4 * 32, 32, 32, 32),
     ],
 )
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
