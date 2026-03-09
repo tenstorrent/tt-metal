@@ -103,89 +103,89 @@ jobs:
       architecture: amd64
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
-  # asan-build:
-  #   if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-  #   needs: build-docker-images
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   permissions:
-  #     packages: write
-  #   secrets: inherit
-  #   with:
-  #     platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-  #     toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-  #     build-type: ${{ inputs.build-type || 'ASan' }}
-  #     publish-artifact: false
-  #     skip-tt-train: true
-  #     ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
-  #     # Pass pre-built docker images to avoid duplicate builds
-  #     ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-  #     ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-  #     dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
-  #     basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
-  #     basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
-  #     manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
+  asan-build:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: build-docker-images
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      build-type: ${{ inputs.build-type || 'ASan' }}
+      publish-artifact: false
+      skip-tt-train: true
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Pass pre-built docker images to avoid duplicate builds
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
-  # find-changed-files:
-  #   if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-  #   runs-on: ubuntu-latest
-  #   outputs:
-  #     any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
-  #     docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
-  #     cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
-  #     tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
-  #     tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
-  #     tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
-  #     model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
-  #   steps:
-  #     - id: find-changes
-  #       uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+  find-changed-files:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+      tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
+      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
-  # metalium-smoke-tests:
-  #   needs: [ asan-build, find-changed-files ]
-  #   if: ${{
-  #       github.ref_name == 'main' ||
-  #       needs.find-changed-files.outputs.cmake-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-  #     }}
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       platform: [
-  #         "N150-viommu",
-  #       ]
-  #   uses: ./.github/workflows/smoke.yaml
-  #   secrets: inherit
-  #   with:
-  #     docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
-  #     package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
-  #     runner: ${{ matrix.platform }}
-  #     product: tt-metalium
-  #     upload-coverage: false
+  metalium-smoke-tests:
+    needs: [ asan-build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+      upload-coverage: false
 
-  # ttnn-smoke-tests:
-  #   needs: [ asan-build, find-changed-files ]
-  #   if: ${{
-  #       github.ref_name == 'main' ||
-  #       needs.find-changed-files.outputs.cmake-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-  #     }}
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       platform: [
-  #         "N150-viommu",
-  #       ]
-  #   uses: ./.github/workflows/smoke.yaml
-  #   secrets: inherit
-  #   with:
-  #     docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
-  #     package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
-  #     runner: ${{ matrix.platform }}
-  #     product: tt-nn
-  #     upload-coverage: false
+  ttnn-smoke-tests:
+    needs: [ asan-build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-nn
+      upload-coverage: false
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -214,135 +214,135 @@ jobs:
       basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
-  # build-tt-train:
-  #   if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-  #   needs: [ build, find-changed-files ]
-  #   timeout-minutes: 20
-  #   runs-on: tt-ubuntu-2204-large-stable
-  #   container:
-  #     image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
-  #     volumes:
-  #       - ${{ github.workspace }}:/work
-  #   defaults:
-  #     run:
-  #       shell: bash
-  #       working-directory: /work # https://github.com/actions/runner/issues/878
-  #   steps:
-  #     - name: Checkout actions
-  #       uses: actions/checkout@v4
-  #       with:
-  #         sparse-checkout: .github/actions/download-artifact-with-retry
-  #         sparse-checkout-cone-mode: false
-  #
-  #     - uses: ./.github/actions/download-artifact-with-retry
-  #       timeout-minutes: 15
-  #       with:
-  #         name: >-
-  #           ${{ needs.build.outputs.packages-artifact-name ||
-  #               'packages artifact unresolved!' }}
-  #         path: /work/pkgs/
-  #     - name: Install packages
-  #       timeout-minutes: 10
-  #       run: |
-  #         set -euo pipefail
-  #
-  #         apt update
-  #         apt install -y \
-  #           ./pkgs/tt-metalium_*.deb \
-  #           ./pkgs/tt-metalium-jit_*.deb \
-  #           ./pkgs/tt-metalium-dev_*.deb \
-  #           ./pkgs/tt-nn_*.deb \
-  #           ./pkgs/tt-nn-dev_*.deb
-  #
-  #     - name: ⬇️ Checkout
-  #       uses: actions/checkout@v5
-  #       with:
-  #         # submodules: recursive
-  #         ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
-  #         fetch-depth: 500
-  #         fetch-tags: true # Need tags for `git describe`
-  #         sparse-checkout: |
-  #           tt-train
-  #
-  #     - name: Configure git safe.directory
-  #       run: git config --global --add safe.directory /work
-  #
-  #     - name: Submodules
-  #       timeout-minutes: 10
-  #       run: |
-  #         set -euo pipefail
-  #         git submodule update --init --recursive tt-train
-  #
-  #     - name: Configure tt-train
-  #       timeout-minutes: 10
-  #       env:
-  #         CC: clang-20
-  #         CXX: clang++-20
-  #       run: |
-  #         set -euo pipefail
-  #
-  #         cd /work/tt-train
-  #         mkdir -p .build && cd .build
-  #         cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
-  #
-  #     - name: Build tt-train
-  #       timeout-minutes: 10
-  #       run: |
-  #         set -euo pipefail
-  #
-  #         cd /work/tt-train/.build
-  #         cmake --build .
+  build-tt-train:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: [ build, find-changed-files ]
+    timeout-minutes: 20
+    runs-on: tt-ubuntu-2204-large-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
+      volumes:
+        - ${{ github.workspace }}:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
 
-  # build-docs:
-  #   if: >-
-  #     ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
-  #         needs.find-changed-files.outputs.docs-changed == 'true' }}
-  #   needs: [find-changed-files, build]
-  #   uses: ./.github/workflows/docs-latest-public.yaml
-  #   secrets: inherit
-  #   with:
-  #     docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      - uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
+        with:
+          name: >-
+            ${{ needs.build.outputs.packages-artifact-name ||
+                'packages artifact unresolved!' }}
+          path: /work/pkgs/
+      - name: Install packages
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
 
-  # metalium-examples:
-  #   needs: [ build, find-changed-files ]
-  #   if: ${{
-  #       github.ref_name == 'main' ||
-  #       needs.find-changed-files.outputs.cmake-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-metalium-changed == 'true'
-  #     }}
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       platform: [
-  #         "N150-viommu",
-  #       ]
-  #   uses: ./.github/workflows/sdk-examples.yaml
-  #   with:
-  #     docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
-  #     package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
-  #     runner: ${{ matrix.platform }}
-  #     product: tt-metalium
+          apt update
+          apt install -y \
+            ./pkgs/tt-metalium_*.deb \
+            ./pkgs/tt-metalium-jit_*.deb \
+            ./pkgs/tt-metalium-dev_*.deb \
+            ./pkgs/tt-nn_*.deb \
+            ./pkgs/tt-nn-dev_*.deb
 
-  # ttnn-examples:
-  #   needs: [ build, find-changed-files ]
-  #   if: ${{
-  #       github.ref_name == 'main' ||
-  #       needs.find-changed-files.outputs.cmake-changed == 'true' ||
-  #       needs.find-changed-files.outputs.tt-nn-changed == 'true'
-  #     }}
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       platform: [
-  #         "N150-viommu",
-  #       ]
-  #   uses: ./.github/workflows/sdk-examples.yaml
-  #   with:
-  #     docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
-  #     package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
-  #     runner: ${{ matrix.platform }}
-  #     product: tt-nn
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v5
+        with:
+          # submodules: recursive
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+          fetch-depth: 500
+          fetch-tags: true # Need tags for `git describe`
+          sparse-checkout: |
+            tt-train
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: Submodules
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive tt-train
+
+      - name: Configure tt-train
+        timeout-minutes: 10
+        env:
+          CC: clang-20
+          CXX: clang++-20
+        run: |
+          set -euo pipefail
+
+          cd /work/tt-train
+          mkdir -p .build && cd .build
+          cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
+
+      - name: Build tt-train
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+
+          cd /work/tt-train/.build
+          cmake --build .
+
+  build-docs:
+    if: >-
+      ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
+          needs.find-changed-files.outputs.docs-changed == 'true' }}
+    needs: [find-changed-files, build]
+    uses: ./.github/workflows/docs-latest-public.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  metalium-examples:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/sdk-examples.yaml
+    with:
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+
+  ttnn-examples:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/sdk-examples.yaml
+    with:
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-nn
 
   ttsim-integration-tests:
     needs: [ build ]
@@ -360,141 +360,141 @@ jobs:
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
 
-  # # A quick check that parses the models charts in README.md and models/README.md
-  # # and ensures that models attributes are in sync.
-  # model-charts-sync:
-  #   needs: [find-changed-files]
-  #   if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - name: Checkout repo
-  #     uses: actions/checkout@v4
-  #   - name: Set up Python
-  #     uses: actions/setup-python@v5
-  #     with:
-  #       python-version: '3.10'
-  #   - name: Run model charts sync Python script
-  #     run: |
-  #       # Run script that compares the models chart in README.md
-  #       # with the models chart in models/README.md
-  #       python .github/scripts/utils/model-charts-sync.py
+  # A quick check that parses the models charts in README.md and models/README.md
+  # and ensures that models attributes are in sync.
+  model-charts-sync:
+    needs: [find-changed-files]
+    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Run model charts sync Python script
+      run: |
+        # Run script that compares the models chart in README.md
+        # with the models chart in models/README.md
+        python .github/scripts/utils/model-charts-sync.py
 
-  # # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
-  # # enough to run during PRs without bringing infra to a grinding halt.
-  # # A proper scan is run in Merge Gate to ensure only clean code lands.
-  # clang-tidy-light:
-  #   needs: [build-docker-images]
-  #   if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-  #   timeout-minutes: 140
-  #   runs-on: ubuntu-latest
-  #   container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-  #   permissions:
-  #     pull-requests: write
-  #     contents: write  # to allow auto-closing conversations
-  #   steps:
-  #   - name: Change ownership of /github/home
-  #     run: sudo chown -R $(whoami) /github/home  # Thanks GH...
-  #   - uses: actions/checkout@v4
-  #     with:
-  #       ref: >-
-  #         ${{ github.event_name == 'pull_request' &&
-  #             github.event.pull_request.head.sha || '' }}
-  #       fetch-depth: 0
-  #       submodules: "recursive"
-  #   - name: Set safe directory for Git
-  #     run: git config --global --add safe.directory $GITHUB_WORKSPACE
-  #   - name: Fetch base branch
-  #     timeout-minutes: 5
-  #     run: |
-  #       BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
-  #       BASE_REF="${{ github.event.pull_request.base.ref }}"
-  #       git remote add upstream "https://github.com/${BASE_REPO}"
-  #       git fetch --no-tags upstream "${BASE_REF}"
-  #   - name: Install clang-tidy
-  #     timeout-minutes: 10
-  #     run: |
-  #       sudo apt-get update
-  #       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  #         clang-tidy-20 python3.11 python3.11-venv python3.11-dev
-  #       sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-  #       uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
-  #   - name: Prepare .clang-tidy with extra checks
-  #     run: |
-  #       if [ -f .clang-tidy-light ]; then
-  #         grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
-  #         mv .clang-tidy-new .clang-tidy
-  #       fi
-  #       cat .clang-tidy
-  #   - name: Prepare compile_commands.json
-  #     timeout-minutes: 10
-  #     run: |
-  #       cmake -B build \
-  #         -DCMAKE_BUILD_TYPE=Debug \
-  #         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  #         -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
-  #         -DTT_METAL_BUILD_TESTS=ON \
-  #         -DTTNN_BUILD_TESTS=ON \
-  #         -DTT_UNITY_BUILDS=OFF \
-  #         -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-  #       cmake --build build --target all_generated_files
-  #   - name: 'Install jq'
-  #     uses: dcarbone/install-jq-action@v2
-  #   - name: Create results directory
-  #     run: |
-  #       mkdir clang-tidy-result
-  #   - name: Analyze
-  #     # Big PRs will have a LOT to scan, but this should be enough for everyone
-  #     timeout-minutes: 90
-  #     shell: bash
-  #     run: |
-  #       set -euo pipefail
-  #
-  #       # Find all touched files present in compile_commands.json
-  #       # This is not as simple as filtering non-code files, as some code
-  #       # (eg: Kernels) are C++ code that is not built at this level, and
-  #       # thus clang-tidy will be unable to process them.
-  #       PREFIX=$(pwd)
-  #       jq --arg prefix "$PREFIX/" -r \
-  #         '.[].file | sub("^" + $prefix; "")' \
-  #         build/compile_commands.json > relative_files_in_build.txt
-  #       BASE_REF="${{ github.event.pull_request.base.ref }}"
-  #       git diff --name-only \
-  #         "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
-  #       grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
-  #
-  #       # Exit if there are no modified files known to CMake
-  #       [[ -s common_files.txt ]] || {
-  #         echo "No files to analyze"
-  #         exit 0
-  #       }
-  #
-  #       # Analyze the relevant diffs of the relevant files
-  #       BASE_REF="${{ github.event.pull_request.base.ref }}"
-  #       git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
-  #         -- $(cat common_files.txt) > filtered_changes.diff
-  #       clang-tidy-diff-20.py -p1 -path build \
-  #         -export-fixes clang-tidy-result/fixes.yml \
-  #         -j$(nproc) < filtered_changes.diff
-  #
-  #       # TODO: Find a way to fail THIS step if there's some USEFUL issues
-  #       # detected. For now disable it b/c it fails if it finds things in
-  #       # non-user code and/or NOLINT's.
-  #       # # Draw attention to this step (make it an error) if there are fixes
-  #       # # to be addressed.
-  #       # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
-  #   - name: Run clang-tidy-pr-comments action
-  #     if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
-  #     # v1.8.0
-  #     uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
-  #     with:
-  #       github_token: ${{ secrets.GITHUB_TOKEN }}
-  #       clang_tidy_fixes: clang-tidy-result/fixes.yml
-  #       request_changes: false  # TODO: consider enabling this?
-  #       suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
-  #       # Pip fails if the action attempts to install its own Python; Sidestep that
-  #       python_path: python3
-  #       # NOTE: only resolves when ALL are fixed
-  #       auto_resolve_conversations: true
+  # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
+  # enough to run during PRs without bringing infra to a grinding halt.
+  # A proper scan is run in Merge Gate to ensure only clean code lands.
+  clang-tidy-light:
+    needs: [build-docker-images]
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    timeout-minutes: 140
+    runs-on: ubuntu-latest
+    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+    permissions:
+      pull-requests: write
+      contents: write  # to allow auto-closing conversations
+    steps:
+    - name: Change ownership of /github/home
+      run: sudo chown -R $(whoami) /github/home  # Thanks GH...
+    - uses: actions/checkout@v4
+      with:
+        ref: >-
+          ${{ github.event_name == 'pull_request' &&
+              github.event.pull_request.head.sha || '' }}
+        fetch-depth: 0
+        submodules: "recursive"
+    - name: Set safe directory for Git
+      run: git config --global --add safe.directory $GITHUB_WORKSPACE
+    - name: Fetch base branch
+      timeout-minutes: 5
+      run: |
+        BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
+        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        git remote add upstream "https://github.com/${BASE_REPO}"
+        git fetch --no-tags upstream "${BASE_REF}"
+    - name: Install clang-tidy
+      timeout-minutes: 10
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          clang-tidy-20 python3.11 python3.11-venv python3.11-dev
+        sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
+        uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
+    - name: Prepare .clang-tidy with extra checks
+      run: |
+        if [ -f .clang-tidy-light ]; then
+          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
+          mv .clang-tidy-new .clang-tidy
+        fi
+        cat .clang-tidy
+    - name: Prepare compile_commands.json
+      timeout-minutes: 10
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+          -DTT_METAL_BUILD_TESTS=ON \
+          -DTTNN_BUILD_TESTS=ON \
+          -DTT_UNITY_BUILDS=OFF \
+          -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+        cmake --build build --target all_generated_files
+    - name: 'Install jq'
+      uses: dcarbone/install-jq-action@v2
+    - name: Create results directory
+      run: |
+        mkdir clang-tidy-result
+    - name: Analyze
+      # Big PRs will have a LOT to scan, but this should be enough for everyone
+      timeout-minutes: 90
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Find all touched files present in compile_commands.json
+        # This is not as simple as filtering non-code files, as some code
+        # (eg: Kernels) are C++ code that is not built at this level, and
+        # thus clang-tidy will be unable to process them.
+        PREFIX=$(pwd)
+        jq --arg prefix "$PREFIX/" -r \
+          '.[].file | sub("^" + $prefix; "")' \
+          build/compile_commands.json > relative_files_in_build.txt
+        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        git diff --name-only \
+          "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
+        grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
+
+        # Exit if there are no modified files known to CMake
+        [[ -s common_files.txt ]] || {
+          echo "No files to analyze"
+          exit 0
+        }
+
+        # Analyze the relevant diffs of the relevant files
+        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
+          -- $(cat common_files.txt) > filtered_changes.diff
+        clang-tidy-diff-20.py -p1 -path build \
+          -export-fixes clang-tidy-result/fixes.yml \
+          -j$(nproc) < filtered_changes.diff
+
+        # TODO: Find a way to fail THIS step if there's some USEFUL issues
+        # detected. For now disable it b/c it fails if it finds things in
+        # non-user code and/or NOLINT's.
+        # # Draw attention to this step (make it an error) if there are fixes
+        # # to be addressed.
+        # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
+    - name: Run clang-tidy-pr-comments action
+      if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
+      # v1.8.0
+      uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        clang_tidy_fixes: clang-tidy-result/fixes.yml
+        request_changes: false  # TODO: consider enabling this?
+        suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
+        # Pip fails if the action attempts to install its own Python; Sidestep that
+        python_path: python3
+        # NOTE: only resolves when ALL are fixed
+        auto_resolve_conversations: true
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -510,15 +510,24 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
     needs:
-      - build-docker-images
+      - asan-build
+      - metalium-smoke-tests
+      - ttnn-smoke-tests
       - build
+      - build-tt-train
+      - metalium-examples
       - ttsim-integration-tests
+      - clang-tidy-light
+      - model-charts-sync
+      - build-docs
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "build-docker-images, build, ttsim-integration-tests"
-          optional-jobs: ""
+          required-jobs: "asan-build, build, build-tt-train"
+          optional-jobs: >-
+            metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
+            ttsim-integration-tests, model-charts-sync, build-docs
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
