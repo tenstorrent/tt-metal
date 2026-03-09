@@ -36,6 +36,7 @@ static bool run_test(
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
     struct l1_allocator send_allocator = new_erisc_allocator();
+    uint32_t send_delta_time_addr = l1_alloc(send_allocator, sizeof(uint64_t));
     uint32_t send_l1_address = l1_alloc(send_allocator, transfer_size);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
@@ -57,6 +58,7 @@ static bool run_test(
             {
                 transfer_size,
                 transfer_count,
+                send_delta_time_addr,
                 send_l1_address,
                 recv_l1_address,
             },
@@ -149,13 +151,8 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetLinkUp) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
 
                     log_info(tt::LogTest, "    running on {}", processor);
-                    pass &= run_test(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_core,
-                        receiver_core,
-                        processor);
+                    pass &=
+                        run_test(this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
                 }
             }
         }
