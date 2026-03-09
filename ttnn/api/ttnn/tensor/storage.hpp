@@ -82,6 +82,14 @@ public:
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
 
+    // Deallocates the underlying shared memory.
+    //
+    // Warning:
+    // Multiple instances of DeviceStorage can share the same underlying device memory.
+    // This deallocation will cause all instances of the DeviceStorage to be deallocated.
+    // This is a rug pull and should be used with caution.
+    void deallocate_shared_memory(bool force);
+
     // These are internal functions and should be treated as a public API.
     // They are here to support distributed API.
     static DeviceStorage combine_to_multi_device_storage(

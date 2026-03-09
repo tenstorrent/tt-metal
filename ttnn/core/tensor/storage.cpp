@@ -93,6 +93,14 @@ bool DeviceStorage::is_uniform_storage() const {
     return coords.size() == mesh_buffer->device()->num_devices();
 }
 
+void DeviceStorage::deallocate_shared_memory(bool force) {
+    bool is_sole_owner = get_root_mesh_buffer().use_count() == 1;
+    if (force || is_sole_owner) {
+        deallocate_root_mesh_buffer();
+    }
+    reset_root_mesh_buffer();
+}
+
 namespace {
 namespace CMAKE_UNQIUE_NAMESPACE {
 // Returns true if all the coordinates are unique.

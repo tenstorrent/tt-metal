@@ -17,24 +17,13 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-bool can_deallocate(const Tensor& input_tensor) {
-    if (is_cpu_tensor(input_tensor)) {
-        return false;
-    }
-    return input_tensor.device_storage().get_mesh_buffer_leak_ownership().use_count() == 1;
-}
-
 static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
-    if (not can_deallocate(input_tensor)) {
-        // TODO: Should this throw error?
-        return input_tensor;
-    }
-    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
+    const_cast<Tensor&>(input_tensor).deallocate(true);
 
     if (mem_config) {
         output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
@@ -103,20 +92,12 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
-    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    if (not can_deallocate(input_tensor)) {
-        TT_FATAL(
-            false,
-            "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably "
-            "another consumer.");
-        // TODO: Should this throw error?
-        return {input_tensor};
-    }
-    auto shard_spec = input_tensor.shard_spec().value();
-    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
+
+    const_cast<Tensor&>(input_tensor).deallocate(true);
 
     auto output_tensor_spec = input_tensor.tensor_spec();
     if (mem_config) {
+        auto shard_spec = input_tensor.shard_spec().value();
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
         auto output_mem_config = mem_config->with_shard_spec(shard_spec);
         output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
@@ -127,7 +108,7 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
-            input_address);
+            input_tensor.buffer()->address());
         return {output_tensor};
     }
     ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
