@@ -1307,10 +1307,12 @@ void sdpa_ring_v2(
                 }
             }
 
-            // Tile-level matmul skip for local_n or joint_n padding.
+            // Tile-level matmul skip for global_n, local_n, or joint_n padding.
             // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
             uint32_t effective_Sk_param = 0;  // 0 = use full Sk_chunk_t
-            if (is_local_n_mask_chunk && !is_global_n_mask_chunk) {
+            if (is_global_n_mask_chunk) {
+                effective_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
+            } else if (is_local_n_mask_chunk) {
                 effective_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
             } else if (is_joint_n_mask_chunk) {
                 effective_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
