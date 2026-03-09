@@ -13,7 +13,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
@@ -26,10 +25,10 @@ namespace unit_tests::dm::dram_neighbour {
 
 uint32_t runtime_host_id = 0;
 
-typedef struct IndexRange {
+using IndexRange = struct {
     uint32_t start;
     uint32_t end;
-} IndexRange;
+};
 
 // Test config
 struct DramNeighbourConfig {
@@ -113,7 +112,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
-    vector<uint32_t> packed_golden = packed_input;
+    vector<uint32_t>& packed_golden = packed_input;
 
     // Compile-time arguments
     vector<uint32_t> reader_compile_args = {
@@ -152,6 +151,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     vector<uint32_t> l1_addr;
     uint32_t num_cores = worker_cores.size();
+    l1_addr.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         l1_addr.push_back(get_l1_address_and_size(mesh_device, worker_cores[i]).base_address);
     }
