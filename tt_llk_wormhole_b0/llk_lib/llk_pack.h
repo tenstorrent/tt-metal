@@ -122,6 +122,12 @@ inline void _llk_pack_reconfig_data_format_(
     }
 }
 
+inline void _llk_pack_set_fp32_dest_acc_(bool enable)
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
+}
+
 template <bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
