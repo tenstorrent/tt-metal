@@ -177,6 +177,7 @@ void kernel_main() {
                             reduce_second_stage_sem.set(0);
                         }
 
+                        write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
                                 remote_ep,

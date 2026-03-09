@@ -176,6 +176,7 @@ void kernel_main() {
                         }
 
                         cb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
+                        write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
