@@ -292,8 +292,9 @@ def gated_deltanet_forward_ttnn(
     else:
         o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps)
 
-    # 7. Reshape and project output
+    # 7. Reshape and project output (32x1024x512 matmul: place input in L1 per Tracy)
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
+    o = ttnn.to_memory_config(o, ttnn.L1_MEMORY_CONFIG)
     o = ttnn.linear(o, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o, new_state
