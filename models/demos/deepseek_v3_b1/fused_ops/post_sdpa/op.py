@@ -405,7 +405,6 @@ class PostSDPA:
         ccl_residual_cb = 54  # CCL residual (receiver core)
         ccl_temp_cb = 55  # CCL temp for compute (receiver core)
         ccl_output_cb = 56  # CCL output (receiver core)
-        ccl_packet_header_cb = 57  # CCL packet headers (sender + receiver cores)
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
@@ -645,7 +644,6 @@ class PostSDPA:
                     ("ccl_sender_noc_x", ccl_sender_noc_core.x),
                     ("ccl_sender_noc_y", ccl_sender_noc_core.y),
                     # CCL sender (BRISC sends via fabric)
-                    ("ccl_sender_packet_header_cb_id", ccl_packet_header_cb),
                     ("ccl_sender_packet_cb_id", ccl_sender_in_cb),
                     ("ccl_sender_l1_alignment", l1_alignment),
                     ("ccl_sender_input_num_tiles", ccl_num_pages),
@@ -935,28 +933,6 @@ class PostSDPA:
                     ccl_output_cb_descriptor.core_ranges = gather_core_grid
                     cb_list.append(ccl_output_cb_descriptor)
 
-                    # CB 13: CCL packet headers
-                    ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=ccl_packet_header_cb,
-                        data_format=ttnn.uint32,
-                        page_size=ccl_packet_header_size_bytes,
-                    )
-                    if sdpa_kv_cache_buffer_device is not None:
-                        ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            ccl_packet_header_cb,
-                            sdpa_kv_cache_buffer_device,
-                            address_offset=running_address_offset,
-                            total_size=2 * ccl_packet_header_size_bytes,
-                        )
-                        ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
-                        running_address_offset += ccl_packet_header_cb_descriptor.total_size
-                    else:
-                        ccl_packet_header_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=2 * ccl_packet_header_size_bytes,
-                            core_ranges=gather_core_grid.merge(ccl_sender_core_grid),
-                            format_descriptors=[ccl_packet_header_cb_format],
-                        )
-                    cb_list.append(ccl_packet_header_cb_descriptor)
                 # SDPA CBs (14-24): only when SDPA is enabled
                 if sdpa_enabled:
                     # Get per-device SDPA tensors
