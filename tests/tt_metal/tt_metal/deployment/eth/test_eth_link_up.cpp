@@ -29,6 +29,7 @@ static bool run_test(
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
+    uint32_t num_bytes_per_send = 16;
     uint32_t transfer_size = 1024;
     uint32_t transfer_count = 1;
 
@@ -56,6 +57,7 @@ static bool run_test(
         .processor = processor,
         .compile_args =
             {
+                num_bytes_per_send,
                 transfer_size,
                 transfer_count,
                 send_delta_time_addr,
