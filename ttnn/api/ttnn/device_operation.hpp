@@ -455,31 +455,30 @@ typename device_operation_t::tensor_return_value_t launch(
             custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
         }
 
+        std::vector<std::reference_wrapper<Tensor>> output_tensors;
+        tt::stl::reflection::update_object_of_type<Tensor>(
+            [&output_tensors](Tensor& t) { output_tensors.push_back(std::ref(t)); }, tensor_return_value);
+
         if (!custom_topologies.empty()) {
             // Use custom topologies provided by the op
-            tt::stl::reflection::update_object_of_type<Tensor>(
-                [&custom_topologies, topology_idx = size_t{0}](Tensor& output_tensor) mutable {
-                    TT_FATAL(
-                        topology_idx < custom_topologies.size(),
-                        "Not enough custom topologies provided for output tensors");
-                    output_tensor.update_tensor_topology(custom_topologies[topology_idx++]);
-                },
-                tensor_return_value);
+            TT_FATAL(custom_topologies.size() == output_tensors.size(), "Number of custom topologies ({}) does not match number of output tensors ({})", custom_topologies.size(), output_tensors.size());
+
+            for (auto i = 0ul; i < custom_topologies.size(); i++) {
+                output_tensors[i].get().update_tensor_topology(std::move(custom_topologies[i]));
+            }
         } else {
             // Fall back to default topology imputation.
             // Uses the pre-extracted input_tensors to avoid re-visiting the templated tensor_args struct.
             auto output_topology_result =
                 detail::compute_output_placements_and_shape(input_tensors, first_tensor.value());
 
-            tt::stl::reflection::update_object_of_type<Tensor>(
-                [&output_topology_result](Tensor& output_tensor) {
-                    auto topology = tt::tt_metal::TensorTopology(
-                        output_topology_result.second,
-                        output_topology_result.first,
-                        output_tensor.tensor_topology().mesh_coords());
-                    output_tensor.update_tensor_topology(topology);
-                },
-                tensor_return_value);
+            for (auto &tensor : output_tensors) {
+                auto topology = tt::tt_metal::TensorTopology(
+                    output_topology_result.second,
+                    output_topology_result.first,
+                    tensor.get().tensor_topology().mesh_coords());
+                tensor.get().update_tensor_topology(std::move(topology));
+            }
         }
     }
 
