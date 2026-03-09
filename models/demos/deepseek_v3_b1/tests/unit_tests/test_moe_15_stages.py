@@ -112,7 +112,7 @@ class MoEComputeStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 2
+    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 4
     TOKEN_SIZE_BYTES = 64
     FINAL_OUTPUT_WIDTH_PER_CORE = 32 * 32  # 1024
     SHARED_K_PARALLEL = 8
@@ -300,9 +300,10 @@ class MoEComputeStage(StageKind):
             )
             reduce_intermediate_tensors.append(intermediate_tensor)
 
+        shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+        aggregator_core = shard_cores_list[0]
         compute_grid = mesh_device.compute_with_storage_grid_size()
-        reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
         reduce_output_shard_spec = ttnn.ShardSpec(
             reduce_output_shard_grid, (1, final_output_total_width), ttnn.ShardOrientation.ROW_MAJOR
         )
