@@ -43,7 +43,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/hlk_desc.hpp"
@@ -76,7 +75,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"

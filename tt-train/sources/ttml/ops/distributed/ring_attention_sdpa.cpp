@@ -6,7 +6,6 @@
 
 #include <fmt/core.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <umd/device/cluster.hpp>
@@ -22,7 +21,16 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
@@ -334,8 +342,7 @@ autograd::TensorPtr ring_attention_sdpa(
         value->add_grad(grad_V_accum);
     };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));
 
     return out;
 }
