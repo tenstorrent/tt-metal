@@ -881,7 +881,14 @@ class AttentionBlock:
         )  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
         qrope_cos_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos CB for RoPE
         qrope_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Sin CB for RoPE
-        qrope_trans_mat_cb = cb_id_context.get_cb_id(data_format, TD_32x32)  # Trans_mat CB for RoPE
+        qrope_trans_mat_cb = matmul_weights_cb_overlapped
+        assert (
+            trans_mat_tensor.dtype == matmul_weights_tensor.dtype
+        ), f"Qrope trans mat tensor dtype ({trans_mat_tensor.dtype}) must be equal to matmul weights tensor dtype ({matmul_weights_tensor.dtype})"
+        assert (
+            trans_mat_tensor.get_tile() == matmul_weights_tensor.get_tile()
+        ), f"Qrope trans mat tensor tile ({trans_mat_tensor.get_tile()}) must be equal to matmul weights tensor tile ({matmul_weights_tensor.get_tile()})"
+        # qrope_trans_mat_cb = cb_id_context.get_cb_id(data_format, TD_32x32)  # Trans_mat CB for RoPE
         qrope_rotated_input_interm_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Rotated input intermediate CB for RoPE
@@ -892,7 +899,8 @@ class AttentionBlock:
             data_format, TD_1x32
         )  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
         kv_rmsnorm_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Gamma CB for KV Cache Branch RMSNorm
+        kv_rmsnorm_gamma_cb = rmsnorm2_gamma_cb
+        # kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Gamma CB for KV Cache Branch RMSNorm
         kv_rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for KV Cache Branch RMSNorm
         krope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for KV Cache Branch RoPE
         krope_cos_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos CB for RoPE
@@ -2235,9 +2243,9 @@ class AttentionBlock:
         sdpa_out_interm_running_offset_qrope += qrope_sin_cb_descriptor.total_size
 
         # CB 19: Trans_mat (sharded tensor)
-        qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            qrope_trans_mat_cb, ref_trans_mat_tensor, core_ranges=full_device_grid
-        )
+        # qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+        #     qrope_trans_mat_cb, ref_trans_mat_tensor, core_ranges=full_device_grid
+        # )
 
         # CB 20: Rotated input intermediate CB — overlap with sdpa_out_interm L1 buffer
         # at offset 13888 B. This CB is consumed before SDPA runs.
@@ -2392,11 +2400,11 @@ class AttentionBlock:
         sdpa_kv_cache_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
 
         # CB: KV RMSNorm gamma buffer (backed by fused overlapped tensor)
-        kv_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-            kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor, ref_gamma_fused_tensor
-        )
-        kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
-        kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
+        # kv_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+        #     kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor, ref_gamma_fused_tensor
+        # )
+        # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
+        # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
 
         # CB 27: KV RMSNorm output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 15360 B. This CB is consumed before SDPA runs.
@@ -3384,13 +3392,13 @@ class AttentionBlock:
             create_q_heads_out_cb_descriptor,
             qrope_cos_cb_descriptor,
             qrope_sin_cb_descriptor,
-            qrope_trans_mat_cb_descriptor,
+            # qrope_trans_mat_cb_descriptor,
             qrope_rotated_input_interm_cb_descriptor,
             qrope_cos_interm_cb_descriptor,
             qrope_sin_interm_cb_descriptor,
             dkv_matmul_output_cb_descriptor,
             kv_rmsnorm_input_cb_descriptor,
-            kv_rmsnorm_gamma_cb_descriptor,
+            # kv_rmsnorm_gamma_cb_descriptor,
             kv_rmsnorm_output_cb_descriptor,
             krope_output_cb_descriptor,
             krope_cos_cb_descriptor,
@@ -3600,6 +3608,8 @@ class AttentionBlock:
                 matmul2_weights_addr = fused_weights_base_addr + matmul2_weights_tensor.byte_offset
                 dkv_matmul_weights_addr = fused_weights_base_addr + dkv_matmul_weights_tensor.byte_offset
                 gamma_addr = ref_gamma_fused_tensor.buffer_address() + gamma_tensor.byte_offset
+                rmsnorm2_gamma_addr = ref_gamma_fused_tensor.buffer_address() + rmsnorm2_gamma_tensor.byte_offset
+                kv_rmsnorm_gamma_addr = ref_gamma_fused_tensor.buffer_address() + dkv_rmsnorm_gamma_tensor.byte_offset
                 matmul3_weights_addr = ref_kv_b12_fused_tensor.buffer_address() + matmul3_weights_tensor.byte_offset
                 matmul4_weights_addr = (
                     ref_post_sdpa_weights1_fused_tensor.buffer_address() + post_sdpa_weights1_tensor.byte_offset
@@ -3607,6 +3617,7 @@ class AttentionBlock:
                 matmul5_weights_addr = (
                     ref_post_sdpa_weights2_fused_tensor.buffer_address() + post_sdpa_weights2_tensor.byte_offset
                 )
+                qrope_trans_mat_addr = ref_trans_mat_tensor.buffer_address()
 
                 # TRISC common runtime args (shared scalar values)
                 trisc_common_runtime_args = [
@@ -3624,6 +3635,9 @@ class AttentionBlock:
                     matmul3_weights_addr,  # idx 11
                     matmul4_weights_addr,  # idx 12
                     matmul5_weights_addr,  # idx 13
+                    qrope_trans_mat_addr,  # idx 14
+                    rmsnorm2_gamma_addr,  # idx 15
+                    kv_rmsnorm_gamma_addr,  # idx 16
                 ]
 
                 qrope_ncrisc_addr_args = [
@@ -4215,6 +4229,6 @@ class AttentionBlock:
                 ]
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
-
+        print("Running AttentionBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result
