@@ -19,13 +19,13 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor. Must be on the device.
 
             Keyword args:
                 dim (int, optional): dimension to reduce. Defaults to `None`.
                 keepdim (bool, optional): whether to keep the reduced dimension. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. If specified, must be on the same device as :attr:`input_tensor`. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: Output tensor containing the indices of the maximum value.

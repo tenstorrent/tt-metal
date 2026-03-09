@@ -21,7 +21,7 @@ from models.common.utility_functions import torch_random
 
 # Helper function that calls topk with preallocated output tensors, whose shapes are
 # determined by the ttnn_result obtained from a previous run of topk without preallocated output tensors.
-def _run_topk_with_preallocated(ttnn_tensor, k, dim, device, ttnn_result):
+def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
     """Re-runs topk with preallocated output tensors and returns (values, indices) as torch tensors."""
     prealloc_values = ttnn.empty(
         list(ttnn_result[0].shape),
@@ -37,11 +37,25 @@ def _run_topk_with_preallocated(ttnn_tensor, k, dim, device, ttnn_result):
         device=device,
         memory_config=ttnn_result[1].memory_config(),
     )
-    ttnn_result_prealloc = ttnn.topk(ttnn_tensor, k, dim=dim, output_tensor=(prealloc_values, prealloc_indices))
+    ttnn.topk(input_tensor, k, dim=dim, output_tensor=(prealloc_values, prealloc_indices))
     return (
-        ttnn.to_torch(ttnn.from_device(ttnn_result_prealloc[0])),
-        ttnn.to_torch(ttnn.from_device(ttnn_result_prealloc[1])),
+        ttnn.to_torch(ttnn.from_device(prealloc_values)),
+        ttnn.to_torch(ttnn.from_device(prealloc_indices)),
     )
+
+
+# Helper function that calls argmax with preallocated output tensor, whose shape is
+# determined by the ttnn_result obtained from a previous run of topk without preallocated output tensors.
+def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_result):
+    prealloc_output = ttnn.empty(
+        list(ttnn_result.shape),
+        dtype=ttnn_result.dtype,
+        layout=ttnn_result.layout,
+        device=device,
+        memory_config=ttnn_result.memory_config(),
+    )
+    ttnn.argmax(input_tensor, dim=dim, keepdim=keepdim, output_tensor=prealloc_output)
+    return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
@@ -221,10 +235,10 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     # The two methods should produce identical results.
     assert torch.equal(
         prealloc_values, ttnn_values
-    ), f"Preallocated values differ from non-preallocated: {prealloc_values} vs {ttnn_values}"
+    ), f"Preallocated values: {prealloc_values} do not match non-preallocated: {ttnn_values}"
     assert torch.equal(
         prealloc_indices, ttnn_indices
-    ), f"Preallocated indices differ from non-preallocated: {prealloc_indices} vs {ttnn_indices}"
+    ), f"Preallocated indices: {prealloc_indices} do not match non-preallocated: {ttnn_indices}"
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
@@ -277,23 +291,30 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
     if torch_errored:
         return
 
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+    ttnn_result_in_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
     # For 0-volume results, verify shapes match
-    if torch_result.numel() == 0 and ttnn_result.numel() == 0:
+    if torch_result.numel() == 0 and ttnn_result_in_torch.numel() == 0:
         assert (
-            torch_result.shape == ttnn_result.shape
-        ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result.shape}"
+            torch_result.shape == ttnn_result_in_torch.shape
+        ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result_in_torch.shape}"
+
+        # Repeat the test with preallocated output tensors.
+        ttnn_result_prealloc = _run_argmax_with_preallocated(ttnn_tensor, dim, keepdim, device, ttnn_result)
+        assert (
+            torch_result.shape == ttnn_result_prealloc.shape
+        ), f"Preallocated shape mismatch on 0-volume result: torch {torch_result.shape}, ttnn: {ttnn_result_prealloc.shape}"
+
         # Other checks are not meaningful for empty tensors.
         return
 
     # Secondary check: PCC on raw indices (ties are rare with random bfloat16)
     atol = rtol = 0.1
     pcc = 0.999
-    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"Indices PCC: {output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_i64}"
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_in_torch, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"Indices PCC: {output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_in_torch}"
 
-    ttnn_result_i64 = ttnn_result.to(torch.int64)
+    ttnn_result_i64 = ttnn_result_in_torch.to(torch.int64)
 
     # Primary check: semantic validation - verify the values at ttnn's indices
     # match the values at torch's indices (robust against tie-breaking differences)
@@ -329,6 +350,13 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
         assert torch.allclose(
             ttnn_value.float(), torch_value.float(), atol=atol, rtol=rtol
         ), f"Value at ttnn index {ttnn_result_i64.item()} is {ttnn_value}, expected {torch_value} (at torch index {torch_result_i64.item()})"
+
+    # Repeat the test with preallocated output tensor.
+    ttnn_result_prealloc = _run_argmax_with_preallocated(ttnn_tensor, dim, keepdim, device, ttnn_result)
+    # The two methods should produce identical results.
+    assert torch.equal(
+        ttnn_result_prealloc, ttnn_result_in_torch
+    ), f"Preallocated argmax result: {ttnn_result_prealloc} does not match non-preallocated: {ttnn_result_in_torch}"
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
