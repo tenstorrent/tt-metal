@@ -103,14 +103,11 @@ auto launch_mux_workers(
 }
 
 void add_termination_master_rt_args(
-    const std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>>& mux_neigbor_core_maps,
-    std::vector<uint32_t>& writer_runtime_args) {
-    for (const auto& m : mux_neigbor_core_maps) {
-        for (const auto& c : m) {
-            const auto& mux_virtual_core = c.second;
-            writer_runtime_args.push_back(mux_virtual_core.x);
-            writer_runtime_args.push_back(mux_virtual_core.y);
-        }
+    const std::map<ttnn::MeshCoordinate, CoreCoord>& mux_neigbor_core_map, std::vector<uint32_t>& writer_runtime_args) {
+    for (const auto& c : mux_neigbor_core_map) {
+        const auto& mux_virtual_core = c.second;
+        writer_runtime_args.push_back(mux_virtual_core.x);
+        writer_runtime_args.push_back(mux_virtual_core.y);
     }
 }
 
@@ -377,7 +374,8 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
-        {"num_mux_workers", num_links * neighbors.size()}};
+        {"num_links", num_links},
+        {"num_mux_workers_per_link", neighbors.size()}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -410,11 +408,16 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         needed_worker_core_range_set,
         writer_config);
 
-    const auto& termination_master_core = sender_cores[0];
-    const auto termination_master_virtual_core = mesh_device->worker_core_from_logical_core(termination_master_core);
-    const auto termination_master_semaphore_id = CreateSemaphore(program, {termination_master_core}, 0);
-
+    const auto termination_master_semaphore_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0);
     const uint32_t num_workers_per_link = num_worker_cores / num_links;
+
+    const auto idx = std::views::iota(std::size_t{0}, sender_cores.size());
+    auto termination_master_cores = idx |
+                                    std::views::filter([=](std::size_t i) { return i % num_workers_per_link == 0; }) |
+                                    std::views::transform([&](std::size_t i) { return sender_cores[i]; });
+
+    auto termination_master_core_iter = termination_master_cores.begin();
+
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
@@ -435,7 +438,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             cross_device_semaphore.address()    // global_semaphore_addr
         };
 
-        const bool is_termination_master = (sender_core == termination_master_core);
+        const bool is_termination_master = (sender_core == *termination_master_core_iter);
         for (const auto& neighbor_coordinate : neighbors) {
             const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
 
@@ -448,14 +451,14 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
                 sender_core,
                 mux_kernel_config,
                 program,
-                termination_master_virtual_core,
+                mesh_device->worker_core_from_logical_core(*termination_master_core_iter),
                 writer_runtime_args,
                 termination_master_semaphore_id);
         }
 
-        // termination master is responsible for tearing down all mux workers, needs their coordinates
+        // termination master is responsible for tearing down mux workers for given link, needs their coordinates
         if (is_termination_master) {
-            detail::add_termination_master_rt_args(mux_neigbor_core_maps, writer_runtime_args);
+            detail::add_termination_master_rt_args(*core_map_iter, writer_runtime_args);
         }
 
         SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
@@ -472,6 +475,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         if (++link_worker_idx == num_workers_per_link) {
             link_worker_idx = 0;
             ++core_map_iter;
+            ++termination_master_core_iter;
         }
     }
 
