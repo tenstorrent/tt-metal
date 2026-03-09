@@ -12,6 +12,16 @@
 namespace ckernel {
 namespace sfpu {
 
+
+template <bool SCALE_EN, bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_(sfpi::vFloat val, const uint exp_base_scale_factor) {
+    if constexpr (SCALE_EN) {
+        val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
+    }
+    sfpi::vFloat result = _sfpu_exp_improved_<is_fp32_dest_acc_en>(val);
+    return result;
+}
+    
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -32,11 +42,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            if constexpr (SCALE_EN) {
-                val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
-            }
-            sfpi::vFloat result = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[0] = _ckernel_sfpu_exp_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
             sfpi::dst_reg++;
         }
     }
