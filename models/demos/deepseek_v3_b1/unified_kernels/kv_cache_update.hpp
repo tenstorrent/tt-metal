@@ -96,6 +96,9 @@ struct KVCacheUpdate {
                     args.full_grid_mcast_end_y,
                     args.kv_cache_cur_pos_ready_semaphore_addr);
                 noc_semaphore_inc_multicast(sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
+                volatile tt_l1_ptr uint32_t* sem_addr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
+                __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
                 noc_async_atomic_barrier(MCAST_NOC);
             }
 #endif
