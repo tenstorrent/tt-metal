@@ -13,7 +13,6 @@ where <safe_op_name> replaces dots with underscores after the leading
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
