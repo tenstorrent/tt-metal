@@ -28,32 +28,39 @@ struct DFBTCSlot {
     uint32_t wr_ptr;
     uint32_t base_addr;
     uint32_t limit;
+#ifdef COMPILE_FOR_TRISC
+    uint16_t rd_entry_idx;
+    uint16_t wr_entry_idx;
+    uint16_t base_entry_idx;
+#endif
     dfb::PackedTileCounter packed_tile_counter;
 } __attribute__((packed));
 
 // on WH/BH arrays will be sized to 1
 struct LocalDFBInterface {
-    DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
-
     uint32_t entry_size;
     uint32_t stride_size;
 
-    // Entry indices tracking how many entries from DFB base the rd/wr pointers are
+#ifdef COMPILE_FOR_TRISC
     uint32_t stride_size_tiles; // used by triscs to calculate tile offset from base L1 address
-    uint32_t rd_entry_idx;
-    uint32_t wr_entry_idx;
-    uint32_t wr_entry_ptr;
+    uint16_t wr_entry_ptr;
+#endif
 
+    uint8_t num_tcs_to_rr;
+    uint8_t tc_idx;
+
+#ifdef COMPILE_FOR_TRISC
+    uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
+#else
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t
         num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t num_tcs_to_rr;
     uint8_t num_txn_ids;
-    uint8_t tc_idx;
-    uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
     uint8_t broadcast_tc;       // DM-DM BLOCKED producer: post to all TCs instead of round-robin
+#endif
 
+    DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 // Holds metadata for transaction ID based ISR handling
@@ -67,5 +74,10 @@ struct TxnDFBDescriptor {
     } __attribute__((packed));
 };
 
+#ifdef COMPILE_FOR_TRISC
+static_assert(sizeof(DFBTCSlot) == 23, "DFBTCSlot size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 109, "LocalDFBInterface size is incorrect");
+#else
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 103, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface size is incorrect");
+#endif

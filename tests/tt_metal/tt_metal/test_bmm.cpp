@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -30,7 +31,12 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t Mt = 4, Kt = 2, Nt = 3, B = 2;
+    uint32_t Mt, Kt, Nt, B;
+    if (dev->arch() != ARCH::QUASAR) {
+        Mt = 4, Kt = 2, Nt = 3, B = 2;
+    } else {
+        Mt = 2, Kt = 2, Nt = 2, B = 1;
+    }
     uint32_t num_tilesA = Mt * Kt * B;
     uint32_t num_tilesB = Kt * Nt * B;
     uint32_t num_tilesC = Mt * Nt * B;
@@ -60,10 +66,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     std::vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
 
-    uint32_t num_input_tiles = 2;
-    uint32_t num_output_tiles = 2;
-
-    vector<uint32_t> compute_kernel_args = {B, Mt, Kt, Nt};
+    uint32_t THREADING = 2;
+    vector<uint32_t> compute_kernel_args = {B, Mt, Kt, Nt, THREADING};
     KernelHandle reader;
     KernelHandle writer;
     KernelHandle compute;
@@ -72,6 +76,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     uint32_t src1_dfb = 0;
     uint32_t dst_dfb = 0;
     if (dev->arch() != ARCH::QUASAR) {
+        uint32_t num_input_tiles = 2;
+        uint32_t num_output_tiles = 2;
+
         uint32_t src0_cb_index = 0;
         CircularBufferConfig cb_src0_config =
             CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -114,14 +121,15 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             core,
             ComputeConfig{.compile_args = compute_kernel_args});
     } else {
+        uint32_t num_input_tiles = 4;
+        uint32_t num_output_tiles = 4;
+
         tt_metal::experimental::dfb::DataflowBufferConfig src0_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .producer_risc_mask = 0x1,
-            .num_producers = 1,
+            .num_producers = THREADING,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
-            .num_consumers = 1,
+            .num_consumers = THREADING,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -129,23 +137,19 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig src1_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .producer_risc_mask = 0x1,
-            .num_producers = 1,
+            .num_producers = THREADING,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = THREADING,
+            .cap = tt_metal::experimental::dfb::AccessPattern::BLOCKED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
         };
         tt_metal::experimental::dfb::DataflowBufferConfig dst_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_output_tiles,
-            .producer_risc_mask = 0x100,
-            .num_producers = 1,
+            .num_producers = THREADING,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x2,
-            .num_consumers = 1,
+            .num_consumers = THREADING,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -160,7 +164,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1,
+                .num_threads_per_cluster = THREADING,
                 .compile_args = reader_compile_time_args});
 
         writer = tt_metal::experimental::quasar::CreateKernel(
@@ -168,14 +172,14 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1,
+                .num_threads_per_cluster = THREADING,
                 .compile_args = writer_compile_time_args});
 
         compute = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_kernel_args});
+            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = THREADING, .compile_args = compute_kernel_args});
     }
 
     if (dev->arch() == ARCH::QUASAR) {
@@ -186,16 +190,24 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
+
     detail::WriteToBuffer(src0_dram_buffer, src0_vec);
     detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
     uint32_t do_bcast = 0;
+    uint32_t producer_mask = 0;
+    uint32_t consumer_mask = 0;
+    if (dev->arch() == ARCH::QUASAR) {
+        producer_mask = program.impl().get_dataflow_buffer(src0_dfb)->config.producer_risc_mask;
+        consumer_mask = program.impl().get_dataflow_buffer(dst_dfb)->config.consumer_risc_mask;
+    }
     SetRuntimeArgs(
         program,
         reader,
         core,
-        {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B});
+        {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast, producer_mask, 0u});
+    SetRuntimeArgs(
+        program, writer, core, {dram_buffer_dst_addr, 0u, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, consumer_mask, 0u});
 
     detail::LaunchProgram(dev, program, true);
 
@@ -221,6 +233,180 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     vector<uint16_t> src1_linear =
         convert_layout<uint16_t>(u16_src1_vec, shapeB, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
     vector<uint16_t> ref_bmm = gold_bmm(shapeA, src0_linear, shapeB, src1_linear);
+
+    auto gold_4f_u32 = u32_from_u16_vector(
+        convert_layout<uint16_t>(ref_bmm, shapeC, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
+
+    int argfail = -1;
+    bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
+    EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+// This needs to be a separate test because we don't have a way of querying the correct compute grid size
+// when running a multi-neo emu/sim build. Otherwise its the same test with batch split across nodes
+TEST_F(MeshDeviceSingleCardFixture, BmmMultinode) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    if (dev->arch() != ARCH::QUASAR) {
+        GTEST_SKIP();
+    }
+
+    Program program = CreateProgram();
+
+    CoreCoord core0 = {0, 0};
+    CoreCoord core1 = {1, 0};
+    CoreRange core_range = {core0, core1};
+
+    uint32_t single_tile_size = 2 * 1024;
+    uint32_t Mt = 2, Kt = 2, Nt = 2;
+    uint32_t B = 2;           // total batches across both cores
+    uint32_t B_per_core = 1;  // each core computes exactly one batch
+
+    uint32_t num_tilesA = Mt * Kt * B;
+    uint32_t num_tilesB = Kt * Nt * B;
+    uint32_t num_tilesC = Mt * Nt * B;
+    uint32_t bytesA = single_tile_size * num_tilesA;
+    uint32_t bytesB = single_tile_size * num_tilesB;
+    uint32_t bytesC = single_tile_size * num_tilesC;
+
+    InterleavedBufferConfig src0_config{
+        .device = dev, .size = bytesA, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+    auto src0_dram_buffer = CreateBuffer(src0_config);
+    uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
+
+    InterleavedBufferConfig src1_config{
+        .device = dev, .size = bytesB, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+    auto src1_dram_buffer = CreateBuffer(src1_config);
+    uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
+
+    InterleavedBufferConfig dst_config{
+        .device = dev, .size = bytesC, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+    auto dst_dram_buffer = CreateBuffer(dst_config);
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
+
+    uint32_t THREADING = 2;
+    vector<uint32_t> compute_kernel_args = {B_per_core, Mt, Kt, Nt, THREADING};
+
+    uint32_t num_input_tiles = 4;
+    uint32_t num_output_tiles = 4;
+
+    tt_metal::experimental::dfb::DataflowBufferConfig src0_dfb_config = {
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .num_producers = THREADING,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = THREADING,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .data_format = tt::DataFormat::Float16_b};
+    tt_metal::experimental::dfb::DataflowBufferConfig src1_dfb_config = {
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .num_producers = THREADING,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = THREADING,
+        .cap = tt_metal::experimental::dfb::AccessPattern::BLOCKED,
+        .enable_implicit_sync = false,
+        .data_format = tt::DataFormat::Float16_b};
+    tt_metal::experimental::dfb::DataflowBufferConfig dst_dfb_config = {
+        .entry_size = single_tile_size,
+        .num_entries = num_output_tiles,
+        .num_producers = THREADING,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = THREADING,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .data_format = tt::DataFormat::Float16_b};
+
+    // Create DFBs on the full core range — each core gets its own independent DFB instances
+    uint32_t src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core_range, src0_dfb_config);
+    uint32_t src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core_range, src1_dfb_config);
+    uint32_t dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core_range, dst_dfb_config);
+
+    KernelHandle reader = tt_metal::experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+        core_range,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = THREADING,
+            .compile_args = reader_compile_time_args});
+
+    KernelHandle writer = tt_metal::experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+        core_range,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = THREADING,
+            .compile_args = writer_compile_time_args});
+
+    KernelHandle compute = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+        core_range,
+        tt_metal::experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = THREADING, .compile_args = compute_kernel_args});
+
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, src0_dfb, reader, compute);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, src1_dfb, reader, compute);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dst_dfb, compute, writer);
+
+    std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
+    std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
+
+    detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    detail::WriteToBuffer(src1_dram_buffer, src1_vec);
+
+    uint32_t do_bcast = 0;
+    uint32_t producer_mask = program.impl().get_dataflow_buffer(src0_dfb)->config.producer_risc_mask;
+    uint32_t consumer_mask = program.impl().get_dataflow_buffer(dst_dfb)->config.consumer_risc_mask;
+
+    SetRuntimeArgs(
+        program,
+        reader,
+        core0,
+        {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B_per_core, do_bcast,
+         producer_mask, 0u});
+    SetRuntimeArgs(
+        program, writer, core0, {dram_buffer_dst_addr, 0u, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B_per_core, consumer_mask, 0u});
+
+    SetRuntimeArgs(
+        program,
+        reader,
+        core1,
+        {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B_per_core, do_bcast,
+         producer_mask, 1u});
+    SetRuntimeArgs(
+        program, writer, core1, {dram_buffer_dst_addr, 0u, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B_per_core, consumer_mask, 1u});
+
+    detail::LaunchProgram(dev, program, true);
+
+    std::vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+
+    auto comparison_function = [](float a, float b) {
+        const float rtol = 0.05f;
+        const float atol = 0.05f;
+        float maxabs = fmaxf(fabsf(a), fabsf(b));
+        float absdiff = fabsf(a - b);
+        return (absdiff <= atol) || absdiff < rtol * maxabs;
+    };
+
+    vector<uint32_t> shapeA = {1, B, Mt * 32, Kt * 32};
+    vector<uint32_t> shapeB_shape = {1, B, Kt * 32, Nt * 32};
+    vector<uint32_t> shapeC = {1, B, Mt * 32, Nt * 32};
+    auto u16_src0_vec = u16_from_u32_vector(src0_vec);
+    auto u16_src1_vec = u16_from_u32_vector(src1_vec);
+    vector<uint16_t> src0_linear =
+        convert_layout<uint16_t>(u16_src0_vec, shapeA, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+    vector<uint16_t> src1_linear = convert_layout<uint16_t>(
+        u16_src1_vec, shapeB_shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+    vector<uint16_t> ref_bmm = gold_bmm(shapeA, src0_linear, shapeB_shape, src1_linear);
 
     auto gold_4f_u32 = u32_from_u16_vector(
         convert_layout<uint16_t>(ref_bmm, shapeC, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));

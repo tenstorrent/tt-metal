@@ -63,6 +63,15 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
             // Address fields are in bytes on host; convert to 16B units on TRISC (cb_addr_shift=4), keep bytes on DM
             // (cb_addr_shift=0)
+            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
+            // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
+            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
+            // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
+#ifdef COMPILE_FOR_TRISC
+            dfb_interface.stride_size_tiles = init_ptr->stride_in_entries;
+            dfb_interface.wr_entry_ptr = 0;
+#endif
+
             for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
                 uint32_t base = per_risc_ptr->base_addr[i] >> cb_addr_shift;
                 dfb_interface.tc_slots[i].base_addr = base;
@@ -70,19 +79,20 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 dfb_interface.tc_slots[i].rd_ptr = base;
                 dfb_interface.tc_slots[i].wr_ptr = base;
                 dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+#ifdef COMPILE_FOR_TRISC
+                dfb_interface.tc_slots[i].base_entry_idx =
+                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size;
+                dfb_interface.tc_slots[i].rd_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+                dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+#endif
             }
-            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
-            // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
-            dfb_interface.stride_size_tiles = init_ptr->stride_in_entries;
-            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
-            // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
-            dfb_interface.rd_entry_idx = 0;
-            dfb_interface.wr_entry_idx = 0;
-            dfb_interface.wr_entry_ptr = 0;
 
             dfb_interface.tc_idx = 0;
+#ifdef COMPILE_FOR_TRISC
             dfb_interface.tensix_trisc_mask = init_ptr->risc_mask_bits.tensix_trisc_mask;
+#else
             dfb_interface.broadcast_tc = per_risc_ptr->num_tcs_and_init.broadcast_tc;
+#endif
 
 #ifndef COMPILE_FOR_TRISC
             if (per_risc_ptr->flags.is_producer) {

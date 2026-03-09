@@ -52,8 +52,13 @@ inline void llk_unpack_AB_reduce(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const std::uint32_t l1_tile_index_a = g_dfb_interface[operandA_id].rd_entry_idx + tile_index_a;
-    const std::uint32_t l1_tile_index_b = g_dfb_interface[operandB_id].rd_entry_idx + tile_index_b;
+    const LocalDFBInterface& local_dfb_interface_a = g_dfb_interface[operandA_id];
+    const LocalDFBInterface& local_dfb_interface_b = g_dfb_interface[operandB_id];
+
+    const std::uint32_t l1_tile_index_a =
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
+    const std::uint32_t l1_tile_index_b =
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
 
     WAYPOINT("UABW");
     _llk_unpack_reduce_(l1_tile_index_a, l1_tile_index_b);
