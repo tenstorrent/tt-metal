@@ -43,6 +43,7 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             staging_buf: Optional [1,1,P,D] BF16 ROW_MAJOR fabric receive buffer
             enable_fabric_dispatch: Enable fabric token dispatch (default False)
             dispatch_metadata: Per-device dispatch routing metadata
+            dispatch_target_cols: Per-device target column for dispatch exchange
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("hidden_states").noconvert(),
@@ -64,6 +65,7 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             nb::arg("staging_buf") = nb::none(),
             nb::arg("enable_fabric_dispatch") = false,
             nb::arg("dispatch_metadata") = nb::none(),
+            nb::arg("dispatch_target_cols") = std::vector<uint32_t>{},
         });
 }
 

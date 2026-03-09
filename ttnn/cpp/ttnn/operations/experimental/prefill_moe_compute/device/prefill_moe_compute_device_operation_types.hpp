@@ -33,6 +33,10 @@ struct operation_attributes_t {
     // Each inner vector is packed as:
     //   [local_count, recv_count, send_count, local_indices..., send_indices...]
     std::vector<std::vector<uint32_t>> dispatch_metadata;
+    // Per-device target column for fabric dispatch exchange.
+    // Index = device index. Value = target device column in mesh.
+    // When empty, defaults to immediate neighbor (forward preferred for 1x2).
+    std::vector<uint32_t> dispatch_target_cols;
 };
 
 struct tensor_args_t {

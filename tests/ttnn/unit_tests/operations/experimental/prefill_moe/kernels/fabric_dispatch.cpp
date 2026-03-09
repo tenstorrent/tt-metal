@@ -7,21 +7,29 @@
 // receives tokens from the other device, and assembles a TILE_LAYOUT pkt_buf
 // from ROW_MAJOR hidden_states sources.
 //
+// Uses per-direction WorkerToFabricEdmSender connections (EAST/WEST) with
+// explicit send_direction and num_hops parameters to support multi-hop routing
+// on 1xN meshes (N >= 2).
+//
 // Runs on dispatch core (0, grid_y), dm1/RISCV_1.
 //
 // Data flow:
-//   1. Open fabric connection
-//   2. Send remote-bound tokens from local hs_rm → remote staging_buf via fabric
+//   1. Open fabric connections for valid directions (EAST/WEST)
+//   2. Send remote-bound tokens from local hs_rm -> remote staging_buf via fabric
 //   3. Signal remote device (atomic_inc on SEM_FABRIC_RECV)
 //   4. Wait for remote device's signal (SEM_FABRIC_RECV)
 //   5. Assemble pkt_buf in TILE_LAYOUT from local + received tokens (one tile row at a time)
 //   6. Write assembled tiles to pkt_buf DRAM (2D page indexing)
 //   7. Signal SEM_PKT_READY on compute leader
-//   8. Close fabric connection
+//   8. Close fabric connections
 //
 // Semaphores:
 //   SEM_PKT_READY (id=2): Incremented on compute leader after pkt_buf is written.
 //   SEM_FABRIC_RECV (id=4): Remote dispatch signals when sends are complete.
+//
+// Compile-time defines:
+//   EAST_CONNECTION: 1 if device has an EAST neighbor, 0 otherwise
+//   WEST_CONNECTION: 1 if device has a WEST neighbor, 0 otherwise
 //
 // CT args:
 //   [0..A] TensorAccessorArgs for pkt_buf (TILE_LAYOUT, page=2048B)
@@ -42,18 +50,29 @@
 //   [11] local_count         - tokens from local HS for local expert
 //   [12] recv_count          - tokens expected from remote device
 //   [13] send_count          - tokens to send to remote device
-//   [14..14+local_count-1]          - local_token_indices[]
-//   [14+local_count..14+local_count+send_count-1] - send_token_indices[]
-//   [...] FabricConnectionManager RT args
+//   [14..14+local_count+send_count-1] - local_token_indices[] + send_token_indices[]
+//   [...]  send_direction    - 0=EAST, 1=WEST
+//   [...]  num_hops          - number of fabric hops to target device
+//   [...]  fabric connection RT args (per valid direction)
 
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 using namespace tt::tt_fabric::linear::experimental;
+
+// Direction indices (matching factory's EAST=0, WEST=1 convention)
+constexpr uint32_t DIR_EAST = 0;
+constexpr uint32_t DIR_WEST = 1;
+constexpr uint32_t NUM_DIRS = 2;
+
+// Direction validity from compile-time defines
+constexpr bool HAS_EAST = (EAST_CONNECTION == 1);
+constexpr bool HAS_WEST = (WEST_CONNECTION == 1);
+constexpr std::array<bool, NUM_DIRS> directions = {HAS_EAST, HAS_WEST};
 
 // Scatter one ROW_MAJOR token row (in L1) into TILE_LAYOUT faces in L1.
 // All operations are L1-to-L1 memcpy (pure RISC-V, no NOC).
@@ -72,14 +91,14 @@ inline void scatter_row_to_tiles(
         uint32_t tile_base = tile_buf_l1 + c * 2048;
         uint32_t src_off = c * 64;  // 32 BF16 = 64 bytes per tile column
 
-        // Copy cols 0-15 (32 bytes) → face 0 or 2
+        // Copy cols 0-15 (32 bytes) -> face 0 or 2
         volatile uint32_t* dst0 = reinterpret_cast<volatile uint32_t*>(tile_base + face0_off);
         volatile uint32_t* s0 = reinterpret_cast<volatile uint32_t*>(src_l1 + src_off);
         for (uint32_t w = 0; w < 8; ++w) {
             dst0[w] = s0[w];
         }
 
-        // Copy cols 16-31 (32 bytes) → face 1 or 3
+        // Copy cols 16-31 (32 bytes) -> face 1 or 3
         volatile uint32_t* dst1 = reinterpret_cast<volatile uint32_t*>(tile_base + face1_off);
         volatile uint32_t* s1 = reinterpret_cast<volatile uint32_t*>(src_l1 + src_off + 32);
         for (uint32_t w = 0; w < 8; ++w) {
@@ -111,8 +130,11 @@ void kernel_main() {
     const uint32_t send_count = get_arg_val<uint32_t>(rt_idx++);           // [13]
     const uint32_t indices_base = rt_idx;                                  // [14]
 
-    // Fabric connection args start after all indices
-    size_t fab_arg_idx = indices_base + local_count + send_count;
+    // Skip past indices to reach send_direction, num_hops, and fabric connection args
+    size_t post_indices = indices_base + local_count + send_count;
+    const uint32_t send_direction = get_arg_val<uint32_t>(post_indices);  // 0=EAST, 1=WEST
+    const uint32_t num_hops = get_arg_val<uint32_t>(post_indices + 1);
+    size_t fab_arg_idx = post_indices + 2;  // fabric connection args start here
 
     // ---- CB setup ----
     constexpr uint32_t cb_temp = 3;   // Temp buffer for one token row
@@ -145,34 +167,45 @@ void kernel_main() {
     uint64_t remote_sem_noc_addr = safe_get_noc_addr(
         static_cast<uint8_t>(my_phys_x), static_cast<uint8_t>(my_phys_y), get_semaphore(SEM_FABRIC_RECV), 0);
 
-    // ---- Phase 1: Open fabric connection ----
-    auto fabric_connection = FabricConnectionManager::build_from_args(fab_arg_idx);
-    fabric_connection.open();
+    // ---- Phase 1: Open fabric connections ----
+    // Build per-direction WorkerToFabricEdmSender connections (same pattern as all_to_all_dispatch_metadata).
+    // Each valid direction opens a connection to the immediate neighbor's EDM.
+    // Multi-hop routing is handled by the fabric routers via the num_hops parameter.
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, NUM_DIRS> fabric_connections;
+    size_t conn_idx = fab_arg_idx;
+    for (uint32_t i = 0; i < NUM_DIRS; i++) {
+        if (directions[i]) {
+            fabric_connections[i] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(conn_idx);
+            fabric_connections[i].open_start();
+        }
+    }
+    for (uint32_t i = 0; i < NUM_DIRS; i++) {
+        if (directions[i]) {
+            fabric_connections[i].open_finish();
+        }
+    }
 
-    auto* sender = fabric_connection.has_forward_connection() ? &fabric_connection.get_forward_connection()
-                                                              : &fabric_connection.get_backward_connection();
+    auto* sender = &fabric_connections[send_direction];
 
     auto pkt_hdr_data = PacketHeaderPool::allocate_header();
     auto pkt_hdr_sem = PacketHeaderPool::allocate_header();
 
     // ---- Phase 2: Send remote-bound tokens via fabric ----
     // Split large writes into chunks to avoid partial delivery when payload > 4096 bytes.
-    // The fabric EDM / NOC may split writes internally; splitting explicitly ensures each
-    // chunk is flushed before the next, preventing the last chunk of the last send from
-    // being incomplete when the semaphore fires.
     constexpr uint32_t MAX_FABRIC_CHUNK = 4096;
 
     for (uint32_t i = 0; i < send_count; ++i) {
         uint32_t t = get_arg_val<uint32_t>(indices_base + local_count + i);
 
-        // Read token row t from hs_rm DRAM → L1 temp
+        // Read token row t from hs_rm DRAM -> L1 temp
         noc_async_read_page(t, hs_rm_accessor, temp_l1);
         noc_async_read_barrier();
 
         // Compute remote staging_buf NOC address for page (row) i
         uint64_t dest_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(remote_stg_accessor, i);
 
-        // Send in chunks ≤ MAX_FABRIC_CHUNK bytes
+        // Send in chunks <= MAX_FABRIC_CHUNK bytes
         uint32_t bytes_sent = 0;
         while (bytes_sent < D_bytes) {
             uint32_t chunk = D_bytes - bytes_sent;
@@ -186,7 +219,7 @@ void kernel_main() {
                 temp_l1 + bytes_sent,
                 chunk,
                 tt::tt_fabric::NocUnicastCommandHeader{dest_noc_addr + bytes_sent},
-                static_cast<uint8_t>(1));  // 1 hop
+                static_cast<uint8_t>(num_hops));
 
             noc_async_write_barrier();
             bytes_sent += chunk;
@@ -198,7 +231,7 @@ void kernel_main() {
         sender,
         pkt_hdr_sem,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 1, true},
-        static_cast<uint8_t>(1));
+        static_cast<uint8_t>(num_hops));
     noc_async_write_barrier();
 
     // ---- Phase 3: Wait for remote device's sends ----
@@ -208,13 +241,8 @@ void kernel_main() {
     noc_semaphore_set(recv_sem, 0);
 
     // ---- Phase 4+5: Assemble and write pkt_buf, one tile row at a time ----
-    // pkt_buf layout: local tokens at rows 0..local_count-1,
-    //                 received tokens at rows local_count..total_tokens-1.
-    // Each tile row holds 32 rows. We stream one tile row through CB6,
-    // scattering the relevant subset of tokens, then write to DRAM.
-    // For P_tiles=1 (P=32), this executes exactly once — same as before.
     for (uint32_t tr = 0; tr < P_tiles; ++tr) {
-        // Zero-fill tile buffer (D_tiles × 2048 bytes)
+        // Zero-fill tile buffer (D_tiles * 2048 bytes)
         {
             volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(tile_buf_l1);
             uint32_t num_words = D_tiles * tile_page_bytes / 4;
@@ -262,8 +290,12 @@ void kernel_main() {
     uint64_t leader_sem_addr = get_noc_addr(leader_phys_x, leader_phys_y, get_semaphore(SEM_PKT_READY));
     noc_semaphore_inc(leader_sem_addr, 1);
 
-    // ---- Phase 7: Close fabric ----
-    fabric_connection.close();
+    // ---- Phase 7: Close fabric connections ----
+    for (uint32_t i = 0; i < NUM_DIRS; i++) {
+        if (directions[i]) {
+            fabric_connections[i].close();
+        }
+    }
 
     // Release CB reservations
     cb_push_back(cb_temp, 1);

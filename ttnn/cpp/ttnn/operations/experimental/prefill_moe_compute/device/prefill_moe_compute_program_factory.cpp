@@ -399,6 +399,16 @@ PrefillMoeComputeMeshFactory::create_at(
         cbs.push_back(cb8);
     }
 
+    // Compute direction flags for fabric dispatch (needed for kernel defines)
+    bool dispatch_has_east = false;
+    bool dispatch_has_west = false;
+    if (enable_fabric_dispatch && mesh_dev != nullptr) {
+        auto mesh_shape_early = mesh_dev->shape();
+        auto coord_col_early = mesh_coordinate[1];
+        dispatch_has_east = (coord_col_early + 1 < mesh_shape_early[1]);
+        dispatch_has_west = (coord_col_early > 0);
+    }
+
     // ----- Kernel Descriptors -----
     KernelDescriptor reader_kd;
     reader_kd.kernel_source = READER_KERNEL;
@@ -435,6 +445,10 @@ PrefillMoeComputeMeshFactory::create_at(
     dispatch_kd.compile_time_args = dispatch_ct_args;
     dispatch_kd.runtime_args = std::move(dispatch_rt_args);
     dispatch_kd.config = WriterConfigDescriptor{};
+    if (enable_fabric_dispatch) {
+        dispatch_kd.defines.emplace_back("EAST_CONNECTION", dispatch_has_east ? "1" : "0");
+        dispatch_kd.defines.emplace_back("WEST_CONNECTION", dispatch_has_west ? "1" : "0");
+    }
 
     KernelDescriptor combine_kd;
     combine_kd.kernel_source = COMBINE_KERNEL;
@@ -507,36 +521,51 @@ PrefillMoeComputeMeshFactory::create_at(
         // Append per-device dispatch_metadata: [local_count, recv_count, send_count, indices...]
         dispatch_args.insert(dispatch_args.end(), dev_dispatch_meta.begin(), dev_dispatch_meta.end());
 
-        // Fabric connection setup
+        // Direction-based fabric connection setup (EAST/WEST for 1xN mesh)
         auto mesh_shape = mesh_dev->shape();
         auto coord_row = mesh_coordinate[0];
         auto coord_col = mesh_coordinate[1];
 
-        // For 1xN mesh: forward = EAST (col+1), backward = WEST (col-1)
-        std::optional<ttnn::MeshCoordinate> forward_coord;
-        std::optional<ttnn::MeshCoordinate> backward_coord;
-        if (coord_col + 1 < mesh_shape[1]) {
-            forward_coord = ttnn::MeshCoordinate{coord_row, coord_col + 1};
+        // Determine target device for this device's dispatch
+        uint32_t target_col;
+        if (!attributes.dispatch_target_cols.empty()) {
+            target_col = attributes.dispatch_target_cols[device_index];
+        } else {
+            // Default: forward-preferring for backward compatibility
+            target_col = (coord_col + 1 < mesh_shape[1]) ? coord_col + 1 : coord_col - 1;
         }
-        if (coord_col > 0) {
-            backward_coord = ttnn::MeshCoordinate{coord_row, coord_col - 1};
-        }
-        TT_FATAL(
-            forward_coord.has_value() || backward_coord.has_value(), "Fabric dispatch requires at least one neighbor");
 
+        // Compute send direction and hop count
+        uint32_t dispatch_send_direction;  // 0=EAST, 1=WEST
+        uint32_t dispatch_num_hops;
+        if (target_col > coord_col) {
+            dispatch_send_direction = 0;  // EAST
+            dispatch_num_hops = target_col - coord_col;
+        } else {
+            dispatch_send_direction = 1;  // WEST
+            dispatch_num_hops = coord_col - target_col;
+        }
+
+        // Which directions have valid immediate neighbors
+        bool dispatch_has_east = (coord_col + 1 < mesh_shape[1]);
+        bool dispatch_has_west = (coord_col > 0);
+
+        // Append send_direction and num_hops RT args
+        dispatch_args.push_back(dispatch_send_direction);
+        dispatch_args.push_back(dispatch_num_hops);
+
+        // Append fabric connection RT args for each valid direction
         auto src_node_id = mesh_dev->get_fabric_node_id(mesh_coordinate);
         constexpr uint32_t link = 0;
-
-        dispatch_args.push_back(forward_coord.has_value() ? 1 : 0);
-        if (forward_coord.has_value()) {
-            auto dst_node_id = mesh_dev->get_fabric_node_id(forward_coord.value());
+        if (dispatch_has_east) {
+            auto east_coord = ttnn::MeshCoordinate{coord_row, coord_col + 1};
+            auto dst_node_id = mesh_dev->get_fabric_node_id(east_coord);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_node_id, dst_node_id, link, program, dispatch_core_logical, dispatch_args);
         }
-
-        dispatch_args.push_back(backward_coord.has_value() ? 1 : 0);
-        if (backward_coord.has_value()) {
-            auto dst_node_id = mesh_dev->get_fabric_node_id(backward_coord.value());
+        if (dispatch_has_west) {
+            auto west_coord = ttnn::MeshCoordinate{coord_row, coord_col - 1};
+            auto dst_node_id = mesh_dev->get_fabric_node_id(west_coord);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_node_id, dst_node_id, link, program, dispatch_core_logical, dispatch_args);
         }
@@ -585,6 +614,10 @@ PrefillMoeComputeMeshFactory::create_at(
         // ---- Create fabric_reduce kernel ----
         CoreRangeSet reduce_core_set(std::vector<CoreRange>{CoreRange(reduce_core_logical, reduce_core_logical)});
 
+        std::map<std::string, std::string> reduce_defines;
+        reduce_defines.emplace("EAST_CONNECTION", (coord_col + 1 < mesh_shape[1]) ? "1" : "0");
+        reduce_defines.emplace("WEST_CONNECTION", (coord_col > 0) ? "1" : "0");
+
         auto reduce_kernel_id = CreateKernel(
             program,
             FABRIC_REDUCE_KERNEL,
@@ -592,7 +625,8 @@ PrefillMoeComputeMeshFactory::create_at(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = reduce_ct_args});
+                .compile_args = reduce_ct_args,
+                .defines = reduce_defines});
 
         // ---- Semaphores on reduce_core ----
         auto sem_combine_done_id = CreateSemaphore(program, reduce_core_set, 0);
@@ -608,20 +642,32 @@ PrefillMoeComputeMeshFactory::create_at(
         reduce_rt_args.push_back(reduce_phys.x);        // [5] noc x (virtual)
         reduce_rt_args.push_back(reduce_phys.y);        // [6] noc y (virtual)
 
-        // FabricConnectionManager RT args
+        // Direction-based fabric connection for reduce
+        // Reduce sends in the OPPOSITE direction of dispatch (return results to partner)
+        uint32_t reduce_send_direction;
+        if (!attributes.dispatch_target_cols.empty()) {
+            uint32_t reduce_target_col = attributes.dispatch_target_cols[device_index];
+            reduce_send_direction = (reduce_target_col > coord_col) ? 0 : 1;  // 0=EAST, 1=WEST
+        } else {
+            // Default: same as dispatch direction (forward-preferring)
+            reduce_send_direction = (coord_col + 1 < mesh_shape[1]) ? 0 : 1;
+        }
+        reduce_rt_args.push_back(reduce_send_direction);
+
+        // Fabric connection RT args for each valid direction
         auto src_node_id = mesh_dev->get_fabric_node_id(mesh_coordinate);
         constexpr uint32_t link = 0;
-
-        reduce_rt_args.push_back(forward_coord.has_value() ? 1 : 0);
-        if (forward_coord.has_value()) {
-            auto dst_node_id = mesh_dev->get_fabric_node_id(forward_coord.value());
+        bool reduce_has_east = (coord_col + 1 < mesh_shape[1]);
+        bool reduce_has_west = (coord_col > 0);
+        if (reduce_has_east) {
+            auto east_coord = ttnn::MeshCoordinate{coord_row, coord_col + 1};
+            auto dst_node_id = mesh_dev->get_fabric_node_id(east_coord);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_node_id, dst_node_id, link, program, reduce_core_logical, reduce_rt_args);
         }
-
-        reduce_rt_args.push_back(backward_coord.has_value() ? 1 : 0);
-        if (backward_coord.has_value()) {
-            auto dst_node_id = mesh_dev->get_fabric_node_id(backward_coord.value());
+        if (reduce_has_west) {
+            auto west_coord = ttnn::MeshCoordinate{coord_row, coord_col - 1};
+            auto dst_node_id = mesh_dev->get_fabric_node_id(west_coord);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_node_id, dst_node_id, link, program, reduce_core_logical, reduce_rt_args);
         }
