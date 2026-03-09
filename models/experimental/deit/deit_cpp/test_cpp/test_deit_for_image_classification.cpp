@@ -237,7 +237,7 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     }
 
     profiler.start("sync_output");
-    auto tt_logits_host_final = ttnn::from_device(tt_logits_trace, false);
+    auto tt_logits_host_final = ttnn::from_device(tt_logits_trace);
     profiler.stop("sync_output");
     ttnn::operations::trace::release_trace(device.get(), tid);
     device->disable_and_clear_program_cache();

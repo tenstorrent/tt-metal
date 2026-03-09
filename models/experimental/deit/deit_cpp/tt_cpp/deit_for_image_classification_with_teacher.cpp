@@ -12,15 +12,16 @@ TtDeiTForImageClassificationWithTeacher::TtDeiTForImageClassificationWithTeacher
     const DeiTConfig& config,
     std::unordered_map<std::string, torch::Tensor>& state_dict,
     const std::string& base_address,
-    std::shared_ptr<ttnn::MeshDevice> device
-) : config_(config), device_(device), num_labels_(1000) { // Default to 1000 classes like ImageNet
+    std::shared_ptr<ttnn::MeshDevice> device) :
+    config_(config), device_(device), num_labels_(1000) {  // Default to 1000 classes like ImageNet
 
     try {
         // Load model parameters to state_dict
         std::vector<std::string> required_params = {
-            "cls_classifier.weight", "cls_classifier.bias",
-            "distillation_classifier.weight", "distillation_classifier.bias"
-        };
+            "cls_classifier.weight",
+            "cls_classifier.bias",
+            "distillation_classifier.weight",
+            "distillation_classifier.bias"};
 
         // Split state_dict into two parts based on required_params
         std::unordered_map<std::string, torch::Tensor> required_state_dict;
@@ -49,17 +50,13 @@ TtDeiTForImageClassificationWithTeacher::TtDeiTForImageClassificationWithTeacher
         std::string cls_bias_key = base_address + "cls_classifier.bias";
 
         if (required_state_dict.find(cls_weight_key) != required_state_dict.end()) {
-            cls_classifier_weight_ = helper_funcs::torch_to_tt_tensor_tile(
-                required_state_dict[cls_weight_key], device
-            );
+            cls_classifier_weight_ = helper_funcs::torch_to_tt_tensor_tile(required_state_dict[cls_weight_key], device);
         } else {
             throw std::runtime_error("CLS classifier weight not found in state_dict: " + cls_weight_key);
         }
 
         if (required_state_dict.find(cls_bias_key) != required_state_dict.end()) {
-            cls_classifier_bias_ = helper_funcs::torch_to_tt_tensor_tile(
-                required_state_dict[cls_bias_key], device
-            );
+            cls_classifier_bias_ = helper_funcs::torch_to_tt_tensor_tile(required_state_dict[cls_bias_key], device);
 
             // Update num_labels based on classifier bias size
             auto bias_shape = cls_classifier_bias_.logical_shape();
@@ -75,17 +72,15 @@ TtDeiTForImageClassificationWithTeacher::TtDeiTForImageClassificationWithTeacher
         std::string distill_bias_key = base_address + "distillation_classifier.bias";
 
         if (required_state_dict.find(distill_weight_key) != required_state_dict.end()) {
-            distillation_classifier_weight_ = helper_funcs::torch_to_tt_tensor_tile(
-                required_state_dict[distill_weight_key], device
-            );
+            distillation_classifier_weight_ =
+                helper_funcs::torch_to_tt_tensor_tile(required_state_dict[distill_weight_key], device);
         } else {
             throw std::runtime_error("Distillation classifier weight not found in state_dict: " + distill_weight_key);
         }
 
         if (required_state_dict.find(distill_bias_key) != required_state_dict.end()) {
-            distillation_classifier_bias_ = helper_funcs::torch_to_tt_tensor_tile(
-                required_state_dict[distill_bias_key], device
-            );
+            distillation_classifier_bias_ =
+                helper_funcs::torch_to_tt_tensor_tile(required_state_dict[distill_bias_key], device);
         } else {
             throw std::runtime_error("Distillation classifier bias not found in state_dict: " + distill_bias_key);
         }
@@ -103,8 +98,7 @@ TtDeiTForImageClassificationWithTeacher::forward(
     const ttnn::Tensor* head_mask,
     bool output_attentions,
     bool output_hidden_states,
-    bool return_dict
-) {
+    bool return_dict) {
     try {
         // Forward pass through DeiT backbone
         auto [sequence_output, pooled_output, hidden_states, attentions] = deit_model_->forward(
@@ -113,21 +107,17 @@ TtDeiTForImageClassificationWithTeacher::forward(
             head_mask,
             output_attentions,
             output_hidden_states,
-            return_dict
-        );
+            return_dict);
 
         // Extract tokens
         ttnn::Tensor cls_token = extract_cls_token(sequence_output);
         ttnn::Tensor distillation_token = extract_distillation_token(sequence_output);
 
         // Apply classification heads
-        ttnn::Tensor cls_logits = apply_classifier(
-            cls_token, cls_classifier_weight_, cls_classifier_bias_
-        );
+        ttnn::Tensor cls_logits = apply_classifier(cls_token, cls_classifier_weight_, cls_classifier_bias_);
 
-        ttnn::Tensor distillation_logits = apply_classifier(
-            distillation_token, distillation_classifier_weight_, distillation_classifier_bias_
-        );
+        ttnn::Tensor distillation_logits =
+            apply_classifier(distillation_token, distillation_classifier_weight_, distillation_classifier_bias_);
 
         // Average the logits for final prediction
         ttnn::Tensor averaged_logits = average_logits(cls_logits, distillation_logits);
@@ -150,7 +140,8 @@ TtDeiTForImageClassificationWithTeacher::forward(
             }
         }
 
-        return std::make_tuple(averaged_logits, cls_logits, distillation_logits, attentions_output, hidden_states_output);
+        return std::make_tuple(
+            averaged_logits, cls_logits, distillation_logits, attentions_output, hidden_states_output);
 
     } catch (const std::exception& e) {
         throw;
@@ -158,27 +149,14 @@ TtDeiTForImageClassificationWithTeacher::forward(
 }
 
 std::pair<ttnn::Tensor, ttnn::Tensor> TtDeiTForImageClassificationWithTeacher::get_separate_logits(
-    const ttnn::Tensor& pixel_values,
-    const ttnn::Tensor* head_mask
-) {
-    // Forward pass through DeiT backbone (no optional outputs needed)
+    const ttnn::Tensor& pixel_values, const ttnn::Tensor* head_mask) {
     auto deit_outputs = deit_model_->forward(pixel_values, std::nullopt, head_mask, false, false, true);
-
-    // Extract sequence output
     ttnn::Tensor sequence_output = std::get<0>(deit_outputs);
 
-    // Extract tokens
-    ttnn::Tensor cls_token = extract_cls_token(sequence_output);
-    ttnn::Tensor distillation_token = extract_distillation_token(sequence_output);
+    ttnn::Tensor cls_logits = apply_classifier(sequence_output, cls_classifier_weight_, cls_classifier_bias_);
 
-    // Apply classification heads
-    ttnn::Tensor cls_logits = apply_classifier(
-        cls_token, cls_classifier_weight_, cls_classifier_bias_
-    );
-
-    ttnn::Tensor distillation_logits = apply_classifier(
-        distillation_token, distillation_classifier_weight_, distillation_classifier_bias_
-    );
+    ttnn::Tensor distillation_logits =
+        apply_classifier(sequence_output, distillation_classifier_weight_, distillation_classifier_bias_);
 
     return std::make_pair(cls_logits, distillation_logits);
 }
@@ -262,19 +240,15 @@ ttnn::Tensor TtDeiTForImageClassificationWithTeacher::extract_distillation_token
 }
 
 ttnn::Tensor TtDeiTForImageClassificationWithTeacher::apply_classifier(
-    const ttnn::Tensor& token_output,
-    const ttnn::Tensor& weight,
-    const ttnn::Tensor& bias
-) {
-    // Apply linear transformation: output = input @ weight.T + bias
-    ttnn::Tensor logits = helper_funcs::linear_transform(token_output, weight, bias);
+    const ttnn::Tensor& sequence_output, const ttnn::Tensor& weight, const ttnn::Tensor& bias) {
+    // Apply linear transformation: output = sequence_output @ weight.T + bias
+    // Pass full sequence_output like the working classifier model does
+    ttnn::Tensor logits = helper_funcs::linear_transform(sequence_output, weight, bias);
     return logits;
 }
 
 ttnn::Tensor TtDeiTForImageClassificationWithTeacher::average_logits(
-    const ttnn::Tensor& logits1,
-    const ttnn::Tensor& logits2
-) {
+    const ttnn::Tensor& logits1, const ttnn::Tensor& logits2) {
     // Add the two logits and multiply by 0.5 to get average
     ttnn::Tensor sum_logits = ttnn::add(logits1, logits2);
     // Use scalar multiplication instead of creating a constant tensor
@@ -282,9 +256,7 @@ ttnn::Tensor TtDeiTForImageClassificationWithTeacher::average_logits(
 }
 
 std::shared_ptr<TtDeiTForImageClassificationWithTeacher> create_deit_for_image_classification_with_teacher(
-    std::shared_ptr<ttnn::MeshDevice> device,
-    const std::string& model_path
-) {
+    std::shared_ptr<ttnn::MeshDevice> device, const std::string& model_path) {
     // This is a placeholder implementation
     // In practice, you would load the model from the specified path
     // For now, we'll create a default configuration
@@ -294,7 +266,5 @@ std::shared_ptr<TtDeiTForImageClassificationWithTeacher> create_deit_for_image_c
     // Load state dict from model_path if provided
     // This would require implementing model loading logic
 
-    return std::make_shared<TtDeiTForImageClassificationWithTeacher>(
-        config, state_dict, "", device
-    );
+    return std::make_shared<TtDeiTForImageClassificationWithTeacher>(config, state_dict, "", device);
 }
