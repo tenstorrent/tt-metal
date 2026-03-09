@@ -43,7 +43,7 @@ def compute_sampling_locations_and_attention_weights(
     if isinstance(reference_points, ttnn.Tensor):
         ref_pts = reference_points
     else:
-        ref_pts = ttnn.from_torch(reference_points, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ref_pts = ttnn.from_torch(reference_points, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if ref_pts.shape[-1] == 2:
         spatial_shapes_tt = ttnn.from_torch(
@@ -52,30 +52,38 @@ def compute_sampling_locations_and_attention_weights(
         offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
         offset_normalizer = ttnn.to_memory_config(offset_normalizer, ttnn.L1_MEMORY_CONFIG)
         offset_normalizer = ttnn.reshape(offset_normalizer, (1, 1, 1, num_levels, 1, 2))
-        so_tt = ttnn.divide(so_tt, offset_normalizer, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.divide_(so_tt, offset_normalizer)
+        ttnn.deallocate(offset_normalizer)
         ref_xy = ttnn.reshape(
-            ref_pts, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+            ref_pts, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        sampling_locations = ttnn.add(ref_xy, so_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.add_(so_tt, ref_xy)
+        ttnn.deallocate(ref_xy)
+        sampling_locations = so_tt
     else:
         ref_xy_4d = ref_pts[:, :, :, :2]
         ref_xy = ttnn.reshape(
-            ref_xy_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+            ref_xy_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         if isinstance(ref_xy, torch.Tensor):
-            ref_xy = ttnn.from_torch(ref_xy, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ref_xy = ttnn.from_torch(ref_xy, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ref_wh_4d = ref_pts[:, :, :, 2:]
         ref_wh = ttnn.reshape(
-            ref_wh_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+            ref_wh_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         if isinstance(ref_wh, torch.Tensor):
-            ref_wh = ttnn.from_torch(ref_wh, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ref_wh = ttnn.from_torch(ref_wh, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        term1 = ttnn.divide(so_tt, num_points, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        term2 = ttnn.multiply(ref_wh, 0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
-        offset_term = ttnn.multiply(term1, term2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.divide_(so_tt, num_points)
+        term2 = ttnn.multiply(ref_wh, 0.5, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(ref_wh)
+        offset_term = ttnn.multiply(so_tt, term2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(so_tt)
+        ttnn.deallocate(term2)
 
-        sampling_locations = ttnn.add(ref_xy, offset_term, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.add_(offset_term, ref_xy)
+        ttnn.deallocate(ref_xy)
+        sampling_locations = offset_term
 
     return sampling_locations, aw_tt
 
@@ -299,7 +307,6 @@ class TtMSDeformAttn:
         logger.info("  MSDeformAttn: linear projections on device...")
 
         value = ttnn.linear(value, self.params["value_proj"]["weight"], bias=self.params["value_proj"]["bias"])
-
         sampling_offsets_flat = ttnn.linear(
             query, self.params["sampling_offsets"]["weight"], bias=self.params["sampling_offsets"]["bias"]
         )
@@ -521,27 +528,85 @@ class TtDINOEncoder:
         ]
 
     @staticmethod
+    def _linspace_ttnn(start, end, steps, device, dtype=ttnn.bfloat16):
+        """Linspace on device: [start, ..., end] with steps elements. Steps must be >= 1."""
+        if steps <= 1:
+            return ttnn.full((1,), start, dtype=dtype, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        idx = ttnn.arange(0, steps, dtype=dtype, device=device)
+        step_size = (end - start) / (steps - 1)
+        return ttnn.add(ttnn.multiply(idx, step_size), start)
+
+    @staticmethod
     def get_encoder_reference_points(spatial_shapes, valid_ratios, device):
         """
-        Generate 2D reference points for encoder self-attention.
+        Generate 2D reference points for encoder self-attention (pure TTNN on device).
 
-        Returns: [B, sum(H_i*W_i), num_levels, 2] on ttnn device.
+        Returns: [B, sum(H_i*W_i), num_levels, 2] as ttnn.Tensor on device.
         """
+        # Normalize to list of (H, W) for iteration
+        if hasattr(spatial_shapes, "tolist"):
+            hw_list = spatial_shapes.tolist()
+        else:
+            hw_list = list(spatial_shapes)
+        B = valid_ratios.shape[0]
+        num_levels = len(hw_list)
+
+        # Upload valid_ratios once for per-level divide and final multiply (small: [B, 5, 2] -> L1)
+        valid_ratios_tt = ttnn.from_torch(
+            valid_ratios.float(),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
         reference_points_list = []
-        for lvl, (H, W) in enumerate(spatial_shapes):
-            H, W = int(H), int(W)
-            ref_y, ref_x = torch.meshgrid(
-                torch.linspace(0.5, H - 0.5, H, dtype=torch.float32),
-                torch.linspace(0.5, W - 0.5, W, dtype=torch.float32),
-                indexing="ij",
-            )
-            vr = valid_ratios[:, lvl]  # [B, 2]
-            ref_y = ref_y.reshape(-1)[None] / (vr[:, 1:2] * H)
-            ref_x = ref_x.reshape(-1)[None] / (vr[:, 0:1] * W)
-            ref = torch.stack((ref_x, ref_y), -1)
-            reference_points_list.append(ref)
-        reference_points = torch.cat(reference_points_list, 1)  # [B, N, 2]
-        reference_points = reference_points[:, :, None] * valid_ratios[:, None]  # [B, N, num_levels, 2]
+        for lvl, hw in enumerate(hw_list):
+            H, W = int(hw[0]), int(hw[1])
+            if H * W == 0:
+                continue
+
+            # ref_y: [0.5, 1.5, ..., H-0.5] repeated W times -> [1, H*W]
+            ref_y_vals = TtDINOEncoder._linspace_ttnn(0.5, H - 0.5, H, device)
+            ref_y_vals = ttnn.reshape(ref_y_vals, (H, 1))
+            ref_y_vals = ttnn.repeat(ref_y_vals, (1, W))
+            ref_y_vals = ttnn.reshape(ref_y_vals, (1, H * W))
+
+            # ref_x: [0.5, 1.5, ..., W-0.5] repeated H times -> [1, H*W]
+            ref_x_vals = TtDINOEncoder._linspace_ttnn(0.5, W - 0.5, W, device)
+            ref_x_vals = ttnn.reshape(ref_x_vals, (1, W))
+            ref_x_vals = ttnn.repeat(ref_x_vals, (H, 1))
+            ref_x_vals = ttnn.reshape(ref_x_vals, (1, H * W))
+
+            # Per-level valid_ratio: [B, 2] -> denom_y [B,1], denom_x [B,1] (small -> L1)
+            vr_slice = ttnn.slice(valid_ratios_tt, [0, lvl, 0], [B, lvl + 1, 2], memory_config=ttnn.L1_MEMORY_CONFIG)
+            vr_slice = ttnn.reshape(vr_slice, (B, 2))
+            denom_y = ttnn.multiply(ttnn.reshape(vr_slice[:, 1:2], (B, 1)), float(H))
+            denom_x = ttnn.multiply(ttnn.reshape(vr_slice[:, 0:1], (B, 1)), float(W))
+
+            # [1, H*W] / [B, 1] -> [B, H*W]
+            ref_y = ttnn.divide(ref_y_vals, denom_y)
+            ref_x = ttnn.divide(ref_x_vals, denom_x)
+
+            # [B, H*W, 2] with (x, y) order to match original
+            ref_level = ttnn.stack([ref_x, ref_y], dim=-1)
+            reference_points_list.append(ref_level)
+            ttnn.deallocate(ref_y_vals)
+            ttnn.deallocate(ref_x_vals)
+
+        reference_points = ttnn.concat(reference_points_list, dim=1)
+        for t in reference_points_list:
+            ttnn.deallocate(t)
+
+        # [B, N, 2] * [B, num_levels, 2] -> [B, N, num_levels, 2]
+        ref_bn12 = ttnn.reshape(reference_points, (B, reference_points.shape[1], 1, 2))
+        valid_b1l2 = ttnn.reshape(valid_ratios_tt, (B, 1, num_levels, 2))
+        reference_points = ttnn.multiply(ref_bn12, valid_b1l2)
+
+        ttnn.deallocate(ref_bn12)
+        # valid_b1l2 is a view of valid_ratios_tt; only deallocate the base
+        ttnn.deallocate(valid_ratios_tt)
+
         return reference_points
 
     def __call__(

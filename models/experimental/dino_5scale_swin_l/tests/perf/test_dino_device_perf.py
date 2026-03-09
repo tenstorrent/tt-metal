@@ -30,7 +30,8 @@ def test_perf_device_bare_metal_dino_5scale():
     num_iterations = 1
 
     command = (
-        "pytest  models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_dino_e2e.py" "::test_ttnn_dino_e2e_pcc -sv"
+        "pytest  --timeout=0 models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_dino_e2e.py"
+        "::test_ttnn_dino_e2e_pcc -sv"
     )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
