@@ -151,8 +151,8 @@ def test_ingest_multiple_runs(db_path):
     assert len(runs) == 3
 
 
-def test_ingest_with_kernels(db_path, tmp_path):
-    """Ingest should collect C++ kernels, program descriptor, and entry point."""
+def test_ingest_with_kernels_and_host_code(db_path, tmp_path):
+    """Ingest should collect C++ kernels and host-side Python separately."""
     clone = tmp_path / "clone"
     op_dir = clone / "ttnn" / "ttnn" / "operations" / "my_op"
     kernel_dir = op_dir / "kernels"
@@ -160,7 +160,7 @@ def test_ingest_with_kernels(db_path, tmp_path):
     (kernel_dir / "reader.cpp").write_text('#include "dataflow_api.h"\nvoid kernel_main() {}')
     (kernel_dir / "compute.cpp").write_text("namespace NAMESPACE {\nvoid MAIN {}\n}")
     (kernel_dir / "empty.cpp").write_text("")  # empty should be skipped
-    # Program descriptor and entry point
+    # Host-side Python files
     (op_dir / "my_op_program_descriptor.py").write_text("def create_program_descriptor(): pass")
     (op_dir / "my_op.py").write_text("def my_op(input): pass")
 
@@ -177,14 +177,20 @@ def test_ingest_with_kernels(db_path, tmp_path):
 
     conn = db.connect(db_path)
     kernels = db.get_kernels(conn, rid)
+    host_code = db.get_host_code(conn, rid)
     conn.close()
 
-    assert len(kernels) == 4  # 2 cpp + descriptor + entry point
-    filenames = {k["filename"] for k in kernels}
-    assert "reader.cpp" in filenames
-    assert "compute.cpp" in filenames
-    assert "my_op_program_descriptor.py" in filenames
-    assert "my_op.py" in filenames
+    # C++ kernels only
+    assert len(kernels) == 2
+    kernel_names = {k["filename"] for k in kernels}
+    assert "reader.cpp" in kernel_names
+    assert "compute.cpp" in kernel_names
+
+    # Host-side Python only
+    assert len(host_code) == 2
+    host_names = {f["filename"] for f in host_code}
+    assert "my_op_program_descriptor.py" in host_names
+    assert "my_op.py" in host_names
 
 
 def test_ingest_with_self_reflection(db_path, tmp_path):

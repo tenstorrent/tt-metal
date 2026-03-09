@@ -211,6 +211,28 @@ def test_empty_kernels(conn):
     assert db.get_kernels(conn, rid) == []
 
 
+# --- host_code ---
+
+
+def test_insert_and_get_host_code(conn):
+    rid = _make_run(conn)
+    files = [
+        {"filename": "my_op.py", "source_code": "def my_op(input): pass"},
+        {"filename": "my_op_program_descriptor.py", "source_code": "def create_pd(): pass"},
+    ]
+    db.insert_host_code(conn, rid, files)
+
+    fetched = db.get_host_code(conn, rid)
+    assert len(fetched) == 2
+    assert fetched[0]["filename"] == "my_op.py"  # sorted by filename
+    assert "create_pd" in fetched[1]["source_code"]
+
+
+def test_empty_host_code(conn):
+    rid = _make_run(conn)
+    assert db.get_host_code(conn, rid) == []
+
+
 # --- artifacts ---
 
 

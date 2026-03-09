@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS kernels (
     source_code TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS host_code (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    filename TEXT NOT NULL,
+    source_code TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL REFERENCES runs(id),
@@ -212,7 +219,7 @@ def get_stats(conn) -> dict:
 
 
 def insert_kernels(conn, run_id: int, kernels: list):
-    """Insert kernel source files. Each item: {"filename": str, "source_code": str}."""
+    """Insert kernel C++ source files. Each item: {"filename": str, "source_code": str}."""
     conn.executemany(
         "INSERT INTO kernels (run_id, filename, source_code) VALUES (?, ?, ?)",
         [(run_id, k["filename"], k["source_code"]) for k in kernels],
@@ -221,8 +228,23 @@ def insert_kernels(conn, run_id: int, kernels: list):
 
 
 def get_kernels(conn, run_id: int) -> list:
-    """Get all kernels for a run."""
+    """Get all kernel C++ files for a run."""
     rows = conn.execute("SELECT * FROM kernels WHERE run_id = ? ORDER BY filename", (run_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_host_code(conn, run_id: int, files: list):
+    """Insert host-side Python files. Each item: {"filename": str, "source_code": str}."""
+    conn.executemany(
+        "INSERT INTO host_code (run_id, filename, source_code) VALUES (?, ?, ?)",
+        [(run_id, f["filename"], f["source_code"]) for f in files],
+    )
+    conn.commit()
+
+
+def get_host_code(conn, run_id: int) -> list:
+    """Get all host-side Python files for a run."""
+    rows = conn.execute("SELECT * FROM host_code WHERE run_id = ? ORDER BY filename", (run_id,)).fetchall()
     return [dict(r) for r in rows]
 
 

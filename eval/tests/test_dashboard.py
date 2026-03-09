@@ -180,11 +180,31 @@ def test_kernel_code_escaped(conn):
     assert "c&gt;d" in html
 
 
+def test_host_code_in_detail(conn):
+    rid = _make_run(conn)
+    db.insert_host_code(
+        conn,
+        rid,
+        [
+            {"filename": "my_op.py", "source_code": "def my_op(input): pass"},
+            {"filename": "my_op_program_descriptor.py", "source_code": "def create_pd(): pass"},
+        ],
+    )
+    html = generate_html(conn)
+    assert "Host-Side (2)" in html
+    assert "my_op.py" in html
+    assert "my_op_program_descriptor.py" in html
+    assert "language-python" in html
+
+
 def test_section_tabs_present(conn):
-    """When kernels and artifacts exist, section tabs should appear."""
+    """When kernels, host code, and artifacts exist, section tabs should appear."""
     rid = _make_run(conn)
     db.insert_kernels(conn, rid, [{"filename": "k.cpp", "source_code": "code"}])
+    db.insert_host_code(conn, rid, [{"filename": "op.py", "source_code": "code"}])
     db.insert_artifact(conn, rid, "self_reflection", "content")
     html = generate_html(conn)
     assert "showSection" in html
-    assert "showKernel" in html
+    assert "Kernels (1)" in html
+    assert "Host-Side (1)" in html
+    assert "Self-Reflection" in html

@@ -78,6 +78,7 @@ def generate_html(conn) -> str:
             "tests": db.get_test_results(conn, run["id"]),
             "criteria": db.get_score_criteria(conn, run["id"]),
             "kernels": db.get_kernels(conn, run["id"]),
+            "host_code": db.get_host_code(conn, run["id"]),
             "artifacts": db.get_artifacts(conn, run["id"]),
         }
 
@@ -299,10 +300,27 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
     return header + "\n".join(rows) + "\n</tbody>\n</table>"
 
 
+def _html_code_tabs(parts: list, group_id: str, files: list, lang: str):
+    """Render a tabbed code viewer for a list of source files."""
+    parts.append('<div class="kernel-tabs">')
+    for i, f in enumerate(files):
+        active = " active" if i == 0 else ""
+        fname = html.escape(f["filename"])
+        parts.append(f'  <button class="kernel-tab{active}" onclick="showKernel(\'{group_id}\',{i})">{fname}</button>')
+    parts.append("</div>")
+    for i, f in enumerate(files):
+        active = " active" if i == 0 else ""
+        escaped_code = html.escape(f["source_code"])
+        parts.append(f'<div class="kernel-panel{active}" id="{group_id}-{i}">')
+        parts.append(f'  <div class="kernel-code"><pre><code class="language-{lang}">{escaped_code}</code></pre></div>')
+        parts.append("</div>")
+
+
 def _html_run_detail(rid: int, details: dict) -> str:
     tests = details.get("tests", [])
     criteria = details.get("criteria", [])
     kernels = details.get("kernels", [])
+    host_code = details.get("host_code", [])
     artifacts = details.get("artifacts", [])
 
     parts = ['<div class="detail-content">']
@@ -321,12 +339,13 @@ def _html_run_detail(rid: int, details: dict) -> str:
                 parts.append(f'  <span class="cat-badge" style="background:{color}">{cat}: {count}</span>')
             parts.append("</div>")
 
-    # Section tabs (Tests, Kernels, Self-Reflection)
+    # Section tabs
     has_kernels = len(kernels) > 0
+    has_host_code = len(host_code) > 0
     has_artifacts = len(artifacts) > 0
     tab_id = f"run{rid}"
 
-    parts.append(f'<div class="section-tabs">')
+    parts.append('<div class="section-tabs">')
     parts.append(f"  <button class=\"section-tab active\" onclick=\"showSection('{tab_id}','tests')\">Tests</button>")
     if criteria:
         parts.append(f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','criteria')\">Score</button>")
@@ -334,6 +353,11 @@ def _html_run_detail(rid: int, details: dict) -> str:
         parts.append(
             f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','kernels')\">"
             f"Kernels ({len(kernels)})</button>"
+        )
+    if has_host_code:
+        parts.append(
+            f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','host')\">"
+            f"Host-Side ({len(host_code)})</button>"
         )
     if has_artifacts:
         parts.append(
@@ -381,25 +405,16 @@ def _html_run_detail(rid: int, details: dict) -> str:
         parts.append("</tbody></table>")
         parts.append("</div>")
 
-    # --- Kernels panel ---
+    # --- Kernels panel (C++) ---
     if has_kernels:
         parts.append(f'<div class="section-panel" id="{tab_id}-kernels">')
-        kid = f"k{rid}"
-        parts.append('<div class="kernel-tabs">')
-        for i, k in enumerate(kernels):
-            active = " active" if i == 0 else ""
-            fname = html.escape(k["filename"])
-            parts.append(f'  <button class="kernel-tab{active}" onclick="showKernel(\'{kid}\',{i})">{fname}</button>')
+        _html_code_tabs(parts, f"k{rid}", kernels, "cpp")
         parts.append("</div>")
-        for i, k in enumerate(kernels):
-            active = " active" if i == 0 else ""
-            escaped_code = html.escape(k["source_code"])
-            lang = "python" if k["filename"].endswith(".py") else "cpp"
-            parts.append(f'<div class="kernel-panel{active}" id="{kid}-{i}">')
-            parts.append(
-                f'  <div class="kernel-code"><pre><code class="language-{lang}">{escaped_code}</code></pre></div>'
-            )
-            parts.append("</div>")
+
+    # --- Host-side panel (Python) ---
+    if has_host_code:
+        parts.append(f'<div class="section-panel" id="{tab_id}-host">')
+        _html_code_tabs(parts, f"h{rid}", host_code, "python")
         parts.append("</div>")
 
     # --- Artifacts panel (self-reflection) ---

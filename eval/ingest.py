@@ -48,34 +48,31 @@ def _read_source(path: Path) -> str | None:
         return None
 
 
-def _collect_kernels(op_dir: Path, op_name: str) -> list:
-    """Collect kernel C++ files and Python source (program descriptor + entry point)."""
+def _collect_kernels(op_dir: Path) -> list:
+    """Collect kernel C++ files from kernels/ subdirectory."""
     kernels = []
-
-    # C++ kernels from kernels/ subdirectory
     kernel_dir = op_dir / "kernels"
-    if kernel_dir.is_dir():
-        for ext in KERNEL_EXTENSIONS:
-            for path in sorted(kernel_dir.glob(ext)):
-                source = _read_source(path)
-                if source:
-                    kernels.append({"filename": path.name, "source_code": source})
+    if not kernel_dir.is_dir():
+        return kernels
 
-    # Program descriptor: <op_name>_program_descriptor.py
-    pd_path = op_dir / f"{op_name}_program_descriptor.py"
-    if pd_path.is_file():
-        source = _read_source(pd_path)
-        if source:
-            kernels.append({"filename": pd_path.name, "source_code": source})
-
-    # Entry point: <op_name>.py
-    entry_path = op_dir / f"{op_name}.py"
-    if entry_path.is_file():
-        source = _read_source(entry_path)
-        if source:
-            kernels.append({"filename": entry_path.name, "source_code": source})
-
+    for ext in KERNEL_EXTENSIONS:
+        for path in sorted(kernel_dir.glob(ext)):
+            source = _read_source(path)
+            if source:
+                kernels.append({"filename": path.name, "source_code": source})
     return kernels
+
+
+def _collect_host_code(op_dir: Path, op_name: str) -> list:
+    """Collect host-side Python files (program descriptor + entry point)."""
+    files = []
+    for name in (f"{op_name}_program_descriptor.py", f"{op_name}.py"):
+        path = op_dir / name
+        if path.is_file():
+            source = _read_source(path)
+            if source:
+                files.append({"filename": path.name, "source_code": source})
+    return files
 
 
 def _collect_self_reflection(op_dir: Path) -> str | None:
@@ -151,9 +148,13 @@ def ingest_run(
         clone_path = Path(clone_dir)
         op_dir = _find_op_dir(clone_path, op_name)
         if op_dir:
-            kernels = _collect_kernels(op_dir, op_name)
+            kernels = _collect_kernels(op_dir)
             if kernels:
                 db.insert_kernels(conn, run_id, kernels)
+
+            host_code = _collect_host_code(op_dir, op_name)
+            if host_code:
+                db.insert_host_code(conn, run_id, host_code)
 
             reflection = _collect_self_reflection(op_dir)
             if reflection:
