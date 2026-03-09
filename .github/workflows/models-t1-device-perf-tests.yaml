@@ -1,7 +1,6 @@
 name: "[Tier 1] Models Device Perf Tests"
 
 on:
-  push:
   workflow_dispatch:
     inputs:
       model:
