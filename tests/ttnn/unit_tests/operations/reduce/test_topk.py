@@ -9,6 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from models.common.utility_functions import skip_with_llk_assert
 
 UINT16_MAX = 65535
 
