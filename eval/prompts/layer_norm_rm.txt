@@ -14,7 +14,7 @@ to do standardization. It takes in a tensor that is at least two dimensional,
 and the output tensor should have the same dimensions as the input tensor.
 
 Optionally, the operation applies affine transformations using gamma (scale) and
-beta (shift) parameters. Both gamma and beta are optional row-major input
+beta (shift) parameters. Both gamma and beta are optional input tensors in the ROW MAJOR memory layout
 tensors with shape (1, 1, 1, W), where W is the input width. When gamma and/or
 beta are not provided (i.e., None), the operation returns the pure normalized
 output without the affine transform. The function signature must support these

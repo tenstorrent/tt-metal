@@ -12,7 +12,7 @@ The operation normalizes each row of the input tensor through the following step
 6. Multiply centered values by this reciprocal square root to produce standardized output
 
 Optionally, apply learnable affine parameters gamma (scale) and beta (shift).
-Both gamma and beta are optional row-major tensors with shape (1, 1, 1, W) where
+Both gamma and beta are optional input tensor in ROW MAJOR memory layout with shape (1, 1, 1, W) where
 W matches the input width. When gamma and/or beta are not provided (None), the
 operation returns purely normalized output. The function signature must be:
 
