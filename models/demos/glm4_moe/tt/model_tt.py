@@ -821,11 +821,12 @@ class Glm4MoeTT:
     def _host_argmax_from_trace_logits(
         self, logits_tt: ttnn.Tensor, active: int, vocab: int,
     ) -> torch.Tensor:
-        """Host-side argmax from trace-owned logits, optimized for minimal work.
+        """Per-shard device-side top-1 from trace-owned logits.
 
-        Instead of concatenating all TP shards into full vocab then running argmax,
-        does per-shard argmax on host and picks global best. Avoids the full
-        torch.cat allocation.
+        Uses ttnn.topk(k=1) per TP shard on device, then reads only the top-1
+        value+index (~256 bytes total across 8 shards) instead of transferring
+        the full logit shards to host (~304 KB).  Falls back to full-transfer
+        host argmax if topk fails.
 
         Does NOT deallocate logits_tt (trace-owned).
         """
@@ -840,30 +841,44 @@ class Glm4MoeTT:
 
             next_ids = torch.empty((active,), dtype=torch.int32)
 
-            # Transfer shards and do per-shard argmax on host
-            shard_maxvals = []
-            shard_argmaxes = []
-            for tp_idx in range(tp_size):
-                shard_idx = tp_idx * dp_stride
-                shard_torch = ttnn.to_torch(shards[shard_idx].cpu())
-                # Slice to valid batch and vocab range
-                shard_torch = shard_torch[..., :active, :vocab_per_shard]
-                shard_flat = shard_torch.reshape(active, -1).to(torch.float32)
-                shard_maxvals.append(shard_flat.max(dim=-1))
-                shard_argmaxes.append(shard_flat.argmax(dim=-1))
+            # Device-side per-shard top-1: topk(k=1) on each TP shard.
+            # Transfers ~32 bytes/shard instead of ~38 KB/shard.
+            all_vals = []  # [tp_size] lists of [active] floats
+            all_idxs = []  # [tp_size] lists of [active] ints
+            try:
+                for tp_idx in range(tp_size):
+                    shard_idx = tp_idx * dp_stride
+                    shard = shards[shard_idx]
 
-            # Pick global best across shards
+                    topk_values, topk_indices = ttnn.topk(
+                        shard, k=1, dim=-1, largest=True, sorted=False,
+                    )
+
+                    val_host = ttnn.to_torch(topk_values.cpu())  # [1,1,B_pad,1]
+                    idx_host = ttnn.to_torch(topk_indices.cpu())  # [1,1,B_pad,1]
+
+                    ttnn.deallocate(topk_values)
+                    ttnn.deallocate(topk_indices)
+
+                    all_vals.append([float(val_host[0, 0, b, 0]) for b in range(active)])
+                    all_idxs.append([int(idx_host[0, 0, b, 0]) for b in range(active)])
+            except Exception:
+                # topk failed on per-shard tensor — fall back to host transfer
+                logger.warning("Device topk failed, falling back to host argmax")
+                return self._host_argmax_fallback(logits_tt, active, vocab)
+
+            # Pick global best across TP shards
             for b in range(active):
                 best_val = None
                 best_global = None
                 for tp_idx in range(tp_size):
-                    max_val = float(shard_maxvals[tp_idx].values[b].item())
-                    local_idx = int(shard_argmaxes[tp_idx][b].item())
+                    v = all_vals[tp_idx][b]
+                    local_idx = all_idxs[tp_idx][b]
                     global_idx = tp_idx * vocab_per_shard + local_idx
                     if global_idx >= vocab:
                         continue
-                    if best_val is None or max_val > best_val:
-                        best_val = max_val
+                    if best_val is None or v > best_val:
+                        best_val = v
                         best_global = global_idx
                 if best_global is None:
                     best_global = max(0, vocab - 1)
@@ -874,6 +889,45 @@ class Glm4MoeTT:
             # Non-sharded: simple host transfer + argmax
             logits_host = self._logits_to_host(logits_tt, active, vocab)
             return logits_host.reshape(active, -1)[:, :vocab].argmax(dim=-1).to(torch.int32)
+
+    def _host_argmax_fallback(
+        self, logits_tt: ttnn.Tensor, active: int, vocab: int,
+    ) -> torch.Tensor:
+        """Full-transfer host argmax fallback (transfers ~38 KB per TP shard)."""
+        shards = ttnn.get_device_tensors(logits_tt)
+        num_shards = len(shards)
+        tp_size = self.lm_head_tp_size
+        vocab_per_shard = int(self.lm_head_vocab_per_shard)
+        dp_stride = num_shards // tp_size if num_shards > tp_size else 1
+
+        next_ids = torch.empty((active,), dtype=torch.int32)
+        shard_maxvals = []
+        shard_argmaxes = []
+        for tp_idx in range(tp_size):
+            shard_idx = tp_idx * dp_stride
+            shard_torch = ttnn.to_torch(shards[shard_idx].cpu())
+            shard_torch = shard_torch[..., :active, :vocab_per_shard]
+            shard_flat = shard_torch.reshape(active, -1).to(torch.float32)
+            shard_maxvals.append(shard_flat.max(dim=-1))
+            shard_argmaxes.append(shard_flat.argmax(dim=-1))
+
+        for b in range(active):
+            best_val = None
+            best_global = None
+            for tp_idx in range(tp_size):
+                max_val = float(shard_maxvals[tp_idx].values[b].item())
+                local_idx = int(shard_argmaxes[tp_idx][b].item())
+                global_idx = tp_idx * vocab_per_shard + local_idx
+                if global_idx >= vocab:
+                    continue
+                if best_val is None or max_val > best_val:
+                    best_val = max_val
+                    best_global = global_idx
+            if best_global is None:
+                best_global = max(0, vocab - 1)
+            next_ids[b] = best_global
+
+        return next_ids
 
     def _logits_to_host(
         self,

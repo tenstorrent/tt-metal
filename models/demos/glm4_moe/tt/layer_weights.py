@@ -99,6 +99,31 @@ def _env_dense_dtype() -> ttnn.DataType:
     raise ValueError(f"Invalid GLM4_MOE_DENSE_TT_DTYPE={override!r}")
 
 
+def _env_dram_shard() -> bool:
+    """Return True if DRAM-sharded weights are enabled for attention projections."""
+    return os.environ.get("GLM4_MOE_DRAM_SHARD", "0").strip() == "1"
+
+
+def _dram_shard_weight(weight: ttnn.Tensor, device) -> ttnn.Tensor:
+    """Convert a [1,1,K,N] weight to DRAM WIDTH_SHARDED format for decode perf.
+
+    Distributes N dimension across all DRAM banks for full bandwidth utilization.
+    Uses host round-trip because interleaved_to_sharded kernel dispatch to DRAM core
+    coordinates exceeds the harvested TENSIX grid (see glm4_moe_lite layer_weights.py).
+    """
+    from models.demos.deepseek_v3.utils.config_helpers import dram_sharded_weight_config
+
+    K = int(weight.shape[2])
+    N = int(weight.shape[3])
+
+    dram_grid = device.dram_grid_size()
+
+    dram_mc = dram_sharded_weight_config(K, N, dram_grid)
+    host_weight = ttnn.from_device(weight)
+    ttnn.deallocate(weight, force=True)
+    return host_weight.to(device, dram_mc)
+
+
 def _env_attn_dtype() -> ttnn.DataType:
     """Attention weight dtype (QKV and O projections), separate from dense MLP dtype.
 

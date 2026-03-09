@@ -303,11 +303,18 @@ def moe_topk_tt(
     routed_scaling_factor = float(getattr(hparams, "routed_scaling_factor", 2.5))
     norm_topk_prob = bool(getattr(hparams, "norm_topk_prob", True))
 
-    if compute_kernel_config is None:
-        logits = ttnn.linear(x, moe_w.w_gate)  # [1,1,T,96]
-    else:
-        logits = ttnn.linear(x, moe_w.w_gate, compute_kernel_config=compute_kernel_config)
-    scores = ttnn.sigmoid(logits)
+    # Use L1 memory for router ops in decode mode (small token count).
+    use_l1 = int(x.shape[2]) <= 32  # decode mode only
+    mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
+
+    linear_kwargs: dict[str, Any] = {}
+    if compute_kernel_config is not None:
+        linear_kwargs["compute_kernel_config"] = compute_kernel_config
+    if mc is not None:
+        linear_kwargs["memory_config"] = mc
+
+    logits = ttnn.linear(x, moe_w.w_gate, **linear_kwargs)  # [1,1,T,96]
+    scores = ttnn.sigmoid(logits, memory_config=mc) if mc else ttnn.sigmoid(logits)
     ttnn.deallocate(logits, force=False)
 
     # scores_for_choice = scores + e_score_correction_bias
@@ -325,7 +332,10 @@ def moe_topk_tt(
             ttnn.deallocate(bias_rm, force=False)
         bias_owned = True
 
-    scores_with_bias = ttnn.add(scores, bias, dtype=ttnn.bfloat16)
+    add_kwargs = {"dtype": ttnn.bfloat16}
+    if mc is not None:
+        add_kwargs["memory_config"] = mc
+    scores_with_bias = ttnn.add(scores, bias, **add_kwargs)
     if bias_owned:
         ttnn.deallocate(bias, force=False)
 
@@ -338,13 +348,22 @@ def moe_topk_tt(
     ttnn.deallocate(scores, force=False)
 
     if norm_topk_prob:
-        denom = ttnn.sum(topk_weights, dim=3, keepdim=True)
+        sum_kwargs = {"dim": 3, "keepdim": True}
+        if mc is not None:
+            sum_kwargs["memory_config"] = mc
+        denom = ttnn.sum(topk_weights, **sum_kwargs)
         denom = ttnn.add(denom, 1e-20, output_tensor=denom)
-        topk_weights = ttnn.div(topk_weights, denom)
+        div_kwargs = {}
+        if mc is not None:
+            div_kwargs["memory_config"] = mc
+        topk_weights = ttnn.div(topk_weights, denom, **div_kwargs)
         ttnn.deallocate(denom, force=False)
 
     if routed_scaling_factor != 1.0:
-        topk_weights = ttnn.mul(topk_weights, routed_scaling_factor)
+        mul_kwargs = {}
+        if mc is not None:
+            mul_kwargs["memory_config"] = mc
+        topk_weights = ttnn.mul(topk_weights, routed_scaling_factor, **mul_kwargs)
 
     return topk_weights, topk_indices
 

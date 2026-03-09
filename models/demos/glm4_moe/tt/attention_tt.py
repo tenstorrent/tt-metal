@@ -29,6 +29,7 @@ import os
 import logging
 
 _REDUCE_IMPL = os.environ.get("GLM4_MOE_REDUCE_IMPL", "host").strip().lower()
+_REDUCE_IMPL_AXIS1 = os.environ.get("GLM4_MOE_REDUCE_IMPL_AXIS1", "").strip().lower()
 _REDUCE_LOG_ONCE = set()
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
     # returning physical-padded dims instead of the true logical shape.
     input_logical_shape = [int(d) for d in tensor.shape]
 
-    impl = impl or _REDUCE_IMPL
+    impl = impl or (_REDUCE_IMPL_AXIS1 if (_REDUCE_IMPL_AXIS1 and cluster_axis == 1) else _REDUCE_IMPL)
     mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
 
     # Log once per (impl, axis) combination
@@ -338,6 +339,11 @@ class Glm4MoeAttention(LightweightModule):
         self._grid_size = mesh_device.compute_with_storage_grid_size()
         self._shard_cfg_cache: dict[int, dict] = {}  # batch -> {q, k, rope, trans}
 
+        # DRAM-sharded matmul configs (when GLM4_MOE_DRAM_SHARD=1)
+        self._use_dram_shard = os.environ.get("GLM4_MOE_DRAM_SHARD", "0").strip() == "1"
+        if self._use_dram_shard:
+            self._setup_dram_sharded_configs()
+
         # TG user selection matrices (for slicing batch from all-reduce output)
         if self.TG:
             B = self.max_batch_size  # logical total batch (e.g. 4, 8, 32)
@@ -398,6 +404,72 @@ class Glm4MoeAttention(LightweightModule):
         }
         self._shard_cfg_cache[batch] = cfgs
         return cfgs
+
+    def _setup_dram_sharded_configs(self):
+        """Pre-compute DRAM-sharded matmul configs and weight copies for decode attention.
+
+        Creates DRAM WIDTH_SHARDED copies of QKV and O weights for decode (full DRAM bank
+        utilization), while keeping the original interleaved weights for prefill.
+        """
+        from models.demos.deepseek_v3.utils.config_helpers import (
+            dram_sharded_weight_config,
+            get_activation_sharding_core_counts_for_dram_matmul,
+            get_dram_sharded_matmul_config,
+        )
+
+        grid = self._grid_size
+        max_cores = grid.x * grid.y  # 72 for Galaxy WH (8x9)
+        _DS_BATCH = 32  # tile-padded batch for decode
+
+        def _ds_act_mc(width: int) -> ttnn.MemoryConfig:
+            cores = max(get_activation_sharding_core_counts_for_dram_matmul(width, max_cores))
+            return ttnn.create_sharded_memory_config_(
+                shape=(_DS_BATCH, width // cores),
+                core_grid=ttnn.num_cores_to_corerangeset(
+                    cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True,
+                ),
+                strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+        def _shard_weight(weight):
+            """Create a DRAM WIDTH_SHARDED copy of a weight tensor."""
+            K, N = int(weight.shape[2]), int(weight.shape[3])
+            dram_grid = self.mesh_device.dram_grid_size()
+            dram_mc = dram_sharded_weight_config(K, N, dram_grid)
+            host_w = ttnn.from_device(weight)
+            return host_w.to(self.mesh_device, dram_mc)
+
+        # QKV matmul: [1,1,B,5120] × [1,1,5120,1792] → [1,1,B,1792]
+        K_qkv = int(self.wqkv.shape[2])
+        N_qkv = int(self.wqkv.shape[3])
+        qkv_in = max(get_activation_sharding_core_counts_for_dram_matmul(K_qkv, max_cores))
+        qkv_out = max(get_activation_sharding_core_counts_for_dram_matmul(N_qkv, max_cores))
+        self._ds_qkv_act_mc = _ds_act_mc(K_qkv)
+        self._ds_qkv_prog_cfg = get_dram_sharded_matmul_config(
+            m=_DS_BATCH, k=K_qkv, n=N_qkv,
+            input_num_shards=qkv_in, output_num_shards=qkv_out,
+        )
+        self._ds_wqkv = _shard_weight(self.wqkv)
+
+        # O projection: [1,1,B,1536] × [1,1,1536,5120] → [1,1,B,5120]
+        K_o = int(self.wo.shape[2])
+        N_o = int(self.wo.shape[3])
+        o_in = max(get_activation_sharding_core_counts_for_dram_matmul(K_o, max_cores))
+        o_out = max(get_activation_sharding_core_counts_for_dram_matmul(N_o, max_cores))
+        self._ds_o_act_mc = _ds_act_mc(K_o)
+        self._ds_o_prog_cfg = get_dram_sharded_matmul_config(
+            m=_DS_BATCH, k=K_o, n=N_o,
+            input_num_shards=o_in, output_num_shards=o_out,
+        )
+        self._ds_wo = _shard_weight(self.wo)
+
+        logger.info(
+            "DRAM-sharded attention configs: QKV K=%d N=%d in=%d out=%d, O K=%d N=%d in=%d out=%d",
+            K_qkv, N_qkv, qkv_in, qkv_out, K_o, N_o, o_in, o_out,
+        )
 
     def _apply_partial_rope_decode(self, x, cos, sin, trans_mat):
         """Apply partial rotary embedding (decode mode, NeoX-style).
@@ -500,13 +572,24 @@ class Glm4MoeAttention(LightweightModule):
         """
 
         # 1. QKV linear
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        if self._use_dram_shard:
+            x_sharded = ttnn.to_memory_config(x, self._ds_qkv_act_mc)
+            xqkv = ttnn.linear(
+                x_sharded,
+                self._ds_wqkv,
+                program_config=self._ds_qkv_prog_cfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(x_sharded, force=False)
+        else:
+            xqkv = ttnn.linear(
+                x,
+                self.wqkv,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+                compute_kernel_config=self.compute_kernel_config,
+            )
 
         # Add QKV bias
         xqkv = xqkv + self.wqkv_bias
@@ -532,7 +615,7 @@ class Glm4MoeAttention(LightweightModule):
             xqkv_shape = [int(d) for d in xqkv.shape]
             B_phys = ((self.max_batch_size + 31) // 32) * 32
             if xqkv_shape[-2] != B_phys:
-                xqkv = ttnn.reshape(xqkv, (1, 1, B_phys, xqkv_shape[-1]))
+                xqkv = ttnn.reshape(xqkv, (1, 1, B_phys, xqkv_shape[-1]), (1, 1, B_phys, xqkv_shape[-1]))
             xqkv = ttnn.matmul(
                 self.slice_mat,
                 xqkv,
@@ -627,7 +710,7 @@ class Glm4MoeAttention(LightweightModule):
             attn_shape = [int(d) for d in attn_output.shape]
             B_phys = ((self.max_batch_size + 31) // 32) * 32
             if attn_shape[-2] != B_phys:
-                attn_output = ttnn.reshape(attn_output, (1, 1, B_phys, attn_shape[-1]))
+                attn_output = ttnn.reshape(attn_output, (1, 1, B_phys, attn_shape[-1]), (1, 1, B_phys, attn_shape[-1]))
 
             # Gather across DP groups (cluster_axis=1) on batch dim
             attn_output = _simple_all_gather(
@@ -643,18 +726,32 @@ class Glm4MoeAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
-            attn_output = ttnn.reshape(attn_output, (1, 1, active_batch, attn_shape[-1]))
+            B_phys_out = ((self.max_batch_size + 31) // 32) * 32
+            attn_output = ttnn.reshape(attn_output, (1, 1, active_batch, attn_shape[-1]), (1, 1, B_phys_out, attn_shape[-1]))
 
         # 10. Output projection (BF16 output for precision through 92 layers)
-        dense_out = ttnn.matmul(
-            attn_output,
-            self.wo,
-            core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(attn_output)
+        if self._use_dram_shard:
+            ao_sharded = ttnn.to_memory_config(attn_output, self._ds_o_act_mc)
+            ttnn.deallocate(attn_output)
+            dense_out = ttnn.linear(
+                ao_sharded,
+                self._ds_wo,
+                program_config=self._ds_o_prog_cfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(ao_sharded, force=False)
+        else:
+            dense_out = ttnn.matmul(
+                attn_output,
+                self.wo,
+                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(attn_output)
 
         # DEBUG: force synchronize to isolate if compute pipeline or reduce hangs
         import os as _os
