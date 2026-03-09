@@ -13,8 +13,6 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
-os.environ.setdefault("MESH_DEVICE", "QUAD")
-
 
 def tt_to_torch_dtype(tt_dtype):
     if tt_dtype == ttnn.bfloat16:
@@ -526,6 +524,10 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 
 
 @pytest.mark.requires_device(["QUAD"])
+@pytest.mark.skipif(
+    (os.getenv("USE_TORUS_MODE") is None),
+    reason=f"Requires ring fabric",
+)
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
