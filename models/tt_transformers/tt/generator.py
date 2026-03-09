@@ -251,7 +251,10 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
         else:
-            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+            prefill_kwargs = {"page_table": page_table}
+            if global_user_id is not None:
+                prefill_kwargs["global_user_id"] = global_user_id
+            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
             host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
