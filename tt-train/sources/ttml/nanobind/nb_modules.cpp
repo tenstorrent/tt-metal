@@ -12,8 +12,6 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/trampoline.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "modules/grouped_query_attention.hpp"

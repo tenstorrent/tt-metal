@@ -89,7 +89,6 @@ struct ExecuteUnaryCompositeOpWithInt {
         return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, output_memory_config);
     }
 };
-
 }  // namespace operations::unary
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly

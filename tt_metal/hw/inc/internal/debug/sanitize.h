@@ -362,28 +362,58 @@ uint32_t debug_sanitize_noc_addr(
         bool is_virtual_coord_end = false;
         AddressableCoreType end_core_type = get_core_type(noc_id, x_end, y_end, is_virtual_coord_end);
         uint16_t return_code = DebugSanitizeOK;
-        if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX) {
+        bool both_cores_tensix =
+            (core_type == AddressableCoreType::TENSIX && end_core_type == AddressableCoreType::TENSIX);
+
+        if (!both_cores_tensix) {
             return_code = DebugSanitizeNocMulticastNonWorker;
         }
         if (is_virtual_coord != is_virtual_coord_end) {
             return_code = DebugSanitizeNocMixedVirtualandPhysical;
         }
-        if (is_virtual_coord && is_virtual_coord_end) {
-            // If coordinates are in virtual space, start can be greater than end, when using NOC1.
-            // This is because NOC0 and NOC1 endpoints are identical in virtual space, but order of
-            // start and end coords is still flipped between NOC0 and NOC1.
-            if (noc_id == 0) {
+
+        // Only check wrap-around for Tensix-to-Tensix multicasts
+        if (both_cores_tensix) {
+            if (is_virtual_coord && is_virtual_coord_end) {
+                // Virtual coordinates: noc0 and noc1 endpoints are identical in virtual space,
+                // but coordinate ordering differs between noc0 and noc1.
+                //
+                // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
+                // Non-torus architectures (Quasar) require start <= end.
+#ifdef ARCH_QUASAR
+                if (noc_id == 0) {
+                    if (x > x_end || y > y_end) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                } else {
+                    if (x_end > x || y_end > y) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                }
+#endif
+            } else {
+#ifdef ARCH_QUASAR
                 if (x > x_end || y > y_end) {
                     return_code = DebugSanitizeNocMulticastInvalidRange;
                 }
-            } else {
-                if (x_end > x || y_end > y) {
-                    return_code = DebugSanitizeNocMulticastInvalidRange;
-                }
+#endif
             }
         } else {
-            if (x > x_end || y > y_end) {
-                return_code = DebugSanitizeNocMulticastInvalidRange;
+            // For non-Tensix multicasts, enforce start <= end on all architectures
+            if (is_virtual_coord && is_virtual_coord_end) {
+                if (noc_id == 0) {
+                    if (x > x_end || y > y_end) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                } else {
+                    if (x_end > x || y_end > y) {
+                        return_code = DebugSanitizeNocMulticastInvalidRange;
+                    }
+                }
+            } else {
+                if (x > x_end || y > y_end) {
+                    return_code = DebugSanitizeNocMulticastInvalidRange;
+                }
             }
         }
         debug_sanitize_post_addr_and_hang(
