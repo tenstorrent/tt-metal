@@ -350,11 +350,11 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
         }
-        if constexpr (Core::Shared::is_compute_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("shared_gu_weights_cb"),
-                get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
-        }
+        // if constexpr (Core::Shared::is_compute_core) {
+        //     unified_kernels::setup_sharded_buffer(
+        //         get_named_compile_time_arg_val("shared_gu_weights_cb"),
+        //         get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
+        // }
         if constexpr (Core::Shared::is_mcast_receiver_core) {
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("shared_down_matmul_in1"),

@@ -1958,13 +1958,14 @@ class MoeSharedExpertOp:
         act_total_tiles = num_tiles_k
         weights_num_pages = k_per_core
 
-        cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
+        # cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
 
         return {
             "k_per_core": k_per_core,
             "act_total_tiles": act_total_tiles,
             "weights_num_pages": weights_num_pages,
-            "cb_weights_descriptor": cb_weights_descriptor,
+            "cb_weights_descriptor": None,
+            "weights_cb_addr": weights_tensor.buffer_address(),
             "cb_out_descriptor": None,
         }
 
@@ -2269,12 +2270,13 @@ class MoeSharedExpertOp:
 
         # Tensor-backed CBs (format from weight tensors)
         shared_gate_up_weights_tensor = shared_gate_weights_overlapped.fused_tensor
-        shared_gu_weights_cb = cb_id_context.get_cb_id(
-            shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
-        )
+        # shared_gu_weights_cb = cb_id_context.get_cb_id(
+        #     shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
+        # )
         shared_down_matmul_in1_cb = cb_id_context.get_cb_id(
             shared_down_weights_tensor.dtype, ttnn.TileDescriptor(shared_down_weights_tensor.get_tile())
         )
+        shared_gu_weights_cb = shared_down_matmul_in1_cb
 
         # ==================================================================
         # Dimensions
@@ -2590,6 +2592,7 @@ class MoeSharedExpertOp:
             # Gate/Up matmul
             ("shared_gu_act_cb", rmsnorm_mcast_dst_cb),
             ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+            ("shared_gu_weights_cb_addr", shared_ctx.gu_matmul_params["weights_cb_addr"]),
             ("shared_gu_out_cb", shared_ctx.gu_out_cb),
             ("shared_gu_k_per_core", shared_ctx.gu_matmul_params["k_per_core"]),
             ("shared_gu_act_total_tiles", shared_ctx.gu_matmul_params["act_total_tiles"]),
@@ -2619,7 +2622,7 @@ class MoeSharedExpertOp:
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
         return [
-            shared_ctx.gu_matmul_params["cb_weights_descriptor"],
+            # shared_ctx.gu_matmul_params["cb_weights_descriptor"],
             shared_ctx.gu_matmul_params["cb_out_descriptor"],
             shared_ctx.gated_reduce_params["cb_group1_descriptor"],
             shared_ctx.gated_reduce_params["cb_group2_descriptor"],
