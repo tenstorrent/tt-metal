@@ -522,9 +522,9 @@ def test_gpt_oss_demo(
                 "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
             )
     if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) > 64 * 1024:
+        if max([len(p) for p in real_prompts]) >= 32 * 1024:
             pytest.skip(
-                "120b model with mesh_shape (4, 8) and prefill > 64k is not supported. OOM error gh issue #38728"
+                "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
             )
     if model_args[0].model_name.split("-")[-1] == "20b" and mesh_device.shape[0] == 4:
         if max([len(p) for p in real_prompts]) > 32 * 1024:
