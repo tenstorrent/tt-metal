@@ -173,16 +173,13 @@ else
     [[ -z "$DEPLOYMENT_DESCRIPTOR_PATH" ]] && DEPLOYMENT_DESCRIPTOR_PATH="$DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT"
 fi
 
-# Build descriptor args for run_cluster_validation
-build_descriptor_args() {
-    if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
-        echo "--factory-descriptor-path $FACTORY_DESCRIPTOR_PATH"
-    else
-        echo "--cabling-descriptor-path $CABLING_DESCRIPTOR_PATH --deployment-descriptor-path $DEPLOYMENT_DESCRIPTOR_PATH"
-    fi
-}
-
-DESCRIPTOR_ARGS=$(build_descriptor_args)
+# Build descriptor args array for run_cluster_validation
+DESCRIPTOR_ARGS=()
+if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+    DESCRIPTOR_ARGS+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+else
+    DESCRIPTOR_ARGS+=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
+fi
 
 # Print summary
 echo "=========================================="
@@ -217,21 +214,19 @@ fi
 
 # Step 2: Cluster validation
 if [[ "$SKIP_VALIDATION" == false ]]; then
-    TRAFFIC_ARG=""
+    VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then
-        TRAFFIC_ARG="--send-traffic"
+        VALIDATION_ARGS+=(--send-traffic)
     fi
+    VALIDATION_ARGS+=(--num-iterations "$NUM_ITERATIONS")
 
     echo ""
     echo "Running cluster validation..."
-    # shellcheck disable=SC2086
     mpirun --host "$HOSTS" \
         --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
         --tag-output \
         ./build/tools/scaleout/run_cluster_validation \
-        $DESCRIPTOR_ARGS \
-        $TRAFFIC_ARG \
-        --num-iterations "$NUM_ITERATIONS"
+        "${VALIDATION_ARGS[@]}"
 else
     echo "Skipping validation (--skip-validation)"
 fi
