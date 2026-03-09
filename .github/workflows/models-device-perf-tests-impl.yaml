@@ -122,7 +122,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
       - name: Download Llama model weights from LFC
-        if: ${{ contains(matrix.test-group.name, 'bh_p300') }}
+        if: ${{ matrix.test-group.sku == 'bh_p300' }}
         timeout-minutes: 15
         run: |
           set -e
