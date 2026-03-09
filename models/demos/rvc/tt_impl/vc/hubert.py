@@ -119,7 +119,13 @@ class TransformerSentenceEncoderLayer:
             device=device, embed_dim=embed_dim, num_heads=attention_heads, self_attention=True
         )
         self.layer_norm_first = layer_norm_first
-        self.fc1 = Linear(device=device, in_features=embed_dim, out_features=ffn_embed_dim, dtype=ttnn.bfloat16)
+        self.fc1 = Linear(
+            device=device,
+            in_features=embed_dim,
+            out_features=ffn_embed_dim,
+            dtype=ttnn.bfloat16,
+            activation=activation_fn,
+        )
         self.fc2 = Linear(device=device, in_features=ffn_embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
 
         self.self_attn_layer_norm_weight: ttnn.Tensor | None = None
@@ -157,18 +163,6 @@ class TransformerSentenceEncoderLayer:
             setattr(self, attr_w, w)
             setattr(self, attr_b, b)
 
-    def _apply_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        if self.activation_fn == "relu":
-            return ttnn.relu(x)
-        if self.activation_fn == "gelu":
-            return ttnn.gelu(x)
-        if self.activation_fn == "tanh":
-            return ttnn.tanh(x)
-        if self.activation_fn == "linear":
-            return x
-        raise RuntimeError(f"Unsupported activation_fn in TT port: {self.activation_fn}")
-
     def _layer_norm(self, x: ttnn.Tensor, weight: ttnn.Tensor | None, bias: ttnn.Tensor | None) -> ttnn.Tensor:
         if weight is None or bias is None:
             raise ValueError("Layer norm parameters are not loaded.")
@@ -187,7 +181,7 @@ class TransformerSentenceEncoderLayer:
 
             residual = x
             x = self._layer_norm(x, self.final_layer_norm_weight, self.final_layer_norm_bias)
-            x = self._apply_activation(self.fc1(x))
+            x = self.fc1(x)
             x = self.fc2(x)
             x = residual + x
         else:
@@ -198,7 +192,7 @@ class TransformerSentenceEncoderLayer:
             x = self._layer_norm(x, self.self_attn_layer_norm_weight, self.self_attn_layer_norm_bias)
 
             residual = x
-            x = self._apply_activation(self.fc1(x))
+            x = self.fc1(x)
 
             x = self.fc2(x)
             x = residual + x
@@ -386,7 +380,13 @@ class FeedForwardModule:
         self.use_bias = bias
 
         self.layer_norm = LayerNorm(device=device, normalized_shape=input_feat, eps=1e-5, dtype=ttnn.bfloat16)
-        self.w_1 = Linear(device=device, in_features=input_feat, out_features=hidden_units, dtype=ttnn.bfloat16)
+        self.w_1 = Linear(
+            device=device,
+            in_features=input_feat,
+            out_features=hidden_units,
+            dtype=ttnn.bfloat16,
+            activation=activation_fn,
+        )
         self.w_2 = Linear(device=device, in_features=hidden_units, out_features=input_feat, dtype=ttnn.bfloat16)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
@@ -394,25 +394,10 @@ class FeedForwardModule:
         self.w_1.load_parameters(parameters=parameters, key="w_1", prefix=prefix)
         self.w_2.load_parameters(parameters=parameters, key="w_2", prefix=prefix)
 
-    def _apply_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        if self.activation_fn == "relu":
-            return ttnn.relu(x)
-        if self.activation_fn == "gelu":
-            return ttnn.gelu(x)
-        if self.activation_fn == "tanh":
-            return ttnn.tanh(x)
-        if self.activation_fn == "linear":
-            return x
-        if self.activation_fn == "swish":
-            return ttnn.silu(x)
-        raise RuntimeError(f"Unsupported activation_fn in TT FeedForwardModule: {self.activation_fn}")
-
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # x: T x B x C
         x = self.layer_norm(x)
         x = self.w_1(x)
-        x = self._apply_activation(x)
         x = self.w_2(x)
         return x
 
