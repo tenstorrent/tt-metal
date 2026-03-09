@@ -74,7 +74,7 @@ class RotarySetup:
     NOTE: it would be better to re-migrate this class to TTT rope.py at some point
     """
 
-    def __init__(self, device, batch_size_per_row: int, hf_config):
+    def __init__(self, device, batch_size_per_row: int, hf_config, shard_over_seq_len: bool = False):
         self.batch_size_per_row = batch_size_per_row
         self.hf_config = hf_config
         self.dim = hf_config.qk_rope_head_dim
@@ -105,6 +105,7 @@ class RotarySetup:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+
         self.transformation_mat = ttnn.from_torch(
             trans_mat,
             device=device,
@@ -172,6 +173,43 @@ class RotarySetup:
         )
 
         return rot_idxs
+
+    def get_rot_mats_table_shard_over_seq_len(self, seq_len: int | None = None, sp_axis: int = 0):
+        """
+        Get the cos and sin matrices for all positions in the sequence length.
+        If seq_len is None, it will use the max position embeddings from the HF config.
+        """
+
+        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
+
+        shard_dims = [None, None]
+        shard_dims[sp_axis] = 2
+
+        if seq_len is not None:
+            assert (
+                seq_len <= self.hf_config.max_seq_len
+            ), f"seq_len {seq_len} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
+            cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
+            sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
+
+        cos_matrix = ttnn.from_torch(
+            cos_matrix_torch,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=shard_dims, mesh_shape=self.device.shape),
+        )
+        sin_matrix = ttnn.from_torch(
+            sin_matrix_torch,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=shard_dims, mesh_shape=self.device.shape),
+        )
+
+        if seq_len is not None:
+            return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": self.transformation_mat_prefill}
+        return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix}
 
     def get_rot_mats_table(self, seq_len: int | None = None):
         """
