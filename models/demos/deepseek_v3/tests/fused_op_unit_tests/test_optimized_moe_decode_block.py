@@ -150,7 +150,7 @@ def create_torch_dispatch_input_expert_indices_tensor(
     selected_experts_k,
     dtype,
 ):
-    expert_indices = torch.ones(batch, 1, seq, selected_experts_k, dtype=tt_to_torch_dtype(dtype)) * -1
+    expert_indices = torch.ones((batch, 1, seq, selected_experts_k), dtype=tt_to_torch_dtype(dtype)) * -1
     current_expert = 0
 
     # For avg_perf scheme, track how many tokens are assigned to each expert
@@ -324,16 +324,17 @@ def create_torch_dispatch_input_expert_indices_tensor(
     return expert_indices
 
 
-def create_torch_dispatch_input_export_scores_tensor(dispatch_input_expert_indices_shape, dtype):
+def create_torch_dispatch_input_export_scores_tensor(batch, seq, selected_experts_k, dtype):
     # Generate expert scores (same shape as expert_indices)
     # Normalize scores so they sum to 1 per token (softmax-like)
-    torch_dispatch_input_expert_scores_tensor = torch.rand(dispatch_input_expert_indices_shape, dtype=torch.float32).to(
-        tt_to_torch_dtype(dtype)
+    torch_dispatch_input_expert_scores_tensor = torch.rand(
+        (batch, 1, seq, selected_experts_k), dtype=tt_to_torch_dtype(dtype)
     )
     torch_dispatch_input_expert_scores_tensor = (
         torch_dispatch_input_expert_scores_tensor / torch_dispatch_input_expert_scores_tensor.sum(dim=-1, keepdim=True)
     )
 
+    # [batch, 1, seq, selected_experts_k]
     return torch_dispatch_input_expert_scores_tensor
 
 
@@ -659,6 +660,7 @@ def test_optimized_moe_decode_block(
             torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, matmul_N, ring2cores
         )
 
+        # TODO: (GR)
         iteration = i // 2
         mapped_index = (iteration % 16) * 8 + (iteration // 16)
         torch_w0_w1_reordered_tensors[mapped_index] = torch_w0_w1_reordered
@@ -777,9 +779,10 @@ def test_optimized_moe_decode_block(
             dispatch_input_expert_indices_dtype,
         )
         torch_dispatch_input_expert_scores_tensor = create_torch_dispatch_input_export_scores_tensor(
-            torch_dispatch_input_expert_indices_tensor.shape, dispatch_input_expert_scores_dtype
+            batch, seq, select_experts_k, dispatch_input_expert_scores_dtype
         )
 
+        # [tokens_per_device, 1, seq, hidden_size] per device
         tt_dispatch_input_tensor = ttnn.from_torch(
             torch_dispatch_input_tensor,
             device=mesh_device,
@@ -790,6 +793,7 @@ def test_optimized_moe_decode_block(
         )
         tt_dispatch_input_tensors.append(tt_dispatch_input_tensor)
 
+        # [tokens_per_device, 1, seq, select_experts_k] per device
         tt_dispatch_input_expert_indices_tensor = ttnn.from_torch(
             torch_dispatch_input_expert_indices_tensor,
             device=mesh_device,
@@ -800,6 +804,7 @@ def test_optimized_moe_decode_block(
         )
         tt_dispatch_input_expert_indices_tensors.append(tt_dispatch_input_expert_indices_tensor)
 
+        # [tokens_per_device, 1, seq, select_experts_k] per device
         tt_dispatch_input_expert_scores_tensor = ttnn.from_torch(
             torch_dispatch_input_expert_scores_tensor,
             device=mesh_device,
@@ -842,6 +847,7 @@ def test_optimized_moe_decode_block(
     ############################################
     logger.info(f"Begin creating persistent dispatch output tensors")
 
+    # [1, total_tokens, hidden_size] per device
     dispatch_output_sparse_buffer_dtype = ttnn.bfloat16
     dispatch_output_sparse_buffer_shape = [num_dispatch_devices, total_tokens, hidden_size]
     tt_preallocated_dispatch_output_sparse_buffer = ttnn.from_torch(
@@ -863,6 +869,7 @@ def test_optimized_moe_decode_block(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
+    # [1, total_tokens, select_experts_k] per device
     dispatch_output_expert_indices_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -884,6 +891,7 @@ def test_optimized_moe_decode_block(
         f"preallocated_dispatch_output_expert_indices shape: {tt_preallocated_dispatch_output_expert_indices.shape}"
     )
 
+    # [1, total_tokens, select_experts_k] per device
     dispatch_output_expert_scores_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -975,6 +983,7 @@ def test_optimized_moe_decode_block(
         # create persistent output tensor for combine
         # runtime since it needs to be a zeroed out tensor (for each layer)
         # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
+        # [select_experts_k, tokens_per_device, hidden_size] per device
         tt_preallocated_combine_output = ttnn.moreh_full(
             shape=[select_experts_k, tokens_per_device, hidden_size],
             fill_value=0,
@@ -1054,10 +1063,12 @@ def test_optimized_moe_decode_block(
         )
 
         # unsqueeze
-        # (8, 32, 896) -> (8, 1, 32, 896)
+        # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
         tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
 
         # TODO: (GR)
+        # scale with scores
+        # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
         # topk_experts_weights = ttnn.permute(tt_dispatch_input_expert_scores_tensors[iteration], (3, 1, 0, 2), memory_config=scaled_output_memory_config)
         # topk_experts_weights = ttnn.to_layout(topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config)
         # tt_scaled_output = ttnn.mul(tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config)
@@ -1070,6 +1081,7 @@ def test_optimized_moe_decode_block(
             output_memory_config=fast_reduce_output_memory_config,
         )
 
+        # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
         tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
             tt_fast_reduce_output_tensors,
             output_memory_config=rs_output_memory_config,
@@ -1078,6 +1090,7 @@ def test_optimized_moe_decode_block(
             topology=ttnn.Topology.Ring,
             cluster_axis=1,
         )
+        print(tt_final_output.shape)
 
         return tt_combine_output, tt_final_output
 
