@@ -6,6 +6,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
+#include "ckernel.h"
 #include "experimental/dataflow_buffer.h"
 #else
 #include "experimental/circular_buffer.h"
@@ -27,6 +28,7 @@ void kernel_main() {
     uint32_t Nt = get_compile_time_arg_val(3);
 
 #ifdef ARCH_QUASAR
+    uint32_t compute_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     experimental::DataflowBuffer dfb0(0);
     experimental::DataflowBuffer dfb1(1);
     experimental::DataflowBuffer dfb_out(2);
@@ -43,18 +45,26 @@ void kernel_main() {
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
     for (uint32_t nb = 0; nb < batch; nb++) {
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {  // output tile of C
+#ifdef ARCH_QUASAR
+            if (mt_C % 4 != compute_id) {
+                continue;
+            }
+#endif
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
 #ifdef ARCH_QUASAR
+                    DPRINT << "compute " << compute_id << " wait_front: dfb0" << ENDL();
                     dfb0.wait_front(onetile);
+                    DPRINT << "compute " << compute_id << " wait_front: dfb1" << ENDL();
                     dfb1.wait_front(onetile);
-
+                    DPRINT << "compute " << compute_id << " matmul_tiles: dfb0, dfb1" << ENDL();
                     matmul_tiles(dfb0.get_id(), dfb1.get_id(), 0, 0, 0);
-
+                    DPRINT << "compute " << compute_id << " pop_front: dfb0" << ENDL();
                     dfb0.pop_front(onetile);
+                    DPRINT << "compute " << compute_id << " pop_front: dfb1" << ENDL();
                     dfb1.pop_front(onetile);
 #else
                     cb0.wait_front(onetile);
@@ -67,10 +77,11 @@ void kernel_main() {
 #endif
                 }
 
-
 #ifdef ARCH_QUASAR
+                    DPRINT << "compute " << compute_id << " reserve_back: dfb_out" << ENDL();
                     dfb_out.reserve_back(onetile);
                     pack_tile(0, dfb_out.get_id());
+                    DPRINT << "compute " << compute_id << " push_back: dfb_out" << ENDL();
                     dfb_out.push_back(onetile);
 #else
                     cb16.reserve_back(onetile);
@@ -82,4 +93,5 @@ void kernel_main() {
             }
         }
     }
+    dfb_out.finish();
 }

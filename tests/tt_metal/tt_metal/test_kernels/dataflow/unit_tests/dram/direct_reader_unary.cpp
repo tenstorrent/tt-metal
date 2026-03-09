@@ -34,7 +34,7 @@ void kernel_main() {
 
     uint32_t ublock_size_bytes = dfb.get_entry_size();
 
-    uint32_t tlocal_src_addr = src_addr + (producer_idx * dfb.get_stride_size());
+    uint32_t tlocal_src_addr = src_addr + (producer_idx * ublock_size_bytes);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         dfb.reserve_back(ublock_size_tiles);

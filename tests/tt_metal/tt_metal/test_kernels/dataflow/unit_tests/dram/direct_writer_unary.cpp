@@ -32,7 +32,7 @@ void kernel_main() {
 
     uint32_t ublock_size_bytes = dfb.get_entry_size();
 
-    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * dfb.get_stride_size());
+    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * ublock_size_bytes);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         dfb.wait_front(ublock_size_tiles);

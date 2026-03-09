@@ -10,11 +10,19 @@
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
-    // same arg indices as in reader_bmm_8bank for reuse
     uintptr_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t Mt = get_arg_val<uint32_t>(2);
     uint32_t Nt = get_arg_val<uint32_t>(4);
     uint32_t batch = get_arg_val<uint32_t>(7);
+    uint32_t writer_id = 0;
+    uint32_t num_writers = 1;
+#ifdef ARCH_QUASAR
+    uint32_t consumer_mask = get_arg_val<uint32_t>(8);  // 0 for single-writer; output DFB consumer_risc_mask for 4-lane
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    writer_id = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
+    num_writers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
+#endif
 
     constexpr int onetile = 1;
 #ifdef ARCH_QUASAR
@@ -26,24 +34,27 @@ void kernel_main() {
     experimental::CircularBuffer cb(cb_id_out0);
 #endif
 
-    uint32_t itileC = 0;
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     experimental::Noc noc;
 
     // C is MN so we iterate in tile RM order
+    uint32_t itileC_batch = writer_id * Nt;  // first tile of first batch for this writer
     for (uint32_t nb = 0; nb < batch; nb++) {
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {      // output tile of C
-            for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) {  // output tile index of C
+        uint32_t itileC = itileC_batch;
+        for (uint32_t mt_C = writer_id; mt_C < Mt; mt_C += num_writers) {  // output tile row of C
+            for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) {  // output tile col of C
                 // bmm will generate C's tiles C=A*B, MN=MK*KN, in row major order, we just read them from CB and write
                 // out to DRAM
 #ifdef ARCH_QUASAR
+                DPRINT << "writer " << writer_id << " wait_front: dfb" << ENDL();
                 dfb.wait_front(onetile);
                 uint32_t l1_read_addr = dfb.get_read_ptr();
-
+                DPRINT << "writer " << writer_id << " async_write_tile: dfb" << ENDL();
                 noc_async_write_tile(itileC, s, l1_read_addr);
                 noc.async_write_barrier();
+                DPRINT << "writer " << writer_id << " pop_front: dfb" << ENDL();
                 dfb.pop_front(onetile);
 #else
                 cb.wait_front(onetile);
@@ -58,6 +69,8 @@ void kernel_main() {
                 // DPRINT << itileC << ' ' << uint32_t(dst_noc_addr) << ENDL();
                 itileC++;
             }
+            itileC += (num_writers - 1) * Nt;  // skip rows owned by other writers
         }
+        itileC_batch += Mt * Nt;
     }
 }
