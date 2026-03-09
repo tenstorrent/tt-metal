@@ -259,19 +259,27 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         reduce_mesh_mapper = ttnn.create_mesh_mapper(mesh_device, reduce_mesh_mapper_config)
 
         final_output_mem_config = r.final_output_mem_config
-        reduce_intermediate_tensors = []
-        for _ in range(3):
-            intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-            intermediate_tensor = ttnn.from_torch(
-                intermediate_data,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=final_output_mem_config,
-                tile=tile_1x32,
-                mesh_mapper=reduce_mesh_mapper,
-            )
-            reduce_intermediate_tensors.append(intermediate_tensor)
+        # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+        intermediate_shard_spec = final_output_mem_config.shard_spec
+        intermediate_shard_shape = [intermediate_shard_spec.shape[0], intermediate_shard_spec.shape[1] * 3]
+        intermediate_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.types.BufferType.L1,
+            ttnn.ShardSpec(
+                intermediate_shard_spec.grid,
+                intermediate_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        reduce_intermediate_tensors = ttnn.from_torch(
+            torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=intermediate_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
         logger.info(f"[rank={my_mesh_id}] reduce intermediate tensors created")
 
         # Reduce output tensor (single-core sharded on aggregator core)
@@ -626,19 +634,27 @@ def test_persistent_moe_15_stages(
             reduce_mesh_mapper = ttnn.create_mesh_mapper(mesh_device, reduce_mesh_mapper_config)
 
             final_output_mem_config = r.final_output_mem_config
-            reduce_intermediate_tensors = []
-            for _ in range(3):
-                intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-                intermediate_tensor = ttnn.from_torch(
-                    intermediate_data,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=final_output_mem_config,
-                    tile=tile_1x32,
-                    mesh_mapper=reduce_mesh_mapper,
-                )
-                reduce_intermediate_tensors.append(intermediate_tensor)
+            # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+            intermediate_shard_spec = final_output_mem_config.shard_spec
+            intermediate_shard_shape = [intermediate_shard_spec.shape[0], intermediate_shard_spec.shape[1] * 3]
+            intermediate_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.types.BufferType.L1,
+                ttnn.ShardSpec(
+                    intermediate_shard_spec.grid,
+                    intermediate_shard_shape,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            reduce_intermediate_tensors = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=intermediate_mem_config,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
 
             compute_grid = mesh_device.compute_with_storage_grid_size()
             reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
@@ -998,19 +1014,27 @@ def test_persistent_moe_multi_token(
             reduce_mesh_mapper = ttnn.create_mesh_mapper(mesh_device, reduce_mesh_mapper_config)
 
             final_output_mem_config = r.final_output_mem_config
-            reduce_intermediate_tensors = []
-            for _ in range(3):
-                intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-                intermediate_tensor = ttnn.from_torch(
-                    intermediate_data,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=final_output_mem_config,
-                    tile=tile_1x32,
-                    mesh_mapper=reduce_mesh_mapper,
-                )
-                reduce_intermediate_tensors.append(intermediate_tensor)
+            # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+            intermediate_shard_spec = final_output_mem_config.shard_spec
+            intermediate_shard_shape = [intermediate_shard_spec.shape[0], intermediate_shard_spec.shape[1] * 3]
+            intermediate_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.types.BufferType.L1,
+                ttnn.ShardSpec(
+                    intermediate_shard_spec.grid,
+                    intermediate_shard_shape,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            reduce_intermediate_tensors = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=intermediate_mem_config,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
 
             compute_grid = mesh_device.compute_with_storage_grid_size()
             reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
