@@ -349,3 +349,32 @@ inline void _llk_math_reduce_block_max_row_reinit_runtime_()
 {
     reduce_max_row_configure_addrmod_reinit_runtime();
 }
+
+/**
+ * Short reinitialization for block-based reduce_max_row operation after a matmul.
+ * Reprograms address modifiers and MOP configuration. Used when MOP was clobbered
+ * but full init is not needed.
+ *
+ * This LLK API function is used only to re-initialize the address modifiers and MOP
+ * after a matmul operation in an SDPA inner loop.
+ */
+template <bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim)
+{
+    reduce_max_row_configure_addrmod();
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
+}
+
+/**
+ * Minimal reinitialization for block-based reduce_max_row operation.
+ * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
+ * Used when only specific addrmods were clobbered by previous operations.
+ */
+inline void _llk_math_reduce_block_max_row_reinit_minimal_runtime_()
+{
+    reduce_max_row_configure_addrmod_reinit_minimal_runtime();
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
