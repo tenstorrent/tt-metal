@@ -23,7 +23,7 @@ namespace compressed {
  * Zero tiles have abs_addr = ZEROS_ADDR_SHIFTED, precomputed by host.
  * No per-tile arithmetic, no branches.
  */
-template <uint32_t KT_DIM, uint32_t CT_DIM>
+template <uint32_t KT_DIM, uint32_t CT_DIM, bool FINALIZE = true>
 FORCE_INLINE void custom_mm_compressed_block_runtime(
     uint32_t fmt_l1_addr, uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
@@ -93,8 +93,14 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
                 }
             }
         }
+
+        // Reset counters so subsequent subblock calls start clean (matches _llk_unpack_AB_custom_mm_run_)
+        wait_for_next_context(1);
+        reset_config_context();
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }));
-    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed
