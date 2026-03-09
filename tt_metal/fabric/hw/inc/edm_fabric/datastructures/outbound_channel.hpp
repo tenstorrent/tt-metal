@@ -10,8 +10,7 @@
 
 namespace tt::tt_fabric {
 
-// A base sender channel interface class that will be specialized for different
-// channel architectures (e.g. static vs elastic sizing)
+// A base sender channel interface class
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS, typename DERIVED_T>
 class SenderEthChannelInterface {
 public:

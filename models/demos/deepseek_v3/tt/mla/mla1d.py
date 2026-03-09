@@ -695,13 +695,8 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
-        # Output L1 WIDTH sharded memory config for qkv_a (using padded n)
-        qkv_a_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), qkv_a_n_padded],
-            core_grid=qkv_a_out_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Output L1 WIDTH sharded memory config for qkv_a (shard spec computed by the op)
+        qkv_a_out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -742,13 +737,8 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
-        # Output L1 WIDTH sharded memory config for wq_b (using padded n)
-        wq_b_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), wq_b_n_padded],
-            core_grid=wq_b_out_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Output L1 WIDTH sharded memory config for wq_b (shard spec computed by the op)
+        wq_b_out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -909,13 +899,8 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
-        # Output L1 WIDTH sharded memory config for wo (using padded n)
-        wo_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), wo_n_padded],
-            core_grid=wo_out_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Output L1 WIDTH sharded memory config for wo (shard spec computed by the op)
+        wo_out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
