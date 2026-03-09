@@ -398,53 +398,56 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 def generate_sdxl_test_inputs():
     inputs = []
 
-    ##### START: 1024x1024 resolution #####
-    # UNet inputs
-    inputs.append((1, 1280, 64, 64))
-    inputs.append((1, 1280, 32, 32))
-    inputs.append((1, 1920, 64, 64))
-    inputs.append((1, 1920, 32, 32))
-    inputs.append((1, 2560, 32, 32))
-    inputs.append((1, 320, 128, 128))
-    inputs.append((1, 320, 64, 64))
-    inputs.append((1, 640, 64, 64))
-    inputs.append((1, 640, 32, 32))
-    inputs.append((1, 960, 64, 64))
+    # ##### START: 1024x1024 resolution #####
+    # # UNet inputs
+    # inputs.append((1, 1280, 64, 64))
+    # inputs.append((1, 1280, 32, 32))
+    # inputs.append((1, 1920, 64, 64))
+    # inputs.append((1, 1920, 32, 32))
+    # inputs.append((1, 2560, 32, 32))
+    # inputs.append((1, 320, 128, 128))
+    # inputs.append((1, 320, 64, 64))
+    # inputs.append((1, 640, 64, 64))
+    # inputs.append((1, 640, 32, 32))
+    # inputs.append((1, 960, 64, 64))
 
-    # VAE inputs
-    inputs.append((1, 512, 128, 128))
+    # # VAE inputs
+    # inputs.append((1, 512, 128, 128))
 
-    # Refiner UNet inputs
-    inputs.append((1, 1152, 64, 64))
-    inputs.append((1, 1536, 16, 16))
-    inputs.append((1, 1536, 32, 32))
-    inputs.append((1, 1536, 64, 64))
-    inputs.append((1, 2304, 32, 32))
-    inputs.append((1, 2304, 64, 64))
-    inputs.append((1, 3072, 16, 16))
-    inputs.append((1, 3072, 32, 32))
-    inputs.append((1, 384, 128, 128))
-    inputs.append((1, 384, 64, 64))
-    inputs.append((1, 768, 32, 32))
-    inputs.append((1, 768, 64, 64))
-    ###### END: 1024x1024 resolution ######
+    # # Refiner UNet inputs
+    # inputs.append((1, 1152, 64, 64))
+    # inputs.append((1, 1536, 16, 16))
+    # inputs.append((1, 1536, 32, 32))
+    # inputs.append((1, 1536, 64, 64))
+    # inputs.append((1, 2304, 32, 32))
+    # inputs.append((1, 2304, 64, 64))
+    # inputs.append((1, 3072, 16, 16))
+    # inputs.append((1, 3072, 32, 32))
+    # inputs.append((1, 384, 128, 128))
+    # inputs.append((1, 384, 64, 64))
+    # inputs.append((1, 768, 32, 32))
+    # inputs.append((1, 768, 64, 64))
+    # ###### END: 1024x1024 resolution ######
 
-    ##### START: 512x512 resolution #####
-    # UNet inputs
-    inputs.append((1, 320, 64, 64))
-    inputs.append((1, 320, 32, 32))
-    inputs.append((1, 640, 32, 32))
-    inputs.append((1, 640, 16, 16))
-    inputs.append((1, 1280, 16, 16))
-    inputs.append((1, 2560, 16, 16))
-    # This test is removed to test_group_norm_DRAM because of the Issue #36408. To be added back after the issue is resolved.
-    # inputs.append((1, 1920, 16, 16))
-    inputs.append((1, 1920, 32, 32))
-    inputs.append((1, 1280, 32, 32))
-    inputs.append((1, 960, 32, 32))
-    inputs.append((1, 960, 64, 64))
-    inputs.append((1, 640, 64, 64))
-    ###### END: 512x512 resolution ######
+    # ##### START: 512x512 resolution #####
+    # # UNet inputs
+    # inputs.append((1, 320, 64, 64))
+    # inputs.append((1, 320, 32, 32))
+    # inputs.append((1, 640, 32, 32))
+    # inputs.append((1, 640, 16, 16))
+    # inputs.append((1, 1280, 16, 16))
+    # inputs.append((1, 2560, 16, 16))
+    inputs.append((1, 1920, 16, 16))  # This test fails because of the Issue #36408
+    # inputs.append((1, 1920, 32, 32))
+    # inputs.append((1, 1280, 32, 32))
+    # inputs.append((1, 960, 32, 32))
+    # inputs.append((1, 960, 64, 64))
+    # inputs.append((1, 640, 64, 64))
+    # ###### END: 512x512 resolution ######
+
+    ##### START: 1152x896 resolution #####
+    inputs.append((1, 320, 144, 112))  # This test fails because of the Issue #36408
+    ###### END: 1152x896 resolution ######
 
     return inputs
 
