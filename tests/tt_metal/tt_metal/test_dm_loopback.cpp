@@ -40,13 +40,10 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     constexpr CoreCoord core = {0, 0};
 
     // These addresses have been randomly chosen
-    // uint32_t signal_address = 999 * 1024;
     uint32_t l1_address = 1000 * 1024;
     uint32_t dram_address = 30000 * 1024;
     std::vector<uint32_t> value = {0x12345678};
 
-    // std::vector<uint32_t> signal = {0};
-    // tt_metal::detail::WriteToDeviceL1(dev, core, signal_address, signal);
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
     MetalContext::instance().get_cluster().dram_barrier(dev->id());
 
@@ -55,7 +52,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
-    KernelHandle kernel_handle = tt_metal::CreateSemaphore(program, core, 0);
+    const uint32_t sem_id = tt_metal::CreateSemaphore(program, core, 0);
 
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
     dm_dram_to_l1_kernels.reserve(4);
@@ -64,8 +61,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
             core,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {kernel_handle}}));
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
@@ -75,8 +71,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
             core,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {kernel_handle}}));
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
     }
 
     uint32_t signal_value = 0;
