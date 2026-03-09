@@ -14,19 +14,19 @@ Tests include:
 import pytest
 import torch
 from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0, comp_pcc
+from models.common.utility_functions import comp_pcc, run_for_wormhole_b0
 from models.demos.attention_denseunet.reference.model import create_attention_denseunet
 from models.demos.attention_denseunet.tt.common import (
-    create_preprocessor,
     ATTENTION_DENSEUNET_L1_SMALL_SIZE,
-    ATTENTION_DENSEUNET_TRACE_SIZE,
     ATTENTION_DENSEUNET_PCC,
+    ATTENTION_DENSEUNET_TRACE_SIZE,
+    create_preprocessor,
 )
 from models.demos.attention_denseunet.tt.config import create_configs_from_parameters
 from models.demos.attention_denseunet.tt.model import create_model_from_configs
-from ttnn.model_preprocessing import preprocess_model_parameters
 
 
 @run_for_wormhole_b0()
@@ -46,7 +46,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 def test_attention_denseunet_inference(device: ttnn.Device, reset_seeds, batch_size: int, resolution: tuple):
     """
     Test full Attention DenseUNet inference and validate against PyTorch.
-    
+
     This test:
     1. Creates PyTorch reference model
     2. Converts weights to TTNN format
@@ -54,7 +54,7 @@ def test_attention_denseunet_inference(device: ttnn.Device, reset_seeds, batch_s
     4. Compares output with PyTorch using PCC
     """
     height, width = resolution
-    
+
     logger.info(f"Testing Attention DenseUNet with batch_size={batch_size}, resolution={resolution}")
     logger.info("Creating PyTorch reference model...")
     reference_model = create_attention_denseunet()
@@ -63,7 +63,7 @@ def test_attention_denseunet_inference(device: ttnn.Device, reset_seeds, batch_s
     logger.info("Running PyTorch inference...")
     with torch.no_grad():
         output_torch = reference_model(input_torch)
-    
+
     logger.info(f"PyTorch output shape: {output_torch.shape}")
     logger.info("Preprocessing model parameters for TTNN...")
     parameters = preprocess_model_parameters(
@@ -95,13 +95,13 @@ def test_attention_denseunet_inference(device: ttnn.Device, reset_seeds, batch_s
     output_ttnn_torch = ttnn.to_torch(output_ttnn)
     output_ttnn_torch = output_ttnn_torch.reshape(batch_size, 1, height, width)
     logger.info(f"TTNN output shape: {output_ttnn_torch.shape}")
-    assert output_torch.shape == output_ttnn_torch.shape, \
-        f"Shape mismatch: PyTorch {output_torch.shape} vs TTNN {output_ttnn_torch.shape}"
+    assert (
+        output_torch.shape == output_ttnn_torch.shape
+    ), f"Shape mismatch: PyTorch {output_torch.shape} vs TTNN {output_ttnn_torch.shape}"
     pcc_value = comp_pcc(output_torch, output_ttnn_torch)
     logger.info(f"PCC: {pcc_value}")
-    assert pcc_value >= ATTENTION_DENSEUNET_PCC, \
-        f"PCC {pcc_value} is below threshold {ATTENTION_DENSEUNET_PCC}"
-    
+    assert pcc_value >= ATTENTION_DENSEUNET_PCC, f"PCC {pcc_value} is below threshold {ATTENTION_DENSEUNET_PCC}"
+
     logger.info("✓ Test passed!")
 
 
