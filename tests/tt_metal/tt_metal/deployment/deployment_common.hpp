@@ -20,8 +20,8 @@ static inline struct l1_allocator new_tensix_allocator() {
     uint32_t start =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
 
-    uint32_t end =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    uint32_t end = start + MetalContext::instance().hal().get_dev_size(
+                               HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
 
     return (struct l1_allocator){
         .start = ROUND_UP(start, ALIGNMENT),
@@ -35,8 +35,8 @@ static inline struct l1_allocator new_erisc_allocator() {
     uint32_t start =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-    uint32_t end =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t end = start + MetalContext::instance().hal().get_dev_size(
+                               HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     return (struct l1_allocator){
         .start = ROUND_UP(start, ALIGNMENT),
