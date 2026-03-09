@@ -7,6 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/endpoints.h"
 #include "reshard_writer.hpp"
 
 void kernel_main() {
@@ -46,6 +47,12 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
+    experimental::CircularBuffer cb_beta_obj(cb_beta);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     if constexpr (!use_welford) {
@@ -71,20 +78,28 @@ void kernel_main() {
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
-        cb_reserve_back(cb_gamma, block_w);
+        experimental::UnicastEndpoint local_ep;
+        cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, mask_read_tile_face_bytes * 2);
-            gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + mask_read_tile_face_bytes);
-            noc_async_read_barrier();
-            noc_async_read(
-                gamma_noc_addr, l1_write_addr_gamma + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
-            l1_write_addr_gamma += gamma_tile_bytes;
+            noc.async_read(
+                gamma,
+                cb_gamma_obj,
+                mask_read_tile_face_bytes * 2,
+                {.page_id = tile_id},
+                {.offset_bytes = w * gamma_tile_bytes});
+            noc.async_read_barrier();
+            noc.async_read(
+                local_ep,
+                cb_gamma_obj,
+                mask_read_tile_face_bytes,
+                {.noc_x = my_x[noc.get_noc_id()],
+                 .noc_y = my_y[noc.get_noc_id()],
+                 .addr = cb_gamma_obj.get_write_ptr() + w * gamma_tile_bytes + mask_read_tile_face_bytes},
+                {.offset_bytes = w * gamma_tile_bytes + mask_read_tile_offset_bytes});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma, block_w);
+        noc.async_read_barrier();
+        cb_gamma_obj.push_back(block_w);
     }
 
     if constexpr (fuse_beta) {
@@ -94,25 +109,35 @@ void kernel_main() {
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
 
-        uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
-        cb_reserve_back(cb_beta, block_w);
+        experimental::UnicastEndpoint local_ep;
+        cb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
-            uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
-            noc_async_read(beta_noc_addr, l1_write_addr_beta, mask_read_tile_face_bytes * 2);
-            beta_noc_addr = get_noc_addr(l1_write_addr_beta + mask_read_tile_face_bytes);
-            noc_async_read_barrier();
-            noc_async_read(beta_noc_addr, l1_write_addr_beta + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
-            l1_write_addr_beta += beta_tile_bytes;
+            noc.async_read(
+                beta,
+                cb_beta_obj,
+                mask_read_tile_face_bytes * 2,
+                {.page_id = tile_id},
+                {.offset_bytes = w * beta_tile_bytes});
+            noc.async_read_barrier();
+            noc.async_read(
+                local_ep,
+                cb_beta_obj,
+                mask_read_tile_face_bytes,
+                {.noc_x = my_x[noc.get_noc_id()],
+                 .noc_y = my_y[noc.get_noc_id()],
+                 .addr = cb_beta_obj.get_write_ptr() + w * beta_tile_bytes + mask_read_tile_face_bytes},
+                {.offset_bytes = w * beta_tile_bytes + mask_read_tile_offset_bytes});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_beta, block_w);
+        noc.async_read_barrier();
+        cb_beta_obj.push_back(block_w);
     }
 
 #ifndef SKIP_WRITE_BACK
     write_resharded_data(
-        cb_out,
-        cb_out_resharded,
+        noc,
+        cb_out_obj,
+        cb_out_resharded_obj,
         num_segments_to_write_back,
         storage_core_start_offset,
         segment_args,

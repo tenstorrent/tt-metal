@@ -43,6 +43,12 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
+    experimental::CircularBuffer cb_beta_obj(cb_beta);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     if constexpr (!use_welford) {
@@ -65,36 +71,35 @@ void kernel_main() {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
         const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
 
-        uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
-        cb_reserve_back(cb_gamma, block_w);
+        cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            noc_async_read_tile(tile_id, gamma, l1_write_addr_gamma);
-            l1_write_addr_gamma += gamma_tile_bytes;
+            noc.async_read(
+                gamma, cb_gamma_obj, gamma_tile_bytes, {.page_id = tile_id}, {.offset_bytes = w * gamma_tile_bytes});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma, block_w);
+        noc.async_read_barrier();
+        cb_gamma_obj.push_back(block_w);
     }
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
         const auto beta = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
 
-        uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
-        cb_reserve_back(cb_beta, block_w);
+        cb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
-            noc_async_read_tile(tile_id, beta, l1_write_addr_beta);
-            l1_write_addr_beta += beta_tile_bytes;
+            noc.async_read(
+                beta, cb_beta_obj, beta_tile_bytes, {.page_id = tile_id}, {.offset_bytes = w * beta_tile_bytes});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_beta, block_w);
+        noc.async_read_barrier();
+        cb_beta_obj.push_back(block_w);
     }
 
 #ifndef SKIP_WRITE_BACK
     write_resharded_data(
-        cb_out,
-        cb_out_resharded,
+        noc,
+        cb_out_obj,
+        cb_out_resharded_obj,
         num_segments_to_write_back,
         storage_core_start_offset,
         segment_args,
