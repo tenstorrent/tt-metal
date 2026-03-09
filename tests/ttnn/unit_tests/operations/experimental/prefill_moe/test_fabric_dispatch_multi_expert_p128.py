@@ -209,7 +209,7 @@ def _run_test(
     logger.info("Created weights (2 experts per device, sharded)")
 
     pkt_buf = ttnn.from_torch(
-        torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
+        torch.zeros(1, 1, NUM_EXPERTS_PER_DEVICE * P, D, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,

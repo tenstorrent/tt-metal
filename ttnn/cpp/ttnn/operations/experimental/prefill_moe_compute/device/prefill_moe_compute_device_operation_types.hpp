@@ -37,16 +37,26 @@ struct operation_attributes_t {
     // Index = device index. Value = target device column in mesh.
     // When empty, defaults to immediate neighbor (forward preferred for 1x2).
     std::vector<uint32_t> dispatch_target_cols;
+    // Per-device per-expert dispatch token sources for per-expert pkt_buf assembly.
+    // When present, overrides the default "all experts share same pkt_buf" behavior.
+    // Outer vector: per device. Inner vector: flat array of
+    //   [num_experts, M_0, source_0_0...source_0_{M0-1}, M_1, source_1_0..., ...]
+    // Each source encodes: bit 31 = is_recv (0=local hs_rm, 1=staging_buf),
+    //                       bits 0-30 = row index in that source buffer.
+    std::optional<std::vector<std::vector<uint32_t>>> per_expert_dispatch_sources;
+    // When true, use FPU combine on compute cores instead of scalar combine on
+    // a dedicated core. ~370x faster at E=4. Requires CB3/4/5 on compute cores.
+    bool enable_fpu_combine = false;
 };
 
 struct tensor_args_t {
     const Tensor& hidden_states;                 // [1,1,P,D] BF16 input activation
-    const Tensor& pkt_buf;                       // [1,1,P,D] BF16 scratch for dispatch
-    const Tensor& inter_buf;                     // [1,1,P,D] BF16 scratch for intermediate
-    const Tensor& output;                        // [1,1,P,D] BF16 pre-allocated output (zero-filled)
+    const Tensor& pkt_buf;                       // [1,1,E*M,D] BF16 scratch for dispatch
+    const Tensor& inter_buf;                     // [1,1,M,D] BF16 scratch for intermediate
+    const Tensor& output;                        // [1,1,P_out,D] BF16 pre-allocated output (zero-filled)
     const std::vector<Tensor>& gate_up_weights;  // Per-expert [1,1,D,D_FF] BFP4_b
     const std::vector<Tensor>& down_weights;     // Per-expert [1,1,D_FF/2,D] BFP4_b
-    const std::vector<Tensor>& out_bufs;         // Per-expert [1,1,P,D] BF16 scratch
+    const std::vector<Tensor>& out_bufs;         // Per-expert [1,1,P_out,D] BF16 scratch
     std::optional<Tensor> reduce_recv_buf;       // [1,1,P,D] BF16 receive buffer for fabric reduce
     std::optional<Tensor> hidden_states_rm;      // [1,1,P,D] BF16 ROW_MAJOR for fabric dispatch
     std::optional<Tensor> staging_buf;           // [1,1,P,D] BF16 ROW_MAJOR fabric receive staging

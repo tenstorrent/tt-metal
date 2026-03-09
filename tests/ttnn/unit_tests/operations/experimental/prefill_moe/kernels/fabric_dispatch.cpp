@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Fabric dispatch kernel for prefill MoE.
+// Fabric dispatch kernel for prefill MoE (v2 — per-expert pkt_buf assembly).
 //
-// Receives routing metadata from host, sends remote-bound tokens via TT-Fabric,
-// receives tokens from the other device, and assembles a TILE_LAYOUT pkt_buf
-// from ROW_MAJOR hidden_states sources.
+// Receives routing metadata from host, exchanges tokens via TT-Fabric between
+// devices, then assembles per-expert pkt_buf regions in TILE_LAYOUT from the
+// ROW_MAJOR token pool (local hs_rm + received staging_buf).
 //
 // Uses per-direction WorkerToFabricEdmSender connections (EAST/WEST) with
 // explicit send_direction and num_hops parameters to support multi-hop routing
@@ -17,14 +17,17 @@
 //   1. Open fabric connections for valid directions (EAST/WEST)
 //   2. Send remote-bound tokens from local hs_rm -> remote staging_buf via fabric
 //   3. Signal remote device (atomic_inc on SEM_FABRIC_RECV)
-//   4. Wait for remote device's signal (SEM_FABRIC_RECV)
-//   5. Assemble pkt_buf in TILE_LAYOUT from local + received tokens (one tile row at a time)
-//   6. Write assembled tiles to pkt_buf DRAM (2D page indexing)
-//   7. Signal SEM_PKT_READY on compute leader
-//   8. Close fabric connections
+//   4. Wait for remote device's signal (SEM_FABRIC_RECV) if recv_count > 0
+//   5. Per-expert assembly: For each expert e:
+//        a. Zero-fill tile buffer
+//        b. For each token in expert e's list: read from hs_rm or staging_buf,
+//           scatter into tile buffer
+//        c. Write assembled tiles to pkt_buf region for expert e
+//   6. Signal SEM_PKT_READY on compute leader (once after all experts)
+//   7. Close fabric connections
 //
 // Semaphores:
-//   SEM_PKT_READY (id=2): Incremented on compute leader after pkt_buf is written.
+//   SEM_PKT_READY (id=2): Incremented on compute leader after all pkt_bufs written.
 //   SEM_FABRIC_RECV (id=4): Remote dispatch signals when sends are complete.
 //
 // Compile-time defines:
@@ -35,25 +38,33 @@
 //   [0..A] TensorAccessorArgs for pkt_buf (TILE_LAYOUT, page=2048B)
 //   [A..B] TensorAccessorArgs for hs_rm/staging_buf (ROW_MAJOR, page=D_bytes)
 //
-// RT args:
+// RT args (fixed — set by factory):
 //   [0]  hs_rm_addr          - hidden_states ROW_MAJOR DRAM address
 //   [1]  staging_buf_addr    - local staging buffer ROW_MAJOR DRAM address
 //   [2]  remote_staging_addr - remote staging buffer ROW_MAJOR DRAM address
-//   [3]  pkt_buf_addr        - pkt_buf TILE_LAYOUT DRAM address
+//   [3]  pkt_buf_addr        - pkt_buf TILE_LAYOUT DRAM address (E * M_padded * D region)
 //   [4]  leader_phys_x
 //   [5]  leader_phys_y
 //   [6]  my_phys_x           - this dispatch core's physical X (for remote sem addr)
 //   [7]  my_phys_y           - this dispatch core's physical Y
 //   [8]  D_bytes             - D * 2 (bytes per token row)
 //   [9]  D_tiles             - D / 32 (tiles per row)
-//   [10] P_tiles             - P / 32 (tile rows in pkt_buf)
-//   [11] local_count         - tokens from local HS for local expert
-//   [12] recv_count          - tokens expected from remote device
-//   [13] send_count          - tokens to send to remote device
-//   [14..14+local_count+send_count-1] - local_token_indices[] + send_token_indices[]
-//   [...]  send_direction    - 0=EAST, 1=WEST
-//   [...]  num_hops          - number of fabric hops to target device
-//   [...]  fabric connection RT args (per valid direction)
+//   [10] M_padded_tiles      - per-expert tile rows (max_M_padded / 32)
+//
+// RT args (dispatch_metadata — from Python, inserted by factory at [11..]):
+//   [11] recv_count          - tokens expected from remote device
+//   [12] send_count          - tokens to send to remote device
+//   [13..13+send_count-1]    - send_token_indices (hs_rm rows to send via fabric)
+//   [13+send_count]          - num_experts
+//   For each expert e:
+//     [..] M_e               - actual token count for this expert
+//     [..] token_sources[0..M_e-1] - bit 31: 0=local hs_rm, 1=staging_buf;
+//                                    bits 0-30: row index in that source
+//
+// RT args (fabric — appended by factory after dispatch_metadata):
+//   [..] send_direction      - 0=EAST, 1=WEST
+//   [..] num_hops            - number of fabric hops to target device
+//   [..] fabric connection RT args (per valid direction)
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -112,7 +123,7 @@ void kernel_main() {
     constexpr auto pkt_ct_args = TensorAccessorArgs<0>();  // pkt_buf (TILE_LAYOUT)
     constexpr auto rm_ct_args = TensorAccessorArgs<1>();   // hs_rm / staging_buf (ROW_MAJOR)
 
-    // ---- RT args ----
+    // ---- RT args (fixed) ----
     uint32_t rt_idx = 0;
     const uint32_t hs_rm_addr = get_arg_val<uint32_t>(rt_idx++);           // [0]
     const uint32_t staging_buf_addr = get_arg_val<uint32_t>(rt_idx++);     // [1]
@@ -124,17 +135,30 @@ void kernel_main() {
     const uint32_t my_phys_y = get_arg_val<uint32_t>(rt_idx++);            // [7]
     const uint32_t D_bytes = get_arg_val<uint32_t>(rt_idx++);              // [8]
     const uint32_t D_tiles = get_arg_val<uint32_t>(rt_idx++);              // [9]
-    const uint32_t P_tiles = get_arg_val<uint32_t>(rt_idx++);              // [10]
-    const uint32_t local_count = get_arg_val<uint32_t>(rt_idx++);          // [11]
-    const uint32_t recv_count = get_arg_val<uint32_t>(rt_idx++);           // [12]
-    const uint32_t send_count = get_arg_val<uint32_t>(rt_idx++);           // [13]
-    const uint32_t indices_base = rt_idx;                                  // [14]
+    const uint32_t M_padded_tiles = get_arg_val<uint32_t>(rt_idx++);       // [10]
 
-    // Skip past indices to reach send_direction, num_hops, and fabric connection args
-    size_t post_indices = indices_base + local_count + send_count;
-    const uint32_t send_direction = get_arg_val<uint32_t>(post_indices);  // 0=EAST, 1=WEST
-    const uint32_t num_hops = get_arg_val<uint32_t>(post_indices + 1);
-    size_t fab_arg_idx = post_indices + 2;  // fabric connection args start here
+    // ---- dispatch_metadata (from Python, variable length) ----
+    const uint32_t recv_count = get_arg_val<uint32_t>(rt_idx++);  // [11]
+    const uint32_t send_count = get_arg_val<uint32_t>(rt_idx++);  // [12]
+    const uint32_t send_indices_base = rt_idx;                    // [13]
+    rt_idx += send_count;                                         // skip past send_indices
+
+    const uint32_t num_experts = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t expert_meta_base = rt_idx;
+
+    // Skip past all per-expert metadata to find send_direction/num_hops/fabric args
+    {
+        uint32_t skip_cursor = expert_meta_base;
+        for (uint32_t e = 0; e < num_experts; ++e) {
+            uint32_t M_e = get_arg_val<uint32_t>(skip_cursor);
+            skip_cursor += 1 + M_e;  // skip M_e + token_sources
+        }
+        rt_idx = skip_cursor;
+    }
+
+    const uint32_t send_direction = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t num_hops = get_arg_val<uint32_t>(rt_idx++);
+    size_t fab_arg_idx = rt_idx;  // fabric connection args start here
 
     // ---- CB setup ----
     constexpr uint32_t cb_temp = 3;   // Temp buffer for one token row
@@ -159,18 +183,11 @@ void kernel_main() {
     cb_reserve_back(cb_tiles, 1);
     const uint32_t tile_buf_l1 = get_write_ptr(cb_tiles);
 
-    const uint32_t total_tokens = local_count + recv_count;
-
     // Remote semaphore NOC address: SEM_FABRIC_RECV on remote device's dispatch core.
-    // Both devices have the same physical core mapping, so the semaphore L1 address
-    // is the same. We use our own physical coords for the NOC address.
     uint64_t remote_sem_noc_addr = safe_get_noc_addr(
         static_cast<uint8_t>(my_phys_x), static_cast<uint8_t>(my_phys_y), get_semaphore(SEM_FABRIC_RECV), 0);
 
     // ---- Phase 1: Open fabric connections ----
-    // Build per-direction WorkerToFabricEdmSender connections (same pattern as all_to_all_dispatch_metadata).
-    // Each valid direction opens a connection to the immediate neighbor's EDM.
-    // Multi-hop routing is handled by the fabric routers via the num_hops parameter.
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, NUM_DIRS> fabric_connections;
     size_t conn_idx = fab_arg_idx;
     for (uint32_t i = 0; i < NUM_DIRS; i++) {
@@ -192,11 +209,10 @@ void kernel_main() {
     auto pkt_hdr_sem = PacketHeaderPool::allocate_header();
 
     // ---- Phase 2: Send remote-bound tokens via fabric ----
-    // Split large writes into chunks to avoid partial delivery when payload > 4096 bytes.
     constexpr uint32_t MAX_FABRIC_CHUNK = 4096;
 
     for (uint32_t i = 0; i < send_count; ++i) {
-        uint32_t t = get_arg_val<uint32_t>(indices_base + local_count + i);
+        uint32_t t = get_arg_val<uint32_t>(send_indices_base + i);
 
         // Read token row t from hs_rm DRAM -> L1 temp
         noc_async_read_page(t, hs_rm_accessor, temp_l1);
@@ -227,70 +243,77 @@ void kernel_main() {
     }
 
     // Signal remote device: all sends complete
-    fabric_unicast_noc_unicast_atomic_inc(
-        sender,
-        pkt_hdr_sem,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 1, true},
-        static_cast<uint8_t>(num_hops));
-    noc_async_write_barrier();
-
-    // ---- Phase 3: Wait for remote device's sends ----
-    volatile tt_l1_ptr uint32_t* recv_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_FABRIC_RECV));
-    noc_semaphore_wait(recv_sem, 1);
-    noc_semaphore_set(recv_sem, 0);
-
-    // ---- Phase 4+5: Assemble and write pkt_buf, one tile row at a time ----
-    for (uint32_t tr = 0; tr < P_tiles; ++tr) {
-        // Zero-fill tile buffer (D_tiles * 2048 bytes)
-        {
-            volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(tile_buf_l1);
-            uint32_t num_words = D_tiles * tile_page_bytes / 4;
-            for (uint32_t i = 0; i < num_words; ++i) {
-                p[i] = 0;
-            }
-        }
-
-        uint32_t row_lo = tr * 32;
-        uint32_t row_hi = row_lo + 32;
-
-        // Local tokens: destination rows 0..local_count-1
-        uint32_t loc_start = (row_lo < local_count) ? row_lo : local_count;
-        uint32_t loc_end = (row_hi < local_count) ? row_hi : local_count;
-        for (uint32_t i = loc_start; i < loc_end; ++i) {
-            uint32_t t = get_arg_val<uint32_t>(indices_base + i);
-            noc_async_read_page(t, hs_rm_accessor, temp_l1);
-            noc_async_read_barrier();
-            scatter_row_to_tiles(temp_l1, tile_buf_l1, i - row_lo, D_tiles);
-        }
-
-        // Received tokens: destination rows local_count..total_tokens-1
-        uint32_t recv_abs_lo = local_count;
-        uint32_t recv_row_start = (row_lo > recv_abs_lo) ? row_lo : recv_abs_lo;
-        uint32_t recv_row_end = (row_hi < total_tokens) ? row_hi : total_tokens;
-        if (recv_row_start < recv_row_end) {
-            uint32_t i_start = recv_row_start - recv_abs_lo;
-            uint32_t i_end = recv_row_end - recv_abs_lo;
-            for (uint32_t i = i_start; i < i_end; ++i) {
-                noc_async_read_page(i, staging_accessor, temp_l1);
-                noc_async_read_barrier();
-                scatter_row_to_tiles(temp_l1, tile_buf_l1, (recv_abs_lo + i) - row_lo, D_tiles);
-            }
-        }
-
-        // Write this tile row to pkt_buf DRAM (2D page indexing)
-        for (uint32_t c = 0; c < D_tiles; ++c) {
-            uint32_t page_idx = tr * D_tiles + c;
-            noc_async_write_page(page_idx, pkt_accessor, tile_buf_l1 + c * tile_page_bytes);
-        }
+    if (send_count > 0) {
+        fabric_unicast_noc_unicast_atomic_inc(
+            sender,
+            pkt_hdr_sem,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 1, true},
+            static_cast<uint8_t>(num_hops));
         noc_async_write_barrier();
     }
 
-    // ---- Phase 6: Signal compute leader ----
+    // ---- Phase 3: Wait for remote device's sends (if expecting any) ----
+    if (recv_count > 0) {
+        volatile tt_l1_ptr uint32_t* recv_sem =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_FABRIC_RECV));
+        noc_semaphore_wait(recv_sem, 1);
+        noc_semaphore_set(recv_sem, 0);
+    }
+
+    // ---- Phase 4: Per-expert pkt_buf assembly ----
+    uint32_t expert_cursor = expert_meta_base;
+    for (uint32_t e = 0; e < num_experts; ++e) {
+        uint32_t M_e = get_arg_val<uint32_t>(expert_cursor);
+        uint32_t src_base = expert_cursor + 1;  // token_sources start here
+
+        uint32_t expert_page_offset = e * M_padded_tiles * D_tiles;
+
+        for (uint32_t tr = 0; tr < M_padded_tiles; ++tr) {
+            // Zero-fill tile buffer (D_tiles * 2048 bytes)
+            {
+                volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(tile_buf_l1);
+                uint32_t num_words = D_tiles * tile_page_bytes / 4;
+                for (uint32_t z = 0; z < num_words; ++z) {
+                    p[z] = 0;
+                }
+            }
+
+            uint32_t row_lo = tr * 32;
+            uint32_t row_hi = row_lo + 32;
+            if (row_hi > M_e) {
+                row_hi = M_e;
+            }
+
+            for (uint32_t i = row_lo; i < row_hi; ++i) {
+                uint32_t src = get_arg_val<uint32_t>(src_base + i);
+                uint32_t is_recv = (src >> 31) & 1;
+                uint32_t src_idx = src & 0x7FFFFFFF;
+
+                if (is_recv) {
+                    noc_async_read_page(src_idx, staging_accessor, temp_l1);
+                } else {
+                    noc_async_read_page(src_idx, hs_rm_accessor, temp_l1);
+                }
+                noc_async_read_barrier();
+                scatter_row_to_tiles(temp_l1, tile_buf_l1, i - row_lo, D_tiles);
+            }
+
+            // Write this tile row to pkt_buf DRAM (2D page indexing with expert offset)
+            for (uint32_t c = 0; c < D_tiles; ++c) {
+                uint32_t page_idx = expert_page_offset + tr * D_tiles + c;
+                noc_async_write_page(page_idx, pkt_accessor, tile_buf_l1 + c * tile_page_bytes);
+            }
+            noc_async_write_barrier();
+        }
+
+        expert_cursor += 1 + M_e;  // advance past M_e + token_sources
+    }
+
+    // ---- Phase 5: Signal compute leader ----
     uint64_t leader_sem_addr = get_noc_addr(leader_phys_x, leader_phys_y, get_semaphore(SEM_PKT_READY));
     noc_semaphore_inc(leader_sem_addr, 1);
 
-    // ---- Phase 7: Close fabric connections ----
+    // ---- Phase 6: Close fabric connections ----
     for (uint32_t i = 0; i < NUM_DIRS; i++) {
         if (directions[i]) {
             fabric_connections[i].close();

@@ -62,7 +62,9 @@ PrefillMoeComputeDeviceOperation::invoke(
     const std::optional<Tensor>& staging_buf,
     bool enable_fabric_dispatch,
     const std::vector<std::vector<uint32_t>>& dispatch_metadata,
-    const std::vector<uint32_t>& dispatch_target_cols) {
+    const std::vector<uint32_t>& dispatch_target_cols,
+    const std::optional<std::vector<std::vector<uint32_t>>>& per_expert_dispatch_sources,
+    bool enable_fpu_combine) {
     return {
         operation_attributes_t{
             num_experts,
@@ -73,7 +75,9 @@ PrefillMoeComputeDeviceOperation::invoke(
             enable_fabric_reduce,
             enable_fabric_dispatch,
             dispatch_metadata,
-            dispatch_target_cols},
+            dispatch_target_cols,
+            per_expert_dispatch_sources,
+            enable_fpu_combine},
         tensor_args_t{
             hidden_states,
             pkt_buf,

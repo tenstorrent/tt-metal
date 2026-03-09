@@ -80,6 +80,7 @@ PrefillMoeComputeMeshFactory::create_at(
     const uint32_t grid_y = attributes.grid_y;
     const bool enable_fabric_reduce = attributes.enable_fabric_reduce;
     const bool enable_fabric_dispatch = attributes.enable_fabric_dispatch;
+    const bool enable_fpu_combine = attributes.enable_fpu_combine;
     const bool need_mesh =
         (attributes.per_device_combine_metadata.size() > 1 || enable_fabric_reduce || enable_fabric_dispatch);
 
@@ -104,7 +105,12 @@ PrefillMoeComputeMeshFactory::create_at(
     const uint32_t D_tiles = D / TILE_HW;
 
     const auto& pkt_shape = tensor_args.pkt_buf.logical_shape();
-    const uint32_t M_tiles = pkt_shape[2] / TILE_HW;  // P/32 tile rows
+    const uint32_t M_tiles_total = pkt_shape[2] / TILE_HW;  // total tile rows in pkt_buf
+    const uint32_t M_tiles = M_tiles_total / num_experts;   // per-expert tile rows
+
+    // Output P_tiles (for combine kernel) — derived from output tensor, not pkt_buf
+    const auto& output_shape = tensor_args.output.logical_shape();
+    const uint32_t output_M_tiles = output_shape[2] / TILE_HW;
 
     const auto& gu_shape = tensor_args.gate_up_weights[0].logical_shape();
     const uint32_t D_FF_padded = gu_shape[3];
@@ -169,6 +175,9 @@ PrefillMoeComputeMeshFactory::create_at(
     std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(tensor_args.pkt_buf.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(tensor_args.inter_buf.buffer()).append_to(reader_ct_args);
+    if (enable_fpu_combine) {
+        TensorAccessorArgs(tensor_args.output.buffer()).append_to(reader_ct_args);  // [2] for combine reads
+    }
 
     std::vector<uint32_t> writer_ct_args;
     TensorAccessorArgs(tensor_args.gate_up_weights[0].buffer()).append_to(writer_ct_args);
@@ -177,7 +186,16 @@ PrefillMoeComputeMeshFactory::create_at(
     TensorAccessorArgs(tensor_args.out_bufs[0].buffer()).append_to(writer_ct_args);
 
     std::vector<uint32_t> compute_ct_args = {
-        k_tiles_gu, n_weight_per_core_gu, n_per_core_dn, num_experts, N_BLOCK_GU, N_BLOCK_DN, k_tiles_dn, M_tiles};
+        k_tiles_gu,
+        n_weight_per_core_gu,
+        n_per_core_dn,
+        num_experts,
+        N_BLOCK_GU,
+        N_BLOCK_DN,
+        k_tiles_dn,
+        M_tiles,
+        output_M_tiles,
+        enable_fpu_combine ? 1u : 0u};
 
     // Dispatch CT args: depends on fabric dispatch mode
     std::vector<uint32_t> dispatch_ct_args;
@@ -192,9 +210,32 @@ PrefillMoeComputeMeshFactory::create_at(
     }
 
     // Combine CT args: TensorAccessorArgs at [0-3], enable_fabric_reduce at [4]
+    // When FPU combine is active, the combine kernel is a no-op — disable its fabric_reduce too.
     std::vector<uint32_t> combine_ct_args;
     TensorAccessorArgs(tensor_args.output.buffer()).append_to(combine_ct_args);
-    combine_ct_args.push_back(enable_fabric_reduce ? 1 : 0);  // index 4: enable_fabric_reduce
+    combine_ct_args.push_back((enable_fabric_reduce && !enable_fpu_combine) ? 1 : 0);
+
+    // ----- Compute per-expert out_buf_tile_row_offsets from combine_metadata -----
+    // combine_metadata format: [addr_0, M_0, rw_0...rw_{M0-1}, addr_1, M_1, ...]
+    // Each rw packs (row_index, weight_bf16) as: low 16 bits = row, high 16 bits = weight
+    std::vector<uint32_t> out_buf_tile_row_offsets(num_experts, 0);
+    {
+        size_t cm_idx = 0;
+        for (uint32_t e = 0; e < num_experts; ++e) {
+            // cm_idx+0 = out_buf_addr, cm_idx+1 = M_e
+            uint32_t m_e = combine_metadata[cm_idx + 1];
+            uint32_t min_row = 0xFFFF;
+            for (uint32_t i = 0; i < m_e; ++i) {
+                uint32_t rw = combine_metadata[cm_idx + 2 + i];
+                uint32_t row = rw & 0xFFFF;
+                if (row < min_row) {
+                    min_row = row;
+                }
+            }
+            out_buf_tile_row_offsets[e] = (m_e > 0) ? (min_row / TILE_HW) : 0;
+            cm_idx += 2 + m_e;
+        }
+    }
 
     // ----- Build runtime args -----
 
@@ -220,6 +261,17 @@ PrefillMoeComputeMeshFactory::create_at(
             for (const auto& [px, py] : phys_coords) {
                 args.push_back(px);
                 args.push_back(py);
+            }
+            // FPU combine args (appended after physical coords)
+            if (enable_fpu_combine) {
+                args.push_back(static_cast<uint32_t>(tensor_args.output.buffer()->address()));
+                args.push_back(n_tiles_dn);
+                args.push_back(core_idx * n_per_core_dn);  // core_d_offset
+                args.push_back(n_per_core_dn);
+                args.push_back(output_M_tiles);
+                for (uint32_t e = 0; e < num_experts; ++e) {
+                    args.push_back(static_cast<uint32_t>(tensor_args.out_bufs[e].buffer()->address()));
+                }
             }
             reader_rt_args.push_back({CoreCoord(x, y), std::move(args)});
         }
@@ -252,6 +304,12 @@ PrefillMoeComputeMeshFactory::create_at(
                 args.push_back(static_cast<uint32_t>(tensor_args.gate_up_weights[e].buffer()->address()));
                 args.push_back(static_cast<uint32_t>(tensor_args.down_weights[e].buffer()->address()));
                 args.push_back(static_cast<uint32_t>(tensor_args.out_bufs[e].buffer()->address()));
+                args.push_back(out_buf_tile_row_offsets[e]);
+            }
+            // FPU combine write-back args
+            if (enable_fpu_combine) {
+                args.push_back(static_cast<uint32_t>(tensor_args.output.buffer()->address()));
+                args.push_back(output_M_tiles);
             }
             writer_rt_args.push_back({CoreCoord(x, y), std::move(args)});
         }
@@ -266,20 +324,23 @@ PrefillMoeComputeMeshFactory::create_at(
              {
                  static_cast<uint32_t>(tensor_args.hidden_states.buffer()->address()),
                  static_cast<uint32_t>(tensor_args.pkt_buf.buffer()->address()),
-                 D_tiles,
+                 M_tiles_total * D_tiles,  // total tiles to copy (all expert regions)
                  leader_phys_x,
                  leader_phys_y,
              }});
     }
 
     // Combine RT args (single core) — uses per-device metadata
+    // When FPU combine is enabled, the combine kernel is a no-op (num_experts=0).
     std::vector<uint32_t> combine_args = {
         static_cast<uint32_t>(tensor_args.output.buffer()->address()),
         n_tiles_dn,
-        M_tiles,
-        num_experts,
+        output_M_tiles,
+        enable_fpu_combine ? 0u : num_experts,
     };
-    combine_args.insert(combine_args.end(), combine_metadata.begin(), combine_metadata.end());
+    if (!enable_fpu_combine) {
+        combine_args.insert(combine_args.end(), combine_metadata.begin(), combine_metadata.end());
+    }
     // When fabric reduce is enabled, append reduce_core NOC address for SEM_COMBINE_DONE signaling
     if (enable_fabric_reduce) {
         auto reduce_phys = device->worker_core_from_logical_core(reduce_core_logical);
@@ -347,19 +408,45 @@ PrefillMoeComputeMeshFactory::create_at(
         cb3.format_descriptors.push_back({3, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
     }
 
-    // CB4: Combine output tile (BF16, 1 tile) on combine core
-    CBDescriptor cb4;
-    cb4.total_size = BF16_TILE_BYTES;
-    cb4.core_ranges = combine_cores;
-    cb4.format_descriptors.push_back({4, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
+    ProgramDescriptor::CBDescriptors cbs = {cb0, cb1, cb2, cb3};
 
-    // CB5: Combine expert tile (BF16, 1 tile) on combine core
-    CBDescriptor cb5;
-    cb5.total_size = BF16_TILE_BYTES;
-    cb5.core_ranges = combine_cores;
-    cb5.format_descriptors.push_back({5, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
+    if (enable_fpu_combine) {
+        // CB3/4/5 on compute cores for FPU combine
+        CBDescriptor cb3_combine;
+        cb3_combine.total_size = BF16_TILE_BYTES;
+        cb3_combine.core_ranges = compute_cores;
+        cb3_combine.format_descriptors.push_back({3, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
 
-    ProgramDescriptor::CBDescriptors cbs = {cb0, cb1, cb2, cb3, cb4, cb5};
+        CBDescriptor cb4_combine;
+        cb4_combine.total_size = BF16_TILE_BYTES;
+        cb4_combine.core_ranges = compute_cores;
+        cb4_combine.format_descriptors.push_back({4, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
+
+        CBDescriptor cb5_combine;
+        cb5_combine.total_size = BF16_TILE_BYTES;
+        cb5_combine.core_ranges = compute_cores;
+        cb5_combine.format_descriptors.push_back({5, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
+
+        cbs.push_back(cb3_combine);
+        cbs.push_back(cb4_combine);
+        cbs.push_back(cb5_combine);
+    }
+
+    // CB4/5 on combine core (always needed — combine kernel accesses them before checking num_experts)
+    {
+        CBDescriptor cb4;
+        cb4.total_size = BF16_TILE_BYTES;
+        cb4.core_ranges = combine_cores;
+        cb4.format_descriptors.push_back({4, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
+
+        CBDescriptor cb5;
+        cb5.total_size = BF16_TILE_BYTES;
+        cb5.core_ranges = combine_cores;
+        cb5.format_descriptors.push_back({5, tt::DataFormat::Float16_b, BF16_TILE_BYTES});
+
+        cbs.push_back(cb4);
+        cbs.push_back(cb5);
+    }
 
     // Add fabric dispatch tile assembly CB on dispatch core
     if (enable_fabric_dispatch) {
@@ -417,6 +504,9 @@ PrefillMoeComputeMeshFactory::create_at(
     reader_kd.compile_time_args = reader_ct_args;
     reader_kd.runtime_args = std::move(reader_rt_args);
     reader_kd.config = ReaderConfigDescriptor{};
+    if (enable_fpu_combine) {
+        reader_kd.defines.emplace_back("ENABLE_FPU_COMBINE", "1");
+    }
 
     KernelDescriptor writer_kd;
     writer_kd.kernel_source = WRITER_KERNEL;
@@ -425,6 +515,9 @@ PrefillMoeComputeMeshFactory::create_at(
     writer_kd.compile_time_args = writer_ct_args;
     writer_kd.runtime_args = std::move(writer_rt_args);
     writer_kd.config = WriterConfigDescriptor{};
+    if (enable_fpu_combine) {
+        writer_kd.defines.emplace_back("ENABLE_FPU_COMBINE", "1");
+    }
 
     KernelDescriptor compute_kd;
     compute_kd.kernel_source = COMPUTE_KERNEL;
@@ -517,9 +610,51 @@ PrefillMoeComputeMeshFactory::create_at(
         dispatch_args.push_back(dispatch_phys.y);  // [7] my_phys_y
         dispatch_args.push_back(D_bytes);          // [8]
         dispatch_args.push_back(D_tiles);          // [9]
-        dispatch_args.push_back(M_tiles);          // [10] P_tiles
-        // Append per-device dispatch_metadata: [local_count, recv_count, send_count, indices...]
-        dispatch_args.insert(dispatch_args.end(), dev_dispatch_meta.begin(), dev_dispatch_meta.end());
+        dispatch_args.push_back(M_tiles);          // [10] M_padded_tiles (per-expert tile rows)
+
+        // Transform old-format dispatch_metadata to new kernel format.
+        // Old Python format: [local_count, recv_count, send_count, local_indices..., send_indices...]
+        // New kernel format: [recv_count, send_count, send_indices..., num_experts, M_0, sources_0..., ...]
+        {
+            size_t dm_idx = 0;
+            uint32_t local_count = dev_dispatch_meta[dm_idx++];
+            uint32_t recv_count = dev_dispatch_meta[dm_idx++];
+            uint32_t send_count = dev_dispatch_meta[dm_idx++];
+
+            // Extract local_indices and send_indices from old format
+            std::vector<uint32_t> local_indices(
+                dev_dispatch_meta.begin() + dm_idx, dev_dispatch_meta.begin() + dm_idx + local_count);
+            dm_idx += local_count;
+            std::vector<uint32_t> send_indices(
+                dev_dispatch_meta.begin() + dm_idx, dev_dispatch_meta.begin() + dm_idx + send_count);
+
+            // Append recv_count, send_count, send_indices
+            dispatch_args.push_back(recv_count);
+            dispatch_args.push_back(send_count);
+            dispatch_args.insert(dispatch_args.end(), send_indices.begin(), send_indices.end());
+
+            // Per-expert pkt_buf assembly metadata
+            if (attributes.per_expert_dispatch_sources.has_value()) {
+                // Per-expert sources provided directly by Python
+                const auto& expert_sources = (*attributes.per_expert_dispatch_sources)[device_index];
+                dispatch_args.insert(dispatch_args.end(), expert_sources.begin(), expert_sources.end());
+            } else {
+                // Default: all experts share the same pkt_buf content (replicated)
+                uint32_t M_padded = local_count + recv_count;
+                dispatch_args.push_back(num_experts);
+                for (uint32_t e = 0; e < num_experts; ++e) {
+                    dispatch_args.push_back(M_padded);
+                    // Local token sources: bit 31 = 0 (local hs_rm)
+                    for (uint32_t i = 0; i < local_count; ++i) {
+                        dispatch_args.push_back(local_indices[i]);
+                    }
+                    // Received token sources: bit 31 = 1 (staging_buf)
+                    for (uint32_t i = 0; i < recv_count; ++i) {
+                        dispatch_args.push_back((1u << 31) | i);
+                    }
+                }
+            }
+        }
 
         // Direction-based fabric connection setup (EAST/WEST for 1xN mesh)
         auto mesh_shape = mesh_dev->shape();
@@ -708,8 +843,8 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
     const uint32_t D_padded = dn_shape[3];
     const uint32_t n_tiles_dn = D_padded / TILE_HW;
 
-    const auto& pkt_shape = tensor_args.pkt_buf.logical_shape();
-    const uint32_t M_tiles = pkt_shape[2] / TILE_HW;
+    const auto& output_shape = tensor_args.output.logical_shape();
+    const uint32_t output_M_tiles = output_shape[2] / TILE_HW;
 
     uint32_t device_index = 0;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
@@ -729,6 +864,14 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
                 auto& reader_args = GetRuntimeArgs(program, shared.reader_kernel_id, CoreCoord(x, y));
                 reader_args[0] = tensor_args.pkt_buf.buffer()->address();
                 reader_args[2] = tensor_args.inter_buf.buffer()->address();
+                // Update FPU combine args if enabled
+                if (attributes.enable_fpu_combine) {
+                    uint32_t combine_base = 10 + 2 * shared.num_cores;
+                    reader_args[combine_base + 0] = tensor_args.output.buffer()->address();
+                    for (uint32_t e = 0; e < num_experts; ++e) {
+                        reader_args[combine_base + 5 + e] = tensor_args.out_bufs[e].buffer()->address();
+                    }
+                }
             }
         }
 
@@ -737,11 +880,17 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
             for (uint32_t x = 0; x < shared.grid_x; ++x) {
                 auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_id, CoreCoord(x, y));
                 writer_args[0] = tensor_args.inter_buf.buffer()->address();
-                // Per-expert addresses start at index 14
+                // Per-expert addresses start at index 15 (4 args per expert)
                 for (uint32_t e = 0; e < num_experts; ++e) {
-                    writer_args[15 + e * 3 + 0] = tensor_args.gate_up_weights[e].buffer()->address();
-                    writer_args[15 + e * 3 + 1] = tensor_args.down_weights[e].buffer()->address();
-                    writer_args[15 + e * 3 + 2] = tensor_args.out_bufs[e].buffer()->address();
+                    writer_args[15 + e * 4 + 0] = tensor_args.gate_up_weights[e].buffer()->address();
+                    writer_args[15 + e * 4 + 1] = tensor_args.down_weights[e].buffer()->address();
+                    writer_args[15 + e * 4 + 2] = tensor_args.out_bufs[e].buffer()->address();
+                    // writer_args[15 + e * 4 + 3] = out_buf_tile_row_offset (unchanged)
+                }
+                // Update FPU combine write-back args if enabled
+                if (attributes.enable_fpu_combine) {
+                    uint32_t combine_base = 15 + num_experts * 4;
+                    writer_args[combine_base + 0] = tensor_args.output.buffer()->address();
                 }
             }
         }
@@ -762,7 +911,7 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
         std::vector<uint32_t> combine_args = {
             static_cast<uint32_t>(tensor_args.output.buffer()->address()),
             n_tiles_dn,
-            M_tiles,
+            output_M_tiles,
             num_experts,
         };
         combine_args.insert(combine_args.end(), combine_metadata.begin(), combine_metadata.end());

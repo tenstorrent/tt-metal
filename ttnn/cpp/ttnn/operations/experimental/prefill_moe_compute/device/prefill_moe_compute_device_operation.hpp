@@ -53,7 +53,9 @@ struct PrefillMoeComputeDeviceOperation {
         const std::optional<Tensor>& staging_buf = std::nullopt,
         bool enable_fabric_dispatch = false,
         const std::vector<std::vector<uint32_t>>& dispatch_metadata = {},
-        const std::vector<uint32_t>& dispatch_target_cols = {});
+        const std::vector<uint32_t>& dispatch_target_cols = {},
+        const std::optional<std::vector<std::vector<uint32_t>>>& per_expert_dispatch_sources = std::nullopt,
+        bool enable_fpu_combine = false);
 };
 
 }  // namespace ttnn::operations::experimental::prefill_moe_compute

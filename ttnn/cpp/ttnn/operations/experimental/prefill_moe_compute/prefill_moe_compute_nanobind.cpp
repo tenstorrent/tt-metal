@@ -28,10 +28,10 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             hidden_states: [1,1,P,D] BF16 TILE_LAYOUT input activation tensor
             gate_up_weights: List of per-expert [1,1,D,D_FF] BFP4_b weight tensors
             down_weights: List of per-expert [1,1,D_FF/2,D] BFP4_b weight tensors
-            pkt_buf: [1,1,P,D] BF16 scratch buffer for dispatch
-            inter_buf: [1,1,P,D_FF/2] BF16 scratch buffer for intermediate
-            out_bufs: List of per-expert [1,1,P,D] BF16 output scratch buffers
-            output: [1,1,P,D] BF16 pre-allocated output tensor (zero-filled)
+            pkt_buf: [1,1,E*M,D] BF16 scratch buffer for dispatch
+            inter_buf: [1,1,M,D_FF/2] BF16 scratch buffer for intermediate
+            out_bufs: List of per-expert [1,1,P_out,D] BF16 output scratch buffers
+            output: [1,1,P_out,D] BF16 pre-allocated output tensor (zero-filled)
             combine_metadata: Per-device packed routing args for combine kernel
             num_experts: Number of experts (1-4)
             num_cores: Number of matmul cores
@@ -44,6 +44,7 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             enable_fabric_dispatch: Enable fabric token dispatch (default False)
             dispatch_metadata: Per-device dispatch routing metadata
             dispatch_target_cols: Per-device target column for dispatch exchange
+            per_expert_dispatch_sources: Per-device per-expert token sources for per-expert pkt_buf assembly
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("hidden_states").noconvert(),
@@ -66,6 +67,8 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             nb::arg("enable_fabric_dispatch") = false,
             nb::arg("dispatch_metadata") = nb::none(),
             nb::arg("dispatch_target_cols") = std::vector<uint32_t>{},
+            nb::arg("per_expert_dispatch_sources") = nb::none(),
+            nb::arg("enable_fpu_combine") = false,
         });
 }
 
