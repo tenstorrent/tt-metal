@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+
 namespace {
 struct kernel_args {
     const uint32_t dst_addr;
@@ -55,8 +58,11 @@ void kernel_main() {
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = get_local_cb_interface(params.cb_id_out).fifo_page_size;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(params.cb_id_out);
+
 #ifdef OUT_SHARDED
-    cb_wait_front(params.cb_id_out, args.num_pages);
+    cb.wait_front(args.num_pages);
 #else
 
     const auto s = TensorAccessor(params.dst_args, args.dst_addr, page_bytes);
@@ -66,40 +72,32 @@ void kernel_main() {
     // Single-tile loop — local L1 writes have zero NOC latency so
     // batching overhead hurts more than it helps.
     for (uint32_t i = args.bank_id; i < args.total_pages; i += args.stride) {
-        cb_wait_front(params.cb_id_out, 1);
-        const auto l1_read_addr = get_read_ptr(params.cb_id_out);
-        noc_async_write_page(i, s, l1_read_addr);
-        noc_async_writes_flushed();
-        cb_pop_front(params.cb_id_out, 1);
+        cb.wait_front(1);
+        noc.async_write(cb, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        cb.pop_front(1);
     }
-    noc_async_write_barrier();
 #else
     // Contiguous access: each core writes a sequential range of pages.
 #ifdef BACKWARDS
     const uint32_t end_id = args.start_id - args.num_pages;
     for (uint32_t i = args.start_id; i != end_id; --i) {
-        constexpr uint32_t onepage = 1;
-        cb_wait_front(params.cb_id_out, onepage);
-        const auto l1_read_addr = get_read_ptr(params.cb_id_out);
-        noc_async_write_page(i, s, l1_read_addr);
-        noc_async_writes_flushed();
-        cb_pop_front(params.cb_id_out, onepage);
+        cb.wait_front(1);
+        noc.async_write(cb, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        cb.pop_front(1);
     }
-    noc_async_write_barrier();
 #else
     const uint32_t end_id = args.start_id + args.num_pages;
     for (uint32_t i = args.start_id; i < end_id; i += params.batch_size) {
         const uint32_t cur_batch = (end_id - i < params.batch_size) ? (end_id - i) : params.batch_size;
-        cb_wait_front(params.cb_id_out, cur_batch);
-        auto l1_read_addr = get_read_ptr(params.cb_id_out);
+        cb.wait_front(cur_batch);
         for (uint32_t j = 0; j < cur_batch; ++j) {
-            noc_async_write_page(i + j, s, l1_read_addr);
-            l1_read_addr += page_bytes;
+            noc.async_write(cb, s, page_bytes, {.offset_bytes = j * page_bytes}, {.page_id = i + j});
         }
-        noc_async_writes_flushed();
-        cb_pop_front(params.cb_id_out, cur_batch);
+        noc.async_write_barrier();
+        cb.pop_front(cur_batch);
     }
-    noc_async_write_barrier();
 #endif
 #endif
 #endif
