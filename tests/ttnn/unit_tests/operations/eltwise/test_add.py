@@ -11,6 +11,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_slow_dispatch
 
 
+# TESTING: Deliberate segfault to verify two-pass diagnostic logic. REMOVE BEFORE MERGE.
+def test_deliberate_segfault():
+    import ctypes
+
+    ctypes.string_at(0)  # dereference null pointer → SIGSEGV
+
+
 @pytest.mark.parametrize(
     "shapes",
     [
