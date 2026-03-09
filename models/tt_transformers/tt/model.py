@@ -152,7 +152,31 @@ class Transformer(LightweightModule):
             self.sampling = None
 
         # Structured output support
-        self.bitmask = None
+        # Pre-allocate bitmask buffers early to avoid device allocations after traces are captured.
+        self._bitmask_packed_width = (self.vocab_size + 31) // 32
+        self._prefill_bitmask_shape = (1, self._bitmask_packed_width)
+        self._decode_bitmask_shape = (self.args.max_batch_size, self._bitmask_packed_width)
+        self._compute_cq_id = 0
+        try:
+            num_cqs = int(self.mesh_device.num_hw_cqs())
+        except Exception:
+            num_cqs = 1
+        self._bitmask_copy_cq_id = 1 if num_cqs > 1 else 0
+        with ttnn.command_queue(self._bitmask_copy_cq_id):
+            self._bitmask_prefill = ttnn.zeros(
+                shape=self._prefill_bitmask_shape,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self._bitmask_decode = ttnn.zeros(
+                shape=self._decode_bitmask_shape,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        self._active_bitmask = None
+        self._bitmask_copy_event = None
         self.bitmask_arange = ttnn.arange(
             start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
@@ -524,21 +548,39 @@ class Transformer(LightweightModule):
         result = ttnn.where(full_mask, 0, float("-inf"))
         return result
 
-    def bitmask_to_device(self, bitmask):
-        """Transfer bitmask from host to device"""
+    def start_bitmask_to_device(self, bitmask, mode: str):
+        """Start asynchronous copy of bitmask to preallocated device buffer."""
+        if mode not in ("prefill", "decode"):
+            raise ValueError(f"Invalid bitmask mode: {mode}")
+
+        target = self._bitmask_prefill if mode == "prefill" else self._bitmask_decode
+        target_shape = self._prefill_bitmask_shape if mode == "prefill" else self._decode_bitmask_shape
+        # Caller contract:
+        # - prefill expects exact shape [1, packed_vocab_bits]
+        # - decode expects exact shape [max_batch_size, packed_vocab_bits] (already padded upstream in vLLM)
+
         bitmask_tt = ttnn.from_torch(
             bitmask,
             device=None,
             dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        # if self.bitmask is not None:
-        #     copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=[self.bitmask])
-        # else:
-        self.bitmask = copy_host_to_device(host_tensors=[bitmask_tt], mesh_device=self.mesh_device)[0]
+
+        with ttnn.command_queue(self._bitmask_copy_cq_id):
+            ttnn.copy_host_to_device_tensor(bitmask_tt, target)
+            self._bitmask_copy_event = ttnn.record_event(self.mesh_device, cq_id=self._bitmask_copy_cq_id)
+        self._active_bitmask = target
+
+    def complete_bitmask_to_device(self):
+        """Complete any pending async bitmask transfer on compute CQ."""
+        if self._bitmask_copy_event is not None:
+            ttnn.wait_for_event(cq_id=self._compute_cq_id, mesh_event=self._bitmask_copy_event)
+            self._bitmask_copy_event = None
 
     def apply_bitmask_to_logits(self, tt_logits):
         """Apply bitmask to logits tensor in-place. Must be called OUTSIDE of traces."""
-        if self.bitmask is None:
+        if self._active_bitmask is None:
             return tt_logits
 
         # matching the logic from the LM head
@@ -549,14 +591,16 @@ class Transformer(LightweightModule):
         else:
             padded_vocab_dim = ((unpadded_vocab_dim + 31) // 32) * 32
 
-        bitmask_unpacked = self.unpack_bitmask(self.bitmask, padded_vocab_dim=padded_vocab_dim)
-        # Reshape bitmask from 2D (batch, vocab) to 4D (1, 1, batch, vocab) to match logits shape
-        bitmask_unpacked = ttnn.reshape(bitmask_unpacked, (1, 1, bitmask_unpacked.shape[0], bitmask_unpacked.shape[1]))
-        print(f"bitmask_unpacked: {bitmask_unpacked}")
-        print(f"tt_logits: {tt_logits}")
-        # Add in-place to preserve the tensor identity for trace compatibility
-        ttnn.add_(tt_logits, bitmask_unpacked)
-        print(f"tt_logits after add: {tt_logits}")
+        with ttnn.trace_allocation_safe_scope(self.mesh_device):
+            # Safe because we use this immediately
+            bitmask_unpacked = self.unpack_bitmask(self._active_bitmask, padded_vocab_dim=padded_vocab_dim)
+            # Reshape bitmask from 2D (batch, vocab) to 4D (1, 1, batch, vocab) to match logits shape
+            bitmask_unpacked = ttnn.reshape(
+                bitmask_unpacked, (1, 1, bitmask_unpacked.shape[0], bitmask_unpacked.shape[1])
+            )
+            # Add in-place to preserve the tensor identity for trace compatibility
+            # The inplace add may contain a temporary allocation for broadcasting purposes.
+            ttnn.add_(tt_logits, bitmask_unpacked)
         return tt_logits
 
     def ttnn_decode_forward(
