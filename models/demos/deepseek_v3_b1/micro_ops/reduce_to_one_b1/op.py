@@ -305,7 +305,7 @@ class ReduceToOneB1:
     @staticmethod
     def op(
         input_tensor_mesh: ttnn.Tensor,
-        intermediate_tensors: list,
+        intermediate_tensor: ttnn.Tensor,
         output_tensor: ttnn.Tensor,
         semaphores: list,
         root_coord: ttnn.MeshCoordinate,
@@ -320,7 +320,8 @@ class ReduceToOneB1:
 
         Args:
             input_tensor_mesh: Input tensor mesh (each device has its own data)
-            intermediate_tensors: List of 3 pre-allocated intermediate tensor meshes
+            intermediate_tensor: Pre-allocated intermediate tensor mesh (3x shard width,
+                                 backing a single 3-page CB for all reduction rounds)
             output_tensor: Pre-allocated output tensor mesh (single-core sharded)
             semaphores: List of 4 global semaphores for synchronization
             root_coord: MeshCoordinate of the root device (must be row 1 or 2)
@@ -355,9 +356,7 @@ class ReduceToOneB1:
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        intermediate_r1_per_device = ttnn.get_device_tensors(intermediate_tensors[0])
-        intermediate_r2_per_device = ttnn.get_device_tensors(intermediate_tensors[1])
-        intermediate_r3_per_device = ttnn.get_device_tensors(intermediate_tensors[2])
+        intermediate_per_device = ttnn.get_device_tensors(intermediate_tensor)
 
         # Get semaphore addresses
         sem_round1_addr = ttnn.get_global_semaphore_address(semaphores[0])
@@ -396,13 +395,11 @@ class ReduceToOneB1:
 
         # CB indices (matching C++ implementation)
         local_cb = 0  # Input tensor
-        received_cb_r1 = 1  # Round 1: LEAF → ROOT*
+        received_cb = 1  # 3-page CB for all reduction rounds (backed by intermediate tensor)
         output_cb = 2  # Final output
         packet_cb = 3  # Packet staging
         packet_header_cb = 4  # Packet header (persistent)
-        received_cb_r2 = 5  # Round 2: ROOT3 → ROOT2/ROOT1
-        received_cb_r3 = 6  # Round 3: ROOT2 → ROOT1
-        scratch_cb = 7  # Scratch for compute
+        scratch_cb = 5  # Scratch for compute
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -460,9 +457,7 @@ class ReduceToOneB1:
                 # Get tensors for this device
                 input_tensor_device = input_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
-                intermediate_r1_device = intermediate_r1_per_device[device_idx]
-                intermediate_r2_device = intermediate_r2_per_device[device_idx]
-                intermediate_r3_device = intermediate_r3_per_device[device_idx]
+                intermediate_device = intermediate_per_device[device_idx]
 
                 device = input_tensor_device.device()
 
@@ -544,18 +539,20 @@ class ReduceToOneB1:
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
-                # Destination L1 address depends on role
+                # Destination L1 address: offset within the single intermediate tensor
+                # Page 0 = round 1 (LEAF data), page 1 = round 2 (ROOT3), page 2 = round 3 (ROOT2)
+                intermediate_base = intermediate_device.buffer_address()
                 if is_leaf:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()
+                    dst_l1_addr = intermediate_base  # page 0
                     dst_sem_addr = sem_round1_addr
                 elif is_root3:
-                    dst_l1_addr = intermediate_r2_device.buffer_address()
+                    dst_l1_addr = intermediate_base + payload_size_bytes  # page 1
                     dst_sem_addr = sem_round2_addr
                 elif is_root2:
-                    dst_l1_addr = intermediate_r3_device.buffer_address()
+                    dst_l1_addr = intermediate_base + 2 * payload_size_bytes  # page 2
                     dst_sem_addr = sem_round3_addr
                 else:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()
+                    dst_l1_addr = intermediate_base  # ROOT1 exit (not used for reduce)
                     dst_sem_addr = sem_exit_addr
 
                 # Get physical coords for output core
@@ -567,9 +564,7 @@ class ReduceToOneB1:
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
-                    ("received_cb_r1", received_cb_r1),
-                    ("received_cb_r2", received_cb_r2),
-                    ("received_cb_r3", received_cb_r3),
+                    ("received_cb", received_cb),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -597,9 +592,7 @@ class ReduceToOneB1:
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
-                    ("received_cb_r1", received_cb_r1),
-                    ("received_cb_r2", received_cb_r2),
-                    ("received_cb_r3", received_cb_r3),
+                    ("received_cb", received_cb),
                     ("output_cb", output_cb),
                     ("scratch_cb", scratch_cb),
                     ("num_loop_iters", num_iterations),
@@ -662,13 +655,13 @@ class ReduceToOneB1:
                     )
                 ]
 
-                # received_cb_r1: backed by intermediate tensor r1
-                cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r1, intermediate_r1_device)
+                # received_cb: 3-page CB backed by intermediate tensor (all reduction rounds)
+                cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb, intermediate_device)
                 cb1_desc.core_ranges = all_cores_set
-                cb1_desc.total_size = payload_size_bytes
+                cb1_desc.total_size = 3 * payload_size_bytes
                 cb1_desc.format_descriptors = [
                     ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r1,
+                        buffer_index=received_cb,
                         data_format=dtype,
                         page_size=payload_size_bytes,
                         tile=compute_tile_desc,
@@ -714,35 +707,9 @@ class ReduceToOneB1:
                     ],
                 )
 
-                # received_cb_r2: backed by intermediate tensor r2
-                cb5_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r2, intermediate_r2_device)
-                cb5_desc.core_ranges = all_cores_set
-                cb5_desc.total_size = payload_size_bytes
-                cb5_desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r2,
-                        data_format=dtype,
-                        page_size=payload_size_bytes,
-                        tile=compute_tile_desc,
-                    )
-                ]
-
-                # received_cb_r3: backed by intermediate tensor r3
-                cb6_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r3, intermediate_r3_device)
-                cb6_desc.core_ranges = all_cores_set
-                cb6_desc.total_size = payload_size_bytes
-                cb6_desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r3,
-                        data_format=dtype,
-                        page_size=payload_size_bytes,
-                        tile=compute_tile_desc,
-                    )
-                ]
-
                 # scratch_cb: compute scratch (not tensor-backed)
                 cb_size_bytes = num_compute_tiles * compute_tile_size_bytes
-                cb7_desc = ttnn.CBDescriptor(
+                cb5_desc = ttnn.CBDescriptor(
                     total_size=cb_size_bytes,
                     core_ranges=all_cores_set,
                     format_descriptors=[
@@ -755,7 +722,7 @@ class ReduceToOneB1:
                     ],
                 )
 
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc, cb6_desc, cb7_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
 
                 # Build unified compile-time core descriptors
                 unified_ct_core_descriptors = [
@@ -868,9 +835,7 @@ class ReduceToOneB1:
         input_list = [
             input_tensor_mesh,
             output_tensor,
-            intermediate_tensors[0],
-            intermediate_tensors[1],
-            intermediate_tensors[2],
+            intermediate_tensor,
         ]
         ttnn.generic_op(input_list, mesh_program_descriptor)
 
