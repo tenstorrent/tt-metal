@@ -12,7 +12,6 @@ import torch
 import numpy as np
 import pytest
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     num_to_corerange,
@@ -30,7 +29,6 @@ def reset_seeds():
     yield
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -62,7 +60,6 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
         )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -88,7 +85,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.num_program_cache_entries() == 1
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -123,7 +119,6 @@ def test_sdpa_decode_ignore_users(device, b, nh, nkv, s, d, dtype, grid_size, q_
     )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
     [
@@ -165,7 +160,6 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -191,7 +185,6 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],
@@ -298,7 +291,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
     assert device.num_program_cache_entries() == 4
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
