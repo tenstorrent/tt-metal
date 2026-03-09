@@ -27,7 +27,9 @@ def _make_run(conn, **overrides):
         created_branch="2026_03_09_run1_layer_norm_rm",
     )
     defaults.update(overrides)
-    return db.insert_run(conn, **defaults)
+    rid = db.insert_run(conn, **defaults)
+    conn.commit()
+    return rid
 
 
 # --- Schema ---
@@ -81,6 +83,7 @@ def test_insert_and_get_test_results(conn):
         },
     ]
     db.insert_test_results_batch(conn, rid, results)
+    conn.commit()
 
     fetched = db.get_test_results(conn, rid)
     assert len(fetched) == 2
@@ -103,6 +106,7 @@ def test_insert_and_get_criteria(conn):
         {"name": "helper_usage", "raw_score": 100.0, "weight": 0.13, "weighted_score": 13.0},
     ]
     db.insert_score_criteria(conn, rid, criteria)
+    conn.commit()
 
     fetched = db.get_score_criteria(conn, rid)
     assert len(fetched) == 2
@@ -156,6 +160,7 @@ def test_stats_with_data(conn):
             {"test_name": "t3", "status": "failed", "failure_category": "OOM"},
         ],
     )
+    conn.commit()
 
     stats = db.get_stats(conn)
     assert stats["total_runs"] == 2
@@ -182,6 +187,7 @@ def test_failure_summary_excludes_passed(conn):
             {"test_name": "t2", "status": "failed", "failure_category": "hang"},
         ],
     )
+    conn.commit()
     summary = db.get_failure_summary(conn)
     assert "hang" in summary
     assert summary["hang"] == 1
@@ -199,6 +205,7 @@ def test_insert_and_get_kernels(conn):
         {"filename": "compute.cpp", "source_code": "namespace NAMESPACE {\nvoid MAIN { }\n}"},
     ]
     db.insert_kernels(conn, rid, kernels)
+    conn.commit()
 
     fetched = db.get_kernels(conn, rid)
     assert len(fetched) == 2
@@ -221,6 +228,7 @@ def test_insert_and_get_host_code(conn):
         {"filename": "my_op_program_descriptor.py", "source_code": "def create_pd(): pass"},
     ]
     db.insert_host_code(conn, rid, files)
+    conn.commit()
 
     fetched = db.get_host_code(conn, rid)
     assert len(fetched) == 2
@@ -239,6 +247,7 @@ def test_empty_host_code(conn):
 def test_insert_and_get_artifact(conn):
     rid = _make_run(conn)
     db.insert_artifact(conn, rid, "self_reflection", "## Summary\nRun went well.")
+    conn.commit()
 
     fetched = db.get_artifacts(conn, rid)
     assert len(fetched) == 1
@@ -250,6 +259,7 @@ def test_multiple_artifacts(conn):
     rid = _make_run(conn)
     db.insert_artifact(conn, rid, "self_reflection", "reflection content")
     db.insert_artifact(conn, rid, "design_doc", "design content")
+    conn.commit()
 
     fetched = db.get_artifacts(conn, rid)
     assert len(fetched) == 2

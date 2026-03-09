@@ -42,13 +42,7 @@ def parse_contract(contract_path: Path) -> dict:
         params = []
         for line in params_raw.split("\n"):
             line = line.strip().rstrip(",")
-            if not line or line.startswith("#") or line == "*":
-                continue
-            if line == "*":
-                continue
-
-            # Handle keyword-only marker
-            if line.startswith("*,") or line == "*":
+            if not line or line.startswith("#") or line == "*" or line.startswith("*,"):
                 continue
 
             param_match = re.match(r"(\*?\*?\w+)(?:\s*:\s*[\w.\[\]]+)?\s*(?:=\s*(.+))?", line)
@@ -62,17 +56,19 @@ def parse_contract(contract_path: Path) -> dict:
         contract["params"] = params
 
     # Extract valid call patterns
+    func_name = contract.get("function")
     patterns = []
-    for match in re.finditer(r"layer_norm_rm\(([^)]*)\)", text):
-        args = match.group(1).strip()
-        if args and not args.startswith("input_tensor"):  # skip the def line
-            patterns.append(args)
+    if func_name:
+        for match in re.finditer(rf"{re.escape(func_name)}\(([^)]*)\)", text):
+            args = match.group(1).strip()
+            if args and not args.startswith("input_tensor"):  # skip the def line
+                patterns.append(args)
     contract["call_patterns"] = patterns
 
     return contract
 
 
-def validate_operation(contract: dict) -> list:
+def validate_operation(contract: dict, contract_path: Path) -> list:
     """Validate the generated operation matches the contract. Returns list of issues."""
     issues = []
     module_name = contract.get("module")
@@ -138,20 +134,18 @@ def validate_operation(contract: dict) -> list:
                 issues.append(f"Parameter '{name}' has no default but contract expects default={expected_default}")
 
     # Check keyword-only parameters
-    for exp_param in expected_params:
-        name = exp_param["name"]
-        if name not in actual_names:
-            continue
+    raw_sig = contract.get("signature_raw", "")
+    contract_text = contract_path.read_text()
+    has_keyword_only_marker = "*,\n" in contract_text or "*, " in raw_sig
 
-        actual_param = sig.parameters[name]
+    if has_keyword_only_marker:
+        for exp_param in expected_params:
+            name = exp_param["name"]
+            if name not in actual_names:
+                continue
 
-        # If contract has * before this param, it should be keyword-only
-        # We detect this by checking if the contract's raw signature has "*, <name>"
-        raw_sig = contract.get("signature_raw", "")
-        # Simple heuristic: if "*, epsilon" or similar appears in contract
-        if f"*,\n" in contract_path_global.read_text() or "*, " in raw_sig:
-            # Check if params after * are keyword-only
-            if name == "epsilon" and actual_param.kind != inspect.Parameter.KEYWORD_ONLY:
+            actual_param = sig.parameters[name]
+            if exp_param.get("default") is not None and actual_param.kind != inspect.Parameter.KEYWORD_ONLY:
                 issues.append(
                     f"Parameter '{name}' should be keyword-only (use *, {name}=...) " f"but is {actual_param.kind.name}"
                 )
@@ -159,13 +153,7 @@ def validate_operation(contract: dict) -> list:
     return issues
 
 
-# Global for accessing contract path in nested function
-contract_path_global = None
-
-
 def main():
-    global contract_path_global
-
     if len(sys.argv) < 2:
         print("Usage: python3 -m eval.validate_contract <golden_test_dir>", file=sys.stderr)
         sys.exit(1)
@@ -179,7 +167,6 @@ def main():
         print(json.dumps(result, indent=2))
         sys.exit(0)
 
-    contract_path_global = contract_path
     contract = parse_contract(contract_path)
 
     if not contract.get("module"):
@@ -187,7 +174,7 @@ def main():
         print(json.dumps(result, indent=2))
         sys.exit(1)
 
-    issues = validate_operation(contract)
+    issues = validate_operation(contract, contract_path)
 
     if issues:
         result = {

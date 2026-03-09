@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import glob
 import json
 from datetime import datetime
 from pathlib import Path
@@ -145,8 +144,7 @@ def ingest_run(
 
     # Collect kernels and artifacts from clone
     if clone_dir and op_name:
-        clone_path = Path(clone_dir)
-        op_dir = _find_op_dir(clone_path, op_name)
+        op_dir = _find_op_dir(clone_dir, op_name)
         if op_dir:
             kernels = _collect_kernels(op_dir)
             if kernels:
@@ -160,6 +158,7 @@ def ingest_run(
             if reflection:
                 db.insert_artifact(conn, run_id, "self_reflection", reflection)
 
+    conn.commit()
     conn.close()
     return run_id
 

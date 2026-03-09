@@ -11,9 +11,9 @@ import pytest
 
 _HANG_PATTERNS = [
     "operation timeout",
-    "Operation timed out",
-    "TT_METAL_OPERATION_TIMEOUT",
-    "Timeout waiting for",
+    "operation timed out",
+    "tt_metal_operation_timeout",
+    "timeout waiting for",
     "dispatch timeout",
 ]
 
@@ -25,7 +25,7 @@ def _is_hang(report) -> bool:
     """Check if a test failure was caused by a hang/timeout."""
     if report.longrepr:
         text = str(report.longrepr).lower()
-        return any(p.lower() in text for p in _HANG_PATTERNS)
+        return any(p in text for p in _HANG_PATTERNS)
     return False
 
 

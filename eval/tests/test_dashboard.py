@@ -25,7 +25,9 @@ def _make_run(conn, **overrides):
         created_branch="run1_ln",
     )
     defaults.update(overrides)
-    return db.insert_run(conn, **defaults)
+    rid = db.insert_run(conn, **defaults)
+    conn.commit()
+    return rid
 
 
 def test_empty_db(conn):
@@ -74,6 +76,7 @@ def test_failure_breakdown_bar(conn):
             {"test_name": "t3", "status": "failed", "failure_category": "OOM"},
         ],
     )
+    conn.commit()
     html = generate_html(conn)
     assert "Failure Breakdown" in html
     assert "numerical" in html
@@ -96,6 +99,7 @@ def test_detail_section_has_tests(conn):
             },
         ],
     )
+    conn.commit()
     html = generate_html(conn)
     assert "test_a[32x32]" in html
     assert "test_a[64x64]" in html
@@ -112,6 +116,7 @@ def test_criteria_in_detail(conn):
             {"name": "test_success", "raw_score": 80.0, "weight": 0.35, "weighted_score": 28.0},
         ],
     )
+    conn.commit()
     html = generate_html(conn)
     assert "Test Success" in html
     assert "28.0" in html
@@ -150,6 +155,7 @@ def test_kernels_in_detail(conn):
             {"filename": "compute.cpp", "source_code": "namespace NAMESPACE {\nvoid MAIN {}\n}"},
         ],
     )
+    conn.commit()
     html = generate_html(conn)
     assert "reader.cpp" in html
     assert "compute.cpp" in html
@@ -161,6 +167,7 @@ def test_kernels_in_detail(conn):
 def test_self_reflection_in_detail(conn):
     rid = _make_run(conn)
     db.insert_artifact(conn, rid, "self_reflection", "## Summary\nAll stages passed.")
+    conn.commit()
     html = generate_html(conn)
     assert "Self-Reflection" in html
     assert "All stages passed" in html
@@ -174,6 +181,7 @@ def test_kernel_code_escaped(conn):
         rid,
         [{"filename": "test.cpp", "source_code": "int x = a<b && c>d; // template<T>"}],
     )
+    conn.commit()
     html = generate_html(conn)
     # The < and > should be escaped in the HTML
     assert "a&lt;b" in html
@@ -190,6 +198,7 @@ def test_host_code_in_detail(conn):
             {"filename": "my_op_program_descriptor.py", "source_code": "def create_pd(): pass"},
         ],
     )
+    conn.commit()
     html = generate_html(conn)
     assert "Host-Side (2)" in html
     assert "my_op.py" in html
@@ -203,6 +212,7 @@ def test_section_tabs_present(conn):
     db.insert_kernels(conn, rid, [{"filename": "k.cpp", "source_code": "code"}])
     db.insert_host_code(conn, rid, [{"filename": "op.py", "source_code": "code"}])
     db.insert_artifact(conn, rid, "self_reflection", "content")
+    conn.commit()
     html = generate_html(conn)
     assert "showSection" in html
     assert "Kernels (1)" in html

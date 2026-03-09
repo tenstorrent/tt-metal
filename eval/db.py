@@ -98,7 +98,7 @@ def insert_run(
     golden_passed=None,
     golden_total=None,
 ) -> int:
-    """Insert a run and return its ID."""
+    """Insert a run and return its ID. Caller must commit."""
     cur = conn.execute(
         """INSERT INTO runs
            (timestamp, prompt_name, run_number, starting_branch, starting_commit,
@@ -117,12 +117,11 @@ def insert_run(
             golden_total,
         ),
     )
-    conn.commit()
     return cur.lastrowid
 
 
 def insert_test_results_batch(conn, run_id: int, results: list):
-    """Insert multiple test results at once."""
+    """Insert multiple test results at once. Caller must commit."""
     conn.executemany(
         """INSERT INTO test_results
            (run_id, test_name, test_file, shape, status, failure_category, failure_message)
@@ -140,17 +139,15 @@ def insert_test_results_batch(conn, run_id: int, results: list):
             for r in results
         ],
     )
-    conn.commit()
 
 
 def insert_score_criteria(conn, run_id: int, criteria: list):
-    """Insert score criteria for a run."""
+    """Insert score criteria for a run. Caller must commit."""
     conn.executemany(
         """INSERT INTO score_criteria (run_id, criterion, raw_score, weight, weighted_score)
            VALUES (?, ?, ?, ?, ?)""",
         [(run_id, c["name"], c["raw_score"], c["weight"], c["weighted_score"]) for c in criteria],
     )
-    conn.commit()
 
 
 def annotate_run(conn, run_id: int, score: int, notes: str = ""):
@@ -219,12 +216,11 @@ def get_stats(conn) -> dict:
 
 
 def insert_kernels(conn, run_id: int, kernels: list):
-    """Insert kernel C++ source files. Each item: {"filename": str, "source_code": str}."""
+    """Insert kernel C++ source files. Each item: {"filename": str, "source_code": str}. Caller must commit."""
     conn.executemany(
         "INSERT INTO kernels (run_id, filename, source_code) VALUES (?, ?, ?)",
         [(run_id, k["filename"], k["source_code"]) for k in kernels],
     )
-    conn.commit()
 
 
 def get_kernels(conn, run_id: int) -> list:
@@ -234,12 +230,11 @@ def get_kernels(conn, run_id: int) -> list:
 
 
 def insert_host_code(conn, run_id: int, files: list):
-    """Insert host-side Python files. Each item: {"filename": str, "source_code": str}."""
+    """Insert host-side Python files. Each item: {"filename": str, "source_code": str}. Caller must commit."""
     conn.executemany(
         "INSERT INTO host_code (run_id, filename, source_code) VALUES (?, ?, ?)",
         [(run_id, f["filename"], f["source_code"]) for f in files],
     )
-    conn.commit()
 
 
 def get_host_code(conn, run_id: int) -> list:
@@ -249,12 +244,11 @@ def get_host_code(conn, run_id: int) -> list:
 
 
 def insert_artifact(conn, run_id: int, name: str, content: str):
-    """Insert a text artifact (e.g. self_reflection.md)."""
+    """Insert a text artifact (e.g. self_reflection.md). Caller must commit."""
     conn.execute(
         "INSERT INTO artifacts (run_id, name, content) VALUES (?, ?, ?)",
         (run_id, name, content),
     )
-    conn.commit()
 
 
 def get_artifacts(conn, run_id: int) -> list:

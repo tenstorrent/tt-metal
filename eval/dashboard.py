@@ -54,7 +54,7 @@ def _status_bg(status):
     return f"background:{color};color:white;padding:1px 6px;border-radius:3px;font-size:0.85em"
 
 
-def _cat_bg(cat):
+def _category_bg(cat):
     if not cat:
         return ""
     color = CATEGORY_COLORS.get(cat, "#6b7280")
@@ -327,14 +327,14 @@ def _html_run_detail(rid: int, details: dict) -> str:
 
     # Category summary badges
     if tests:
-        cats = {}
+        categories = {}
         for t in tests:
             cat = t.get("failure_category")
             if cat:
-                cats[cat] = cats.get(cat, 0) + 1
-        if cats:
+                categories[cat] = categories.get(cat, 0) + 1
+        if categories:
             parts.append('<div class="cat-summary">')
-            for cat, count in sorted(cats.items(), key=lambda x: -x[1]):
+            for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
                 color = CATEGORY_COLORS.get(cat, "#6b7280")
                 parts.append(f'  <span class="cat-badge" style="background:{color}">{cat}: {count}</span>')
             parts.append("</div>")
@@ -379,7 +379,7 @@ def _html_run_detail(rid: int, details: dict) -> str:
             status = t["status"]
             status_html = f'<span style="{_status_bg(status)}">{status.upper()}</span>'
             cat = t.get("failure_category")
-            cat_html = f'<span style="{_cat_bg(cat)}">{cat}</span>' if cat else "--"
+            cat_html = f'<span style="{_category_bg(cat)}">{cat}</span>' if cat else "--"
             msg = html.escape(t.get("failure_message") or "")[:120]
             parts.append(
                 f"<tr><td>{tname}</td><td>{shape}</td><td>{status_html}</td>"
