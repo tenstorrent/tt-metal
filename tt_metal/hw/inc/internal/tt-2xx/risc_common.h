@@ -249,19 +249,12 @@ inline __attribute__((always_inline)) void flush_l2_cache_line(uint32_t addr) {
 // Flush a range of addresses from L2 to TL1.
 // Flushes all cache lines covering [start_addr, start_addr + size).
 inline __attribute__((always_inline)) void flush_l2_cache_range(uint32_t start_addr, uint32_t size) {
-    constexpr uint32_t LINE_MASK = ~(L2_CACHE_LINE_SIZE - 1);
-
-    __asm__ __volatile__("fence" ::: "memory");
-
-    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
-    uint32_t aligned_start = start_addr & LINE_MASK;
+    uint32_t aligned_start = start_addr & ~(uint32_t)63;  // align to 64B
     uint32_t end_addr = start_addr + size;
 
-    for (uint32_t addr = aligned_start; addr < end_addr; addr += L2_CACHE_LINE_SIZE) {
-        *flush_reg = (uint64_t)addr;
+    for (uint32_t addr = aligned_start; addr < end_addr; addr += 64) {
+        flush_l2_cache_line(addr);
     }
-
-    __asm__ __volatile__("fence" ::: "memory");
 }
 
 // Flush entire L2 cache (128KB) to TL1.

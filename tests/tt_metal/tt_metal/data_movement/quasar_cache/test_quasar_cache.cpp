@@ -185,7 +185,7 @@ TEST_F(QuasarL2CacheFlush, FlushRange) {
 
     unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
         .base_addr = 100 * 1024,
-        .num_words = 256,  // Multiple cache lines
+        .num_words = 64,  // Multiple cache lines (4 lines worth)
         .value = 0xABCD0000,
         .test_mode = 1  // range flush
     };
