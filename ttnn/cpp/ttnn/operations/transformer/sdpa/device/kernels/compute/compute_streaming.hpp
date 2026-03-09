@@ -69,7 +69,8 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
     uint32_t SUBBLOCK_W,
     uint32_t SUBBLOCK_H,
     uint32_t INNER_DIM,
-    uint32_t KT_DIM_MATMUL = 0) {
+    uint32_t KT_DIM_MATMUL = 0,
+    bool trigger_reduce = false) {
     if (KT_DIM_MATMUL == 0) {
         KT_DIM_MATMUL = INNER_DIM;
     }
@@ -98,6 +99,9 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
             dst_idx += SUBBLOCK_W;
         }
+        if (trigger_reduce) {
+            PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+        }
     } else
 #endif
     {
@@ -124,7 +128,8 @@ void reduce_c_row_group(
     uint32_t row_group_index,
     bool do_eltwise_max,
     uint32_t SBH,
-    uint32_t reduce_cols = cols) {
+    uint32_t reduce_cols = cols,
+    bool respect_trigger = false) {
     const uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
@@ -148,14 +153,18 @@ void reduce_c_row_group(
     // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
     // When do_eltwise_max=true, the prev_cb wait + copy_tile work above can overlap
     // with in0_cb data arrival.
-    cb_wait_front(in0_cb, cumulative_input_tiles);
+    // When respect_trigger=true, the unpack MOP is split into two halves with a
+    // HW semaphore wait in between, so we don't need cb_wait_front here.
+    if (!respect_trigger) {
+        cb_wait_front(in0_cb, cumulative_input_tiles);
+    }
 
-    reduce_block_max_row_init_runtime(reduce_cols);
+    reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
     }
-    reduce_block_max_row_uninit_runtime(in0_cb);
+    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -625,6 +634,12 @@ static void sdpa_inner_loop_step(
     const uint32_t kt_num_full_subblocks = active_Sk / qkt_subblock_w;
     const uint32_t kt_remainder = active_Sk % qkt_subblock_w;
     const bool has_partial_subblock = (kt_remainder > 0);
+    const uint32_t total_kt_iterations = kt_num_full_subblocks + (has_partial_subblock ? 1 : 0);
+    // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
+    // Disabled when: (a) partial k_chunks (effective_Sk > 0), or (b) partial subblocks exist.
+    // The custom reduce does half/half block_ct_dim and doesn't handle partial tiles correctly.
+    const bool reduce_trigger =
+        (effective_Sk == 0) && !has_partial_subblock && (total_kt_iterations > 1) && (Sk_chunk_t % 2 == 0);
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
     constexpr uint32_t row_tiles = sbh * KT_stride;  // Use KT_stride for cb_qkt_im row width
 
@@ -700,6 +715,10 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
+                // Only the LAST full subblock posts the semaphore — one post per reduce,
+                // matching the single semaphore get in the UNPACK MOP split.
+                bool kt_trigger_reduce =
+                    reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1) && !has_partial_subblock;
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
@@ -710,7 +729,9 @@ static void sdpa_inner_loop_step(
                     kt_subblock * qkt_subblock_w,
                     qkt_subblock_w,
                     sbh,
-                    in0_block_w);
+                    in0_block_w,
+                    0,
+                    kt_trigger_reduce);
                 kt_index_offset += qkt_subblock_w;
             }
         }
@@ -750,6 +771,9 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
+                // Partial subblock is always the last subblock — never trigger custom reduce sync.
+                // The reduce trigger mechanism is only for full subblocks.
+                constexpr bool partial_trigger_reduce = false;
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
@@ -760,7 +784,9 @@ static void sdpa_inner_loop_step(
                     kt_num_full_subblocks * qkt_subblock_w,
                     kt_remainder,
                     sbh,
-                    in0_block_w);
+                    in0_block_w,
+                    0,
+                    partial_trigger_reduce);
                 }
             }
         }
@@ -799,8 +825,17 @@ static void sdpa_inner_loop_step(
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
 #endif
+            // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
+            // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, KT_stride>(
-                cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/, sbh, active_Sk);
+                cb_qkt_im,
+                cur_max,
+                prev_max,
+                q_subblock,
+                !is_first_iter /*do_eltwise_max*/,
+                sbh,
+                active_Sk,
+                reduce_trigger);
             cb_push_back(cur_max, sbh);
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
@@ -1253,9 +1288,11 @@ void sdpa_ring_v2(
     const uint32_t local_padded_Nt,
     const uint32_t logical_nt,
     const bool ring_iter_needs_global_n_mask,
+    const bool ring_iter_needs_joint_n_mask,
     const bool local_n_needs_masking,
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
+    const uint32_t joint_n_mask_chunk_id,
     const uint32_t cb_out_im_A,
     const uint32_t cb_out_im_B,
     const uint32_t cb_max_A,
