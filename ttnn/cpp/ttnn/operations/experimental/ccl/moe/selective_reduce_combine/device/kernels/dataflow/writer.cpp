@@ -8,8 +8,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
-#include "api/debug/dprint_pages.h"
-
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
@@ -40,40 +38,37 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
     }
 }
 
-// output is [cluster experts ,tokens, hidden]
+// output is [select_experts_k ,tokens, hidden]
 template <uint32_t TokensPerDevice>
-inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t expert_offset) {
+inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     uint32_t t_idx = t % TokensPerDevice;
-    return expert_offset * TokensPerDevice + t_idx;
+    return k * TokensPerDevice + t_idx;
 }
 }  // namespace detail
 
 void kernel_main() {
     constexpr uint32_t dense_token_maps_cb_id = get_named_compile_time_arg_val("dense_token_maps_cb_id");
+    constexpr uint32_t token_counts_cb_id = get_named_compile_time_arg_val("token_counts_cb_id");
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
-
+    constexpr uint32_t token_activations_cb_id = get_named_compile_time_arg_val("token_activations_cb_id");
+    constexpr uint32_t activations_stride_elm = get_named_compile_time_arg_val("activations_stride_elm");
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
-
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
     constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
-
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
-
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
-
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_expert_block_size_bytes =
         get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t token_size_bytes = get_named_compile_time_arg_val("token_size_bytes");
-
+    constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
-
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
     constexpr uint32_t src_chip_id = get_named_compile_time_arg_val("src_chip_id");
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
@@ -99,12 +94,12 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t replicate_group_index = (replicate_axis == ReplicateGroup::COLS) ? row : col;
+    // constexpr uint32_t replicate_group_index = (replicate_axis == ReplicateGroup::COLS) ? row : col;
 
     constexpr uint32_t num_local_experts = experts / num_devices;
     constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-    constexpr uint32_t cluster_expert_offset = replicate_group_index * num_local_experts;
+    // constexpr uint32_t cluster_expert_offset = replicate_group_index * num_local_experts;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -158,19 +153,29 @@ void kernel_main() {
             num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
     }
 
+    cb_wait_front(token_counts_cb_id, 1);
+    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
+    auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
+    uint32_t token_split_offsets[num_local_experts];
+    uint32_t token_split_counts[num_local_experts];
+    uint32_t token_activation_offsets[num_local_experts];
+    for (uint32_t e = 0; e < num_local_experts; ++e) {
+        token_split_offsets[e] = token_counts_l1_ptr[num_local_experts + e];
+        token_split_counts[e] = token_counts_l1_ptr[num_local_experts + num_local_experts + e];
+        token_activation_offsets[e] = token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e];
+    }
+    cb_pop_front(token_counts_cb_id, 1);
+
     cb_reserve_back(data_cb_id, 1);
     const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
 
-    cb_wait_front(dense_token_maps_cb_id, 1);
+    cb_wait_front(dense_token_maps_cb_id, num_local_experts);
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
 
-    uint32_t token_split_offsets[num_local_experts];
-    uint32_t token_split_counts[num_local_experts];
-    for (uint32_t e = 0; e < num_local_experts; ++e) {
-        token_split_offsets[e] = dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + e];
-        token_split_counts[e] = dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + num_local_experts + e];
-    }
+    cb_wait_front(token_activations_cb_id, 1);
+    const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
+    auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
     if constexpr (use_init_semaphore) {
         auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
@@ -192,12 +197,21 @@ void kernel_main() {
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
+        auto* expert_token_activations_ptr =
+            token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
+
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
-            const uint32_t st = dense_token_maps_l1_ptr[e * global_num_tokens + token_split_offsets[e] + dt];
+            const uint32_t st = dense_token_maps_l1_ptr
+                [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
+            uint32_t guard = 0;
+            while (expert_token_activations_ptr[0] != st) {
+                expert_token_activations_ptr += activations_stride_elm;
+                ASSERT(guard++ < global_num_tokens);
+            }
+            const uint32_t k = expert_token_activations_ptr[1 + e];
 
             // figure out output page index, noc address.
-            const uint32_t output_page_idx =
-                detail::get_output_page_idx<tokens_per_device>(st, cluster_expert_offset + e);
+            const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(st, k);
 
             const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
                                               dt * source_token_segment_buffer_size_bytes;
@@ -238,7 +252,8 @@ void kernel_main() {
             }
         }
     }
-    cb_pop_front(dense_token_maps_cb_id, 1);
+    cb_pop_front(dense_token_maps_cb_id, num_local_experts);
+    cb_pop_front(token_activations_cb_id, 1);
 
     if (needs_barrier) {
         noc_async_write_barrier();

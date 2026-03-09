@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+// UMD: re-exports ChipId (used in return types of GetLatest/AllProgramsPerfData).
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::experimental {

@@ -214,7 +214,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const MeshCoordinate& mesh_coordinate,
     const std::vector<MeshCoordinate>& all_mesh_coordinates,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
-    Tensor& output_tensor,
+    Tensor& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
@@ -226,12 +226,17 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
     const auto& dense_token_counts_tensor = tensor_args.dense_token_counts_tensor;
-    const auto total_tokens = operation_attributes.total_tokens;
+    const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
+
+    const auto& output_tensor = tensor_return_value;
+    const auto batch_size = operation_attributes.batch_size;
+    const auto seq_size = operation_attributes.seq_size;
     const auto select_experts_k = operation_attributes.select_experts_k;
     const auto hidden_size = operation_attributes.hidden_size;
     // Eventually map number of experts to device
     const auto experts = operation_attributes.experts;
 
+    const auto total_tokens = batch_size * seq_size;
     const auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -293,31 +298,47 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
     // dense_token_maps_tensor page buffer
+    // tensor pages are padded for alignment
+    const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / total_tokens;
     constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_1;
-    // stash offset and count value for each local expert in uint32_t
-    const uint32_t dense_token_maps_tensor_extra_size_bytes = 2 * 4 * experts_per_device;
-    const uint32_t aligned_dense_token_maps_buffer_size =
-        tt::align(aligned_dense_token_maps_page_size_bytes + dense_token_maps_tensor_extra_size_bytes, l1_alignment);
+    const uint32_t aligned_dense_token_maps_buffer_size_bytes =
+        tt::align(experts_per_device * aligned_dense_token_maps_page_size_bytes, l1_alignment);
     const auto dense_token_maps_data_format = datatype_to_dataformat_converter(dense_token_maps_tensor.dtype());
     CircularBufferConfig cb_dense_token_maps_config =
         CircularBufferConfig(
-            aligned_dense_token_maps_buffer_size, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
-            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_buffer_size);
+            aligned_dense_token_maps_buffer_size_bytes, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
+            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_page_size_bytes);
 
     // active token counts page buffer
+    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
+    // offset into token maps, number of tokens, offset into activations
+    const auto token_offset_count_bytes_per_expert = 3 * tt::datum_size(token_counts_data_format);
     const auto dram_alignment = hal::get_dram_alignment();
     constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
     const auto token_counts_element_size = dense_token_counts_tensor.element_size();
-    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
-    const uint32_t aligned_token_counts_buffer_size =
-        tt::align(token_counts_element_size * experts_per_device, dram_alignment);
+    const uint32_t aligned_token_counts_buffer_size = tt::align(
+        (token_counts_element_size + token_offset_count_bytes_per_expert) * experts_per_device, dram_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
 
+    // token activations metadata
+    // page size: total tokens * (2 * experts_per_device + 1 + 3) * sizeof(uint32_t)
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    TT_FATAL(activations_stride_elm == 8, "unexpected stride");
+
+    const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
+    const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
+    constexpr auto token_activations_cb_id = tt::CBIndex::c_3;
+    CircularBufferConfig cb_token_activations_config =
+        CircularBufferConfig(
+            aligned_token_activations_page_size_bytes, {{token_activations_cb_id, tt::DataFormat::UInt32}})
+            .set_page_size(token_activations_cb_id, token_activations_page_size_bytes);
+
     // client interface
-    constexpr auto num_headers = 3;  // data unicast headers and atomic inc "multicast" headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_3;
+    constexpr auto num_headers = 3;  // data unicast headers and atomic inc multicast headers
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -326,6 +347,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_dense_token_maps_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_counts_config);
+    CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_activations_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, client_interface_cb_config);
 
     // fabric routing info
@@ -351,8 +373,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"token_counts_cb_id", token_counts_cb_id},
+        {"token_activations_cb_id", token_activations_cb_id},
+        {"token_activations_page_size_bytes", token_activations_page_size_bytes},
+        {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
+        {"activations_stride_elm", activations_stride_elm},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
         {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
+        {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
@@ -367,6 +394,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(dense_token_counts_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(token_activations_tensor.buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1,
@@ -392,6 +420,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
+        {"token_activations_cb_id", token_activations_cb_id},
+        {"token_counts_cb_id", token_counts_cb_id},
+        {"activations_stride_elm", activations_stride_elm},
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
@@ -402,9 +433,11 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"noc_y_end", end_coord.y},
         {"experts", experts},
         {"global_num_tokens", total_tokens},
+        {"token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
+        {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"alignment", l1_alignment},
         {"num_devices", num_devices_total},
         {"src_chip_id", src_chip_id},
@@ -461,6 +494,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         std::vector<uint32_t> reader_runtime_args = {
             dense_token_maps_tensor.buffer()->address(),    // dense_token_maps_addr
             dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
+            token_activations_tensor.buffer()->address(),   // token_activations_addr
             token_parallel_idx,                             // token_parallel_core_id
         };
 
@@ -527,20 +561,22 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
-    Tensor& output_tensor,
+    Tensor& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     for (const auto& core : cores) {
-        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
         reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
         reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
+        reader_runtime_args.at(2) = tensor_args.dense_activations_tensor.buffer()->address();
 
-        writer_runtime_args.at(0) = output_tensor.buffer()->address();
+        writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
         writer_runtime_args.at(3) = (uint32_t)init_semaphore.address();
-        writer_runtime_args.at(4) = optional_cross_device_semaphore.has_value()
+
+        writer_runtime_args.at(4) = (optional_cross_device_semaphore.has_value())
                                         ? optional_cross_device_semaphore->address()
                                         : cross_device_semaphore.address();
     }

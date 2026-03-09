@@ -84,7 +84,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
                 ----------------------------------
 
 
-            dense_metadata_tensor (ttnn.Tensor): Metadata tensor provided by all_to_all_dispatch_selective_tilize
+            dense_activations_tensor (ttnn.Tensor): Token activations tensor provided by all_to_all_dispatch_selective_tilize
             dense_token_maps_tensor (ttnn.Tensor): Sparse output tokens tensor provided by all_to_all_dispatch_selective_tilize
             dense_token_counts_tensor (ttnn.Tensor): Active token counts tensor all_to_all_dispatch_selective_tilize
             hidden_size (int): H
@@ -105,7 +105,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             optional_cross_device_semaphore (ttnn.GlobalSemaphore): Optional preallocated signaling semaphore
 
         Returns:
-            (ttnn.Tensor) [T*D[A], E*D[A], H] sparse output tensor.
+            (ttnn.Tensor) [K, T*D[A], H] dense output tensor, sharded on dim 1 across cluster devices.
 
         )doc";
 
@@ -115,7 +115,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
         ttnn::overload_t(
             &ttnn::experimental::selective_reduce_combine,
             nb::arg("dense_input_tensor").noconvert(),
-            nb::arg("dense_metadata_tensor").noconvert(),
+            nb::arg("dense_activations_tensor").noconvert(),
             nb::arg("dense_token_maps_tensor").noconvert(),
             nb::arg("dense_token_counts_tensor").noconvert(),
             nb::arg("hidden_size"),

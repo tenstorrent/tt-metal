@@ -936,7 +936,7 @@ void kernel_main() {
             // Wait until previous chunk arrives on the matmul cores before reading in another chunk of tokens.
             // Since both the reader and writer use NoC1, we want writer to have priority access so that chunks
             // arrive at the matmul cores earlier. Also, to do linked mcast transactions we need NoC to be completely
-            // idle during mcast. The very last wait is technically redundent since we won't be reading in another chunk
+            // idle during mcast. The very last wait is technically redundant since we won't be reading in another chunk
             // of tokens, however it's still required so we don't use NoC1 to write out the output tensors until the
             // last linked mcast completes.
             noc_semaphore_wait(

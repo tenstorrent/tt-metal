@@ -74,7 +74,7 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
-    Tensor& output_tensor,
+    Tensor& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);

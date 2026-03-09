@@ -336,7 +336,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
-    // Tilize drain-sync-core propogates this to the tilize non-drain-sync cores
+    // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
     auto matmul_chunk_available_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
@@ -1121,7 +1121,8 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
         .hidden_size = hidden_size,
-        .total_tokens = tokens,
+        .batch_size = 1,
+        .seq_size = tokens,
         .select_experts_k = selected_experts_k,
         .experts = experts,
         .num_links = args.combine_num_links.value_or(4),
@@ -1139,7 +1140,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // tensor we create (output_tensor) passed explicitly to build_selective_reduce_combine_program_artifacts.
     ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
         .dense_input_tensor = tilize_output_tensor,
-        .dense_metadata_tensor = tilize_expert_activation_output_tensor,
+        .dense_activations_tensor = tilize_expert_activation_output_tensor,
         .dense_token_maps_tensor = tilize_e_t_output_tensor,
         .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor
         //.optional_output_tensor = std::nullopt,
@@ -1261,7 +1262,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
             // MoE compute op does not have an optional output tensor; do not pass it in tensor_args.
             ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
                 .dense_input_tensor = tilize_output_tensor,
-                .dense_metadata_tensor = tilize_expert_activation_output_tensor,
+                .dense_activations_tensor = tilize_expert_activation_output_tensor,
                 .dense_token_maps_tensor = tilize_e_t_output_tensor,
                 .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
                 .optional_output_tensor = std::nullopt,

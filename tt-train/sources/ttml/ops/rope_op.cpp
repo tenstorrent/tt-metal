@@ -4,7 +4,6 @@
 
 #include "ops/rope_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <numbers>
 
 #include "autograd/auto_context.hpp"
@@ -13,6 +12,11 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttml::ops {
 
@@ -179,8 +183,7 @@ autograd::TensorPtr rope(
             input->add_grad(unsquished);
         };
 
-    auto links = autograd::get_links(input);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
 
     return out;
 }

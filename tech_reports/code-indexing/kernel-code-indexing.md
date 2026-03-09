@@ -64,7 +64,7 @@ This will generate something like:
 
 `python3 ./scripts/build_kernel_compile_commands_json.py --input-command="python3 /home/ubuntu/projects/tt-metal/experiments/calls_ttnn_mean.py" --output-dir="build_Debug" --merge`
 
-### build_kernel_compile_commands_json.py scrip
+### build_kernel_compile_commands_json.py script
 
 Due to the nuances of how kernels are built on the device, there are a few things to keep in mind:
 1. All kernels for NCRISC/TRISC0/TRISC1/TRISC2/BRISC are included in ncrisc.cc/trisc0.cc/trisc1.cc/trisc2.cc/brisc.cc, so to enable indexing inside the kernel, the script has to search for actual kernel files and update generated compile_commands.json.

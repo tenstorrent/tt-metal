@@ -1,6 +1,0 @@
-Kernels
-=======
-
-.. toctree::
-  CreateKernel
-  CreateKernelFromString

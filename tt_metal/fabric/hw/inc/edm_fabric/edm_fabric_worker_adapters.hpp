@@ -320,7 +320,7 @@ struct WorkerToFabricEdmSenderImpl {
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
             // then once we get it we will use that address for the teardown ack
             // Note this is safe because only the worker can initiate teardown (and it will not do it until)
-            // some time atleast after it copied the wrptr out of the worker_teardown_addr
+            // some time at least after it copied the wrptr out of the worker_teardown_addr
             noc_async_read(
                 remote_buffer_index_addr,
                 reinterpret_cast<size_t>(this->worker_teardown_addr),
@@ -567,8 +567,8 @@ private:
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = get_fabric_worker_noc()) {
-        this->advance_buffer_slot_write_index();
         this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance>(noc);
+        this->advance_buffer_slot_write_index();
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>

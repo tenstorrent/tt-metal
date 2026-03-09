@@ -1,0 +1,31 @@
+2026-03-03 23:37:35.691 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:48)
+2026-03-03 23:37:35.984 | DEBUG    | conftest:mesh_device:580 - multidevice with 16 devices is created
+2026-03-03 23:37:44.389 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:485 - Compiling model
+2026-03-03 23:37:45.939 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:489 - Capturing Warmup
+2026-03-03 23:37:45.940 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:491 - Capturing Warmup iterations
+2026-03-03 23:37:45.976 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:496 - Warmup done
+2026-03-03 23:37:45.976 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:498 - Capturing Trace
+2026-03-03 23:37:46.099 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:504 - Starting Trace perf test...
+2026-03-03 23:37:46.101 | INFO     | tracy:signpost:44 - start
+2026-03-03 23:37:46.108 | INFO     | tracy:signpost:44 - stop
+2026-03-03 23:37:46.108 | INFO     | issues.test_selective_combine_6U:_run_op_with_trace:523 - Time taken e2e: 114.75000000000001 us
+2026-03-03 23:38:20.013 | INFO     | issues.test_selective_combine_6U:test_sample:776 - Decode iter: 0 success
+PASSED
+
+=============================================================================================================== PASSES ================================================================================================================
+--------------------------------------------------------------------------- generated xml file: /work/tt-metal/generated/test_reports/most_recent_tests.xml ---------------------------------------------------------------------------
+========================================================================================================== slowest durations ==========================================================================================================
+44.03s call     issues/test_selective_combine_6U.py::test_sample[wormhole_b0-40-1-mux_core_range0-4-4-4-worker_core_range0-1-1-7168-2-32-512-mesh_device0-device_params0]
+6.09s setup    issues/test_selective_combine_6U.py::test_sample[wormhole_b0-40-1-mux_core_range0-4-4-4-worker_core_range0-1-1-7168-2-32-512-mesh_device0-device_params0]
+0.04s teardown issues/test_selective_combine_6U.py::test_sample[wormhole_b0-40-1-mux_core_range0-4-4-4-worker_core_range0-1-1-7168-2-32-512-mesh_device0-device_params0]
+======================================================================================================= short test summary info =======================================================================================================
+PASSED issues/test_selective_combine_6U.py::test_sample[wormhole_b0-40-1-mux_core_range0-4-4-4-worker_core_range0-1-1-7168-2-32-512-mesh_device0-device_params0]
+========================================================================================================= 1 passed in 50.23s ==========================================================================================================
+2026-03-03 23:38:21.238 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:477)
+2026-03-03 23:38:21.238 | info     |             UMD | Closing devices in cluster (cluster.cpp:975)
+
+
+
+
+
+main branch
