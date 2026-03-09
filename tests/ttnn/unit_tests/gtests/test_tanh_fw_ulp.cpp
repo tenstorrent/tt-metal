@@ -683,7 +683,7 @@ TEST_F(TanhFwUlpTest, UlpCalculatorVerification) {
             continue;
         }
         uint16_t norm = bf16_ulp_tanh_fw::bf16_daz_normalize(bits);
-        if (seen_norm.count(norm)) {
+        if (seen_norm.contains(norm)) {
             continue;
         }
         seen_norm.insert(norm);
