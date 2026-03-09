@@ -842,7 +842,43 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
             }
         }
     }
-    return core_ranges;
+
+    // Fast path: if no ranges overlap, return as-is.
+    bool has_overlap = false;
+    for (size_t i = 0; i < core_ranges.size() && !has_overlap; ++i) {
+        for (size_t j = i + 1; j < core_ranges.size(); ++j) {
+            if (core_ranges[i].intersects(core_ranges[j])) {
+                has_overlap = true;
+                break;
+            }
+        }
+    }
+    if (!has_overlap) {
+        return core_ranges;
+    }
+
+    // Ensure all returned CoreRanges are non-overlapping. During dispatch, each
+    // CoreRange's CB config payload is built from all CBs whose core_ranges intersect
+    // it. When a superset range (e.g. all_cores) overlaps with sub-ranges that carry
+    // different configs for the same CB index, the payload can only hold one config
+    // per index — the last one written wins, and the multicast sends the wrong config
+    // to cores that need the other. By making ranges non-overlapping, each range's
+    // intersects()-based CB lookup returns only CBs that fully cover it, so every
+    // core receives exactly the correct set of configs in a single multicast.
+    //
+    // Algorithm: process ranges in order. For each new range, subtract all
+    // previously claimed regions (using CoreRangeSet::subtract) and keep only the
+    // uncovered pieces.
+    CoreRangeSet claimed;
+    std::vector<CoreRange> result;
+    for (const auto& cr : core_ranges) {
+        CoreRangeSet uncovered = CoreRangeSet(cr).subtract(claimed);
+        for (const auto& piece : uncovered.ranges()) {
+            result.push_back(piece);
+        }
+        claimed = claimed.merge(CoreRangeSet(cr));
+    }
+    return result;
 }
 
 void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
