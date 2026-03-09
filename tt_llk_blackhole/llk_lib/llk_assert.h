@@ -8,7 +8,8 @@
 
 #ifdef ENV_LLK_INFRA
 
-#include "ckernel.h"
+#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
+#define UNREACHABLE()       __builtin_unreachable()
 
 #define LLK_ASSERT(condition, message) \
     do                                 \
