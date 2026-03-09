@@ -30,15 +30,13 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
-namespace tt::tt_metal {
-class PhysicalSystemDescriptor;
-}
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_metal::distributed {
 
 bool is_device_coord_mmio_mapped(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord);
 
-tt::tt_metal::PhysicalSystemDescriptor make_physical_system_descriptor();
+PhysicalSystemDescriptor make_physical_system_descriptor();
 
 // Create an L1 mesh buffer sharded to a single logical core.
 std::shared_ptr<MeshBuffer> make_l1_mesh_buffer(MeshDevice* mesh_device, const CoreCoord& core, DeviceAddr size);

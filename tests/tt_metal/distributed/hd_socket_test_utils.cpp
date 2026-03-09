@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hd_socket_test_utils.hpp"
-#include "physical_system_descriptor.hpp"
 
 namespace tt::tt_metal::distributed {
 
