@@ -4,10 +4,9 @@
 
 #include "layernorm_fw.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_fw_device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::metal {
 
