@@ -38,8 +38,8 @@ struct DramNeighbourConfig {
     uint32_t pages_per_bank = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    std::reference_wrapper<const std::map<uint32_t, uint32_t>> core_dram_map;
-    std::reference_wrapper<const std::map<uint32_t, IndexRange>> dram_index_map;
+    const std::map<uint32_t, uint32_t>& core_dram_map;
+    const std::map<uint32_t, IndexRange>& dram_index_map;
 
     DramNeighbourConfig(
         uint32_t test_id_,
@@ -72,8 +72,8 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
     const size_t total_size_bytes = num_pages * test_config.page_size_bytes;
-    const map<uint32_t, uint32_t>& core_dram_map = test_config.core_dram_map.get();
-    const map<uint32_t, IndexRange>& dram_index_map = test_config.dram_index_map.get();
+    const map<uint32_t, uint32_t>& core_dram_map = test_config.core_dram_map;
+    const map<uint32_t, IndexRange>& dram_index_map = test_config.dram_index_map;
 
     std::vector<CoreCoord> dram_cores;
     unordered_set<uint32_t> dram_visited;
