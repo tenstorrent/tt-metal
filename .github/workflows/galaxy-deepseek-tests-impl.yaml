@@ -61,6 +61,11 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"${{ inputs.test-type }}\")]")
           fi
 
+          # Remove final-op-unit tests when Tracy profiling is not enabled
+          if [ "${{ inputs.enable-tracy }}" != "true" ]; then
+            matrix=$(echo "$matrix" | jq -c '[.[] | select(."test-type" != "final-op-unit")]')
+          fi
+
           # Fail fast if the matrix is empty (invalid test-type selected)
           if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
             echo "Error: Invalid test-type selected: '${{ inputs.test-type }}'"
@@ -193,21 +198,6 @@ jobs:
             --ignore=models/demos/deepseek_v3/tests/test_mlp.py \
             --ignore=models/demos/deepseek_v3/tests/test_mla.py \
             --timeout 600 --durations=0
-      - name: Run DeepSeek op unit tests
-        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          echo "Skipping separate functional fused-op run for final-op-unit."
-          echo "final-op-unit now uses Tracy-backed device perf tests as the single execution path."
-      - name: Check device performance test availability
-        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
-        run: |
-          if [ "${{ inputs.enable-tracy }}" != "true" ]; then
-            echo "ERROR: final-op-unit requires Tracy-enabled execution for fused-op device perf tests."
-            echo "Set enable-tracy: true in workflow dispatch/caller."
-            exit 1
-          fi
-          echo "✓ Tracy profiling ENABLED - final-op-unit device perf tests will run"
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
