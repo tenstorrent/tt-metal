@@ -23,13 +23,13 @@
 namespace tt::tt_metal {
 
 // These Tests verify built in gcc atomics on Tensix RISCV processors
-// https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.htmla
+// https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html
 
 class RISCVAtomicsFixture : public MeshDispatchFixture {
 protected:
     static constexpr CoreCoord core = {0, 0};
     static constexpr uint32_t SENTINEL{0xABABABAB};
-    static constexpr uint32_t iterations{2e3};
+    static constexpr uint32_t iterations{2000};
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/riscv_atomics.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
@@ -51,12 +51,14 @@ protected:
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
-        // Quasar zero-inits in 64-bit slots; BH uses 32-bit slot
+        // Number of uint32_t words per atomic_type: Quasar uses 64-bit atomics (2 words), BH uses 32-bit (1 word)
         word_count_32b = is_quasar ? 2 : 1;
-        set_rtas();
     }
 
     void set_rtas() {
+        if (!runtime_args.empty()) {
+            return;
+        }
         runtime_args.push_back(l1_unreserved_base);
         runtime_args.push_back(iterations);
     }
@@ -98,16 +100,15 @@ protected:
     }
 };
 
-// Tests __atomic_load_n and __atomic_store_n on RISC. DM = 0 will write a value to L1
-// and atomically set a ready flag for other DM(s) to read that flag and read the value to L1
-// Expected to read back that value on Host
+// DM0 (writer) atomically stores SENTINEL to L1, other DM(s) (reader) spin on atomic load until they see it.
+// Host reads back each reader's result slot and verifies SENTINEL was observed.
 TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
     std::map<std::string, std::string> dm_defines = {
         {"TEST_ATOMIC_LOAD_STORE", "1"}, {"SENTINEL", std::to_string(SENTINEL)}};
 
     // Number of slots used in L1:
-    // shared_value_ptr producer DM slot + ready_flag_ptr slot + one result slot per consumer DM x # of DMs
-    const uint32_t l1_slot_count = num_dms_ + 1;
+    // 1 shared_value slot + (num_dms - 1) reader result slots
+    const uint32_t l1_slot_count = num_dms_;
 
     // Zero-Init the L1 atomics scratch space
     std::vector<uint32_t> initial_l1_words(l1_slot_count * word_count_32b, 0);
@@ -116,14 +117,14 @@ TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
     // Run the test
     run_riscv_atomics_test(dm_defines);
 
-    // Skip shared_value_ptr + ready_flag_ptr L1 address offset
-    // and read only consumer result slots on host
-    constexpr uint32_t l1_offset = 2;
+    // Skip shared_value_ptr slot; read only consumer result slots
+    constexpr uint32_t l1_offset = 1;
     const uint32_t read_addr = l1_unreserved_base + l1_offset * sizeof(uint32_t) * word_count_32b;
     // Read back words written by all DMs to verify atomic load/store went through properly
     const uint32_t read_size_bytes = sizeof(uint32_t) * (num_dms_ - 1) * word_count_32b;
 
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, read_addr, read_size_bytes, result);
+    ASSERT_EQ(result.size(), (num_dms_ - 1) * word_count_32b);
 
     // Quasar publishes a 64-bit result, while BH reads back a 32-bit result
     if (is_quasar) {
@@ -139,17 +140,15 @@ TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
     }
 }
 
-// Tests __atomic_add_fetch on RISC. Each DM will atomically increment a counter 2e3 times.
-//  Expected to read back N x 2e3 back on host verifies atomic increments
+// All DMs atomically increment a shared L1 counter 2000 times each.
+// Host verifies final count == num_dms * 2000 to confirm atomic increments
 TEST_F(RISCVAtomicsFixture, TestAtomicAddFetchRISCV) {
-    std::map<std::string, std::string> dm_defines = {
-        {"TEST_ATOMIC_ADD_FETCH", "1"}, {"SENTINEL", std::to_string(SENTINEL)}};
+    std::map<std::string, std::string> dm_defines = {{"TEST_ATOMIC_ADD_FETCH", "1"}};
 
     // Zero-Init the L1 atomics scratch space
     std::vector<uint32_t> initial_l1_words(word_count_32b, 0);
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, initial_l1_words);
 
-    // We launch the same kernel on all DMs. So each DM should've atomically incremented the counter 2e3 times
     const uint32_t expected_result = num_dms_ * iterations;
     const uint32_t read_size_bytes = sizeof(uint32_t) * word_count_32b;
 
@@ -157,6 +156,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicAddFetchRISCV) {
     run_riscv_atomics_test(dm_defines);
 
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, read_size_bytes, result);
+    ASSERT_EQ(result.size(), word_count_32b);
 
     // Quasar publishes a 64-bit result, while BH reads back a 32-bit result
     uint64_t observed = result[0];
@@ -170,20 +170,19 @@ TEST_F(RISCVAtomicsFixture, TestAtomicAddFetchRISCV) {
         << "Kernel should have performed " << expected_result << " atomic additions";
 }
 
-// Tests __atomic_compare_exchange_n on RISC. Each DM will CAS a value to L1 2e3 times.
-// Expected to read back N x 2e3 back on host verifies atomic CAS success
+// All DMs CAS increment a shared L1 counter 2000 times each. Zalrsc extension only supported on Quasar.
+// Host verifies final count == num_dms * 2000 to confirm atomic CAS increments
 TEST_F(RISCVAtomicsFixture, TestAtomicCASRISCV) {
     if (!is_quasar) {
         GTEST_SKIP() << "RISCV CAS Atomics only supported on Quasar";
     }
 
-    std::map<std::string, std::string> dm_defines = {{"TEST_ATOMIC_CAS", "1"}, {"SENTINEL", std::to_string(SENTINEL)}};
+    std::map<std::string, std::string> dm_defines = {{"TEST_ATOMIC_CAS", "1"}};
 
     // Zero-Init the L1 atomics scratch space
     std::vector<uint32_t> initial_l1_words(word_count_32b, 0);
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, initial_l1_words);
 
-    // We launch the same kernel on all DMs. So each DM should've atomically CAS the counter 2e3 times
     const uint64_t expected_result = num_dms_ * iterations;
     const uint32_t read_size_bytes = sizeof(uint32_t) * word_count_32b;
 
@@ -191,6 +190,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicCASRISCV) {
     run_riscv_atomics_test(dm_defines);
 
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, read_size_bytes, result);
+    ASSERT_EQ(result.size(), word_count_32b);
 
     // Quasar publishes a 64-bit result
     const uint64_t result64 = static_cast<uint64_t>(result[0]) | (static_cast<uint64_t>(result[1]) << 32);
