@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 """
 Comprehensive BF16 saturation analysis for sech²(x).
@@ -118,8 +122,6 @@ def main():
     # Find the transition from non-zero to zero
     last_nonzero = None
     first_zero = None
-    transition_values = []
-
     for r in results:
         if r["ref_bf16"] != 0.0:
             last_nonzero = r
@@ -252,7 +254,6 @@ def main():
         i, r = nonzero[j]
         if j > 0:
             prev_i, prev_r = nonzero[j - 1]
-            step_bits = prev_r["ref_bf16_bits"] - r["ref_bf16_bits"]  # Should be positive (decreasing)
             step_ulps = bf16_order_index(prev_r["ref_bf16_bits"]) - bf16_order_index(r["ref_bf16_bits"])
             note = ""
             if step_ulps == 1:

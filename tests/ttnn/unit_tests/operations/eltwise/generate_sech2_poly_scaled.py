@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 """
 Generate minimax polynomial coefficients for sech²(x) using scaled variables.
