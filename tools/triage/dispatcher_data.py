@@ -34,6 +34,55 @@ from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
 from run_checks import RunChecks, BlockType
 
+
+class _DramL1MemoryAccess(MemoryAccess):
+    """MemoryAccess for DRAM L1 memory accessed via NOC.
+
+    DRAM L1 private addresses (as recorded in ELF DWARF) start at 0x0, but the
+    NOC-visible base address is 0x2000000000. L1MemoryAccess is not usable here
+    because it assumes private_address == noc_address (true for Tensix, not DRAM).
+
+    The noc_memory_map entry for "l1" is registered with just_noc_address(), so
+    private_address is None there. We read the NOC base from noc_memory_map and
+    use 0 as the private base (DRAM L1 always starts at private address 0x0).
+    """
+
+    def __init__(self, location: OnChipCoordinate):
+        self._location = location
+        l1 = location.noc_block.noc_memory_map.find_by_name("l1")
+        if l1 is None:
+            raise Exception(f"Could not find L1 memory block for DRAM location {location}")
+        if l1.memory_block.address.noc_address is None:
+            raise Exception(f"DRAM L1 memory block has no NOC address at {location}")
+        self._noc_base = l1.memory_block.address.noc_address
+
+    def _to_noc(self, address: int) -> int:
+        # address is a private (ELF) address starting from 0x0; translate to NOC address
+        return self._noc_base + address
+
+    def read(self, address: int, size_bytes: int) -> bytes:
+        return self._location.noc_read(self._to_noc(address), size_bytes)
+
+    def write(self, address: int, data: bytes) -> None:
+        self._location.noc_write(self._to_noc(address), data)
+
+
+def create_l1_mem_access(location: OnChipCoordinate) -> MemoryAccess:
+    """Create the appropriate L1 MemoryAccess for any block type.
+
+    For most blocks, private_address == noc_address so MemoryAccess.create_l1()
+    works directly. DRAM is the exception: its L1 private base (0x0) differs from
+    its NOC base (0x2000000000), so it needs the offset-aware _DramL1MemoryAccess.
+
+    Detection: DRAM registers its L1 in noc_memory_map via just_noc_address(), which
+    strips private_address. Other blocks (Tensix, ETH) register the full MemoryBlock
+    with private_address set, so private_address being None signals the DRAM case.
+    """
+    l1 = location.noc_block.noc_memory_map.find_by_name("l1")
+    if l1 is not None and l1.memory_block.address.noc_address is not None and l1.memory_block.address.private_address is None:
+        return _DramL1MemoryAccess(location)
+    return MemoryAccess.create_l1(location)
+
 script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
@@ -289,21 +338,26 @@ class DispatcherData:
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
-        l1_mem_access = MemoryAccess.create_l1(location)
         match block_type:
             case "tensix":
                 fw_elf = self._brisc_elf
+                mem_access = MemoryAccess.create_l1(location)
             case "idle_eth":
                 fw_elf = self._idle_erisc_elf
+                mem_access = MemoryAccess.create_l1(location)
             case "active_eth":
                 fw_elf = self._active_erisc_elf
+                mem_access = MemoryAccess.create_l1(location)
             case "dram":
                 if self._drisc_elf is None:
                     raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
                 fw_elf = self._drisc_elf
+                # DRAM L1 NOC base (0x2000000000) differs from the private address base (0x0)
+                # that the ELF uses, so we cannot use L1MemoryAccess directly.
+                mem_access = _DramL1MemoryAccess(location)
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
-        return fw_elf.read_global("mailboxes", l1_mem_access)
+        return fw_elf.read_global("mailboxes", mem_access)
 
     def get_core_data(
         self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
