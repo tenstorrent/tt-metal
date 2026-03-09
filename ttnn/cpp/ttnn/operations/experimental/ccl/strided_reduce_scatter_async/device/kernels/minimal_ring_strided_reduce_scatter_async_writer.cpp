@@ -404,7 +404,9 @@ void kernel_main() {
                                                         NocUnicastScatterCommandHeader(
                                                             {noc_address0, noc_address1, noc_address2}));
                                                 } else {
-                                                    // Ghost tile(s) in the middle: per-tile writes.
+                                                    // Valid tiles are non-contiguous in L1 (ghost tile(s)
+                                                    // between them in the CB batch); write each valid tile
+                                                    // individually from its own L1 address.
                                                     fabric_unicast_noc_unicast_write_with_state<
                                                         UnicastWriteUpdateMask::DstAddr>(
                                                         &mux_connection_handle,
@@ -442,7 +444,7 @@ void kernel_main() {
                                                         valid_l1_addrs[0],
                                                         NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                                                 } else {
-                                                    // Ghost tile(s) in the middle: per-tile writes.
+                                                    // Valid tiles are non-contiguous in L1; write each individually.
                                                     fabric_unicast_noc_unicast_write_with_state<
                                                         UnicastWriteUpdateMask::DstAddr>(
                                                         &mux_connection_handle,
