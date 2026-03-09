@@ -1277,6 +1277,7 @@ void sdpa_ring_v2(
     const bool is_last_ring_iter = false,
     const uint32_t q_per_core = 1,
     const LightweightMaskContext& lw_mask = {}) {
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
 
     uint32_t KV_chunks_processed_in_iter = 0;
@@ -1404,8 +1405,7 @@ void sdpa_ring_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
-                q_prev, q_cur, is_last, is_first, apply_mask, lw_num_padded, lw_partial_tile_idx, effective_Sk_param);
+                cb_mask_in>(q_prev, q_cur, is_last, is_first, apply_mask, lw_partial_tile_idx, effective_Sk_param);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
