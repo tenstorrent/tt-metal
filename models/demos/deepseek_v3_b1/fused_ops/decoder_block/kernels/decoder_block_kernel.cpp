@@ -2281,7 +2281,7 @@ void kernel_main() {
         Core::Shared::is_mcast_receiver_core,
         false>
         residual_mcast;
-    residual_mcast.init(moe.routed.residual_mcast_args);
+    // residual_mcast.init(moe.routed.residual_mcast_args);
 
     deepseek_b1_ops::Mcast::Op<
         Moe::Routed::McastCTArgs,
@@ -2520,7 +2520,7 @@ void kernel_main() {
     }
 
     DPRINT << " MCAST_TEARDOWN END" << ENDL();
-    residual_mcast.teardown();
+    // residual_mcast.teardown();
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();
