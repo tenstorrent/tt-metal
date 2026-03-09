@@ -19,9 +19,6 @@ namespace tt::tt_fabric {
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
 struct RouterStaticSizedChannelWriterAdapter;
 
-template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
-struct RouterElasticChannelWriterAdapter;
-
 /**
  * Primary template for channel traits.
  * Specialized for each channel type to expose their properties.
@@ -35,18 +32,7 @@ struct ChannelTraits;
 template <uint8_t NUM_BUFFERS>
 struct ChannelTraits<RouterStaticSizedChannelWriterAdapter<NUM_BUFFERS>> {
     static constexpr uint8_t num_buffers = NUM_BUFFERS;
-    static constexpr bool is_elastic = false;
     using channel_type = RouterStaticSizedChannelWriterAdapter<NUM_BUFFERS>;
-};
-
-/**
- * Specialization for RouterElasticChannelWriterAdapter
- */
-template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
-struct ChannelTraits<RouterElasticChannelWriterAdapter<SLOTS_PER_CHUNK, CHUNK_SIZE_BYTES>> {
-    static constexpr uint8_t num_buffers = SLOTS_PER_CHUNK;
-    static constexpr bool is_elastic = true;
-    using channel_type = RouterElasticChannelWriterAdapter<SLOTS_PER_CHUNK, CHUNK_SIZE_BYTES>;
 };
 
 /**
@@ -64,14 +50,6 @@ struct has_channel_traits<T, std::void_t<decltype(ChannelTraits<T>::num_buffers)
 template <typename ChannelT>
 constexpr uint8_t get_num_buffers() {
     return ChannelTraits<ChannelT>::num_buffers;
-}
-
-/**
- * Helper function to check if a channel type is elastic
- */
-template <typename ChannelT>
-constexpr bool is_elastic_channel() {
-    return ChannelTraits<ChannelT>::is_elastic;
 }
 
 }  // namespace tt::tt_fabric
