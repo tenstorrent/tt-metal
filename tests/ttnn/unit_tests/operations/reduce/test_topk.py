@@ -188,6 +188,7 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
