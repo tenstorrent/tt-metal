@@ -22,8 +22,6 @@ inline Tensor typecast_impl(
         return input_tensor;
     }
     // Handle host tensors by delegating to to_dtype
-    log_info(tt::LogOp, "[DEBUG] typecast_impl ");
-    ZoneScopedN("ttnn::operations::typecast");
     if (is_cpu_tensor(input_tensor)) {
         TT_FATAL(
             !optional_output_tensor.has_value(),

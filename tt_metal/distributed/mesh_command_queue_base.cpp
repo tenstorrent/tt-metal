@@ -22,8 +22,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
-#include <tracy/Tracy.hpp>
-
 namespace tt::tt_metal::distributed {
 
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
@@ -227,7 +225,6 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const std::shared_ptr<MeshBuffer>& buffer,
     const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
-    ZoneScopedN("MeshCommandQueueBase::enqueue_write_shards_nolock");
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
 

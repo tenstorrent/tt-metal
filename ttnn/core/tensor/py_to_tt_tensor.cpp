@@ -67,26 +67,6 @@ Tensor create_tt_tensor_from_host_data(
     ttnn::distributed::MeshDevice* device,
     bool preserve_nan_values) {
     using namespace tt::tt_metal;
-
-    ZoneScopedN("ttnn::create_tt_tensor_from_host_data");
-    auto args_str = fmt::format(
-        "convert_python_tensor_to_tt_tensor shape: {}\n src_data_type: {}\n dst_dtype: {}\n layout: {}\n"
-        "memory_config: "
-        "{}\n device: {}\n cq_id: {}\n  mesh_mapper: {}\n pad_value: {}\n",
-        tensor_shape,
-        src_dtype,
-        dst_dtype,
-        layout,
-        memory_config,
-        device != nullptr ? "not null" : "null",
-        cq_id,
-        mesh_mapper ? "not null" : "null",
-        pad_value);
-
-    std::replace(args_str.begin(), args_str.end(), '\n', '\t');
-    log_info(tt::LogAlways, "{}", args_str);
-    ZoneText(args_str.c_str(), args_str.size());
-
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile);  // memory_config
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
@@ -215,8 +195,6 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value,
     bool preserve_nan_values,
     bool col_tilize) {
-    ZoneScopedN("ttnn::convert_python_tensor_to_tt_tensor");
-
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
     }

@@ -157,19 +157,6 @@ public:
         TT_FATAL(
             span.size() == volume, "Current buffer size is {} different from shape volume {}", span.size(), volume);
 
-        int idx = 0;
-        for (const auto& placement : config_.placements) {
-            if (std::holds_alternative<MeshMapperConfig::Shard>(placement)) {
-                const auto& shard = std::get<MeshMapperConfig::Shard>(placement);
-                log_info(tt::LogAlways, "[DEBUG] Shard dimension: {} at index {}", shard.dim, idx);
-            } else if (std::holds_alternative<MeshMapperConfig::Replicate>(placement)) {
-                log_info(tt::LogAlways, "[DEBUG] Replicate at index {}", idx);
-            } else {
-                log_info(tt::LogAlways, "[DEBUG] Unknown placement at index {}", idx);
-            }
-            idx++;
-        }
-
         // Perform sharding, followed by replication.
         tt::stl::SmallVector<size_t> shard_dims;
         tt::stl::SmallVector<int> num_chunks_per_dim;
@@ -278,7 +265,6 @@ private:
         T pad_value,
         const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::stl::SmallVector<int>& shard_dims) const {
-        ZoneScopedN("create_tensor");
         const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
         // Determine whether we can borrow directly from the source buffer instead of copying.
@@ -403,7 +389,6 @@ public:
 
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
-        ZoneScopedN("MeshToTensor::compose");
         const auto cpu_tensor = tensor.cpu();
         auto all_gather_tensor = host_ccl::all_gather(cpu_tensor);
         const auto& src_buffer = all_gather_tensor.host_storage().buffer();

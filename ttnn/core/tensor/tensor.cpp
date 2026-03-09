@@ -45,7 +45,6 @@ std::atomic<std::uint64_t> tensor_id_counter{0};
 
 template <typename T>
 Tensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
-    ZoneScopedN("ttnn::Tensor::from_span");
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec =
@@ -183,7 +182,6 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    ZoneScopedN("ttnn::Tensor::from_span");
     // from_span do first copy of the data to pass to from_vector
     // than from_vector allocate another vector to change layout, in that use case we don't need first
     // allocation.
@@ -200,7 +198,6 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    ZoneScopedN("ttnn::Tensor::from_borrowed_data");
     size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -214,7 +211,6 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    ZoneScopedN("ttnn::Tensor::from_vector");
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -405,12 +401,10 @@ Tensor Tensor::to_device(
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<tt::tt_metal::QueueId> cq_id) const {
-    ZoneScopedN("ttnn::Tensor::to_device");
     return tt::tt_metal::to_device(*this, mesh_device, mem_config, cq_id);
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) const {
-    ZoneScopedN("ttnn::Tensor::cpu");
     return tt::tt_metal::cpu(*this, blocking, cq_id);
 }
 

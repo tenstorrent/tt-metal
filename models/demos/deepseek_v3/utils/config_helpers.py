@@ -1061,9 +1061,6 @@ def _shard_device_impl(
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    print(f"[PY_DEBUG][W] tensor shape: {tensor.shape}")
-    print(f"[PY_DEBUG][W] memory_config: {memory_config}")
-    print(f"[PY_DEBUG][W] dtype: {dtype}")
     ttnn_tensor = ttnn.from_torch(
         tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
     )
