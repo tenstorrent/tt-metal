@@ -481,6 +481,15 @@ void kernel_main() {
         }
     }
 
+    // DEBUG: Print NCRISC local expert IDs (dev 0 only, others compiled away)
+    if (linearized_mesh_coord == 0) {
+        DPRINT << "[NCRISC dev=0] local_expert_count=" << local_expert_count << " ids:";
+        for (uint32_t dbg_e = 0; dbg_e < local_expert_count; dbg_e++) {
+            DPRINT << " " << (uint32_t)local_expert_ids[dbg_e];
+        }
+        DPRINT << ENDL();
+    }
+
     // Pre-compute base addresses (avoid repeated calls in hot loop)
     const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
     const uint32_t e_t_buffer_base = get_write_ptr(e_t_cb_id);
@@ -529,6 +538,22 @@ void kernel_main() {
         const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
         const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
 
+        // Skip non-dispatched slots: valid top-K routing always selects K distinct experts.
+        // Zero-initialized (non-dispatched) slots have all-identical indices (typically all zero).
+        // Guard with selected_experts_k > 1 to avoid skipping K=1 single-expert routing.
+        if constexpr (selected_experts_k > 1) {
+            bool all_same = true;
+            for (uint32_t kk = 1; kk < selected_experts_k; kk++) {
+                if (token_indices[kk] != token_indices[0]) {
+                    all_same = false;
+                    break;
+                }
+            }
+            if (all_same) {
+                continue;  // Not dispatched to this device
+            }
+        }
+
         // Defer pointer calculation until we know token is activated
         uint32_t* expert_activation_l1_ptr = nullptr;
         bool activated = false;
@@ -570,6 +595,15 @@ void kernel_main() {
         if (activated) {
             num_activated_tokens++;
         }
+    }
+
+    // DEBUG: Print NCRISC per-expert counts (dev 0 only, others compiled away)
+    if (linearized_mesh_coord == 0) {
+        DPRINT << "[NCRISC dev=0] activated=" << num_activated_tokens << " counts:";
+        for (uint32_t dbg_e = 0; dbg_e < experts_per_device; dbg_e++) {
+            DPRINT << " " << num_activated_tokens_per_expert[dbg_e];
+        }
+        DPRINT << ENDL();
     }
 
     // ========== ALL CORES: WAIT FOR BRISC AND MERGE ==========

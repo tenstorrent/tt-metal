@@ -537,7 +537,6 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
             logger.info(f"Device {device_idx}): Passed")
 
     # Convert sparse to L1 and reshape to 2D for moe_gpt
-    breakpoint()
     tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [total_tokens, hidden_size])
 
@@ -552,7 +551,6 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
         cluster_axis=cluster_axis,
     )
     ttnn.synchronize_device(mesh_device)
-    breakpoint()
 
     # --- Verify per-device moe_gpt output against torch reference ---
     tt_output = moe_gpt_outputs[4]  # ROW_MAJOR view of BLOCK_SHARDED combine output
@@ -583,6 +581,127 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
             logger.warning(f"Device {dev_idx}: FAILED")
         else:
             logger.info(f"Device {dev_idx}: Passed")
+
+    # --- Verify moe_gpt outputs 0, 1, 2 (routing metadata) ---
+    # Expected values derived from original routing (independent of dispatch correctness).
+    # output[0]: [1, padded_E_elements] UINT32 — counts[e] = tokens routed to local expert e
+    # output[1]: [1, flat] UINT32 — rows of [token_id, k_idx_0..E-1, score_0..E-1, pad],
+    #             aligned to 64 bytes; sentinel row has token_id == 0xFFFFFFFF (-1 as int32)
+    #             k_idx_e == selected_experts_k+1 means expert e not selected for this token
+    # output[2]: [E, e_t_row_elements] UINT32 — token slot indices per local expert, sentinel=0xFFFFFFFF
+    tc_per_device = ttnn.get_device_tensors(moe_gpt_outputs[0])
+    act_per_device = ttnn.get_device_tensors(moe_gpt_outputs[1])
+    et_per_device = ttnn.get_device_tensors(moe_gpt_outputs[2])
+    tc_pass = True
+    act_pass = True
+    et_pass = True
+    # Row stride for output[1]: align((2E+1)*4, l1_alignment) / 4 uint32 elements
+    # l1_alignment = hal::get_l1_alignment() = 16 bytes on TT hardware
+    l1_align_bytes = 16
+    act_row_bytes_raw = (2 * E + 1) * 4
+    act_row_bytes_aligned = (act_row_bytes_raw + l1_align_bytes - 1) // l1_align_bytes * l1_align_bytes
+    act_row_stride = act_row_bytes_aligned // 4  # uint32 elements per row
+    for dev_idx in range(total_mesh_devices):
+        # Find global expert IDs owned by this device (in order = local expert 0, 1, ..., E-1)
+        global_experts_for_dev = [e for e in range(experts_total) if int(expert_mapping_torch[0, e]) == dev_idx]
+
+        expected_counts = []
+        expected_slots_per_expert = []
+        expected_act_rows = {}  # token_id → k_indices list [E]
+        for local_e, global_e in enumerate(global_experts_for_dev):
+            routed = (expert_indices[0, 0, :, :] == global_e).any(dim=-1)
+            expected_counts.append(int(routed.sum().item()))
+            expected_slots_per_expert.append(routed.nonzero(as_tuple=True)[0].tolist())
+        for t in range(tokens_global):
+            token_experts = expert_indices[0, 0, t].tolist()
+            k_indices_expected = [selected_experts_k + 1] * E
+            activated = False
+            for local_e, global_e in enumerate(global_experts_for_dev):
+                if global_e in token_experts:
+                    k_indices_expected[local_e] = token_experts.index(global_e)
+                    activated = True
+            if activated:
+                expected_act_rows[t] = k_indices_expected
+
+        # Check output[0]: per-expert token counts (first E entries of the padded row)
+        tc_raw = ttnn.to_torch(tc_per_device[dev_idx]).flatten()
+        actual_counts = [int(tc_raw[i].item()) for i in range(E)]
+        if actual_counts != expected_counts:
+            logger.error(f"  Token counts device {dev_idx}: FAILED actual={actual_counts} expected={expected_counts}")
+            tc_pass = False
+            all_passing = False
+        else:
+            logger.info(f"  Token counts device {dev_idx}: PASSED counts={actual_counts}")
+
+        # Check output[1]: expert activation metadata rows
+        act_raw = ttnn.to_torch(act_per_device[dev_idx]).flatten()
+        actual_act_rows = {}
+        for row_idx in range(len(act_raw) // act_row_stride):
+            offset = row_idx * act_row_stride
+            token_id = int(act_raw[offset].item())
+            if token_id == -1 or token_id == 0xFFFFFFFF:  # 0xFFFFFFFF sentinel (int64 from to_torch)
+                break
+            k_indices_actual = [int(act_raw[offset + 1 + e].item()) for e in range(E)]
+            actual_act_rows[token_id] = k_indices_actual
+        if set(actual_act_rows.keys()) != set(expected_act_rows.keys()):
+            logger.error(
+                f"  Activation metadata device {dev_idx}: FAILED token set mismatch "
+                f"actual_count={len(actual_act_rows)} expected_count={len(expected_act_rows)}"
+            )
+            act_pass = False
+            all_passing = False
+        else:
+            k_mismatches = [
+                (t, actual_act_rows[t], expected_act_rows[t])
+                for t in expected_act_rows
+                if actual_act_rows[t] != expected_act_rows[t]
+            ]
+            if k_mismatches:
+                logger.error(
+                    f"  Activation metadata device {dev_idx}: FAILED {len(k_mismatches)} k_idx mismatches, "
+                    f"first: token {k_mismatches[0][0]} actual={k_mismatches[0][1]} expected={k_mismatches[0][2]}"
+                )
+                act_pass = False
+                all_passing = False
+            elif dev_idx < 4:
+                logger.info(f"  Activation metadata device {dev_idx}: PASSED {len(actual_act_rows)} activated tokens")
+
+        # Check output[2]: token slot indices per local expert
+        # Shape: [E, e_t_row_elements] as int32 on host; sentinel 0xFFFFFFFF appears as 4294967295 (int64).
+        # Each e_t entry occupies e_t_entry_size=l1_alignment=16 bytes=4 uint32; token ID is first uint32.
+        e_t_stride = l1_align_bytes // 4  # = 4: stride between token ID entries
+        et_raw = ttnn.to_torch(et_per_device[dev_idx])  # [E, e_t_row_elements]
+        for local_e in range(E):
+            row = et_raw[local_e].tolist()
+            actual_slots = []
+            for i in range(0, len(row), e_t_stride):
+                v_int = int(row[i])
+                if v_int == -1 or v_int == 0xFFFFFFFF:  # 0xFFFFFFFF sentinel (int64 from to_torch)
+                    break
+                actual_slots.append(v_int)
+            expected_slots = expected_slots_per_expert[local_e]
+            if sorted(actual_slots) != sorted(expected_slots):
+                logger.error(
+                    f"  Dense tokens indices device {dev_idx} expert {local_e}(global {global_experts_for_dev[local_e]}): "
+                    f"FAILED actual={sorted(actual_slots)} expected={sorted(expected_slots)}"
+                )
+                et_pass = False
+                all_passing = False
+            else:
+                logger.info(f"  Dense tokens indices device {dev_idx} expert {local_e}: PASSED slots={actual_slots}")
+
+    if tc_pass:
+        logger.info("output[0] (token counts): ALL PASSED")
+    else:
+        logger.warning("output[0] (token counts): SOME FAILED — moe_gpt kernel may not scan full mapping")
+    if act_pass:
+        logger.info("output[1] (activation metadata): ALL PASSED")
+    else:
+        logger.warning("output[1] (activation metadata): SOME FAILED — moe_gpt kernel may not scan full mapping")
+    if et_pass:
+        logger.info("output[2] (token indices): ALL PASSED")
+    else:
+        logger.warning("output[2] (token indices): SOME FAILED — moe_gpt kernel may not scan full mapping")
 
     for t in moe_gpt_outputs:
         ttnn.deallocate(t)

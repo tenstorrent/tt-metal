@@ -263,6 +263,15 @@ void kernel_main() {
         }
     }
 
+    // DEBUG: Print BRISC local expert IDs (dev 0 only, others compiled away)
+    if (linearized_mesh_coord == 0) {
+        DPRINT << "[BRISC dev=0] local_expert_count=" << local_expert_count << " ids:";
+        for (uint32_t dbg_e = 0; dbg_e < local_expert_count; dbg_e++) {
+            DPRINT << " " << (uint32_t)local_expert_ids[dbg_e];
+        }
+        DPRINT << ENDL();
+    }
+
     // Reserve BRISC's e_t buffer (single page contains all experts' token lists)
     cb_reserve_back(brisc_e_t_cb_id, one_page);
     const uint32_t brisc_e_t_buffer_base = get_write_ptr(brisc_e_t_cb_id);
@@ -277,7 +286,7 @@ void kernel_main() {
             reinterpret_cast<uint32_t*>(brisc_expert_activation_base + row * aligned_activation_row_bytes);
         row_ptr[0] = 0;  // token_id placeholder
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            row_ptr[1 + e] = selected_experts_k;      // sentinel for k-index
+            row_ptr[1 + e] = selected_experts_k + 1;  // sentinel for k-index (not activated)
             row_ptr[1 + experts_per_device + e] = 0;  // score placeholder
         }
     }
@@ -313,6 +322,22 @@ void kernel_main() {
 
         const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
         const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+
+        // Skip non-dispatched slots: valid top-K routing always selects K distinct experts.
+        // Zero-initialized (non-dispatched) slots have all-identical indices (typically all zero).
+        // Guard with selected_experts_k > 1 to avoid skipping K=1 single-expert routing.
+        if constexpr (selected_experts_k > 1) {
+            bool all_same = true;
+            for (uint32_t kk = 1; kk < selected_experts_k; kk++) {
+                if (token_indices[kk] != token_indices[0]) {
+                    all_same = false;
+                    break;
+                }
+            }
+            if (all_same) {
+                continue;  // Not dispatched to this device
+            }
+        }
 
         // Track if this token is activated for any local expert
         uint32_t* brisc_activation_l1_ptr = nullptr;
@@ -354,6 +379,15 @@ void kernel_main() {
         if (activated) {
             brisc_num_activated_tokens++;
         }
+    }
+
+    // DEBUG: Print BRISC per-expert counts (dev 0 only, others compiled away)
+    if (linearized_mesh_coord == 0) {
+        DPRINT << "[BRISC dev=0] activated=" << brisc_num_activated_tokens << " counts:";
+        for (uint32_t dbg_e = 0; dbg_e < experts_per_device; dbg_e++) {
+            DPRINT << " " << brisc_num_tokens_per_expert[dbg_e];
+        }
+        DPRINT << ENDL();
     }
 
     // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer)

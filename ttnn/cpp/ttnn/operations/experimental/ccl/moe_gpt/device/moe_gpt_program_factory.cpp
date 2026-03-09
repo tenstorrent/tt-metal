@@ -741,12 +741,12 @@ MoEGPTMeshWorkloadFactory::create_at(
         tt::tt_metal::TensorAccessorArgs(expert_indices.buffer()).append_to(tilize_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(expert_scores.buffer()).append_to(tilize_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(expert_mapping.buffer()).append_to(tilize_compile_time_args);
-        // Placeholder accessors for metadata outputs (unused in fused mode but required by kernel compile args)
-        auto* placeholder_buffer = sparse_buffer.buffer();
-        tt::tt_metal::TensorAccessorArgs(placeholder_buffer)
+        // Metadata output tensor accessors (outputs 0, 1, 2 written by drain tilize core)
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[0].buffer())
             .append_to(tilize_compile_time_args);  // per_expert_total_tokens
-        tt::tt_metal::TensorAccessorArgs(placeholder_buffer).append_to(tilize_compile_time_args);  // expert_activation
-        tt::tt_metal::TensorAccessorArgs(placeholder_buffer).append_to(tilize_compile_time_args);  // e_t
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[1].buffer())
+            .append_to(tilize_compile_time_args);  // expert_activation
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[2].buffer()).append_to(tilize_compile_time_args);  // e_t
 
         // --- Named compile-time args ---
         std::unordered_map<std::string, uint32_t> tilize_named_compile_time_args = {
@@ -889,13 +889,13 @@ MoEGPTMeshWorkloadFactory::create_at(
 
         // --- Per-core runtime args ---
         std::vector<uint32_t> tilize_runtime_args = {
-            sparse_buffer.buffer()->address(),   // 0
-            expert_indices.buffer()->address(),  // 1
-            expert_scores.buffer()->address(),   // 2
-            expert_mapping.buffer()->address(),  // 3
-            0,                                   // 4: per_expert_total_tokens (unused placeholder)
-            0,                                   // 5: expert_activation (unused placeholder)
-            0,                                   // 6: e_t (unused placeholder)
+            sparse_buffer.buffer()->address(),           // 0
+            expert_indices.buffer()->address(),          // 1
+            expert_scores.buffer()->address(),           // 2
+            expert_mapping.buffer()->address(),          // 3
+            tensor_return_value[0].buffer()->address(),  // 4: per_expert_total_tokens
+            tensor_return_value[1].buffer()->address(),  // 5: expert_activation
+            tensor_return_value[2].buffer()->address(),  // 6: e_t
         };
 
         uint32_t is_drain_tilize_core_idx = tilize_runtime_args.size();
