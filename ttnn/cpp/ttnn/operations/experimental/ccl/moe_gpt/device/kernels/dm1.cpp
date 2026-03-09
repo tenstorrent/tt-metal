@@ -86,6 +86,9 @@ void kernel_main() {
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
     constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
     constexpr uint32_t tile_width_size_bytes = get_named_compile_time_arg_val("tile_width_size_bytes");
+    constexpr uint32_t num_tokens_total = get_named_compile_time_arg_val("num_tokens_total");
+    constexpr uint32_t shard_offset_per_expert_bytes =
+        num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
 
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
@@ -111,11 +114,13 @@ void kernel_main() {
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
     // Read per-expert token counts from dedicated semaphores
+    uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
         volatile tt_l1_ptr uint32_t* count_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
         uint32_t num_tokens = *count_sem_ptr;
+        NUM_TOKENS_PER_EXPERT[e] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
@@ -190,6 +195,9 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+        const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
+        const uint32_t max_tokens_per_height_shard = (active_tokens + height_shard_dim - 1) / height_shard_dim;
+        const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Set NOC 1 write state at top of chunk, before waiting for compute.
@@ -234,10 +242,16 @@ void kernel_main() {
             }
 
             //-----------------------------------------------------------------
-            // Combine core output write for this chunk
-            // Untilized ROW_MAJOR data from c_14 → combine core L1
+            // Combine core output write for this chunk.
+            // Matches moe_compute layout: tokens distributed across tp rows
+            // using div_up(active_tokens, height_shard_dim), with expert
+            // blocks separated by shard_offset_per_expert_bytes.
+            // Tokens within a chunk can cross tp_row boundaries.
             //-----------------------------------------------------------------
-            const uint32_t dest_height_shard = expert_id;
+            const uint32_t dest_height_shard_start = (chunk * tokens_per_chunk_combine) / max_tokens_per_height_shard;
+            const uint32_t shard_row_start = (chunk * tokens_per_chunk_combine) % max_tokens_per_height_shard;
+            const uint32_t num_tokens_block =
+                std::min(tokens_per_chunk_combine, active_tokens - chunk * tokens_per_chunk_combine);
 
             cb_wait_front(cb_c2s_out, tokens_per_chunk_combine);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
@@ -255,24 +269,33 @@ void kernel_main() {
                     combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
-                const auto dest_noc_x =
-                    output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
-                const auto dest_noc_y =
-                    output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
+                uint32_t dest_height_shard = dest_height_shard_start;
+                uint32_t shard_row = shard_row_start;
 
-                const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
-                noc_async_write_one_packet_set_state<true>(dest_noc_addr_base, width_transfer_bytes, 1, vchannel);
+                for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
+                    const uint32_t shard_row_offset_bytes =
+                        shard_row * combine_shard_width_tiles * tile_width_size_bytes;
 
-                for (uint32_t bt = 0; bt < tokens_per_chunk_combine; ++bt) {
-                    const uint32_t shard_row_offset_bytes = bt * combine_shard_width_tiles * tile_width_size_bytes;
+                    const auto dest_noc_x =
+                        output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
+                    const auto dest_noc_y =
+                        output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
+
+                    const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
+                    noc_async_write_one_packet_set_state<true>(dest_noc_addr_base, width_transfer_bytes, 1, vchannel);
 
                     const uint32_t dest_l1_addr =
-                        output_base_l1_addr + dest_width_offset_bytes + shard_row_offset_bytes;
+                        output_base_l1_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
 
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
                     noc_async_write_one_packet_with_state<true>(source_l1_addr, dest_l1_addr);
+
+                    if (++shard_row == max_tokens_per_height_shard) {
+                        ++dest_height_shard;
+                        shard_row = 0;
+                    }
                 }
                 width_tiles_sent += width_transfer_tiles;
                 width_tiles_to_send -= width_transfer_tiles;

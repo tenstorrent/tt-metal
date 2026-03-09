@@ -107,6 +107,7 @@ MoEGPTMeshWorkloadFactory::create_at(
 
     // Infer experts_per_device from w0_w1 weight tensor shape dim 2
     const uint32_t num_experts = tensor_args.w0_w1_tensor.logical_shape()[2];
+    const uint32_t total_tokens = tensor_args.input_tensor.logical_shape()[0];
 
     // c_14 (untilized ROW_MAJOR output buffer) on matmul cores
     {
@@ -120,7 +121,9 @@ MoEGPTMeshWorkloadFactory::create_at(
     }
 
     //=========================================================================
-    // Combine cores (fused mode only): 3x4 grid avoiding matmul cores
+    // Combine cores (fused mode only): COMBINE_W×COMBINE_H grid avoiding matmul cores.
+    // Data-parallel (hidden dim split) × token-parallel. Each core packs
+    // all experts sequentially for its token slice.
     //=========================================================================
     std::vector<CoreCoord> combine_cores;
     CoreRangeSet combine_core_range_set;
@@ -180,7 +183,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         const auto& combine_output_tensor = tensor_return_value.at(3);
         constexpr uint32_t combine_shard_width_tiles = 30;                         // 90/3
         constexpr uint32_t output_page_size = combine_shard_width_tiles * 32 * 2;  // 1920 bytes per row
-        const uint32_t output_num_pages = num_experts * 32 / 4;  // pages per shard (E*tokens/height_shards)
+        const uint32_t output_num_pages = combine_output_tensor.logical_shape()[0] / COMBINE_H;
 
         auto [combine_cb_id, sharded_output_cb_handle] = tt::tt_metal::create_cb(
             (uint32_t)tt::CBIndex::c_0,
@@ -284,6 +287,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         named_compile_time_args["combine_shard_width_tiles"] = 30u;
         named_compile_time_args["tile_width"] = 32u;
         named_compile_time_args["tile_width_size_bytes"] = 64u;
+        named_compile_time_args["num_tokens_total"] = total_tokens;
     }
 
     auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
@@ -546,8 +550,8 @@ MoEGPTMeshWorkloadFactory::create_at(
         uint32_t activation_total_bytes = (tokens + 1) * activation_row_bytes;
         auto tilize_expert_activation_output_page_size = activation_total_bytes;
 
-        uint32_t e_t_row_bytes = (tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
-        auto tilize_e_t_output_page_size = e_t_row_bytes;
+        // stride-1 flat layout: {1, E * tokens} uint32, matches e_t_spec in device_operation
+        auto tilize_e_t_output_page_size = experts_per_device * tokens * sizeof(uint32_t);
 
         // --- Semaphores ---
         constexpr uint32_t INVALID = 0;

@@ -284,7 +284,7 @@ void kernel_main() {
     for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
         uint32_t* row_ptr =
             reinterpret_cast<uint32_t*>(brisc_expert_activation_base + row * aligned_activation_row_bytes);
-        row_ptr[0] = 0;  // token_id placeholder
+        row_ptr[0] = static_cast<uint32_t>(-1);  // sentinel: row not yet written
         for (uint32_t e = 0; e < experts_per_device; e++) {
             row_ptr[1 + e] = selected_experts_k + 1;  // sentinel for k-index (not activated)
             row_ptr[1 + experts_per_device + e] = 0;  // score placeholder

@@ -158,9 +158,10 @@ constexpr uint32_t NUM_A2A_ITERS_B = *std::max_element(
 // Tokens per chunk (1 tile height)
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
-// Combine output constants
-constexpr uint32_t COMBINE_WIDTH_SHARD_DIM = 3;
-constexpr uint32_t COMBINE_HEIGHT_SHARD_DIM = 4;
+// Combine output grid: token-parallel rows × data-parallel columns.
+// Each core's buffer packs all experts sequentially for its token slice.
+constexpr uint32_t COMBINE_WIDTH_SHARD_DIM = 3;   // data-parallel (hidden dim split)
+constexpr uint32_t COMBINE_HEIGHT_SHARD_DIM = 4;  // token-parallel (token dim split)
 constexpr uint32_t K_TILES = NUM_W0_W1_TILES_H;  // 90
 
 // Ring cores per combine column: 12 / 3 = 4

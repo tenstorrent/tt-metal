@@ -138,20 +138,20 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    // Output 2: Token indices (per expert)
-    uint32_t e_t_row_bytes = (total_tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
-    uint32_t e_t_row_elements = e_t_row_bytes / sizeof(uint32_t);
+    // Output 2: Token indices (per expert) - stride-1 flat: [1, E * total_tokens]
     auto e_t_spec = TensorSpec(
-        Shape({experts_per_device, e_t_row_elements}),
+        Shape({1, experts_per_device * total_tokens}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
     // Output 3: Combine output (BLOCK_SHARDED on combine cores, ROW_MAJOR)
-    // Find combine core range: WxH rectangle avoiding matmul (DRAM-bank) cores
-    constexpr uint32_t COMBINE_W = 3;  // width_shard_dim
-    constexpr uint32_t COMBINE_H = 4;  // height_shard_dim
+    // Grid: COMBINE_W cols (data-parallel, splitting hidden dim) × COMBINE_H rows (token-parallel).
+    // Each core's shard packs all experts sequentially: expert e's tokens occupy rows
+    // [e*tokens_per_tp .. (e+1)*tokens_per_tp), matching selective_reduce_combine's expected layout.
+    constexpr uint32_t COMBINE_W = 3;  // data_parallel_core_dim (hidden dim split)
+    constexpr uint32_t COMBINE_H = 4;  // token_parallel_core_dim (token dim split)
     auto* device = tensor_args.w0_w1_tensor.device();
     const auto dram_bank2core_coords =
         device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
@@ -181,7 +181,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     TT_FATAL(found, "Could not find a {}x{} combine core range that avoids matmul cores", COMBINE_W, COMBINE_H);
 
     CoreRangeSet combine_core_range_set(combine_core_range);
-    uint32_t combine_shard_h = experts_per_device * 32 / COMBINE_H;  // E*M/height_shards
+    uint32_t combine_shard_h = experts_per_device * total_tokens / COMBINE_H;  // E*total_tokens/height_shards
     constexpr uint32_t K_hidden = 2880;
     uint32_t combine_shard_w = K_hidden / COMBINE_W;  // 960
 
@@ -192,7 +192,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
             combine_core_range_set, {combine_shard_h, combine_shard_w}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    auto combine_output_shape = ttnn::Shape({experts_per_device * 32, K_hidden});
+    auto combine_output_shape = ttnn::Shape({experts_per_device * total_tokens, K_hidden});
     auto combine_output_spec = TensorSpec(
         Shape(combine_output_shape),
         tt::tt_metal::TensorLayout(

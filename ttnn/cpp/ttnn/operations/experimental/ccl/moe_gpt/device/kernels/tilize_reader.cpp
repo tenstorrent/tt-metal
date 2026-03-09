@@ -905,6 +905,7 @@ void kernel_main() {
 
         noc_semaphore_set_multicast(
             metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
+        DPRINT << "[tilize_drain] sent metadata_ready to matmul cores" << ENDL();
 #endif  // !TILIZE_TO_DRAM
     }  // End of is_drain_tilize_core block
     else {
@@ -996,8 +997,10 @@ void kernel_main() {
             // idle during mcast. The very last wait is technically redundent since we won't be reading in another chunk
             // of tokens, however it's still required so we don't use NoC1 to write out the output tensors until the
             // last linked mcast completes.
+            DPRINT << "[tilize_drain] waiting chunk_available=" << num_chunks_sent << " e=" << e << ENDL();
             noc_semaphore_wait(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
+            DPRINT << "[tilize_drain] chunk_available ok e=" << e << " chunks=" << num_chunks_sent << ENDL();
         }
     }
 
@@ -1005,11 +1008,20 @@ void kernel_main() {
     // write out e_t_output_tensor
     // Skip if address is 0 (fused mode: no output tensors allocated)
     if (is_drain_tilize_core && e_t_output_address != 0) {
-        uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
+        // Repack stride-4 internal e_t CB to stride-1 flat format in-place for selective_reduce_combine.
+        // Internal: token_id at e_t_buffer_base + (e*(tokens+1) + k) * e_t_entry_size
+        // Output:   flat[e * tokens + k] = token_id  (written to CB base, then NOC-copied to output)
+        // In-place safety: src byte (e*(tokens+1)*16 + k*16) >= dst byte (e*tokens*4 + k*4) for all e,k.
+        constexpr uint32_t e_t_stride = e_t_entry_size / sizeof(uint32_t);  // = 4
+        uint32_t* flat_e_t = reinterpret_cast<uint32_t*>(e_t_buffer_base);
         for (uint32_t e = 0; e < experts_per_device; ++e) {
-            noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
-            l1_read_addr += e_t_output_page_size;
+            const uint32_t* src =
+                reinterpret_cast<const uint32_t*>(e_t_buffer_base + e * (tokens + 1) * e_t_entry_size);
+            for (uint32_t k = 0; k < num_activated_tokens_per_expert[e]; ++k) {
+                flat_e_t[e * tokens + k] = src[k * e_t_stride];
+            }
         }
+        noc_async_write_page(0, e_t_output_tensor_addr_gen, e_t_buffer_base);
     }
 
     // write out per_expert_total_tokens_output_tensor

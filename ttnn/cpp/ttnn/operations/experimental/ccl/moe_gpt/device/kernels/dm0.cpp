@@ -165,7 +165,9 @@ void kernel_main() {
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
+    DPRINT << "[dm0] waiting metadata_ready" << ENDL();
     noc_semaphore_wait_min(metadata_ready_semaphore_ptr, 1);
+    DPRINT << "[dm0] got metadata_ready" << ENDL();
 
     // Read per-expert token counts from dedicated semaphores
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
@@ -181,6 +183,7 @@ void kernel_main() {
     // full matmul pipeline per chunk (SwiGLU → A2A → W2).
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+        DPRINT << "[dm0] expert=" << expert_id << " chunks=" << num_expert_chunks << ENDL();
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Phase 1: W0/W1 weight reads (same weights re-read for each chunk)
