@@ -4,8 +4,6 @@
 
 #include "swiglu_gate_up_program_factory.hpp"
 
-#include <common/tt_rounding.h>
-
 #include <algorithm>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -86,7 +84,7 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
 
     uint32_t per_core_M = (total_M_tiles + num_cores_r - 1U) / num_cores_r;
     uint32_t per_core_N = (hidden_Wt + num_cores_c - 1U) / num_cores_c;
-    uint32_t per_core_N_rounded = ll_api::round_up_to<uint32_t, uint32_t>(per_core_N, kBlockSize);
+    uint32_t per_core_N_rounded = round_up(per_core_N, kBlockSize);
 
     // block_h: number of M tile-rows processed per K-loop pass.
     // Larger block_h amortizes weight reads across more M rows.
