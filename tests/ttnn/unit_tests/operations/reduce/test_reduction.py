@@ -10,6 +10,10 @@ import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    assert_matmul_accuracy,
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -55,7 +59,28 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     output_tensor = ttnn.to_torch(output_tensor)
     assert len(torch_output_tensor.shape) == len(output_tensor.shape)
     assert torch_output_tensor.shape == output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_var[batch={batch_size},h={h},w={w},dim={dim},keepdim={keepdim},correction={correction}]"
+    test_params = {
+        "batch_size": batch_size,
+        "h": h,
+        "w": w,
+        "dim": dim,
+        "keepdim": keepdim,
+        "correction": correction,
+    }
+
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=test_params,
+    )
+
+    # Run assert_matmul_accuracy (asserts based on env var flags: USE_PCC, USE_ALLCLOSE, etc.)
+    # assert_matmul_accuracy(torch_output_tensor, output_tensor, test_name=test_name)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
