@@ -107,9 +107,6 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
             dst_idx += SUBBLOCK_W;
         }
-        if (trigger_reduce) {
-            PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
-        }
     } else
 #endif
     {
@@ -120,6 +117,9 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
                 dst_idx++;
             }
         }
+    }
+    if (trigger_reduce) {
+        PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
     }
     tile_regs_release();
 }
