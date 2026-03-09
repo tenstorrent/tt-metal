@@ -8,6 +8,7 @@
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
+#include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
@@ -402,6 +403,51 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+}  // namespace detail
+
+namespace experimental {
+
+std::map<ChipId, IDevice*> CreateDevices(
+    ContextId context_id,
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    auto& ctx = MetalContext::instance(context_id);
+    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    ctx.initialize_device_manager(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        initialize_fabric_and_dispatch_fw);
+
+    const auto devices = ctx.device_manager()->get_all_active_devices();
+    std::map<ChipId, IDevice*> ret_devices;
+    for (IDevice* dev : devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
+            continue;
+        }
+        ret_devices.insert({dev->id(), dev});
+    }
+
+    return ret_devices;
+}
+
+}  // namespace experimental
+
+namespace detail {
+
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
@@ -411,7 +457,7 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
-void ReleaseOwnership() { MetalContext::destroy_instance(); }
+void ReleaseOwnership() { MetalContext::destroy_all_instances(); }
 
 void print_page(
     uint32_t dev_page_id,
@@ -1046,10 +1092,13 @@ IDevice* CreateDevice(
 IDevice* CreateDeviceMinimal(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
+    auto& ctx = MetalContext::instance();  // runtime state
+    auto& env = ctx.get_env();             // default low level state
+    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
+    auto* dev =
+        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
+    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 
