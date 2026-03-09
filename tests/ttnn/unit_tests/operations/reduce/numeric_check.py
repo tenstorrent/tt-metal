@@ -126,7 +126,7 @@ def collect_and_dump_numeric_metrics(
     allclose_atol=ALLCLOSE_ATOL,
     allclose_rtol=ALLCLOSE_RTOL,
     ulp_threshold=ULP_THRESHOLD,
-    pcc_threshold=0.99,
+    pcc_threshold=0.999,
 ):
     """
     Collect all numeric accuracy metrics (PCC, Allclose, Frobenius, ULP) and dump to CSV.
@@ -192,30 +192,6 @@ def collect_and_dump_numeric_metrics(
     # Relative Frobenius
     frob_val, frob_expected_zero = comp_relative_frobenius(expected, actual)
 
-    # if 0:
-    #     # ULP (filtered: skip near-zero expected values to avoid division issues)
-    #     near_zero_threshold = allclose_atol
-    #     non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
-    #     total_elems = expected.numel()
-    #     near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
-    #     near_zero_pct = (near_zero_count / total_elems * 100) if total_elems > 0 else 0
-    #     # near_zero_pct =7
-    #     max_ulp = float("nan")
-    #     ulp_passed = None
-    #     if non_near_zero_mask.any():
-    #         ulp_passed_val, ulp_msg = comp_ulp(expected[non_near_zero_mask], actual[non_near_zero_mask], ulp_threshold)
-    #         ulp_passed = bool(ulp_passed_val)
-    #         # Extract numeric value from "Max ULP Delta: tensor(X.Y)" or "Max ULP Delta: X.Y"
-    #         if "Max ULP Delta:" in ulp_msg:
-    #             ulp_str = ulp_msg.split("Max ULP Delta: ")[1].split(" ")[0]
-    #             # Handle tensor(...) format
-    #             if ulp_str.startswith("tensor("):
-    #                 ulp_str = ulp_str[len("tensor(") :].rstrip(")")
-    #             try:
-    #                 max_ulp = float(ulp_str)
-    #             except ValueError:
-    #                 max_ulp = float("nan")
-    # else:
     if 1:
         # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
         near_zero_threshold = NEAR_ZERO_THRESHOLD
