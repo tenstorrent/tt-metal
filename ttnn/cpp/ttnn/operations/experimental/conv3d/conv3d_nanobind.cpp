@@ -15,6 +15,7 @@
 #include <nanobind/stl/string.h>
 
 #include "conv3d.hpp"
+#include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
@@ -49,6 +50,7 @@ void bind_conv3d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("input_tensor"),
         nb::arg("weight_tensor"),
+        nb::arg("device"),
         nb::arg("bias_tensor") = nb::none(),
         nb::arg("config") = nb::none(),
         nb::arg("dtype"),
@@ -61,6 +63,18 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("groups") = 1,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
+
+    // Register to ttnn.experimental namespace
+    ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(
+        mod,
+        R"doc(Prepare conv3d weights for TTNN execution.)doc",
+        &ttnn::operations::experimental::conv3d::prepare_conv3d_weights,
+        nb::kw_only(),
+        nb::arg("weight_tensor"),
+        nb::arg("groups") = 1u,
+        nb::arg("C_in_block") = 0u,
+        nb::arg("alignment") = 32u,
+        nb::arg("device") = nb::none());
 
     auto py_conv3d_config = nb::class_<ttnn::experimental::prim::Conv3dConfig>(
                                 mod,
@@ -79,6 +93,7 @@ void bind_conv3d(nb::module_& mod) {
                                         uint32_t,
                                         uint32_t,
                                         std::array<uint32_t, 3>,
+                                        uint32_t,
                                         CoreCoord>(),
                                     nb::kw_only(),
                                     nb::arg("weights_dtype") = DataType::BFLOAT16,
@@ -89,6 +104,7 @@ void bind_conv3d(nb::module_& mod) {
                                     nb::arg("C_out_block") = 0,
                                     nb::arg("C_in_block") = 0,
                                     nb::arg("dilation") = std::array<uint32_t, 3>{1, 1, 1},
+                                    nb::arg("alignment") = 32,
                                     nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
     py_conv3d_config.def_rw("weights_dtype", &ttnn::experimental::prim::Conv3dConfig::weights_dtype, "");
@@ -97,6 +113,7 @@ void bind_conv3d(nb::module_& mod) {
     py_conv3d_config.def_rw("W_out_block", &ttnn::experimental::prim::Conv3dConfig::W_out_block, "");
     py_conv3d_config.def_rw("H_out_block", &ttnn::experimental::prim::Conv3dConfig::H_out_block, "");
     py_conv3d_config.def_rw("C_out_block", &ttnn::experimental::prim::Conv3dConfig::C_out_block, "");
+    py_conv3d_config.def_rw("alignment", &ttnn::experimental::prim::Conv3dConfig::alignment, "");
     py_conv3d_config.def_rw("C_in_block", &ttnn::experimental::prim::Conv3dConfig::C_in_block, "");
     py_conv3d_config.def_rw("dilation", &ttnn::experimental::prim::Conv3dConfig::dilation, "");
     py_conv3d_config.def_rw(
