@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, skip_with_llk_assert
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 
 
@@ -47,6 +47,9 @@ def run_resnet_50(
     assert passed, message
 
 
+@skip_with_llk_assert(
+    "Hit LLK_ASSERT(l1_address_is_valid(hit_l1_address), L1 address must be in valid L1 memory region.)"
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
