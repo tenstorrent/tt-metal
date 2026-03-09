@@ -650,18 +650,34 @@ class TtDINO:
             if memory_tt.shape[1] > N
             else memory_tt
         )
-        output_proposals, output_proposals_valid = gen_encoder_output_proposals_ttnn(
-            self.device, mem, spatial_shapes, B, self._dram_cfg
+
+        proposals_host, valid_host = gen_encoder_output_proposals(torch.zeros(B, N, self.embed_dims), spatial_shapes)
+        output_proposals = ttnn.from_torch(
+            proposals_host.to(torch.bfloat16),
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._dram_cfg,
         )
+        output_proposals_valid = ttnn.from_torch(
+            valid_host.to(torch.bfloat16),
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._dram_cfg,
+        )
+
         zeros_mem = ttnn.zeros_like(mem, memory_config=self._dram_cfg)
         output_memory = ttnn.where(output_proposals_valid, mem, zeros_mem)
         ttnn.deallocate(zeros_mem)
+        ttnn.deallocate(output_proposals_valid)
+
         mfc = self._decoder_params["memory_trans_fc"]
         output_memory = ttnn.linear(output_memory, mfc["weight"], bias=mfc["bias"], memory_config=self._dram_cfg)
         mnorm = self._decoder_params["memory_trans_norm"]
         output_memory = ttnn.layer_norm(output_memory, weight=mnorm["weight"], bias=mnorm["bias"])
+
         cls6 = self._decoder_params["cls_branches"][6]
         enc_cls = ttnn.linear(output_memory, cls6["weight"], bias=cls6["bias"], memory_config=self._dram_cfg)
+
         reg6 = self._decoder_params["reg_branches"][6]
         reg_out = output_memory
         for i, layer in enumerate(reg6):
@@ -671,30 +687,38 @@ class TtDINO:
         enc_coords_unact = ttnn.add(reg_out, output_proposals)
         ttnn.deallocate(output_proposals)
         ttnn.deallocate(reg_out)
-        max_scores = ttnn.max(enc_cls, dim=-1)
-        topk_vals, topk_indices = ttnn.topk(max_scores, k=self.num_queries, dim=1)
-        ttnn.deallocate(max_scores)
-        ttnn.deallocate(topk_vals)
-        topk_indices_4 = ttnn.reshape(topk_indices, (B, self.num_queries, 1))
-        topk_indices_4 = ttnn.repeat(topk_indices_4, (1, 1, 4))
-        topk_coords_unact = ttnn.gather(enc_coords_unact, 1, index=topk_indices_4)
+
+        enc_cls_t = ttnn.to_torch(enc_cls).float()[:, :N, :]
+        ttnn.deallocate(enc_cls)
+        output_memory_t = ttnn.to_torch(output_memory).float()[:, :N, :]
+        ttnn.deallocate(output_memory)
+
+        coarse_cls = torch.nn.functional.linear(output_memory_t, self.cls_enc_w_torch, self.cls_enc_b_torch)
+        topk_indices = torch.topk(coarse_cls.max(-1)[0], k=self.num_queries, dim=1)[1]
+
+        enc_coords_t = ttnn.to_torch(enc_coords_unact).float()[:, :N, :]
         ttnn.deallocate(enc_coords_unact)
-        ttnn.deallocate(topk_indices_4)
-        reference_points = ttnn.sigmoid(topk_coords_unact)
-        ttnn.deallocate(topk_coords_unact)
+        topk_coords_unact = torch.gather(enc_coords_t, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
+        reference_points = topk_coords_unact.sigmoid()
+        reference_points_tt = ttnn.from_torch(
+            reference_points.to(torch.bfloat16),
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._dram_cfg,
+        )
+
         qemb = self._decoder_params["query_embedding"]
         qemb = ttnn.reshape(qemb, (1, self.num_queries, self.embed_dims))
         query_tt = ttnn.repeat(qemb, (B, 1, 1))
-        topk_indices_torch = ttnn.to_torch(topk_indices)
-        ttnn.deallocate(topk_indices)
+
         if memory_tt.shape[1] > N:
             ttnn.deallocate(mem)
         return {
             "query": query_tt,
-            "reference_points": reference_points,
+            "reference_points": reference_points_tt,
             "topk_score": None,
-            "topk_coords": reference_points,
-            "topk_indices": topk_indices_torch,
+            "topk_coords": reference_points_tt,
+            "topk_indices": topk_indices,
         }
 
     def forward_heads(
@@ -942,7 +966,10 @@ class TtDINO:
             result["neck_feats"] = neck_feats_torch
             result["encoder_memory"] = encoder_memory_torch
             result["decoder_hidden_states"] = [ttnn.to_torch(hs).float()[:, :N_q, :] for hs in hidden_states]
-            result["decoder_references"] = references
+            result["decoder_references"] = [
+                ttnn.to_torch(r).float()[:, :N_q, :] if isinstance(r, ttnn.Tensor) else r[:, :N_q, :]
+                for r in references
+            ]
             result["topk_indices"] = pre_dec.get("topk_indices")
 
         return result
