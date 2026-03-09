@@ -219,7 +219,7 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
                     logical_core,
                     tt_metal::experimental::quasar::QuasarDataMovementConfig{
                         .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
-            } else {            
+            } else {
                 unary_reader_kernel = tt_metal::CreateKernel(
                     program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
@@ -240,7 +240,7 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
                     logical_core,
                     tt_metal::experimental::quasar::QuasarDataMovementConfig{
                         .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
-            } else {               
+            } else {
                 unary_writer_kernel = tt_metal::CreateKernel(
                     program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
@@ -408,12 +408,12 @@ void run_single_core_reduce_program(
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b,
             .tile = tt_metal::Tile({32, 32}),
-        }; 
+        };
 
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
             .entry_size = single_tile_bytes,
             .num_entries = num_output_buffer_tiles,
-            .producer_risc_mask = 0x1,
+            .producer_risc_mask = 0x100,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .consumer_risc_mask = 0x2,
@@ -427,7 +427,7 @@ void run_single_core_reduce_program(
         src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
         src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_temp_reduce_tile_config);
         dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
-     
+
     } else {
         uint32_t src0_cb_index = 0;
         tt_metal::CircularBufferConfig cb_src0_config =
@@ -487,12 +487,19 @@ void run_single_core_reduce_program(
             compute_kernel_name,
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .math_fidelity = test_config.math_fidelity, .fp32_dest_acc_en = test_config.fp32_dest_acc_en, 
-                .dst_full_sync_en = test_config.dst_full_sync_en, .compile_args = compute_kernel_args, .defines = reduce_defines});
-    
-            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, src0_dfb, reader_kernel, compute_kernel);
-            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, src1_dfb, reader_kernel, compute_kernel);
-            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, dst_dfb, compute_kernel, writer_kernel);                      
+                .num_threads_per_cluster = 1,
+                .math_fidelity = test_config.math_fidelity,
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .compile_args = compute_kernel_args,
+                .defines = reduce_defines});
+
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src0_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src1_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dst_dfb, compute_kernel, writer_kernel);
     } else {
         compute_kernel = tt_metal::CreateKernel(
             program_,
