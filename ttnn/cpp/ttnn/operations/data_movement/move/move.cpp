@@ -23,7 +23,10 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
-    const_cast<Tensor&>(input_tensor).deallocate(true);
+    // This is used instead of input_tensor.deallocate(true) as Tensor::deallocate will reset the MeshBuffer pointer.
+    // There is existing code that continues to attempt to access the buffer after deallocation.
+    // Refactoring to be continued in #38697
+    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {
         output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
@@ -92,12 +95,16 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
+    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
+    auto shard_spec = input_tensor.shard_spec().value();
 
-    const_cast<Tensor&>(input_tensor).deallocate(true);
+    // This is used instead of input_tensor.deallocate(true) as Tensor::deallocate will reset the MeshBuffer pointer.
+    // There is existing code that continues to attempt to access the buffer after deallocation.
+    // Refactoring to be continued in #38697
+    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();
     if (mem_config) {
-        auto shard_spec = input_tensor.shard_spec().value();
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
         auto output_mem_config = mem_config->with_shard_spec(shard_spec);
         output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
@@ -108,7 +115,7 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
-            input_tensor.buffer()->address());
+            input_address);
         return {output_tensor};
     }
     ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
