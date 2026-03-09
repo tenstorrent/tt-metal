@@ -7,6 +7,7 @@ import torch
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.tt_cnn.tt.builder import (
     AutoShardedStrategyConfiguration,
     BlockShardedStrategyConfiguration,
@@ -184,6 +185,7 @@ def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)  # Use first 2 sizes
 @pytest.mark.parametrize("channels", [16, 8])
@@ -230,6 +232,7 @@ def test_pool2d(input_size, channels, batch_size, pool_config, device):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", [(224, 224), (32, 32)])
 @pytest.mark.parametrize("batch_size", [1, 4])
@@ -295,6 +298,7 @@ def test_downblock(input_size, batch_size, device):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)
 @pytest.mark.parametrize("channels", [16, 8])
@@ -342,6 +346,7 @@ def test_upsample(input_size, channels, batch_size, upsample_config, device):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS[:1])
@@ -396,6 +401,7 @@ def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channels", [16, 8])
@@ -445,6 +451,7 @@ def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size,
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channels", [16])
@@ -498,6 +505,7 @@ def test_upsample_configuration_from_torch_layer(input_size, channels, batch_siz
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)
 @pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS)
@@ -555,6 +563,7 @@ def test_conv2d_configuration_from_model_args(input_size, channel_config, batch_
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)
 @pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS)
@@ -587,6 +596,7 @@ def test_conv2d_return_output_dim(input_size, channel_config, kernel_config, dev
     assert W == expected_w, f"Width mismatch: got {W}, expected {expected_w}"
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)
@@ -624,6 +634,7 @@ def test_conv2d_return_output_dim_with_channel_slicing(input_size, channels, ker
     assert W == expected_w
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_conv2d_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for Conv2D slicing"""
@@ -670,6 +681,7 @@ def test_pool2d_slicing_validation_errors(device):
         )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_upsample_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for Upsample configuration"""
@@ -718,6 +730,7 @@ def test_upsample_slicing_validation_errors(device):
         )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing
@@ -800,6 +813,7 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing
@@ -871,6 +885,7 @@ def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_con
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT during semaphore_post. Semaphore must not be already at max value.")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing

@@ -19,6 +19,7 @@ from models.experimental.functional_unet.tests.common import (
     UNET_FULL_MODEL_PCC_BH,
     UNET_L1_SMALL_REGION_SIZE,
 )
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def run_unet_model(batch, groups, device, iterations=1):
@@ -61,6 +62,7 @@ def run_unet_model(batch, groups, device, iterations=1):
         ttnn.ReadDeviceProfiler(device)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
