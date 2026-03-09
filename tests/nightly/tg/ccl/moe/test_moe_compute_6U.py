@@ -1026,7 +1026,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
     [(1, 1, 1), (8, 5, 1)],
-    ids=["perf", "accuracy"],  # only perf tests failing (1x8)
+    ids=["perf", "accuracy"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
