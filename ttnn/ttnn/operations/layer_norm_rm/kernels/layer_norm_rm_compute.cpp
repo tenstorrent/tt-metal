@@ -1,34 +1,48 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// layer_norm_rm - Compute Kernel (stub)
-// Per tile-row: tilize -> reduce_mean -> sub_mean -> square ->
-//               reduce_var -> add_eps+rsqrt -> mul_rsqrt ->
-//               (optional: mul_gamma, add_beta) -> untilize
+// layer_norm_rm - Compute Kernel
+// Stage 1: tilize c_0 -> c_1, then untilize c_1 -> c_16 (passthrough)
 
 #include "api/compute/compute_kernel_hw_startup.h"
-// Full implementation will also need:
-// #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-// #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-// #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-// #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
-// #include "api/compute/eltwise_unary/rsqrt.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+// CB indices
+constexpr uint32_t cb_input_rm = 0;    // c_0: RM sticks for tilize
+constexpr uint32_t cb_tilized = 1;     // c_1: Tilized input tiles
+constexpr uint32_t cb_scaler = 8;      // c_8: Reduce scaler (1/W)
+constexpr uint32_t cb_eps = 9;         // c_9: Epsilon tile
+constexpr uint32_t cb_output_rm = 16;  // c_16: Untilized RM output
+
+// Compile-time args
+constexpr uint32_t Wt = get_compile_time_arg_val(0);
+constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
+constexpr uint32_t has_beta = get_compile_time_arg_val(2);
 
 void kernel_main() {
-    // Stub: compute kernel
-    // Real implementation will:
-    // 1. compute_kernel_hw_startup(c_0, c_8, c_16)
-    // 2. Wait on c_9 (epsilon) once
-    // 3. Per tile-row loop:
-    //    Phase 1: tilize c_0 -> c_1
-    //    Phase 2: reduce_mean c_1 -> c_24
-    //    Phase 3: sub_mean c_1, c_24 -> c_25 (manual pop c_1)
-    //    Phase 4: square c_25 -> c_26
-    //    Phase 5: reduce_var c_26 -> c_27
-    //    Phase 6: add_eps c_27, c_9 -> c_28 + rsqrt post-op
-    //    Phase 7: mul_rsqrt c_25, c_28 -> c_31
-    //    (Phase 8: mul_gamma c_31, c_29 -> c_25)
-    //    (Phase 9: add_beta cb_in, c_30 -> cb_out)
-    //    Phase 10: untilize cb_final -> c_16
-    // 4. Pop c_9, c_8
+    // Hardware startup: srcA=c_0, srcB=c_8, ocb=c_16
+    compute_kernel_hw_startup(cb_input_rm, cb_scaler, cb_output_rm);
+
+    // Runtime args
+    const uint32_t nblocks = get_arg_val<uint32_t>(0);
+
+    // Wait for epsilon tile (pushed by reader, but not used in stage 1)
+    cb_wait_front(cb_eps, 1);
+
+    // Main loop: process nblocks tile-rows
+    for (uint32_t block = 0; block < nblocks; ++block) {
+        // Phase 1: Tilize (RM -> tile) c_0 -> c_1
+        compute_kernel_lib::
+            tilize<cb_input_rm, cb_tilized, compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit>(Wt, 1);
+
+        // Phase 10: Untilize (tile -> RM) c_1 -> c_16
+        // Stage 1: passthrough, so untilize directly from c_1
+        compute_kernel_lib::
+            untilize<Wt, cb_tilized, cb_output_rm, compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit>(
+                1);
+    }
+
+    // Pop epsilon tile
+    cb_pop_front(cb_eps, 1);
 }
