@@ -164,11 +164,9 @@ void kernel_main() {
 
 #ifdef FUSE_MM_OP_SIGNALER
                 // Wait for matmul to finish writing the output blocks for this chunk.
-                // The matmul signals in a strided pattern: value k means k mm_blocks have been
-                // written in EACH N-full-block, so ceil(effective_chunk_width / mm_block_wt)
-                // signals guarantees all N-full-blocks covering this chunk are ready.
-                const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
-                mm_sem_target += sem_increment;
+                // The matmul signals once per completed chunk (every chunk_width_in_mm_blocks N-blocks,
+                // or unconditionally on the last block), so each chunk = exactly 1 semaphore increment.
+                mm_sem_target += 1;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
                 // Run a full ring reduce-scatter for the current chunk.

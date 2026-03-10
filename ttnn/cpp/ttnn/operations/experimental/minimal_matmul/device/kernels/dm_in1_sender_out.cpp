@@ -138,6 +138,8 @@ void kernel_main() {
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
     }
+    constexpr uint32_t chunk_width_in_mm_blocks = N_tiles_per_chunk / N_block_tiles;
+    uint32_t chunk_block_counter = 0;
 #endif
 
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
@@ -270,8 +272,14 @@ void kernel_main() {
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
-                        noc_async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        // n_block_iter == 0 implies m_block_iter > 0 (not_first_block guard above),
+                        // meaning we just wrote the last deferred block of the previous m-row.
+                        // Force a signal here to flush any partial last chunk of that m-row.
+                        if (++chunk_block_counter == chunk_width_in_mm_blocks || n_block_iter == 0) {
+                            noc_async_write_barrier();
+                            srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            chunk_block_counter = 0;
+                        }
                     }
                 }
 #endif
