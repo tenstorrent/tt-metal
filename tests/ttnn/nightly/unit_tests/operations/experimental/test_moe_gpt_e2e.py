@@ -1071,7 +1071,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
         mesh_device, COMBINE_W, COMBINE_H
     )
-    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set))
+    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
     mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
     mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
@@ -1473,7 +1473,7 @@ def run_test_moe_gpt_e2e(
     )
     logger.info(f"moe_gpt combine cores: ({combine_start.x},{combine_start.y}) to ({combine_end.x},{combine_end.y})")
     # corerange_to_cores iterates x-fast (ROW_MAJOR), consistent with BLOCK_SHARDED shard assignment
-    combine_worker_cores = list(ttnn.corerange_to_cores(moe_gpt_combine_core_range_set))
+    combine_worker_cores = list(ttnn.corerange_to_cores(moe_gpt_combine_core_range_set, row_wise=True))
     combine_token_parallel_core_dim = COMBINE_H  # 4
     combine_data_parallel_core_dim = COMBINE_W  # 3
 
