@@ -118,9 +118,11 @@ def sine_positional_encoding_ttnn(
     pos_y = ttnn.concat([sin_y, cos_y], dim=-1)
     pos_y = ttnn.reshape(pos_y, (1, H, W, num_feats))
     pos = ttnn.concat([pos_y, pos_x], dim=-1)
-    pos = ttnn.permute(pos, (0, 3, 1, 2))
-    pos = ttnn.reshape(pos, (1, num_feats * 2, H * W))
-    pos = ttnn.permute(pos, (0, 2, 1))
+
+    # pos = ttnn.permute(pos, (0, 3, 1, 2))
+    # pos = ttnn.reshape(pos, (1, num_feats * 2, H * W))
+    # pos = ttnn.permute(pos, (0, 2, 1))
+    pos = ttnn.reshape(pos, (1, H * W, -1))
     return ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -796,7 +798,7 @@ class TtDINO:
 
     def __call__(
         self,
-        mlvl_feats: List[torch.Tensor],
+        mlvl_feats_tt: List[ttnn.Tensor],
     ) -> Dict[str, torch.Tensor]:
         """
         DINO inference from neck features → detections.
@@ -808,30 +810,30 @@ class TtDINO:
             all_cls_scores: [num_layers, B, num_queries, num_classes]
             all_bbox_preds: [num_layers, B, num_queries, 4]
         """
-        pre_trans = self.pre_transformer(mlvl_feats)
+        pre_trans = self.pre_transformer_tt(mlvl_feats_tt)
 
-        feat_tt = ttnn.from_torch(
-            pre_trans["feat_flatten"].to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        feat_pos_tt = ttnn.from_torch(
-            pre_trans["feat_pos"].to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        # feat_tt = ttnn.from_torch(
+        #     pre_trans["feat_flatten"].to(torch.bfloat16),
+        #     device=self.device,
+        #     layout=ttnn.TILE_LAYOUT,
+        # )
+        # feat_pos_tt = ttnn.from_torch(
+        #     pre_trans["feat_pos"].to(torch.bfloat16),
+        #     device=self.device,
+        #     layout=ttnn.TILE_LAYOUT,
+        # )
 
         logger.info("Running encoder...")
         memory_tt = self.encoder(
-            feat=feat_tt,
-            feat_pos=feat_pos_tt,
+            feat=pre_trans["feat_flatten"],
+            feat_pos=pre_trans["feat_pos"],
             feat_mask=None,
             spatial_shapes=pre_trans["spatial_shapes"],
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
-        ttnn.deallocate(feat_tt)
-        ttnn.deallocate(feat_pos_tt)
+        ttnn.deallocate(pre_trans["feat_flatten"])
+        ttnn.deallocate(pre_trans["feat_pos"])
 
         pre_dec = self.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
 
