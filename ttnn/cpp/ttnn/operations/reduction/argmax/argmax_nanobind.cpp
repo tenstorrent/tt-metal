@@ -67,7 +67,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                 - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1 or :attr:`dim` = rank - 1).
                 - Sharding is not supported for this operation
                 - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
-                - The (optional) preallocated output tensor must have ROW_MAJOR layout
+                - The (optional) preallocated output tensor must have ROW_MAJOR layout and must be on the same device as :attr:`input_tensor`
         )doc";
 
     ttnn::bind_function<"argmax">(
