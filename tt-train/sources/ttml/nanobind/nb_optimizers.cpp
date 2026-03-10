@@ -23,6 +23,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_full_precision.hpp"
+#include "optimizers/muon.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/optimizer_registry.hpp"
@@ -76,6 +77,8 @@ void py_module_types(nb::module_& m) {
     nb::class_<AdamWFullPrecisionConfig>(m, "AdamWFullPrecisionConfig");
     nb::class_<AdamW, OptimizerBase>(m, "AdamW");
     nb::class_<AdamWFullPrecision, OptimizerBase>(m, "AdamWFullPrecision");
+    nb::class_<MuonConfig>(m, "MuonConfig");
+    nb::class_<Muon, OptimizerBase>(m, "Muon");
     nb::class_<NoOp, OptimizerBase>(m, "NoOp");
     nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
@@ -251,6 +254,26 @@ void py_module(nb::module_& m) {
             nb::init<serialization::NamedParameters, const AdamWFullPrecisionConfig&>(),
             nb::arg("parameters"),
             nb::arg("config"));
+    }
+
+    {
+        auto py_muon_config = static_cast<nb::class_<MuonConfig>>(m.attr("MuonConfig"));
+        py_muon_config.def(nb::init<>());
+        py_muon_config.def_static(
+            "make",
+            [](float lr, float momentum, int ns_steps) {
+                return MuonConfig{.lr = lr, .momentum = momentum, .ns_steps = ns_steps};
+            },
+            nb::arg("lr") = 1e-3F,
+            nb::arg("momentum") = 0.95F,
+            nb::arg("ns_steps") = 5,
+            "Create a MuonConfig object");
+    }
+
+    {
+        auto py_muon = static_cast<nb::class_<Muon, OptimizerBase>>(m.attr("Muon"));
+        py_muon.def(
+            nb::init<serialization::NamedParameters, const MuonConfig&>(), nb::arg("parameters"), nb::arg("config"));
     }
 
     {

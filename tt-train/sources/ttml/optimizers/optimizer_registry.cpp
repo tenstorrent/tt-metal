@@ -7,6 +7,7 @@
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
 #include "optimizers/adamw_full_precision.hpp"
+#include "optimizers/muon.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
@@ -83,6 +84,15 @@ OptimizerRegistry::OptimizerRegistry() {
                 .dampening = config["dampening"].as<float>(0.0F),
                 .weight_decay = config["weight_decay"].as<float>(0.0F),
                 .nesterov = config["nesterov"].as<bool>(false)});
+    });
+
+    register_optimizer("Muon", [](const YAML::Node& config, serialization::NamedParameters params) {
+        return std::make_unique<Muon>(
+            std::move(params),
+            MuonConfig{
+                .lr = config["lr"].as<float>(1e-3F),
+                .momentum = config["momentum"].as<float>(0.95F),
+                .ns_steps = config["ns_steps"].as<int>(5)});
     });
 
     register_optimizer("SGDComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
