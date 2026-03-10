@@ -87,13 +87,13 @@ struct RingJointSDPAInputs {
 struct RingJointSDPAResult {
     Tensor output;
     Tensor joint_output;
-    Tensor lse_output;
+    Tensor stats_output;
 };
 
 struct RingJointSDPAResultSpec {
     TensorSpec output;
     TensorSpec joint_output;
-    TensorSpec lse_output;
+    TensorSpec stats_output;
 };
 
 }  // namespace ttnn::prim

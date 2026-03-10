@@ -69,6 +69,7 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_per_core = global_q_end - global_q_start;
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
@@ -84,7 +85,8 @@ void kernel_main() {
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;
+    constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
+    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -96,11 +98,16 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
+    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
 
     // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
     // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
     constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;
+
+    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
+    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
+    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -117,6 +124,14 @@ void kernel_main() {
     constexpr uint32_t local_n_padded_tiles =
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
+
+    RingAccumulatorState acc_state = {
+        {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
+        {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
+    };
+
+    const uint32_t last_active_ring_iter =
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -169,6 +184,7 @@ void kernel_main() {
         }
 
         if constexpr (use_streaming_compute) {
+            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -187,11 +203,14 @@ void kernel_main() {
                 cb_recip_scratch,
                 cb_mask_in,
                 cb_scale_in,
-                cb_lse_in,
-                cb_lse_out,
+                cb_max_in,
+                cb_max_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat>(
+                uniform_dataformat,
+                cb_out,  // cb_normalized_out — output goes directly to cb_out
+                cb_sum_out,
+                cb_sum_in>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -206,12 +225,9 @@ void kernel_main() {
                 global_n_mask_chunk_id,
                 local_n_mask_chunk_id,
                 joint_n_mask_chunk_id,
-                cb_out_im_A,
-                cb_out_im_B,
-                cb_max_A,
-                cb_max_B,
-                cb_sum_A,
-                cb_sum_B,
+                acc_state,
+                is_last_ring_iter,
+                q_per_core,
                 lw_mask);
         } else {
             sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
