@@ -271,7 +271,7 @@ echo -e "${BLUE}=== Generating Cluster Descriptors ===${NC}"
 echo "Rankfile: $RANKFILE"
 echo "Number of hosts: $NUM_HOSTS"
 echo "Total ranks: $TOTAL_RANKS"
-if [[ $NUM_HOSTS -gt 1 ]] && [[ "$OUTPUT_DIR" =~ ^\./ ]] || [[ "$OUTPUT_DIR" != /* ]]; then
+if [[ $NUM_HOSTS -gt 1 ]] && ( [[ "$OUTPUT_DIR" =~ ^\./ ]] || [[ "$OUTPUT_DIR" != /* ]] ); then
     echo -e "${YELLOW}Warning: Multi-host run with non-absolute output path ($OUTPUT_DIR). OUTPUT_DIR must be a shared filesystem (e.g. NFS path like /data/cluster_descs) so all hosts see the same files.${NC}" >&2
 fi
 echo "Topology tool: $TOPOLOGY_TOOL"
