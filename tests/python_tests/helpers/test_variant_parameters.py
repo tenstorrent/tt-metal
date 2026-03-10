@@ -756,6 +756,8 @@ class IN_TILE_DIMS(RuntimeParameter):
 
 @dataclass
 class RELU_CONFIG(RuntimeParameter):
+    """Packer ReLU config: packed 32-bit value (mode in low 2 bits, threshold in bits 16–31)."""
+
     relu_config: int = 0
 
     def covert_to_cpp(self) -> str:
