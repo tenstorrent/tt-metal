@@ -25,9 +25,6 @@ file(
     moreh_fold/device/kernels/*
     moreh_getitem/device/moreh_getitem_kernels/*
     moreh_getitem/device/moreh_getitem_tilized_kernels/*
-    moreh_group_norm/device/kernels/*
-    moreh_group_norm_backward/device/gamma_beta_grad/kernels/*
-    moreh_group_norm_backward/device/input_grad/kernels/*
     moreh_linear_backward/device/kernels/*
     moreh_matmul/device/kernels/*
     moreh_mean/device/kernels/*
@@ -60,7 +57,6 @@ target_sources(
         FILES
             moreh_adamw/moreh_adamw.hpp
             moreh_clip_grad_norm/moreh_clip_grad_norm.hpp
-            moreh_group_norm/moreh_group_norm.hpp
             moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp
             moreh_linear_backward/moreh_linear_backward.hpp
             moreh_matmul/moreh_matmul.hpp
@@ -128,15 +124,6 @@ target_sources(
             moreh_getitem/moreh_getitem.hpp
             moreh_getitem/moreh_getitem_nanobind.hpp
             moreh_getitem/device/moreh_getitem_device_operation.hpp
-            # moreh_group_norm/
-            moreh_group_norm/moreh_group_norm.hpp
-            moreh_group_norm/moreh_group_norm_nanobind.hpp
-            moreh_group_norm/device/moreh_group_norm_device_operation.hpp
-            # moreh_group_norm_backward/
-            moreh_group_norm_backward/moreh_group_norm_backward.hpp
-            moreh_group_norm_backward/moreh_group_norm_backward_nanobind.hpp
-            moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp
-            moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp
             # moreh_linear/
             moreh_linear/moreh_linear.hpp
             moreh_linear/moreh_linear_nanobind.hpp
@@ -230,14 +217,6 @@ target_sources(
         moreh_getitem/device/moreh_getitem_rm_factory.cpp
         moreh_getitem/device/moreh_getitem_tilized_factory.cpp
         moreh_getitem/moreh_getitem.cpp
-        moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.cpp
-        moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_factory.cpp
-        moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_device_operation.cpp
-        moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_factory.cpp
-        moreh_group_norm_backward/moreh_group_norm_backward.cpp
-        moreh_group_norm/device/moreh_group_norm_device_operation.cpp
-        moreh_group_norm/device/moreh_group_norm_program_factory.cpp
-        moreh_group_norm/moreh_group_norm.cpp
         moreh_linear_backward/device/moreh_linear_backward_device_operation.cpp
         moreh_linear_backward/device/moreh_linear_backward_multi_core_program_factory.cpp
         moreh_linear_backward/device/moreh_linear_backward_single_core_program_factory.cpp
