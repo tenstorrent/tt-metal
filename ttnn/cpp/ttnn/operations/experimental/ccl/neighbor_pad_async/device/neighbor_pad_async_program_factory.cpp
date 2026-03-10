@@ -100,10 +100,11 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 
             auto& ww = GetCommonRuntimeArgs(program, shared_vars.w_writer_kernel_id);
             ww[0] = output_addr;
-            ww[1] = w_sem_addr;
+            ww[1] = output_addr;
+            ww[2] = w_sem_addr;
             // Use h_neighbor_semaphore (not barrier_semaphore) — W reader on same core uses
             // barrier_semaphore for Phase 2 barrier, so they must use different addresses.
-            ww[2] = h_sem_addr;
+            ww[3] = h_sem_addr;
         }
     }
 }
