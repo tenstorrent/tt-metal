@@ -715,17 +715,18 @@ class TtTransformer(LightweightModule):
         )
 
     def unpack_bitmask(self, bitmask):
+        op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
         batch_dim, vocab_dim = bitmask.shape
-        bitmask_to_broadcast = bitmask.reshape((batch_dim, vocab_dim, 1))
+        bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
         broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
-        unpacked_bitmask = broadcast_unpacked.reshape((batch_dim, -1))
-        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT)
+        unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
+        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
         converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32)
         padded_vocab_dim = 131072
         unpadded_vocab_dim = self.vocab_size
         padding_size = padded_vocab_dim - unpadded_vocab_dim
-        full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0)
+        full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0, **op_kwargs)
         result = ttnn.where(full_mask, 0, float("-inf"))
         return result
 
@@ -753,7 +754,11 @@ class TtTransformer(LightweightModule):
             return tt_logits
         with ttnn.trace_allocation_safe_scope(self.mesh_device):
             bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
-            ttnn.add_(tt_logits, bitmask_unpacked)
+            ttnn.add_(
+                tt_logits,
+                bitmask_unpacked,
+                **({"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}),
+            )
             bitmask_unpacked.deallocate(True)
         return tt_logits
 
