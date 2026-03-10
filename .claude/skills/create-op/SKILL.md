@@ -391,7 +391,7 @@ When a helper uses `NoWaitNoPop`, it does NOT pop the input CB. The caller MUST 
 |-------|------|---------|
 | `ttnn-operation-analyzer` | Opus | Deep analysis of existing operations |
 | `ttnn-operation-architect` | Opus | Design new operation (architecture + kernel implementation) |
-| `ttnn-generic-op-builder` | Sonnet | Python infrastructure + stub kernels |
+| `ttnn-generic-op-builder` | Opus | Python infrastructure + stub kernels |
 | `ttnn-kernel-writer-tdd` | Opus | Implement all TDD stages in one session (owns full loop) |
 | `ttnn-riscv-debugger` | Sonnet | Debug kernel issues (hangs, wrong output) |
 | `ttnn-self-reflection` | Opus | Post-pipeline analysis and improvement recommendations |
