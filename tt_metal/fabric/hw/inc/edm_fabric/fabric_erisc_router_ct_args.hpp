@@ -662,7 +662,7 @@ static constexpr uint8_t edm_to_downstream_noc = receiver_channel_forwarding_noc
 #ifdef ARCH_BLACKHOLE
 static constexpr uint8_t worker_handshake_noc = noc_index;
 #else
-static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
+static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids_vc0[0];
 #endif
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
