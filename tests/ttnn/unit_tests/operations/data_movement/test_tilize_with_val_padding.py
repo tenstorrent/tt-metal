@@ -614,3 +614,16 @@ def test_tilize_with_val_padding_scalar(device, dtype, scalar_val, pad_value):
     expected_torch_tensor = pytorch_tilize_with_val_padding(ref_input, output_padded_shape, pad_value)
     expected_torch_tensor = expected_torch_tensor.to(output_torch_tensor.dtype)
     assert_equal(expected_torch_tensor, output_torch_tensor)
+
+
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_val_padding_fp32_truncation(device, use_multicore):
+    """Regression test: FP32 must not be truncated to TF32 during tilize_with_val_padding (issue #39310)."""
+    input_shape = [1, 1, 50, 50]
+    output_shape = [1, 1, 64, 64]
+    torch_input = torch.full(input_shape, 0.1, dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_tiled = ttnn.tilize_with_val_padding(tt_input, output_shape, 0.0, use_multicore=use_multicore)
+    tt_output = ttnn.untilize(tt_tiled)
+    torch_output = ttnn.to_torch(tt_output)
+    assert torch.equal(torch_input, torch_output[..., :50, :50])
