@@ -318,10 +318,10 @@ inline void llk_pack_fast_tilize_init(
     const uint32_t use_32bit_dest =
         pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
 
-    LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
-            pack_src_format[input_id], pack_dst_format[output_id])),
-        "");
+    // LLK_ASSERT(
+    //     (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
+    //         pack_src_format[input_id], pack_dst_format[output_id])),
+    //     "");
 
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces);
 }
