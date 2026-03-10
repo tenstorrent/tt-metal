@@ -74,19 +74,12 @@ Tensor create_tt_tensor_from_host_data(
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
-        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
-
-        const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, tensor_spec);
-        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
-
-        const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
         if (mesh_mapper != nullptr) {
-            // sharded tensor must be created using factory function to avoid validation errors in the
-            // `TensorSpec` constructor. Example `test_paged_cache_mask.py::test_update_cache`, fails
-            // with `Number of shards along height 32 must not exceed number of cores 16` if the
-            // spec is constructed directly.
-
+            // Distributed tensors must be created via the factory function: the per-shard
+            // TensorSpec is built after chunking, so constructing a TensorSpec from the full
+            // (pre-shard) shape + sharded memory config would trigger a validation error
+            // (e.g. "Number of shards along height 32 must not exceed number of cores 16").
             const bool must_construct_on_host = (device == nullptr);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
@@ -100,6 +93,12 @@ Tensor create_tt_tensor_from_host_data(
                 cq_id,
                 static_cast<T>(pad_value));
         }
+
+        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
+        const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, tensor_spec);
+        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
+
+        const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
         if (preserve_nan_values) {
             return Tensor::from_span(
