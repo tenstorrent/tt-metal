@@ -102,6 +102,7 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        use_fused_experts=False,
     ):
         """
         Initialize GPT-OSS model
@@ -176,6 +177,8 @@ class Model:
                 max_local_batch_size=max_local_batch_size,
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
+                use_fused_experts=use_fused_experts,
+                tokens_per_device=max_local_batch_size,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -280,6 +283,7 @@ class Model:
         create_kv_cache=True,
         users_row_sharded=False,
         use_throughput_experts=False,
+        use_fused_experts=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -302,6 +306,7 @@ class Model:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
+            use_fused_experts=use_fused_experts,
         )
 
         # Add tt_transformers compatible attributes

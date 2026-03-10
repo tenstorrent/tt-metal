@@ -283,6 +283,11 @@ The E2E test (`test_moe_gpt_e2e.py`) runs:
 - Output reshape used `[:E*M, :]` slice (only first height shard) instead of full tensor
 - **Fixed**: corrected all three issues
 
+### (m) `create_fused_moe_gpt_config` worker core ordering (2026-03-10)
+- Same root cause as bug (k): `corerange_to_cores()` called without `row_wise=True`
+- Would cause PCC ~0.02 when using the production `create_fused_moe_gpt_config` factory
+- **Fixed**: added `row_wise=True` in `weights.py` line 866
+
 ---
 
 ## 10. What Still Needs to Be Done for Model Integration
@@ -296,25 +301,13 @@ All 5 tests pass on all 32 devices (2026-03-10). Output[1] verified.
 ### 10.3 Verify `batch_size` parameter in `selective_reduce_combine` call
 In `fused_decode.py` line 244 the `batch_size` argument is currently `tokens_per_device` (=32). Per the analysis in §8 of the E2E test: the E2E test passes with `batch_size=total_tokens=128`. Confirm which is correct for the production selective_reduce_combine kernel, and update accordingly.
 
-### 10.4 Wire `fused_decode_forward` into the model
-`fused_decode_forward` in `models/demos/gpt_oss/tt/experts_throughput/fused_decode.py` is implemented but not yet connected to the main `ThroughputExperts` class in `decode.py`. The intended integration point is:
+### 10.4 ~~Wire `fused_decode_forward` into the model~~ DONE
+Already wired in `ThroughputExperts.__init__` (accepts `fused_config`) and `forward_decode` (dispatches to `fused_decode_forward` when `fused_config is not None`). Completed before 2026-03-10.
 
-```python
-# In ThroughputExperts.forward() or similar:
-if self.fused_config is not None:
-    return fused_decode_forward(hidden_states, indices, scores, self.config, self.fused_config, mesh_device)
-else:
-    return decode_forward(...)  # existing dense path
-```
-
-### 10.5 Pre-allocation / FusedMoeGptConfig setup in model init
-`FusedMoeGptConfig` requires pre-allocated dispatch output tensors, semaphores, and combine preallocated tensor. These need to be created in the model's `__init__` / weight loading step alongside `tt_w0_w1` and `tt_w2`. Follow the pattern in `test_moe_gpt_e2e.py` for creating:
-- `dispatch_sparse` (DRAM, `[total_tokens, K]`)
-- `dispatch_indices` / `dispatch_scores` (HEIGHT_SHARDED L1, `[total_tokens, selected_k]`)
-- `dispatch_semaphore` (global semaphore)
-- `combine_preallocated` (DRAM, `[experts_per_ring, M, K]`)
-- `combine_semaphore` (global semaphore)
-- `combine_worker_cores`, `combine_mux_cores` — copied from the combine core selection logic in `moe_gpt_device_operation.cpp`
+### 10.5 ~~Pre-allocation / FusedMoeGptConfig setup in model init~~ DONE
+`create_fused_moe_gpt_config()` factory in `weights.py` handles all pre-allocation.
+Wired into the model via `use_fused_experts=True` flag: `model.py` → `layer.py` → `mlp.py`.
+Fixed bug (m): `row_wise=True` in `corerange_to_cores` call (same as bug (k) in the test).
 
 ### 10.6 Routing weight map for accurate output
 `fused_decode_forward` accepts an optional `routing_weight_map` `[1, E_ring, M, 1]` for scaling expert outputs by routing scores before summing. Without it, the output is an unweighted sum and PCC vs reference will be degraded. This map must be built from the router output each step:

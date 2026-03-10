@@ -863,7 +863,7 @@ def create_fused_moe_gpt_config(
     combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
         mesh_device, COMBINE_W, COMBINE_H
     )
-    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set))
+    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
     mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
     mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
