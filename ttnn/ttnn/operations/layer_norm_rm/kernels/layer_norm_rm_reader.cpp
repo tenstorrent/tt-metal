@@ -1,19 +1,60 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// layer_norm_rm - Reader Kernel (STUB)
-// Runs on RISCV_0 (BRISC), reads RM input sticks from DRAM via NOC0
-//
-// When implemented, this kernel will:
-// 1. Read 32 RM input sticks per block into c_0 using TensorAccessor
-// 2. Generate reduce scaler tile (1/W) into c_2
-// 3. Generate epsilon tile into c_7
-// 4. Optionally read gamma/beta sticks into c_27/c_28
+// layer_norm_rm - Reader Kernel
+// Reads RM input sticks from DRAM via TensorAccessor into c_0.
+// Later stages add: reduce scaler (c_2), epsilon tile (c_7), gamma/beta sticks (c_27/c_28).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
-    // Stub: no data movement, kernels will be implemented in TDD stages
+    // ========== COMPILE-TIME ARGS ==========
+    constexpr uint32_t stick_size = get_compile_time_arg_val(0);  // W * 2 bytes
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(2);
+    constexpr auto input_accessor_args = TensorAccessorArgs<3>();
+
+    // ========== RUNTIME ARGS ==========
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
+    const uint32_t Wt = get_arg_val<uint32_t>(2);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
+    // gamma_addr, beta_addr at indices 4, 5 - used in later stages
+
+    // Early exit for idle cores
+    if (num_sticks == 0) {
+        return;
+    }
+
+    // ========== TENSOR ACCESSOR ==========
+    const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_size);
+
+    // ========== CB CONSTANTS ==========
+    constexpr uint32_t cb_input_rm = 0;  // c_0: input RM sticks
+
+    // ========== MAIN LOOP: READ INPUT STICKS ==========
+    // Each block = 32 sticks = 1 tile-row = Wt tile-sized pages
+    // Reader batches 32 sticks per block, pushes Wt pages
+    const uint32_t num_blocks = num_sticks / 32;
+
+    uint32_t stick_id = start_stick_id;
+
+    for (uint32_t block = 0; block < num_blocks; block++) {
+        // Reserve Wt pages in c_0 (tile-sized pages containing RM sticks)
+        cb_reserve_back(cb_input_rm, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_input_rm);
+
+        // Read 32 sticks into the reserved space
+        for (uint32_t s = 0; s < 32; s++) {
+            noc_async_read_page(stick_id, input_accessor, l1_write_addr);
+            l1_write_addr += stick_size;
+            stick_id++;
+        }
+        noc_async_read_barrier();
+
+        // Push Wt pages (32 sticks = Wt tile-sized pages)
+        cb_push_back(cb_input_rm, Wt);
+    }
 }

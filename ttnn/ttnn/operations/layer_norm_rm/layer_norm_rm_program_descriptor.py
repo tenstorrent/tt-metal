@@ -372,31 +372,46 @@ def create_program_descriptor(
     )
 
     # --- Compute kernel ---
-    # Compile-time args differ per core group (nblocks_per_core differs),
-    # but we use the max and pass the actual count via compile-time args.
-    # The design says: nblocks_per_core, Wt, has_gamma, has_beta
-    # Since compile-time args are shared across all cores using the same kernel,
-    # we use blocks_per_core_group_1 as the compile-time value.
-    # Cores in group 2 will have different block counts - handled via runtime args
-    # or by using nblocks from runtime args. For stubs, this does not matter.
-    compute_ct_args = [
-        blocks_per_core_group_1,  # 0: nblocks_per_core (max)
+    # nblocks_per_core is a compile-time arg and differs between core groups.
+    # Create separate kernel descriptors for each core group.
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        math_approx_mode=False,
+    )
+
+    compute_ct_args_1 = [
+        blocks_per_core_group_1,  # 0: nblocks_per_core
         Wt,  # 1: Wt (tiles per row)
         1 if has_gamma else 0,  # 2: has_gamma
         1 if has_beta else 0,  # 3: has_beta
     ]
 
-    compute_kernel = ttnn.KernelDescriptor(
+    compute_kernel_1 = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "layer_norm_rm_compute.cpp"),
-        core_ranges=core_grid,
-        compile_time_args=compute_ct_args,
+        core_ranges=core_group_1,
+        compile_time_args=compute_ct_args_1,
         runtime_args=[],
-        config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=False,
-            math_approx_mode=False,
-        ),
+        config=compute_config,
     )
+
+    compute_kernels = [compute_kernel_1]
+
+    if blocks_per_core_group_2 > 0:
+        compute_ct_args_2 = [
+            blocks_per_core_group_2,  # 0: nblocks_per_core (cliff core)
+            Wt,  # 1: Wt (tiles per row)
+            1 if has_gamma else 0,  # 2: has_gamma
+            1 if has_beta else 0,  # 3: has_beta
+        ]
+        compute_kernel_2 = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "layer_norm_rm_compute.cpp"),
+            core_ranges=core_group_2,
+            compile_time_args=compute_ct_args_2,
+            runtime_args=[],
+            config=compute_config,
+        )
+        compute_kernels.append(compute_kernel_2)
 
     # --- Writer kernel ---
     writer_ct_args = [
@@ -424,7 +439,7 @@ def create_program_descriptor(
 
     # ========== 5. RETURN PROGRAM DESCRIPTOR ==========
     return ttnn.ProgramDescriptor(
-        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        kernels=[reader_kernel, writer_kernel] + compute_kernels,
         cbs=cbs,
         semaphores=[],
     )
