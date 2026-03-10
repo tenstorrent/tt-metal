@@ -5,7 +5,7 @@
 
 """
 GRPO training
-This script takes the GSM8K dataset and trains the smollm2-135m model to respond with a short first sentence. It uses the GRPO reinforcement learning mechanism.
+This script takes the GSM8K dataset and trains the llama_3_2_1b model to respond with a short first sentence. It uses the GRPO reinforcement learning mechanism.
 
 Here are the main elements of each training step:
 * Take 1 prompt from the dataset, generate a group of completions for the same prompt. (complete_tokens)
@@ -47,8 +47,8 @@ import time
 import re
 from typing import List, TypeAlias, Any
 
-CONFIG = "training_grpo_smollm2_135m.yaml"
-HF_MODEL_ID = "HuggingFaceTB/SmolLM2-135M"
+CONFIG = "training_grpo_unsloth_llama_3_2_1b_instruct.yaml"
+HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"
 LOAD_PRETRAINED = True
 
 # Set when the training & model .yaml files are parsed
@@ -65,13 +65,19 @@ max_steps: int = None
 # Set in main
 optimizer = None
 tokenizer = None
-vocab_size: int = None
+full_vocab_size: int = None
 pad_token = None
 tt_model = None
 
 # Constants not changeable in the yaml
 tile_size: int = 32
 seed = 42
+
+system_prompt = """You are a careful math tutor solving grade-school word problems.
+Show your reasoning step by step.
+End with exactly one final line in this format:
+#### <number>
+Do not output any text after the #### line."""
 
 Tokens: TypeAlias = List[int]
 Completion: TypeAlias = List[int]
@@ -239,12 +245,14 @@ def complete_token(state: DecodeState) -> int:
 def sample_token(logits, sample_seed):
     """Returns a token from raw logits."""
     n, m, k, V = logits.shape()
-    assert n == 1 and m == 1 and k == 1 and V == vocab_size
+    print(f"{logits.shape()=}")
+    print(f"{full_vocab_size=}")
+    assert n == 1 and m == 1 and k == 1 and V == full_vocab_size
 
     if temperature < 0.01:
         argmax_result = ttnn.argmax(logits.get_value(), dim=3, keepdim=True)
         next_token = int(argmax_result.item())
-        next_token = min(next_token, vocab_size - 1)
+        next_token = min(next_token, full_vocab_size - 1)
     else:
         sampled = ttml.ops.sample.sample_op(logits, temperature, sample_seed, None)
         next_token = int(sampled.get_value().item())
@@ -253,13 +261,27 @@ def sample_token(logits, sample_seed):
 
 
 def complete_tokens(input_tokens: List[int], sample_seed: int) -> Completion:
+    stop_ids = set()
+    if tokenizer.eos_token_id is not None:
+        stop_ids.add(int(tokenizer.eos_token_id))
+
+    for tok in ["<|eot_id|>", "<|end_of_text|>"]:
+        tid = tokenizer.convert_tokens_to_ids(tok)
+        if tid is not None and tid >= 0:
+            stop_ids.add(int(tid))
+
+    for tok in stop_ids:
+        print(f"{tok=}")
+    print(f"{full_vocab_size=}")
+    print(f"{len(tokenizer)}")
+
     state = DecodeState(input_tokens, sample_seed)
 
     tt_model.eval()
     with no_grad():
         for _ in range(max_tokens_to_complete):
             token = complete_token(state)
-            if token == tokenizer.eos_token_id:
+            if token in stop_ids:
                 break
 
         return state.tokens[len(input_tokens) :]
@@ -420,36 +442,27 @@ def calculate_loss(
     return result
 
 
-def get_reward(c: Completion) -> Reward:
-    """
-    The reward range is [-1.0, 1.0]
-    Reward meaning:
-    -1.0  -> invalid/degenerate output (empty text or empty first sentence, e.g. starts with punctuation)
-    (0,1] -> valid first sentence; higher is better (shorter first sentence)
-            ~1.0 means very short first sentence, values near 0 mean long first sentence
-    Formula for valid first sentence: reward = exp(-first_len / tau), where first_len is word count.
-    """
-    text = tokenizer.decode(c, skip_special_tokens=True).strip()
-    if not text:
-        return -1.0
-    first = re.split(r"[.!?]+", text, maxsplit=1)[0].strip()
-    # Key fix: empty first sentence is bad
-    if not first:
-        return -1.0
-    first_len = len(first.split())
-    # Higher reward for shorter first sentence, in (0, 1]
-    tau = 10.0
-    return float(np.exp(-first_len / tau))
+def get_reward(c: Completion, golden: Tokens) -> Reward:
+    return 0.0
 
 
-def train_gsm8k():
-    print("Loading GSM8K dataset...")
+def train_grpo():
+    print("Loading dataset...")
     train_data = datasets.load_dataset("openai/gsm8k", "main", split="train")
-    X, _ = tokenize_dataset(train_data, tokenizer)
-    print("Loaded GSM8K dataset!")
+    X, y = tokenize_dataset(train_data, tokenizer)
+    print("Loaded the dataset!")
 
     for step in range(min(max_steps, len(X))):
-        print(f"{step=}")
+        global temperature
+
+        if step < 150:
+            temperature = 1.1
+        elif step < 400:
+            temperature = 0.8
+        else:
+            temperature = 0.6
+
+        print(f"{step=}, {temperature=}")
         start_time = time.perf_counter()
         prompt: Tokens = X[step]
 
@@ -463,7 +476,7 @@ def train_gsm8k():
             c: Completion = complete_tokens(
                 prompt, sample_seed=seed + step * 1000000 + i * 1000
             )
-            r = get_reward(c)
+            r = get_reward(c, golden=y[step])
             completions.append(c)
             rewards.append(r)
 
@@ -575,10 +588,9 @@ def load_configs():
 
 def create_model(model_config):
     print("Setting up model...")
-    orig_vocab_size = tokenizer.vocab_size
 
     tt_model_factory = TransformerModelFactory(model_config)
-    tt_model_factory.transformer_config.vocab_size = orig_vocab_size
+    tt_model_factory.transformer_config.vocab_size = len(tokenizer)
     print("Created Model Factory")
 
     print("Creating model...")
@@ -597,26 +609,44 @@ def create_model(model_config):
 
 
 def inference_example():
-    prompt = "The capital of France is"
-    input_tokens = tokenizer.encode(prompt)
+    start_time = time.perf_counter()
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": "James writes a 3-page letter to 2 different friends twice a week. How many pages does he write a year?",
+        },
+    ]
+    # Build prompt tokens using tokenizer chat template.
+    # add_generation_prompt=True appends assistant header, so model continues as assistant.
+    input_tokens = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+    )
 
     completed_tokens = complete_tokens(input_tokens, sample_seed=seed)
     print(f"{len(completed_tokens)=}")
     print("Prompt + Generated = ")
     print(tokenizer.decode(input_tokens + completed_tokens))
 
+    print(f"Inference time: {(time.perf_counter() - start_time)} s")
+
 
 def setup_tokenizer():
-    global tokenizer, vocab_size, pad_token
+    global tokenizer, full_vocab_size, pad_token
 
     tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
-    vocab_size = tokenizer.vocab_size
+    full_vocab_size = len(tokenizer)
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
 
 
 if __name__ == "__main__":
+    start_time = time.perf_counter()
+
     setup_tokenizer()
 
     set_seed(42)
@@ -626,8 +656,10 @@ if __name__ == "__main__":
 
     tt_model = create_model(model_config)
 
+    print(f"Init time: {time.perf_counter() - start_time} s")
+
     # Uncomment this line to try a sample inference
-    # inference_example()
+    inference_example()
 
     optimizer = create_optimizer(tt_model, yaml_config)
-    train_gsm8k()
+    # train_grpo()
