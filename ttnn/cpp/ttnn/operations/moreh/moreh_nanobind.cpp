@@ -28,8 +28,6 @@
 #include "ttnn/operations/moreh/moreh_norm/moreh_norm_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_norm_backward/moreh_norm_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_sgd/moreh_sgd_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.hpp"
 
@@ -59,8 +57,6 @@ void bind_moreh_operations(nb::module_& mod) {
     moreh_norm_backward::bind_moreh_norm_backward_operation(mod);
     moreh_norm::bind_moreh_norm_operation(mod);
     moreh_sgd::bind_moreh_sgd_operation(mod);
-    moreh_softmax_backward::bind_moreh_softmax_backward_operation(mod);
-    moreh_softmax::bind_moreh_softmax_operation(mod);
     moreh_sum_backward::bind_moreh_sum_backward_operation(mod);
     moreh_sum::bind_moreh_sum_operation(mod);
     moreh_clip_grad_norm::bind_moreh_clip_grad_norm_operation(mod);

@@ -148,7 +148,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         py_tensor.dtype().code,
         py_tensor.dtype().bits,
         optional_data_type.has_value(),
-        optional_data_type.value_or(DataType::INVALID),
+        static_cast<int>(optional_data_type.value_or(DataType::INVALID)),
         config.dtype.code,
         config.dtype.bits);
 
@@ -237,7 +237,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
                 return dispatch_to_concrete.template operator()<float>(input_float_buffer);
             }
-            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
+            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", static_cast<int>(tt_dtype));
         }
         TT_THROW("Unreachable");
     };
@@ -280,7 +280,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
-        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
+        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", static_cast<int>(tt_tensor.dtype()));
     }
     TT_THROW("Unreachable");
 }
@@ -358,7 +358,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
             case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
             case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
             case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
-            default: TT_THROW("Unsupported target DataType: {}", target_dtype);
+            default: TT_THROW("Unsupported target DataType: {}", static_cast<int>(target_dtype));
         }
     };
 

@@ -41,8 +41,6 @@ file(
     moreh_norm/device/ord_other/moreh_norm_w/kernels/*
     moreh_norm_backward/device/kernels/*
     moreh_sgd/device/kernels/*
-    moreh_softmax/device/kernels/*
-    moreh_softmax_backward/device/kernels/*
     moreh_sum/device/moreh_sum_h_impl_kernels/*
     moreh_sum/device/moreh_sum_nc_impl_kernels/*
     moreh_sum/device/moreh_sum_w_impl_kernels/*
@@ -64,10 +62,6 @@ target_sources(
             moreh_mean_backward/moreh_mean_backward.hpp
             moreh_nll_loss/moreh_nll_loss.hpp
             moreh_nll_loss_backward/moreh_nll_loss_backward.hpp
-            moreh_softmax/device/moreh_softmax_device_operation.hpp
-            moreh_softmax/moreh_softmax.hpp
-            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
-            moreh_softmax_backward/moreh_softmax_backward.hpp
             moreh_sum/moreh_sum.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -172,14 +166,6 @@ target_sources(
             moreh_sgd/moreh_sgd.hpp
             moreh_sgd/moreh_sgd_nanobind.hpp
             moreh_sgd/device/moreh_sgd_device_operation.hpp
-            # moreh_softmax/
-            moreh_softmax/moreh_softmax.hpp
-            moreh_softmax/moreh_softmax_nanobind.hpp
-            moreh_softmax/device/moreh_softmax_device_operation.hpp
-            # moreh_softmax_backward/
-            moreh_softmax_backward/moreh_softmax_backward.hpp
-            moreh_softmax_backward/moreh_softmax_backward_nanobind.hpp
-            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
             # moreh_sum/
             moreh_sum/moreh_sum.hpp
             moreh_sum/moreh_sum_nanobind.hpp
@@ -256,27 +242,6 @@ target_sources(
         moreh_sgd/device/moreh_sgd_device_operation.cpp
         moreh_sgd/device/moreh_sgd_program_factory.cpp
         moreh_sgd/moreh_sgd.cpp
-        moreh_softmax_backward/device/moreh_softmax_backward_device_operation.cpp
-        moreh_softmax_backward/device/softmax_backward_c_large/softmax_backward_c_large.cpp
-        moreh_softmax_backward/device/softmax_backward_h_large/softmax_backward_h_large.cpp
-        moreh_softmax_backward/device/softmax_backward_h_small/softmax_backward_h_small.cpp
-        moreh_softmax_backward/device/softmax_backward_w_large/softmax_backward_w_large.cpp
-        moreh_softmax_backward/device/softmax_backward_w_small/softmax_backward_w_small.cpp
-        moreh_softmax_backward/moreh_softmax_backward.cpp
-        moreh_softmax/device/moreh_softmax_device_operation.cpp
-        moreh_softmax/device/moreh_softmax_device_operation.cpp
-        moreh_softmax/device/softmax_c_large/softmax_c_large.cpp
-        moreh_softmax/device/softmax_c_large/softmax_c_large.cpp
-        moreh_softmax/device/softmax_h_large/softmax_h_large.cpp
-        moreh_softmax/device/softmax_h_large/softmax_h_large.cpp
-        moreh_softmax/device/softmax_h_small/softmax_h_small.cpp
-        moreh_softmax/device/softmax_h_small/softmax_h_small.cpp
-        moreh_softmax/device/softmax_w_large/softmax_w_large.cpp
-        moreh_softmax/device/softmax_w_large/softmax_w_large.cpp
-        moreh_softmax/device/softmax_w_small/softmax_w_small.cpp
-        moreh_softmax/device/softmax_w_small/softmax_w_small.cpp
-        moreh_softmax/moreh_softmax.cpp
-        moreh_softmax/moreh_softmax.cpp
         moreh_sum_backward/device/moreh_sum_backward_device_operation.cpp
         moreh_sum_backward/device/moreh_sum_backward_program_factory.cpp
         moreh_sum_backward/moreh_sum_backward.cpp
