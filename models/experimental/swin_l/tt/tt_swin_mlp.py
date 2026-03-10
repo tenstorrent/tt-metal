@@ -46,5 +46,5 @@ class TtSwinMLP:
                 packer_l1_acc=True,
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
