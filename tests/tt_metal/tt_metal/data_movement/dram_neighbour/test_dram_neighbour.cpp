@@ -25,7 +25,7 @@ namespace unit_tests::dm::dram_neighbour {
 
 uint32_t runtime_host_id = 0;
 
-using IndexRange = struct {
+struct IndexRange {
     uint32_t start;
     uint32_t end;
 };
@@ -38,8 +38,8 @@ struct DramNeighbourConfig {
     uint32_t pages_per_bank = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    const std::map<uint32_t, uint32_t>& core_dram_map;
-    const std::map<uint32_t, IndexRange>& dram_index_map;
+    std::map<uint32_t, uint32_t> core_dram_map;
+    std::map<uint32_t, IndexRange> dram_index_map;
 
     DramNeighbourConfig(
         uint32_t test_id_,
