@@ -28,36 +28,6 @@ def prepare_input_tensor(input_tensor, C, device, alignment=ALIGNMENT, dtype=ttn
     return ttnn.from_torch(tt_input, device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(
-    conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT, dtype=ttnn.DataType.BFLOAT16
-):
-    """Prepare weights and bias for TTNN."""
-    w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
-    w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    ALIGN_PAD = alignment - C % alignment
-    if C % alignment != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert num_C_in_blocks * C_in_block == C_in_aligned
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    tt_weight = ttnn.from_torch(w, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0)
-    tt_bias = ttnn.from_torch(
-        conv3d_module.bias.data.reshape(1, -1),
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        pad_value=0,
-    )
-    return tt_weight, tt_bias
-
-
 def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
     """Reshape and permute TTNN output to match PyTorch format."""
     tt_output = ttnn.to_torch(tt_output, device=device, dtype=torch.float32)
@@ -157,8 +127,20 @@ def run_conv3d_test(
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
 
-    # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, dtype=dtype)
+    # Prepare weights and bias for TTNN using device-side prepare functions
+    tt_weight = ttnn._ttnn.operations.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
+        in_channels=C,
+        out_channels=out_channels,
+        C_in_block=0,
+        alignment=ALIGNMENT,
+        device=device,
+    )
+    tt_bias = ttnn._ttnn.operations.experimental.prepare_conv3d_bias(
+        bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
+        out_channels=out_channels,
+        device=device,
+    )
 
     # Create config and run TTNN conv3d
     config = create_conv3d_config(compute_with_storage_grid_size=grid_size, dilation=dilation, weights_dtype=dtype)
@@ -238,6 +220,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
+    num_program_cache_entries = []
     for _ in range(3):
         for i in range(2):
             new_shape = (input_shape[0], input_shape[1] * (i + 1), input_shape[2], input_shape[3], input_shape[4])
@@ -245,8 +228,13 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
             run_conv3d_test(
                 device, new_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
             )
+            num_program_cache_entries.append(device.num_program_cache_entries())
 
-    assert device.num_program_cache_entries() == 2
+    # Check that the two different input shapes produce different cache entries,
+    # and subsequent runs with the same shapes reuse existing entries
+    assert num_program_cache_entries[0] != num_program_cache_entries[1] and all(
+        x == num_program_cache_entries[1] for x in num_program_cache_entries[1:]
+    )
 
 
 @skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
@@ -279,7 +267,19 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+    tt_weight = ttnn._ttnn.operations.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        in_channels=C,
+        out_channels=out_channels,
+        C_in_block=C_in_block,
+        alignment=ALIGNMENT,
+        device=device,
+    )
+    tt_bias = ttnn._ttnn.operations.experimental.prepare_conv3d_bias(
+        bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        out_channels=out_channels,
+        device=device,
+    )
 
     config = create_conv3d_config(
         T_out_block=T_out_block,
@@ -330,7 +330,19 @@ def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride
     C = input_shape[1]
 
     # Prepare weights with C_in_block=0 (full C_in), matching the auto-blocking default
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    tt_weight = ttnn._ttnn.operations.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        in_channels=C,
+        out_channels=out_channels,
+        C_in_block=0,
+        alignment=ALIGNMENT,
+        device=device,
+    )
+    tt_bias = ttnn._ttnn.operations.experimental.prepare_conv3d_bias(
+        bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        out_channels=out_channels,
+        device=device,
+    )
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,

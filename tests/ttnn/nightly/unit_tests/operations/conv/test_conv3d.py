@@ -12,9 +12,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     setup_conv3d_test,
     create_conv3d_config,
-    prepare_weights,
     reshape_output,
     run_conv3d_test,
+    ALIGNMENT,
 )
 
 
@@ -172,7 +172,21 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
         # Prepare weights with specified C_in_block
         if prev_C_in_block != C_in_block:
             # Only prepare if changing C_in_block
-            tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+            tt_weight = ttnn._ttnn.operations.experimental.prepare_conv3d_weights(
+                weight_tensor=ttnn.from_torch(
+                    conv3d_module.weight.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+                ),
+                in_channels=C,
+                out_channels=out_channels,
+                C_in_block=C_in_block,
+                alignment=ALIGNMENT,
+                device=device,
+            )
+            tt_bias = ttnn._ttnn.operations.experimental.prepare_conv3d_bias(
+                bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+                out_channels=out_channels,
+                device=device,
+            )
             prev_C_in_block = C_in_block
 
         config = create_conv3d_config(
@@ -300,7 +314,19 @@ def test_conv3d_mochi_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+    tt_weight = ttnn._ttnn.operations.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        in_channels=C,
+        out_channels=out_channels,
+        C_in_block=C_in_block,
+        alignment=ALIGNMENT,
+        device=device,
+    )
+    tt_bias = ttnn._ttnn.operations.experimental.prepare_conv3d_bias(
+        bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        out_channels=out_channels,
+        device=device,
+    )
 
     config = create_conv3d_config(
         T_out_block=T_out_block,

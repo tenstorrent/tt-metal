@@ -15,6 +15,7 @@
 #include <nanobind/stl/string.h>
 
 #include "conv3d.hpp"
+#include "prepare_conv3d_weights.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
@@ -104,6 +105,61 @@ void bind_conv3d(nb::module_& mod) {
 
     py_conv3d_config.def(
         "__repr__", [](const ttnn::experimental::prim::Conv3dConfig& config) { return fmt::format("{}", config); });
+
+    // Bind prepare_conv3d_weights function
+    mod.def(
+        "prepare_conv3d_weights",
+        &ttnn::operations::experimental::conv3d::prepare_conv3d_weights,
+        nb::kw_only(),
+        nb::arg("weight_tensor"),
+        nb::arg("in_channels"),
+        nb::arg("out_channels"),
+        nb::arg("C_in_block") = uint32_t(0),
+        nb::arg("alignment") = uint32_t(16),
+        nb::arg("device") = nb::none(),
+        R"doc(
+        Prepares conv3d weight tensor for device execution.
+
+        Transforms PyTorch-style weight tensor [out_channels, in_channels, kD, kH, kW]
+        to the format expected by conv3d device operation.
+
+        If device is provided, transforms run on device. Otherwise they run on host.
+
+        Args:
+            weight_tensor (ttnn.Tensor): Weight tensor in ROW_MAJOR layout, shape [out_channels, in_channels, kD, kH, kW].
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            C_in_block (int, optional): Input channel blocking size. 0 means full C_in. Defaults to 0.
+            alignment (int, optional): Channel alignment boundary. Defaults to 16.
+            device (MeshDevice, optional): Device for device-side preparation. Defaults to None (host-side).
+
+        Returns:
+            ttnn.Tensor: Prepared weight tensor in tile layout, shape [-1, out_channels].
+        )doc");
+
+    // Bind prepare_conv3d_bias function
+    mod.def(
+        "prepare_conv3d_bias",
+        &ttnn::operations::experimental::conv3d::prepare_conv3d_bias,
+        nb::kw_only(),
+        nb::arg("bias_tensor"),
+        nb::arg("out_channels"),
+        nb::arg("device") = nb::none(),
+        R"doc(
+        Prepares conv3d bias tensor for device execution.
+
+        Reshapes bias to [1, out_channels] format and converts to tile layout.
+
+        If device is provided, transforms run on device. Otherwise they run on host.
+
+        Args:
+            bias_tensor (ttnn.Tensor): Bias tensor in ROW_MAJOR layout.
+            out_channels (int): Number of output channels.
+            device (MeshDevice, optional): Device for device-side preparation. Defaults to None (host-side).
+
+        Returns:
+            ttnn.Tensor: Prepared bias tensor in tile layout, shape [1, out_channels].
+        )doc");
 }
 
 }  // namespace ttnn::operations::experimental::conv3d::detail
