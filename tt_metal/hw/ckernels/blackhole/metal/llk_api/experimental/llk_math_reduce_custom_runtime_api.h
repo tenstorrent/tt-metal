@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "llk_math_common_api.h"
-#include "llk_math_reduce_custom.h"
+#include "experimental/llk_math_reduce_custom.h"
+#include "experimental/llk_math_reduce_runtime_custom.h"
 
 /*************************************************************************
  * LLK REDUCE CUSTOM - Specialized reduce_max_row operations
@@ -26,14 +27,14 @@
  * Use the standard llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * llk_math_reduce() calls in a loop for general-purpose block reduction.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void llk_math_reduce_block_max_row_init() {
-    _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_init_runtime(uint32_t block_ct_dim) {
+    _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
 }
 
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void llk_math_reduce_block_max_row_mop_config() {
-    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>();
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_mop_config_runtime(uint32_t block_ct_dim) {
+    _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
 }
 
 /**
@@ -51,11 +52,11 @@ inline void llk_math_reduce_block_max_row_mop_config() {
  * Use the standard llk_math_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void llk_math_reduce_block_max_row(const uint dst_index) {
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_runtime(const uint dst_index) {
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
-    _llk_math_reduce_block_max_row_<block_ct_dim, is_fp32_dest_acc_en>(dst_index);
+    _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(dst_index);
 }
 
 /**
@@ -66,4 +67,24 @@ inline void llk_math_reduce_block_max_row(const uint dst_index) {
  * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
  * for a certain use case and the LLK team does not guarantee any degree of generality.
  */
-inline void llk_math_reduce_block_max_row_reinit() { reduce_max_row_configure_addrmod_reinit(); }
+inline void llk_math_reduce_block_max_row_reinit_runtime() { _llk_math_reduce_block_max_row_reinit_runtime_(); }
+
+/**
+ * Short reinitialization for block-based reduce_max_row operation after a matmul.
+ * Reprograms address modifiers and MOP configuration with runtime block_ct_dim.
+ *
+ * This LLK API function is used only to re-initialize the address modifiers and MOP
+ * after a matmul operation in an SDPA inner loop.
+ */
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim) {
+    _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
+}
+
+/**
+ * Minimal reinitialization for block-based reduce_max_row operation.
+ * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
+ */
+inline void llk_math_reduce_block_max_row_reinit_minimal_runtime() {
+    _llk_math_reduce_block_max_row_reinit_minimal_runtime_();
+}
