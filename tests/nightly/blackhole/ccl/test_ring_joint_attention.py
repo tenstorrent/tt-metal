@@ -16,6 +16,15 @@ from models.tt_dit.tests.unit.test_ring_joint_attention import (
 )
 
 
+@pytest.fixture(autouse=True)
+def skip_on_large_clusters():
+    num_devices = ttnn.get_num_devices()
+    if num_devices > 4:
+        pytest.skip(
+            f"2x2 submesh fabric init not supported on clusters with {num_devices} devices (e.g. 8xP150 LoudBox)"
+        )
+
+
 @bh_qb_ge_unit_test_params
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",

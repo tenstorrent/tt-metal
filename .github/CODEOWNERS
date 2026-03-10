@@ -260,6 +260,7 @@ tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/nightly/t3000/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
+tests/nightly/t3000/ccl/test_ring_joint_attention.py @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/nightly/tg/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
 tests/sweep_framework/sweeps @tenstorrent/codeowner-bypass @stevendae @cmaryanTT @ntarafdar @bbradelTT
 tests/sweep_framework/sweeps/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
