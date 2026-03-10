@@ -16,9 +16,19 @@
 //   [2] num_sticks     — nblocks * 32 sticks to read
 //   [3] gamma_addr     — gamma buffer address (0 if absent)
 //   [4] beta_addr      — beta buffer address (0 if absent)
+//   [5] epsilon_packed — epsilon as uint32 IEEE-754 bits
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+// Fill one full tile of bfloat16 with a scalar value.
+// Scalar is assumed to be a 16-bit value double-packed into a u32: (bf16 << 16 | bf16).
+FORCE_INLINE void fill_cb_with_val_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    for (uint32_t i = 0; i < 512; ++i) {
+        ptr[i] = packed_scalar;
+    }
+}
 
 void kernel_main() {
     // ========== Compile-time args ==========
@@ -30,9 +40,11 @@ void kernel_main() {
     const uint32_t start_stick_id = get_arg_val<uint32_t>(1);
     const uint32_t num_sticks = get_arg_val<uint32_t>(2);
     // gamma_addr and beta_addr are runtime args 3 and 4 (used in Stage 4)
+    const uint32_t epsilon_packed = get_arg_val<uint32_t>(5);
 
     // ========== Constants ==========
     constexpr uint32_t cb_in_rm = 0;
+    constexpr uint32_t cb_eps = 8;
     constexpr uint32_t cb_scaler = 9;
 
     // Wt = tiles per row = stick_size / (32 * sizeof(bfloat16)) = stick_size / 64
@@ -47,6 +59,15 @@ void kernel_main() {
     constexpr uint32_t W = stick_size / 2;
     constexpr float scaler_val = 1.0f / static_cast<float>(W);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_val);
+
+    // ========== Fill epsilon CB — program lifetime ==========
+    // epsilon_packed is IEEE-754 float32 bits. Convert to bfloat16:
+    // bfloat16 is the top 16 bits of float32.
+    uint32_t eps_bf16 = epsilon_packed >> 16;
+    uint32_t eps_packed_bf16 = (eps_bf16 << 16) | eps_bf16;
+    cb_reserve_back(cb_eps, 1);
+    fill_cb_with_val_bfloat16(cb_eps, eps_packed_bf16);
+    cb_push_back(cb_eps, 1);
 
     // ========== Read RM sticks ==========
     // Process in blocks of 32 sticks (= 1 tile-row)

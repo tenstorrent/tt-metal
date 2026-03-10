@@ -183,10 +183,11 @@ def create_program_descriptor(
         )
     )
 
-    # --- CB 4: cb_var_input — streaming, 1 tile ---
+    # --- CB 4: cb_var_input — (x-mean)^2 tiles, Wt pages ---
+    # Needs Wt pages because square produces all Wt tiles before reduce consumes them
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=tile_size,
+            total_size=Wt * tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -368,6 +369,7 @@ def create_program_descriptor(
             num_sticks,  # 2: number of RM sticks to read
             gamma_addr,  # 3: gamma buffer address (0 if absent)
             beta_addr,  # 4: beta buffer address (0 if absent)
+            epsilon_packed,  # 5: epsilon as uint32 IEEE-754 bits
         ]
         writer_rt_args[x][y] = [
             output_addr,  # 0: dst_addr
