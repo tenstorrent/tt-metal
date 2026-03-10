@@ -16,8 +16,8 @@ Phase 0: Discovery ─► Phase 1: Analysis ─► Phase 2: Design
 ─► Phase 3: Build ─► Phase 4: TDD Kernels ─► Phase 5: Report
    (generic-op-builder)  (stage-gated loop)
 
-─► Phase 6: Self-Reflection
-   (self-reflection agent)
+─► Phase 6: Self-Reflection ─► Phase 7: Scoring
+   (self-reflection agent)     (score.py)
 ```
 
 ---
@@ -356,6 +356,39 @@ This phase always runs — no interactive checkpoint. It does not modify operati
 
 ---
 
+## Phase 7: Scoring
+
+**Goal**: Produce a quantitative quality score for the pipeline run.
+
+Run the scoring script after self-reflection completes:
+
+```bash
+python3 .claude/scripts/tdd-pipeline/score.py {op_path} --verbose
+```
+
+The script reads:
+- `.tdd_state.json` — test success, retry counts
+- `self_reflection.md` — Phase Timeline table (overall duration), TDD Stage table (per-stage durations), red flags
+- `op_design.md` — helper recommendations
+- `kernels/{op_name}_compute.cpp` — helper vs raw API usage
+- `ttnn/cpp/ttnn/kernel_lib/*.inl` — dynamically determines which raw ops are abstracted by helpers
+
+**Scoring criteria** (weighted, sum to 1.0):
+
+| Criterion | Weight | What it measures |
+|-----------|--------|------------------|
+| Test Success | 0.35 | Did all TDD stages pass? |
+| Execution Time | 0.25 | Overall + per-stage duration vs budgets |
+| Retry Efficiency | 0.15 | How few retries were needed? |
+| Helper Usage | 0.13 | Helpers vs raw compute ops (CB sync ops are expected) |
+| Red Flags | 0.12 | Issues from self-reflection not covered above |
+
+**Grading**: A (≥90), B (≥80), C (≥70), D (≥50), F (<50).
+
+Present the score, grade, and per-criterion breakdown to the user. This is the final pipeline output.
+
+---
+
 ## Critical Rules
 
 These rules apply across all phases. Violating them causes subtle bugs.
@@ -407,7 +440,8 @@ analyzer(s) ──► architect ──► op_design.md + .tdd_state.json
                     kernel_writer_tdd (single agent, all stages)
                                       │
                                       ▼
-                         REPORT.md ──► self_reflection (reads all logs + git history)
+                         REPORT.md ──► self_reflection ──► score.py
+                                       (reads all logs)    (reads self_reflection.md + .tdd_state.json)
 ```
 
 ### When to use the debugger

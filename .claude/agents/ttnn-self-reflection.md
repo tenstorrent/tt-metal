@@ -139,6 +139,12 @@ Look for:
 - Design doc lines that caused confusion (ambiguous alternatives, unresolved deliberation text)
 - Helpers used in wrong context (compute helper in dataflow kernel, etc.)
 
+**Helper vs raw API assessment**: When evaluating compute kernel quality, distinguish between two tiers of "raw" calls:
+- **CB sync ops** (`cb_wait_front`, `cb_pop_front`, `cb_reserve_back`, `cb_push_back`): These are **expected and correct** even when using helpers. Helpers use input policies (e.g., `NoWaitNoPop`, `WaitUpfrontPopAtEnd`) that deliberately leave CB management to the caller. Persistent CBs (scalers, constants, gamma, beta) require explicit `cb_wait_front` at kernel start. Do NOT flag these as issues.
+- **Raw compute ops** (`tile_regs_acquire/commit/wait/release`, `reduce_tile`, `copy_tile`, `pack_tile`, `mul_tiles_bcast`, `sub_tiles_bcast`, etc.): These ARE problems when a helper exists for the same operation. They indicate the kernel writer bypassed the helper library. Flag these as issues.
+
+To determine which ops have helpers: check if the function appears inside `ttnn/cpp/ttnn/kernel_lib/*.inl` — if it does, a helper abstracts it and direct use is a code smell.
+
 Classify each issue's retry cost:
 - **Free retries**: compilation errors, easy fixes (low cost)
 - **Hard attempts**: hangs, numerical mismatches requiring hypothesis/investigation cycles (high cost)

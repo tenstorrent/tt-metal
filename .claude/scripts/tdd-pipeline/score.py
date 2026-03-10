@@ -31,6 +31,7 @@ from typing import Optional
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
+KERNEL_LIB_DIR = REPO_ROOT / "ttnn" / "cpp" / "ttnn" / "kernel_lib"
 
 # ---------------------------------------------------------------------------
 # Default Weights — must sum to 1.0
@@ -146,8 +147,8 @@ def score_test_success(state: dict) -> CriterionResult:
 def score_execution_time(state: dict, op_path: Path) -> CriterionResult:
     """Score based on how long the pipeline took.
 
-    Uses git commit timestamps to estimate durations. Scores both per-stage
-    and overall time.
+    Primary source: self_reflection.md tables (breadcrumb-based, most accurate).
+    Fallback: git commit timestamps.
 
     Scoring per stage:
     - <= budget: 100
@@ -159,8 +160,13 @@ def score_execution_time(state: dict, op_path: Path) -> CriterionResult:
     op_name = state.get("op_name", "")
     stages = state.get("stages", [])
 
-    # Get git timestamps for commits touching this operation
-    durations = _get_stage_durations_from_git(op_path, op_name, stages)
+    # Try self_reflection.md first (breadcrumb-based, most accurate)
+    durations = _get_durations_from_self_reflection(op_path)
+
+    # Fall back to git timestamps if self_reflection.md unavailable
+    if durations["overall"] is None and not durations["per_stage"]:
+        durations = _get_stage_durations_from_git(op_path, op_name, stages)
+
     overall_duration = durations.get("overall", None)
     stage_durations = durations.get("per_stage", {})
 
@@ -194,6 +200,12 @@ def score_execution_time(state: dict, op_path: Path) -> CriterionResult:
         details_parts.append("Overall duration: unknown (git timestamps unavailable)")
     details_parts.append(f"Avg stage score: {avg_stage_score:.0f}")
 
+    # Include per-phase breakdown if available from self_reflection.md
+    phase_details = {}
+    per_phase = durations.get("per_phase", {})
+    for phase_name, dur in per_phase.items():
+        phase_details[phase_name] = {"duration_s": round(dur), "duration": _format_duration(dur)}
+
     return CriterionResult(
         name="execution_time",
         raw_score=round(raw_score, 1),
@@ -204,6 +216,7 @@ def score_execution_time(state: dict, op_path: Path) -> CriterionResult:
             "overall_duration_s": round(overall_duration) if overall_duration else None,
             "overall_score": round(overall_score, 1),
             "avg_stage_score": round(avg_stage_score, 1),
+            "phases": phase_details,
             "stages": stage_details,
         },
     )
@@ -230,16 +243,96 @@ def _format_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def _get_stage_durations_from_git(op_path: Path, op_name: str, stages: list) -> dict:
-    """Extract timing from git commits.
+def _parse_duration_str(duration_str: str) -> Optional[float]:
+    """Parse duration strings like '~3m 35s', '1m 41s', '~13m', '2m 50s' to seconds."""
+    duration_str = duration_str.strip().lstrip("~")
+    total = 0.0
+    m_match = re.search(r"(\d+)\s*m", duration_str)
+    s_match = re.search(r"(\d+)\s*s", duration_str)
+    if m_match:
+        total += int(m_match.group(1)) * 60
+    if s_match:
+        total += int(s_match.group(1))
+    return total if total > 0 else None
 
-    Looks for commits with stage-pass markers like '[kw-tdd] stage X passed'
-    and uses their timestamps to compute durations.
+
+def _get_durations_from_self_reflection(op_path: Path) -> dict:
+    """Parse timing data from self_reflection.md tables.
+
+    Primary source: the '### Phase Timeline' table, which has per-phase
+    durations computed from breadcrumb timestamps. We sum phases 0-4
+    (discovery through TDD kernels) for the overall duration, excluding
+    phase 5+ (reporting/self-reflection).
+
+    Secondary source: the TDD Stage table for per-stage durations.
+
+    These are more accurate than git timestamps because they come from
+    breadcrumb event timestamps recorded during execution.
+    """
+    result = {"overall": None, "per_stage": {}}
+    reflection_path = op_path / "self_reflection.md"
+    if not reflection_path.exists():
+        return result
+
+    try:
+        content = reflection_path.read_text()
+    except OSError:
+        return result
+
+    # Extract just the Phase Timeline section to avoid false positives
+    # from other tables (e.g., Agent Duration Breakdown has timestamps
+    # like "10:02:43" that match the phase pattern).
+    phase_timeline_section = ""
+    match = re.search(r"###\s*Phase Timeline\s*\n(.*?)(?=\n###|\n---|\n##)", content, re.DOTALL)
+    if match:
+        phase_timeline_section = match.group(1)
+
+    # Parse Phase Timeline table rows.
+    # Format: "| 0: Discovery | orchestrator | ~10:00 | ~10:02 | ~2m | Done | ... |"
+    # Capture: phase number and duration column.
+    phase_durations = {}
+    for match in re.finditer(
+        r"\|\s*(\d+):\s*(\w[\w\s]*?)\s*\|.*?\|.*?\|.*?\|\s*(~?[\d]+m[\s\d]*s?)\s*\|",
+        phase_timeline_section,
+    ):
+        phase_num = int(match.group(1))
+        phase_name = match.group(2).strip()
+        dur = _parse_duration_str(match.group(3))
+        if dur:
+            phase_durations[phase_num] = {"name": phase_name, "duration": dur}
+
+    # Overall = sum of phases 0 through 4 (exclude 5: Report, 6: Self-reflection)
+    production_durations = [v["duration"] for k, v in phase_durations.items() if k <= 4]
+    if production_durations:
+        result["overall"] = sum(production_durations)
+
+    # Store per-phase breakdown for reporting
+    result["per_phase"] = {v["name"]: v["duration"] for k, v in phase_durations.items()}
+
+    # Parse TDD Stage table for per-stage durations:
+    #   "| data_pipeline | 1m 41s | 0 free, 0 hard | PASS | ... |"
+    for match in re.finditer(r"\|\s*(\w+)\s*\|\s*([\d]+m[\s\d]*s?)\s*\|\s*\d+ free.*?\|", content):
+        stage_name = match.group(1)
+        dur = _parse_duration_str(match.group(2))
+        if dur:
+            result["per_stage"][stage_name] = dur
+
+    return result
+
+
+def _get_stage_durations_from_git(op_path: Path, op_name: str, stages: list) -> dict:
+    """Extract timing from git commits for the CURRENT pipeline run.
+
+    Uses .tdd_state.json commit hashes as anchors to identify which pipeline
+    run to measure. Only considers commits from the same run — not prior runs
+    on the same branch.
+
+    Overall duration = first commit of this run → last stage-pass commit.
+    Per-stage duration = interval between consecutive stage-pass commits.
     """
     result = {"overall": None, "per_stage": {}}
 
     try:
-        # Get commits touching the op files, with timestamps
         git_log = subprocess.check_output(
             [
                 "git",
@@ -260,54 +353,115 @@ def _get_stage_durations_from_git(op_path: Path, op_name: str, stages: list) -> 
     if not git_log:
         return result
 
-    commits = []
+    from datetime import datetime
+
+    def parse_ts(iso_str: str) -> Optional[float]:
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            return dt.timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    # Parse all commits into chronological order
+    all_commits = []
     for line in git_log.splitlines():
         parts = line.split(" ", 2)
         if len(parts) >= 3:
-            commits.append(
+            all_commits.append(
                 {
                     "hash": parts[0],
                     "timestamp": parts[1],
                     "message": parts[2],
                 }
             )
+    all_commits.reverse()  # oldest first
 
-    if not commits:
+    if not all_commits:
         return result
 
-    # Commits are newest-first; reverse for chronological order
-    commits.reverse()
+    # Use .tdd_state.json stage commit hashes as ground truth anchors.
+    # Only these hashes identify commits from the CURRENT pipeline run.
+    anchor_hashes = set()
+    for stage in stages:
+        commit = stage.get("commit")
+        if commit:
+            anchor_hashes.add(commit[:11])
 
-    # Parse ISO timestamps
-    from datetime import datetime, timezone
+    if not anchor_hashes:
+        return result
 
-    def parse_ts(iso_str: str) -> Optional[float]:
-        try:
-            # Handle timezone offset format like 2024-01-01T12:00:00+01:00
-            dt = datetime.fromisoformat(iso_str)
-            return dt.timestamp()
-        except (ValueError, TypeError):
-            return None
+    # Find first anchor commit — this grounds us in the current run.
+    first_anchor_idx = None
+    first_anchor_ts = None
+    for i, c in enumerate(all_commits):
+        if c["hash"][:11] in anchor_hashes:
+            first_anchor_idx = i
+            first_anchor_ts = parse_ts(c["timestamp"])
+            break
 
-    # Overall duration: first commit to last commit
-    first_ts = parse_ts(commits[0]["timestamp"])
-    last_ts = parse_ts(commits[-1]["timestamp"])
+    if first_anchor_idx is None:
+        return result
+
+    # Find the last stage-pass commit that belongs to this run.
+    # Walk forward from the first anchor — any stage-pass commit within
+    # a tight time window is part of this run.
+    last_stage_pass_idx = first_anchor_idx
+    prev_ts = first_anchor_ts
+    for i in range(first_anchor_idx, len(all_commits)):
+        c = all_commits[i]
+        ts = parse_ts(c["timestamp"])
+        # Stop if we hit a commit > 2 hours after the first anchor
+        if ts and first_anchor_ts and (ts - first_anchor_ts) > 7200:
+            break
+        if re.search(r"stage\s+\w+.*passed", c["message"]):
+            last_stage_pass_idx = i
+
+    # Walk backwards from the first anchor to find the pipeline start.
+    # Include production-phase commits (analyzer, architect, builder) that
+    # precede the TDD stages. Skip self-reflection and report commits
+    # (post-processing from prior runs).
+    AGENT_RE = re.compile(r"\[ttnn-|\[create-op\]")
+    PRODUCTION_RE = re.compile(
+        r"\[ttnn-operation-analyzer\]|\[ttnn-operation-architect\]" r"|\[ttnn-generic-op-builder\]|\[ttnn-kernel-writer"
+    )
+    run_start_idx = first_anchor_idx
+    next_agent_ts = first_anchor_ts
+    for i in range(first_anchor_idx - 1, -1, -1):
+        c = all_commits[i]
+        if not PRODUCTION_RE.search(c["message"]):
+            continue
+        ts = parse_ts(c["timestamp"])
+        if ts and next_agent_ts and (next_agent_ts - ts) > 1800:
+            break  # > 30 min gap = different run
+        run_start_idx = i
+        next_agent_ts = ts
+
+    # Slice: all agent commits from pipeline start to last stage pass.
+    # Excludes post-processing (REPORT, self-reflection).
+    run_commits = [c for c in all_commits[run_start_idx : last_stage_pass_idx + 1] if AGENT_RE.match(c["message"])]
+
+    if not run_commits:
+        return result
+
+    # Overall duration: first commit of this run → last commit of this run
+    first_ts = parse_ts(run_commits[0]["timestamp"])
+    last_ts = parse_ts(run_commits[-1]["timestamp"])
     if first_ts and last_ts:
         result["overall"] = last_ts - first_ts
 
-    # Per-stage duration: time between consecutive stage-pass commits
+    # Per-stage: find stage-pass commits within this run
     stage_pass_times = {}
-    for commit in commits:
+    for commit in run_commits:
         msg = commit["message"]
-        # Match patterns like: [kw-tdd] stage passthrough passed
-        match = re.search(r"stage\s+(\w+)\s+passed", msg)
+        match = re.search(r"stage\s+(\w+).*passed", msg)
         if match:
             stage_name = match.group(1)
             ts = parse_ts(commit["timestamp"])
             if ts:
                 stage_pass_times[stage_name] = ts
 
-    # Compute per-stage durations as intervals between consecutive passes
+    # First stage's duration starts from the run start (includes analysis/design/build).
+    # Subsequent stages measure from the previous stage's pass commit.
     sorted_stages = [s["name"] for s in stages]
     prev_ts = first_ts
     for stage_name in sorted_stages:
@@ -393,12 +547,81 @@ def score_retry_efficiency(state: dict) -> CriterionResult:
 # ---------------------------------------------------------------------------
 
 
+_helper_abstracted_ops_cache: Optional[set] = None
+
+
+def _get_helper_abstracted_ops() -> set:
+    """Scan kernel_lib .inl files to find which raw ops helpers abstract away.
+
+    Any function call that appears inside a helper .inl implementation is
+    something the helpers are designed to replace. Using these directly in a
+    compute kernel (when helpers are available) indicates the kernel writer
+    bypassed the helper library.
+
+    Results are cached for the lifetime of the process.
+    """
+    global _helper_abstracted_ops_cache
+    if _helper_abstracted_ops_cache is not None:
+        return _helper_abstracted_ops_cache
+
+    abstracted = set()
+    if not KERNEL_LIB_DIR.exists():
+        # Fallback: if kernel_lib dir is missing, return empty set.
+        # This means no raw ops will be penalized — safe default.
+        _helper_abstracted_ops_cache = abstracted
+        return abstracted
+
+    for inl_file in KERNEL_LIB_DIR.glob("*.inl"):
+        try:
+            content = inl_file.read_text()
+        except OSError:
+            continue
+        # Extract function calls: word followed by ( or <...>(
+        for match in re.finditer(r"\b([a-z_]+)\s*(?:<[^>]*>)?\s*\(", content):
+            name = match.group(1)
+            # Skip C++ keywords, control flow, and trivially common names
+            if name in (
+                "if",
+                "for",
+                "while",
+                "return",
+                "sizeof",
+                "static_cast",
+                "constexpr",
+                "const",
+                "auto",
+                "void",
+                "uint32_t",
+                "get",
+                "set",
+                "min",
+                "max",
+                "get_compile_time_arg_val",
+                "get_arg_val",
+                "static_assert",
+            ):
+                continue
+            abstracted.add(name)
+
+    # Always exclude cb_wait_front / cb_pop_front from the abstracted set.
+    # These appear inside helpers BUT are also required outside helpers for:
+    #   - Persistent CBs (scaler, eps, gamma, beta) that need a one-time wait
+    #   - NoWaitNoPop policy where the caller MUST manually pop
+    # Penalizing these would punish correct, design-mandated usage.
+    abstracted -= {"cb_wait_front", "cb_pop_front", "cb_reserve_back", "cb_push_back"}
+
+    _helper_abstracted_ops_cache = abstracted
+    return abstracted
+
+
 def score_helper_usage(op_path: Path, state: dict) -> CriterionResult:
     """Score based on how much the compute kernel uses helpers vs raw calls.
 
     The pipeline strongly encourages using helpers from ttnn/cpp/ttnn/kernel_lib/.
-    Raw tile manipulation calls (cb_wait_front, cb_pop_front, tile_regs_acquire, etc.)
-    in the compute kernel are a code smell when helpers exist.
+    Raw compute calls (tile_regs_acquire, reduce_tile, pack_tile, etc.) in the
+    compute kernel are a code smell when helpers exist. CB sync calls
+    (cb_wait_front, cb_pop_front) are expected primitives — helpers don't fully
+    abstract these because policies like NoWaitNoPop require manual management.
 
     Scoring:
     - 100: All compute phases use helpers (no raw tile/CB ops in compute kernel)
@@ -440,44 +663,59 @@ def score_helper_usage(op_path: Path, state: dict) -> CriterionResult:
     # Detect helper function calls (namespace compute_kernel_lib::)
     helper_calls = re.findall(r"compute_kernel_lib::(\w+)", code)
 
-    # Detect raw tile manipulation calls (signs of NOT using helpers)
-    raw_tile_ops = []
-    raw_patterns = [
-        (r"\bcb_wait_front\b", "cb_wait_front"),
-        (r"\bcb_pop_front\b", "cb_pop_front"),
-        (r"\bcb_reserve_back\b", "cb_reserve_back"),
-        (r"\bcb_push_back\b", "cb_push_back"),
-        (r"\btile_regs_acquire\b", "tile_regs_acquire"),
-        (r"\btile_regs_commit\b", "tile_regs_commit"),
-        (r"\btile_regs_wait\b", "tile_regs_wait"),
-        (r"\btile_regs_release\b", "tile_regs_release"),
-        (r"\bcopy_tile\b", "copy_tile"),
-        (r"\bmatmul_tiles\b", "matmul_tiles"),
-        (r"\breduce_tile\b", "reduce_tile"),
-    ]
-    for pattern, name in raw_patterns:
-        if re.search(pattern, code):
-            raw_tile_ops.append(name)
+    # Dynamically determine which raw ops are "abstracted by helpers" by
+    # scanning the kernel_lib .inl files. Any function call that appears
+    # inside a helper implementation is something helpers are designed to
+    # replace — using it directly in a compute kernel is a code smell.
+    # Calls NOT found in helpers (like standalone cb_wait_front for
+    # persistent CBs) are expected primitives.
+    abstracted_ops = _get_helper_abstracted_ops()
+
+    # Find raw function calls in the compute kernel.
+    # First, collect all namespaced calls (compute_kernel_lib::func) — these
+    # are helper API calls that should NOT be penalized. The :: and function
+    # name can span lines (e.g., "compute_kernel_lib::\n    reduce<...>(").
+    namespaced_calls = set(re.findall(r"::\s*([a-z_]+)\s*(?:<|[(])", code))
+
+    # Now find all bare function calls (not namespaced, >= 4 chars)
+    all_calls_in_kernel = set()
+    for match in re.finditer(r"\b([a-z_]{4,})\s*(?:<[^>]*>)?\s*\(", code):
+        name = match.group(1)
+        if name in namespaced_calls:
+            continue
+        if name in (
+            "constexpr",
+            "kernel_main",
+            "compute_kernel_hw_startup",
+            "get_compile_time_arg_val",
+        ):
+            continue
+        all_calls_in_kernel.add(name)
+
+    # Partition into abstracted (bad) vs expected (benign)
+    raw_compute_ops = sorted(all_calls_in_kernel & abstracted_ops)
+    cb_sync_ops = sorted(
+        all_calls_in_kernel & {"cb_wait_front", "cb_pop_front", "cb_reserve_back", "cb_push_back"} - abstracted_ops
+    )
 
     # Check design doc for helper mapping recommendations
     design_helpers = _extract_design_helpers(op_path)
 
-    # Compute score
+    # Compute score — only raw COMPUTE ops penalize, not CB sync ops
     has_helpers = len(helper_includes) > 0 or len(helper_calls) > 0
-    has_raw = len(raw_tile_ops) > 0
+    has_raw_compute = len(raw_compute_ops) > 0
 
-    if has_helpers and not has_raw:
-        # Pure helper usage — best case
+    if has_helpers and not has_raw_compute:
+        # Helpers used for all compute — best case (CB sync ops are fine)
         raw_score = 100.0
         usage_level = "full"
-    elif has_helpers and has_raw:
-        # Mixed: helpers for some phases, raw for others
-        # Score based on ratio of helper calls to total
-        total_ops = len(helper_calls) + len(raw_tile_ops)
+    elif has_helpers and has_raw_compute:
+        # Mixed: helpers for some compute phases, raw for others
+        total_ops = len(helper_calls) + len(raw_compute_ops)
         helper_ratio = len(helper_calls) / total_ops if total_ops > 0 else 0
         raw_score = 40.0 + (helper_ratio * 60.0)  # 40-100 range
         usage_level = "partial"
-    elif not has_helpers and has_raw:
+    elif not has_helpers and has_raw_compute:
         # All raw — functional but not using library
         raw_score = 40.0
         usage_level = "none"
@@ -499,8 +737,10 @@ def score_helper_usage(op_path: Path, state: dict) -> CriterionResult:
     details = f"Helper usage: {usage_level}"
     if helper_includes:
         details += f"; includes: {', '.join(helper_includes)}"
-    if raw_tile_ops:
-        details += f"; raw ops: {', '.join(raw_tile_ops[:5])}"
+    if raw_compute_ops:
+        details += f"; raw compute ops: {', '.join(raw_compute_ops[:5])}"
+    if cb_sync_ops:
+        details += f"; cb sync ops (expected): {', '.join(cb_sync_ops)}"
 
     return CriterionResult(
         name="helper_usage",
@@ -512,7 +752,8 @@ def score_helper_usage(op_path: Path, state: dict) -> CriterionResult:
             "usage_level": usage_level,
             "helper_includes": helper_includes,
             "helper_calls": list(set(helper_calls)),
-            "raw_tile_ops": raw_tile_ops,
+            "raw_compute_ops": raw_compute_ops,
+            "cb_sync_ops": cb_sync_ops,
             "design_helpers_recommended": design_helpers,
             "followed_design": design_match,
         },
@@ -528,14 +769,37 @@ def _extract_design_helpers(op_path: Path) -> list:
     with open(design_path) as f:
         content = f.read()
 
-    # Look for helper mapping table or mentions
     helpers = []
-    # Match patterns like: "use tilize()" or "helper: reduce()" or "USE HELPER: tilize_helpers"
-    for match in re.finditer(r"(?:use|helper|USE HELPER)[:\s]+(\w+(?:_helpers)?)\b", content, re.IGNORECASE):
+
+    # Match kernel_lib include paths: kernel_lib/reduce_helpers_compute.hpp
+    for match in re.finditer(r"kernel_lib/(\w+)\.hpp", content):
         helpers.append(match.group(1))
 
-    # Also look for kernel_lib references
-    for match in re.finditer(r"kernel_lib/(\w+)\.hpp", content):
+    # Match compute_kernel_lib:: namespaced calls (the actual helper API)
+    for match in re.finditer(r"compute_kernel_lib::(\w+)", content):
+        name = match.group(1)
+        # Skip policy/enum names, only keep function names
+        if name not in (
+            "ReduceInputPolicy",
+            "ReduceInputBlockShape",
+            "ReduceInputMemoryLayout",
+            "BinaryInputPolicy",
+            "BinaryInputBlockShape",
+            "BroadcastDim",
+            "NoAccumulation",
+            "Accumulate",
+            "WaitUpfrontNoPop",
+            "WaitAndPopPerTile",
+            "NoWaitNoPop",
+            "WaitUpfrontPopAtEnd",
+            "BulkWaitBulkPop",
+        ):
+            helpers.append(name)
+
+    # Match dataflow helper calls: prepare_reduce_scaler, generate_bcast_scaler, etc.
+    for match in re.finditer(
+        r"\b(prepare_reduce_scaler|generate_bcast_scaler|generate_mask_w|generate_reduce_scaler)\b", content
+    ):
         helpers.append(match.group(1))
 
     return list(set(helpers))
