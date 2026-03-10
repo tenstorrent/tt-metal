@@ -96,6 +96,14 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
 
+        # Sliding window attention support (OLMo: 3 sliding + 1 full pattern)
+        # For non-OLMo models, sliding_window_size will be None (full attention)
+        self.layer_num = layer_num
+        if hasattr(configuration, "get_sliding_window_size"):
+            self.sliding_window_size = configuration.get_sliding_window_size(layer_num)
+        else:
+            self.sliding_window_size = None
+
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -747,6 +755,7 @@ class TtLlamaAttention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
             )
         else:
             attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
@@ -759,6 +768,7 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](
                     seq_len // batch_size if seq_len // batch_size == 128 else seq_len
                 ),
+                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
             )
 
         # deallocate keys and values
