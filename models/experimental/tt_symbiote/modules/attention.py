@@ -1483,18 +1483,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
             final_output = TorchTTNNTensor(merged_dev)
 
         return final_output, None
-            scaling=self.torch_layer.scaling,
-            is_causal=self.torch_layer.is_causal,
-            transpose_output=False,
-        )
-        attn_out = ttnn.experimental.nlp_concat_heads(attn_out.to_ttnn)
-        attn_out = ttnn.squeeze(attn_out, 1)
-        # Slice output if query was padded
-        if self.torch_layer.is_causal and original_q_len < kv_len:
-            # Slice: [B, kv_len, D] -> [B, q_len, D]
-            attn_out = attn_out[:, -original_q_len:, :]
-
-        return self.o_proj(attn_out), None
+      
 
 
 class TTNNGlm4MoeLiteAttention(TTNNModule):
