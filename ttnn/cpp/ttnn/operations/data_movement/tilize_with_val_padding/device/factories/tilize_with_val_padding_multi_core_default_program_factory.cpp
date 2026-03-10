@@ -59,7 +59,7 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     /** reader
      */
@@ -110,12 +110,20 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
 
     /** compute
      */
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     if (!core_range.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core, num_tiles_per_row}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
         CreateKernel(
@@ -123,7 +131,9 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
             "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{
-                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
     /* RUNTIME ARGS */

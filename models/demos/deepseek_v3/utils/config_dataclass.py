@@ -44,6 +44,17 @@ class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 i
     memory_config: ttnn.MemoryConfig | None = None
 
 
+@dataclass
+class DeepseekSamplingArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    max_batch_size: int
+    sampling_dp: int
+    cluster_shape: tuple[int, int]
+    sampling_all_gather_axis: int = 1
+
+
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
 ConfigWeight = ttnn.Tensor | FromWeightConfig
 
@@ -128,6 +139,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     num_workers_per_link: int | None = None
+    use_broadcast: bool | None = None
 
 
 @dataclass

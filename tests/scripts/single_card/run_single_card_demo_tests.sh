@@ -203,10 +203,11 @@ run_resnet_func() {
 }
 
 run_sdxl_func() {
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {

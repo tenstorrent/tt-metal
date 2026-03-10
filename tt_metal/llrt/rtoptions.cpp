@@ -19,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 // NOLINTBEGIN(bugprone-branch-clone)
 
@@ -195,6 +196,7 @@ enum class EnvVarID {
     // FABRIC CONFIGURATION
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
+    TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
 
     // ========================================
     // JIT BUILD CONFIGURATION
@@ -1309,6 +1311,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
             }
             break;
+
+        // TT_METAL_FABRIC_OPT_LEVEL
+        // Override the compiler optimization level for fabric router kernels.
+        // When set, this overrides the automatic VC1-based selection.
+        // Default: not set (automatic: O3 when VC1 inactive, Os when VC1 active)
+        // Usage: export TT_METAL_FABRIC_OPT_LEVEL=O3  (or O0, O1, O2, Os, Oz, Ofast)
+        case EnvVarID::TT_METAL_FABRIC_OPT_LEVEL: {
+            auto opt = enchantum::cast<tt::tt_metal::KernelBuildOptLevel>(std::string_view(value));
+            if (opt.has_value()) {
+                this->fabric_kernel_opt_level = opt;
+                log_info(tt::LogMetal, "Fabric kernel optimization level override: -{}", value);
+            } else {
+                TT_THROW(
+                    "Invalid TT_METAL_FABRIC_OPT_LEVEL value: '{}'. Valid values: O0, O1, O2, O3, Os, Oz, Ofast",
+                    value);
+            }
+            break;
+        }
+
         // TT_METAL_DISABLE_XIP_DUMP
         // Disable XIP dump
         // Default: false
@@ -1733,6 +1754,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
+    hash_str += std::to_string(get_llk_asserts());
     return hash_str;
 }
 

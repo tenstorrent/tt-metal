@@ -17,7 +17,7 @@ class Tensor : public std::enable_shared_from_this<Tensor> {
 private:
     AutocastTensor m_value;
     tt::tt_metal::Tensor m_grad;
-    bool m_requires_grad = true;
+    bool m_requires_grad = false;
     std::optional<NodeId> m_node_id;
 
 public:
@@ -26,7 +26,7 @@ public:
     Tensor(Tensor &&) noexcept = default;
     Tensor &operator=(const Tensor &) = default;
     Tensor &operator=(Tensor &&) noexcept = default;
-    explicit Tensor(const tt::tt_metal::Tensor &value, bool requires_grad = true);
+    explicit Tensor(const tt::tt_metal::Tensor &value, bool requires_grad = false);
     ~Tensor() = default;
 
     void set_value(const tt::tt_metal::Tensor &value);
