@@ -253,15 +253,15 @@ void kernel_main() {
         if (chunk_start_idx_addr != 0) {
             cb_reserve_back(cb_id_chunk_start_idx_compute, 1);
             uint32_t chunk_start_write_ptr = get_write_ptr(cb_id_chunk_start_idx_compute);
-            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr, 4);
-            noc_async_read_barrier();
+            // noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr, 4);
+            // noc_async_read_barrier();
             uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
             cb_push_back(cb_id_chunk_start_idx_compute, 1);
 
             cb_reserve_back(cb_id_chunk_start_idx_writer, 1);
             uint32_t chunk_start_write_ptr_2 = get_write_ptr(cb_id_chunk_start_idx_writer);
-            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr_2, 4);
-            noc_async_read_barrier();
+            // noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr_2, 4);
+            // noc_async_read_barrier();
             cb_push_back(cb_id_chunk_start_idx_writer, 1);
 
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
@@ -291,10 +291,9 @@ void kernel_main() {
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
-                // Chunked means that we have paged attention
                 cb_reserve_back(cb_id_page_table, 1);
-                page_table_ptr = read_page_table_for_batch(
-                    cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
+                // page_table_ptr = read_page_table_for_batch(
+                //     cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
                 cb_push_back(cb_id_page_table, 1);
             }
 
@@ -315,20 +314,13 @@ void kernel_main() {
                 // Read attention sink for this Q chunk if enabled
                 if constexpr (use_attention_sink) {
                     cb_reserve_back(cb_attention_sink, Sq_chunk_t);
-                    uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
-
-                    // Attention sink has shape [1, NH, 1, 1] - single value per head
-                    // Read the single tile for this head into the first tile of the CB
-                    const uint32_t sink_tile_id =
-                        attention_sink_tile_shape.id_of(0, nq, 0, 0);  // batch=0 since shape is [1,NH,1,1]
-                    noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
-                    noc_async_read_barrier();
-
-                    // Fill all Sq_chunk_t tiles in the CB by copying the first element of the source tile
-                    // to the first element of every row in each destination tile
-                    fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                        cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
-
+                    // uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
+                    // const uint32_t sink_tile_id =
+                    //     attention_sink_tile_shape.id_of(0, nq, 0, 0);
+                    // noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
+                    // noc_async_read_barrier();
+                    // fill_attention_sink_tiles<attention_sink_tile_bytes>(
+                    //     cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
                     cb_push_back(cb_attention_sink, Sq_chunk_t);
                 }
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
@@ -363,15 +355,11 @@ void kernel_main() {
                     // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
                     // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
                     if constexpr (!use_q_subblock_push) {
-                        read_chunk_with_padding<q_tile_bytes>(
-                            q_reader,
-                            cb_q_in,
-                            q_read_tile_id,
-                            q_row_tile_count,
-                            DHt,
-                            Sq_chunk_t,
-                            DHt,
-                            barrier_threshold);
+                        // read_chunk_with_padding<q_tile_bytes>(
+                        //     q_reader, cb_q_in, q_read_tile_id,
+                        //     q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                        cb_reserve_back(cb_q_in, Sq_chunk_t * DHt);
+                        cb_push_back(cb_q_in, Sq_chunk_t * DHt);
                     }
 
                     q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -397,239 +385,32 @@ void kernel_main() {
                             is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
                     }
 
-                    // loop while k_low < q_high
+                    // NOC DISABLED: loop pushes empty tiles for compute utilization testing
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
-                        const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
-                        const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
-                        const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
-                        const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
-                        const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
+                        // K: push empty tiles (no DRAM read, no chain forwarding)
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                        cb_push_back(cb_k_in, k_chunk_tiles);
 
-                        // K: either read locally (injector or not participant) or receive from previous core
-                        uint32_t cb_k_start_address = 0;
-
-                        if (should_receive) {
-                            // Receive forwarded K chunk from previous core
-                            cb_reserve_back(cb_k_in, k_chunk_tiles);
-                            cb_k_start_address = get_write_ptr(cb_k_in);
-                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                            cb_push_back(cb_k_in, k_chunk_tiles);
-                        } else {
-                            // Read K chunk from DRAM
-                            if constexpr (is_chunked) {
-                                // Use page table to read K chunk (forwarding not supported for paged mode)
-                                const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                                read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
-                                    k_reader,
-                                    cb_k_in,
-                                    k_head,
-                                    k_chunk_start_row_num,
-                                    kv_row_tile_count,
-                                    DHt,
-                                    Sk_chunk_t,
-                                    DHt,
-                                    k_tile_bytes,
-                                    barrier_threshold,
-                                    page_table_ptr,
-                                    true  // transpose=true for K reads
-                                );
-                            } else {
-                                if (should_forward) {
-                                    cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
-                                        k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
-                                } else {
-                                    read_chunk_with_padding<k_tile_bytes>(
-                                        k_reader,
-                                        cb_k_in,
-                                        k_start_tile_id,
-                                        kv_row_tile_count,
-                                        DHt,
-                                        Sk_chunk_t,
-                                        DHt,
-                                        barrier_threshold,
-                                        true  // transpose=true for K reads
-                                    );
-                                }
-                            }
-                        }
-
-                        // Forward K chunk to next core(s): initiate async write (NOC write channel)
-                        // For mcast: send linked data + companion semaphore back-to-back.
-                        // The companion must be issued immediately after the linked write —
-                        // any noc_async_read_barrier() between them deadlocks (the read barrier
-                        // blocks while a linked write awaits its companion).
-                        if (should_forward) {
-                            noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                            if constexpr (mcast_enabled) {
-                                uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
-                                noc_async_write_multicast(
-                                    cb_k_start_address,
-                                    k_mcast_addr,
-                                    k_chunk_tiles * k_tile_bytes,
-                                    mcast_num_dests,
-                                    true /* linked: semaphore mcast follows */);
-                                noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                            } else {
-                                uint64_t k_unicast_data_addr =
-                                    get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
-                                noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                            }
-                        }
-
-                        // Mask read — safe after linked write pair is complete
+                        // Mask: push empty tiles
                         if constexpr (use_provided_mask) {
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-                            uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                            uint32_t barrier_count = 0;
-
-                            uint32_t mask_row_start = mask_batch_offset + q_chunk * Sq_chunk_t * valid_Skt;
-                            if constexpr (!broadcast_provided_mask_heads) {
-                                mask_row_start += nq * valid_Sqt * valid_Skt;
-                            }
-
-                            uint32_t tile_idx = 0;
-                            for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
-                                const uint32_t global_q_tile = q_chunk * Sq_chunk_t + row;
-                                const bool q_valid = !use_padded_mask || (global_q_tile < valid_Sqt);
-                                for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                                    const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
-                                    const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
-                                    if (q_valid && k_valid) {
-                                        noc_async_read_tile(
-                                            mask_row_start + global_k_tile, mask_reader, mask_write_ptr);
-                                    } else {
-                                        fill_neginf_tile<mask_tile_bytes>(cb_mask_in, tile_idx);
-                                    }
-                                    mask_write_ptr += mask_tile_bytes;
-                                    tile_idx++;
-                                    if (++barrier_count == barrier_threshold) {
-                                        noc_async_read_barrier();
-                                        barrier_count = 0;
-                                    }
-                                }
-                                if (q_valid) {
-                                    mask_row_start += valid_Skt;
-                                }
-                            }
-                            noc_async_read_barrier();
                             cb_push_back(cb_mask_in, mask_chunk_tiles);
                         }
 
-                        // Complete K forward: flush write and signal receiver(s)
-                        // (mcast path already completed above — companion sent with linked write)
-                        if (should_forward) {
-                            if constexpr (!mcast_enabled) {
-                                noc_async_writes_flushed();
-                                noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
-                            }
-                        }
-
-                        // Q subblock push: K is fully forwarded, now push Q one subblock at
-                        // a time. Compute waits for K first (cb_wait_front(cb_k_in, K*N)),
-                        // then waits for Q subblocks incrementally (accumulating cb_wait_front).
-                        // Each push unblocks the next QK subblock computation.
-                        // Placed after K forward complete so no outstanding NOC writes remain
-                        // (noc_async_read_barrier inside read_q_subblock deadlocks on BH
-                        // when NOC writes are in-flight).
+                        // Q subblock push on first K iteration
                         if constexpr (use_q_subblock_push) {
                             if (k_chunk == 0) {
                                 for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                    read_q_subblock<q_tile_bytes>(
-                                        q_reader,
-                                        cb_q_in,
-                                        q_read_tile_id,
-                                        q_sub * qk_subblock_h,
-                                        qk_subblock_h,
-                                        q_row_tile_count,
-                                        DHt,
-                                        DHt,
-                                        barrier_threshold);
+                                    const uint32_t sb_tiles = qk_subblock_h * DHt;
+                                    cb_reserve_back(cb_q_in, sb_tiles);
+                                    cb_push_back(cb_q_in, sb_tiles);
                                 }
                             }
                         }
 
-                        // V: either read locally (injector or not participant) or receive from previous core
-                        uint32_t cb_v_start_address = 0;
-
-                        if (should_receive) {
-                            // Receive forwarded V chunk from previous core
-                            cb_reserve_back(cb_v_in, v_chunk_tiles);
-                            cb_v_start_address = get_write_ptr(cb_v_in);
-                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                            cb_push_back(cb_v_in, v_chunk_tiles);
-                        } else {
-                            // Read V chunk from DRAM
-                            if constexpr (is_chunked) {
-                                // Use page table to read V chunk (forwarding not supported for paged mode)
-                                const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                                constexpr uint32_t head_dim = (use_mla && !mla_kv_overlap) ? vDHt : DHt;
-                                read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
-                                    v_reader,
-                                    cb_v_in,
-                                    v_head,
-                                    kv_chunk_start_row_num,
-                                    kv_row_tile_count,
-                                    vDHt,
-                                    Sk_chunk_t,
-                                    vDHt,
-                                    v_tile_bytes,
-                                    barrier_threshold,
-                                    page_table_ptr,
-                                    false,
-                                    skip_src_cols);
-                            } else {
-                                if (should_forward) {
-                                    cb_v_start_address = read_chunk_for_forwarding<v_tile_bytes, false>(
-                                        v_reader,
-                                        cb_v_in,
-                                        v_start_tile_id,
-                                        kv_row_tile_count,
-                                        vDHt,
-                                        Sk_chunk_t,
-                                        vDHt,
-                                        skip_src_cols);
-                                } else {
-                                    read_chunk_with_padding<v_tile_bytes>(
-                                        v_reader,
-                                        cb_v_in,
-                                        v_start_tile_id,
-                                        kv_row_tile_count,
-                                        vDHt,
-                                        Sk_chunk_t,
-                                        vDHt,
-                                        barrier_threshold,
-                                        false,
-                                        skip_src_cols);
-                                }
-                            }
-                        }
-
-                        // Forward V chunk to next core(s) if applicable
-                        if (should_forward) {
-                            noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                            if constexpr (mcast_enabled) {
-                                uint64_t v_mcast_addr = mcast_base_noc_addr | cb_v_start_address;
-                                noc_async_write_multicast(
-                                    cb_v_start_address,
-                                    v_mcast_addr,
-                                    v_chunk_tiles * v_tile_bytes,
-                                    mcast_num_dests,
-                                    true /* linked: semaphore mcast follows */);
-                                noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                            } else {
-                                uint64_t v_unicast_data_addr =
-                                    get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
-                                noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
-                                noc_async_writes_flushed();
-                                noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
-                            }
-                        }
+                        // V: push empty tiles (no DRAM read, no chain forwarding)
+                        cb_reserve_back(cb_v_in, v_chunk_tiles);
+                        cb_push_back(cb_v_in, v_chunk_tiles);
                     }
                 }
             }
