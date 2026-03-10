@@ -151,13 +151,19 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // No external function calls (_sfpu_exp_f32_accurate_, _sfpu_reciprocal_).
 //
 // Two regions (exploiting even symmetry via a = |x|):
-//   |x| < 3:    Degree-10 polynomial in t = (2/9)·a² - 1 (~12 MAD ops)
-//   |x| >= 3:   Inline exp(-2|x| + ln4) with FTZ (~17 ops)
-//               (zero saturation at |x| >= 45 via guard)
+//   |x| < CORE_REGION_LIMIT:  Degree-10 polynomial in t = (2/9)·a² - 1 (~12 MAD ops)
+//   |x| >= CORE_REGION_LIMIT: Inline exp(-2|x| + ln4) with FTZ (~17 ops)
+//                              (zero saturation at |x| >= TAIL_REGION_LIMIT)
 //
 // Accuracy: Max ULP = 1 across all 65,026 valid BF16 values (FP32 sim).
 // Performance: ~14 ops (core) or ~19 ops (tail) vs ~40-50 ops (old version).
 // =============================================================================
+// Piecewise region boundaries for sech²(x) approximation.
+// Core region uses minimax polynomial; tail uses asymptotic exp formula;
+// beyond tail, sech²(x) underflows BF16 min normal and saturates to zero.
+constexpr float CORE_REGION_LIMIT = 3.0f;   // Polynomial ↔ exp boundary
+constexpr float TAIL_REGION_LIMIT = 45.0f;  // Exp ↔ zero saturation boundary
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_tanh_derivative_sech2() {
     for (int d = 0; d < ITERATIONS; d++) {
@@ -167,7 +173,7 @@ inline void calculate_tanh_derivative_sech2() {
         // sech²(x) is an even function: sech²(-x) = sech²(x)
         sfpi::vFloat a = sfpi::abs(val);
 
-        v_if(a < 3.0f) {
+        v_if(a < CORE_REGION_LIMIT) {
             // Core region: degree-10 polynomial in t = (2/9)·u - 1, u = a²
             // Scaling u ∈ [0, 9) → t ∈ [-1, 1) keeps powers bounded.
             sfpi::vFloat u = a * a;
@@ -186,10 +192,10 @@ inline void calculate_tanh_derivative_sech2() {
                 SECH2_POLY_C9,
                 SECH2_POLY_C10);
         }
-        v_elseif(a < 45.0f) {
+        v_elseif(a < TAIL_REGION_LIMIT) {
             // Tail region: inline exp(-2|x| + ln4) = 4·exp(-2|x|)
-            // Asymptotic formula exact to 1 BF16 ULP for |x| >= 3.
-            // For |x| >= 45, result stays 0 (sech²(45) ≈ 5.5e-39 < BF16 min normal).
+            // Asymptotic formula exact to 1 BF16 ULP for |x| >= CORE_REGION_LIMIT.
+            // Beyond TAIL_REGION_LIMIT, result stays 0 (sech²(45) ≈ 5.5e-39 < BF16 min normal).
             result = inline_exp_sech2_tail(a);
         }
         v_endif;
