@@ -1,13 +1,11 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
+#include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
@@ -19,7 +17,7 @@ struct operation_attributes_t {
 struct tensor_args_t {
     const Tensor& input_tensor;   // [B, hidden_dim] bf16
     const Tensor& weight_tensor;  // [hidden_dim, num_experts] bf16 in DRAM
-    const Tensor& bias_tensor;    // [1, num_experts] bf16 in DRAM
+    const Tensor& bias_tensor;    // [B, num_experts] bf16 in DRAM, pre-broadcast
 };
 
 // Two outputs: (indices_rm_u16, weights_rm)

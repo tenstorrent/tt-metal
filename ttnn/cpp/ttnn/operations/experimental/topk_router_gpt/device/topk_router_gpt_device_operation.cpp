@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_router_gpt_device_operation.hpp"
 
-#include "ttnn/tensor/tensor.hpp"
-
-using namespace tt::tt_metal;
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
@@ -21,10 +19,8 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
     const auto& weight = tensor_args.weight_tensor;
     const auto& bias = tensor_args.bias_tensor;
 
-    // Validate k parameter (1-32 range, kernel uses 32-column tiles)
     TT_FATAL(attrs.k >= 1 && attrs.k <= 32, "topk_router_gpt requires k in range [1, 32], got {}", attrs.k);
 
-    // Kernel architecture requires exactly 128 experts (4 groups × 32 experts per N-tile)
     TT_FATAL(
         attrs.num_experts == 128,
         "topk_router_gpt only supports num_experts=128 (hardcoded 4-group architecture), got {}",
@@ -100,14 +96,17 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     auto B = input_shape[0];
     auto dram_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
+    uint32_t k_padded = tt::round_up(attrs.k, 8);
+
     // Slot 0: indices_rm [B, k_padded] uint16 RM
-    uint32_t k_padded = ((attrs.k + 7) / 8) * 8;
-    auto idx_spec =
-        TensorSpec(ttnn::Shape({B, k_padded}), TensorLayout(DataType::UINT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
+    auto idx_spec = TensorSpec(
+        ttnn::Shape({B, k_padded}),
+        tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram_rm));
 
     // Slot 1: weights_rm [B, k_padded] bf16 RM
     auto wgt_spec = TensorSpec(
-        ttnn::Shape({B, k_padded}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
+        ttnn::Shape({B, k_padded}),
+        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram_rm));
 
     return {idx_spec, wgt_spec};
 }
@@ -115,7 +114,7 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
 tensor_return_value_t TopkRouterGptDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(attrs, tensor_args);
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
     auto idx_tensor = create_device_tensor(std::get<0>(specs), device);
     auto wgt_tensor = create_device_tensor(std::get<1>(specs), device);
     return {idx_tensor, wgt_tensor};

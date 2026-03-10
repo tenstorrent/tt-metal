@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@
 //     wait for final output → write to DRAM
 
 #include <cstdint>
+#include <cstring>
 #include "api/dataflow/dataflow_api.h"
 
 inline uint32_t tile_elem_idx(uint32_t row, uint32_t col) {
@@ -23,33 +24,28 @@ inline uint32_t tile_elem_idx(uint32_t row, uint32_t col) {
 }
 
 inline uint16_t f32_to_bf16(float f) {
-    union {
-        float f;
-        uint32_t u;
-    } c;
-    c.f = f;
-    return (uint16_t)(c.u >> 16);
+    uint32_t u;
+    __builtin_memcpy(&u, &f, sizeof(u));
+    return static_cast<uint16_t>(u >> 16);
 }
 
 inline float bf16_to_f32(uint16_t bf16) {
-    union {
-        float f;
-        uint32_t u;
-    } c;
-    c.u = (uint32_t)bf16 << 16;
-    return c.f;
+    uint32_t u = static_cast<uint32_t>(bf16) << 16;
+    float f;
+    __builtin_memcpy(&f, &u, sizeof(f));
+    return f;
 }
 
 // Generate one index tile where every element at (row, col) = bf16((float)(base + col))
 void generate_index_tile(volatile tt_l1_ptr uint32_t* tile32, uint32_t base) {
     uint32_t left_packed[8], right_packed[8];
     for (uint32_t w = 0; w < 8; w++) {
-        uint16_t lo = f32_to_bf16((float)(base + 2 * w));
-        uint16_t hi = f32_to_bf16((float)(base + 2 * w + 1));
-        left_packed[w] = ((uint32_t)hi << 16) | lo;
-        lo = f32_to_bf16((float)(base + 16 + 2 * w));
-        hi = f32_to_bf16((float)(base + 16 + 2 * w + 1));
-        right_packed[w] = ((uint32_t)hi << 16) | lo;
+        uint16_t lo = f32_to_bf16(static_cast<float>(base + 2 * w));
+        uint16_t hi = f32_to_bf16(static_cast<float>(base + 2 * w + 1));
+        left_packed[w] = (static_cast<uint32_t>(hi) << 16) | lo;
+        lo = f32_to_bf16(static_cast<float>(base + 16 + 2 * w));
+        hi = f32_to_bf16(static_cast<float>(base + 16 + 2 * w + 1));
+        right_packed[w] = (static_cast<uint32_t>(hi) << 16) | lo;
     }
     for (uint32_t face = 0; face < 4; face++) {
         uint32_t* src = (face & 1) ? right_packed : left_packed;
@@ -63,22 +59,29 @@ void generate_index_tile(volatile tt_l1_ptr uint32_t* tile32, uint32_t base) {
 }
 
 void kernel_main() {
+    // Compile-time args
+    constexpr uint32_t tile_size = get_named_compile_time_arg_val("tile_size_bf16");
+    constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+    constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
+    constexpr uint32_t k_padded = get_named_compile_time_arg_val("k_padded");
+    constexpr uint32_t collector_phys_x = get_named_compile_time_arg_val("collector_physical_x");
+    constexpr uint32_t collector_phys_y = get_named_compile_time_arg_val("collector_physical_y");
+
+    // Runtime args
     uint32_t is_sender = get_arg_val<uint32_t>(0);
     uint32_t is_worker = get_arg_val<uint32_t>(1);
     uint32_t is_collector = get_arg_val<uint32_t>(2);
     uint32_t worker_phys_x = get_arg_val<uint32_t>(3);
     uint32_t worker_phys_y = get_arg_val<uint32_t>(4);
-    uint32_t collector_phys_x = get_arg_val<uint32_t>(5);
-    uint32_t collector_phys_y = get_arg_val<uint32_t>(6);
-    uint32_t sem_partial_ready = get_arg_val<uint32_t>(7);
-    uint32_t sem_topk_ready = get_arg_val<uint32_t>(8);
-    uint32_t tile_size = get_arg_val<uint32_t>(9);
-    uint32_t output_addr = get_arg_val<uint32_t>(10);
-    uint32_t topk_k = get_arg_val<uint32_t>(11);
-    uint32_t sender_slot = get_arg_val<uint32_t>(12);
-    uint32_t worker_gather_slot = get_arg_val<uint32_t>(13);
-    uint32_t n_tile_id = get_arg_val<uint32_t>(14);
-    uint32_t num_groups = get_arg_val<uint32_t>(15);
+    uint32_t sem_partial_ready = get_arg_val<uint32_t>(5);
+    uint32_t sem_topk_ready = get_arg_val<uint32_t>(6);
+    uint32_t sender_slot = get_arg_val<uint32_t>(7);
+    uint32_t worker_gather_slot = get_arg_val<uint32_t>(8);
+    uint32_t n_tile_id = get_arg_val<uint32_t>(9);
+    uint32_t indices_rm_addr = get_arg_val<uint32_t>(10);
+    uint32_t weights_rm_addr = get_arg_val<uint32_t>(11);
+    uint32_t aligned_page_size = get_arg_val<uint32_t>(12);
+    uint32_t vchannel = get_arg_val<uint32_t>(13);
 
     constexpr uint32_t CB_PARTIAL_RECV = tt::CBIndex::c_2;
     constexpr uint32_t CB_LOCAL_OUT = tt::CBIndex::c_3;
@@ -90,21 +93,29 @@ void kernel_main() {
     constexpr uint32_t CB_SOFTMAX_MASK = tt::CBIndex::c_12;
     constexpr uint32_t CB_BCAST_SCALER = tt::CBIndex::c_15;
     constexpr uint32_t CB_FINAL_OUT = tt::CBIndex::c_16;
+    constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
 
-    uint32_t tile_u32 = tile_size / sizeof(uint32_t);
+    constexpr uint32_t tile_u32 = tile_size / sizeof(uint32_t);
+
+    // Pre-compute the CB_PARTIAL_RECV base address.
+    // All cores have identical CB layout (CB0-CB3 same sizes), so the base
+    // address of CB2 is at the same L1 offset on every core. We read it from
+    // our own CB interface — valid because we allocated CB2 on all cores.
+    // Then we use this stable base + slot offset for NOC writes to the worker.
+    const uint32_t cb2_base_addr = get_write_ptr(CB_PARTIAL_RECV);
 
     if (is_sender) {
         // ============================================================
         // SENDER PATH
         // ============================================================
-        // Wait for compute to produce local matmul partial in CB3
         cb_wait_front(CB_LOCAL_OUT, 1);
         uint32_t local_out_l1 = get_read_ptr(CB_LOCAL_OUT);
 
-        // NOC write partial tile to worker's CB_PARTIAL_RECV at correct slot
-        // Worker's CB2 base + sender_slot * tile_size
-        uint32_t worker_recv_l1 = get_write_ptr(CB_PARTIAL_RECV) + sender_slot * tile_size;
+        // NOC write partial tile to worker's CB2 at our sender_slot.
+        // cb2_base_addr is the same L1 address on all cores due to uniform CB layout.
+        uint32_t worker_recv_l1 = cb2_base_addr + sender_slot * tile_size;
         uint64_t worker_recv_noc = get_noc_addr(worker_phys_x, worker_phys_y, worker_recv_l1);
+
         noc_async_write(local_out_l1, worker_recv_noc, tile_size);
         noc_async_write_barrier();
 
@@ -113,7 +124,6 @@ void kernel_main() {
         noc_semaphore_inc(worker_sem_noc, 1);
 
         cb_pop_front(CB_LOCAL_OUT, 1);
-        // Sender is done
         return;
     }
 
@@ -122,7 +132,6 @@ void kernel_main() {
     // ============================================================
 
     // 1. Generate index template tile (expert_base + 0..31)
-    //    Can overlap with DM0 weight reads and compute matmul
     uint32_t expert_base = n_tile_id * 32;
     cb_reserve_back(CB_INDEX, 1);
     {
@@ -139,7 +148,7 @@ void kernel_main() {
         {
             uint32_t mask_l1 = get_write_ptr(CB_SOFTMAX_MASK);
             volatile tt_l1_ptr uint32_t* mask32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1);
-            uint32_t neg_inf_packed = 0xFF80FF80u;
+            constexpr uint32_t neg_inf_packed = 0xFF80FF80u;
             for (uint32_t i = 0; i < tile_u32; i++) {
                 mask32[i] = neg_inf_packed;
             }
@@ -158,7 +167,7 @@ void kernel_main() {
         {
             uint32_t scaler_l1 = get_write_ptr(CB_BCAST_SCALER);
             volatile tt_l1_ptr uint32_t* scaler32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_l1);
-            uint32_t one_packed = 0x3F803F80u;
+            constexpr uint32_t one_packed = 0x3F803F80u;
             for (uint32_t i = 0; i < tile_u32; i++) {
                 scaler32[i] = one_packed;
             }
@@ -166,8 +175,7 @@ void kernel_main() {
         cb_push_back(CB_BCAST_SCALER, 1);
     }
 
-    // 2. Reserve space in CB2 for the 2 incoming partial tiles (must call
-    //    cb_reserve_back before cb_push_back, even though data arrives via NOC)
+    // 2. Reserve space in CB2 for the 2 incoming partial tiles
     cb_reserve_back(CB_PARTIAL_RECV, 2);
 
     // Wait for both senders' partials to arrive
@@ -176,11 +184,9 @@ void kernel_main() {
     noc_semaphore_wait(partial_sem, 2);
     noc_semaphore_set(partial_sem, 0);
 
-    // Push the 2 received partial tiles to CB2 for compute to consume
     cb_push_back(CB_PARTIAL_RECV, 2);
 
     // 3. Wait for compute to produce logit output (CB6).
-    //    Index tile stays in CB_INDEX (no copy through compute).
     cb_wait_front(CB_TOPK_VAL, 1);
 
     if (!is_collector) {
@@ -188,13 +194,12 @@ void kernel_main() {
         uint32_t val_l1 = get_read_ptr(CB_TOPK_VAL);
         uint32_t ind_l1 = get_read_ptr(CB_INDEX);
 
-        // Write values to collector's CB_GATHERED_VAL at slot worker_gather_slot
+        // Use our own CB8/CB9 base addresses — identical L1 layout on all worker cores
         uint32_t coll_val_base = get_write_ptr(CB_GATHERED_VAL);
         uint32_t coll_val_dst_l1 = coll_val_base + worker_gather_slot * tile_size;
         uint64_t coll_val_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_val_dst_l1);
         noc_async_write(val_l1, coll_val_noc, tile_size);
 
-        // Write indices to collector's CB_GATHERED_IND at slot worker_gather_slot
         uint32_t coll_ind_base = get_write_ptr(CB_GATHERED_IND);
         uint32_t coll_ind_dst_l1 = coll_ind_base + worker_gather_slot * tile_size;
         uint64_t coll_ind_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_ind_dst_l1);
@@ -208,7 +213,6 @@ void kernel_main() {
 
         cb_pop_front(CB_TOPK_VAL, 1);
         cb_pop_front(CB_INDEX, 1);
-        // Non-collector worker is done
         return;
     }
 
@@ -227,7 +231,6 @@ void kernel_main() {
         uint32_t gathered_val_base = get_write_ptr(CB_GATHERED_VAL);
         uint32_t gathered_ind_base = get_write_ptr(CB_GATHERED_IND);
 
-        // Copy own results to slot 0
         volatile tt_l1_ptr uint32_t* src_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_val_l1);
         volatile tt_l1_ptr uint32_t* dst_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gathered_val_base);
         for (uint32_t w = 0; w < tile_u32; w++) {
@@ -250,7 +253,6 @@ void kernel_main() {
     noc_semaphore_wait(topk_sem, num_groups - 1);
     noc_semaphore_set(topk_sem, 0);
 
-    // Push all gathered tiles to compute
     cb_push_back(CB_GATHERED_VAL, num_groups);
     cb_push_back(CB_GATHERED_IND, num_groups);
 
@@ -259,19 +261,10 @@ void kernel_main() {
     uint32_t final_out_l1 = get_read_ptr(CB_FINAL_OUT);
 
     // 7. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
-    //    Extracts k values per row from face-layout tiles, converts indices
-    //    from bf16 to uint16, and writes to DRAM as row-major pages.
-    uint32_t indices_rm_addr = get_arg_val<uint32_t>(16);
-    uint32_t weights_rm_addr = get_arg_val<uint32_t>(17);
-    uint32_t k_padded = get_arg_val<uint32_t>(18);
-    // DRAM-aligned page size from buffer allocation — the allocator pads
-    // pages to DRAM_ALIGNMENT (32 bytes on WH), so InterleavedAddrGen must
-    // use this stride, not the raw data size (k_padded * 2).
-    uint32_t aligned_page_size = get_arg_val<uint32_t>(19);
+    constexpr uint32_t data_size = k_padded * 2;  // actual data bytes per page
 
-    uint32_t data_size = k_padded * 2;  // actual data bytes per page (16 for k_padded=8)
-
-    constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
+    // Use a local L1 scratch area. We use CB_DISPATCH as scratch storage.
+    // Reserve, write, then push+pop to maintain CB contract.
     cb_reserve_back(CB_DISPATCH, 1);
     uint32_t scratch = get_write_ptr(CB_DISPATCH);
     uint32_t idx_base = scratch;
@@ -288,13 +281,16 @@ void kernel_main() {
         for (uint32_t col = 0; col < topk_k; col++) {
             uint32_t fi = tile_elem_idx(row, col);
             wgt_buf[row * k_padded + col] = src0[fi];
-            idx_buf[row * k_padded + col] = (uint16_t)bf16_to_f32(src1[fi]);
+            idx_buf[row * k_padded + col] = static_cast<uint16_t>(bf16_to_f32(src1[fi]));
         }
         for (uint32_t col = topk_k; col < k_padded; col++) {
             wgt_buf[row * k_padded + col] = 0;
             idx_buf[row * k_padded + col] = 0;
         }
     }
+
+    // Complete the CB reserve/push lifecycle
+    cb_push_back(CB_DISPATCH, 1);
 
     const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = aligned_page_size};
     const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = aligned_page_size};
@@ -303,6 +299,10 @@ void kernel_main() {
         noc_async_write(wgt_base + p * data_size, get_noc_addr(p, wgt_ag), data_size);
     }
     noc_async_write_barrier();
+
+    // Clean up CB lifecycle
+    cb_wait_front(CB_DISPATCH, 1);
+    cb_pop_front(CB_DISPATCH, 1);
 
     cb_pop_front(CB_FINAL_OUT, 2);
 }

@@ -174,7 +174,9 @@ class TopKRouter:
             ttnn.deallocate(hidden_states_bf16)
 
         # Kernel produced uint16 RM indices and bf16 RM weights (padded to k_padded).
-        # Slice to the actual k columns.
+        # Slice to the actual k columns, then free the padded originals.
         expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
         expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
+        ttnn.deallocate(indices_rm)
+        ttnn.deallocate(weights_rm)
         return expert_indices, expert_weights

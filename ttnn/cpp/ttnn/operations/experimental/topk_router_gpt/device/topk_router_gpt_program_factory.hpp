@@ -1,26 +1,24 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "topk_router_gpt_device_operation_types.hpp"
-
-#include <tt-metalium/kernel_types.hpp>
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
-struct TopkRouterGptProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle dm0_kernel_id;
-        tt::tt_metal::KernelHandle dm1_kernel_id;
-        tt::tt_metal::KernelHandle compute_kernel_id;
-        CoreRangeSet all_cores;
-        uint32_t num_cores;
-    };
+struct TopkRouterGptSharedVariables {
+    // Kernel handles
+    std::vector<tt::tt_metal::KernelHandle> kernel_handles;
 
+    // Cores active (cached to avoid re-querying in override_runtime_arguments)
+    std::vector<CoreCoord> worker_cores;
+};
+
+struct TopkRouterGptProgramFactory {
+    using shared_variables_t = TopkRouterGptSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

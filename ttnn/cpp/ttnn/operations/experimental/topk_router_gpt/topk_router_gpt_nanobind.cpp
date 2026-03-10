@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,3 +37,9 @@ void bind_topk_router_gpt(nb::module_& mod) {
 }
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt::detail
+
+namespace ttnn::operations::experimental::detail {
+
+void bind_topk_router_gpt(::nanobind::module_& mod) { topk_router_gpt::detail::bind_topk_router_gpt(mod); }
+
+}  // namespace ttnn::operations::experimental::detail
