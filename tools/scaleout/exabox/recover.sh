@@ -239,9 +239,9 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     echo ""
     echo "Running cluster validation..."
     if [[ -n "$DOCKER_IMAGE" ]]; then
-        ./tools/scaleout/exabox/mpi-docker --host "$HOSTS" \
-            --image "$DOCKER_IMAGE" \
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"
     else
