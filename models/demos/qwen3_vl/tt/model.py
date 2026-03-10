@@ -133,9 +133,6 @@ class VisionTransformer(LightweightModule):
         """
         if isinstance(unpadded_seq_len, (list, tuple)):
             chunks = []
-            # for b, s,in enumerate(unpadded_seq_len):
-            #     chunks.append(x[b, :,  :s, :])
-            # return ttnn.concat(chunks, dim=0)
             offset = 0
             for s, ps in zip(unpadded_seq_len, padded_seq_len_list):
                 chunks.append(x[:, :, offset : offset + s, :])
@@ -178,15 +175,12 @@ class VisionTransformer(LightweightModule):
             )
             if i in self.deepstack_visual_indices:
                 idx = self.deepstack_visual_indices.index(i)
-                # x_unpadded = ttnn.reshape(x, [batch_size, 1, x.shape[-2] // batch_size, -1])
                 x_unpadded = self._slice_unpadded(x, unpadded_seq_len, padded_seq_len_list)
                 deepstack_feature_list.append(self.deepstack_merger_list[idx](x_unpadded))
 
         # Merge patches - first remove any sequence length padding
-        # x = ttnn.reshape(x, [batch_size, 1, x.shape[-2] // batch_size, -1])
         x = self._slice_unpadded(x, unpadded_seq_len, padded_seq_len_list)
         x = self.patch_merger(x)
-        # x = ttnn.reshape(x, [1, 1, x.shape[-2] * batch_size, -1])
         return x, deepstack_feature_list
 
 
@@ -293,7 +287,6 @@ class DropInVisionTransformer(torch.nn.Module):
         Returns:
             torch.Tensor: Output tensor matching the reference model's output shape [total_seq_len, out_hidden_size].
         """
-        # import pdb; pdb.set_trace()
         # process pixel_values for each image/video separately
         all_pixel_values = pixel_values.clone()
         grid_thw_clone = grid_thw.clone()
@@ -321,8 +314,6 @@ class DropInVisionTransformer(torch.nn.Module):
                 current_pixel_values = pixel_values
                 seq_len = seq_len_list
                 padded_seq_len = padded_seq_len_list
-            # unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            # seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(current_pixel_values)
@@ -339,7 +330,6 @@ class DropInVisionTransformer(torch.nn.Module):
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
                 # todo)) refactor this code to make the intent clear, which is data parallelism
                 mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
@@ -348,7 +338,6 @@ class DropInVisionTransformer(torch.nn.Module):
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
                 # todo)) refactor this code to make the intent clear, which is data parallelism
                 mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
@@ -425,8 +414,6 @@ class DropInVisionTransformer(torch.nn.Module):
         final_output_ttnn = torch.cat(final_outputs, dim=0)
         if self.debug:
             logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-            # reference_output, deepstack_ref = self.reference_model.forward(all_pixel_values, grid_thw_clone)
-            # torch.save(reference_output, "models/demos/qwen3_vl/tt/ref_out_visual.pt")
             reference_output = torch.load("models/demos/qwen3_vl/tt/ref_out_visual.pt")
             _, pcc = comp_pcc(reference_output, final_output_ttnn)
             logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
@@ -640,5 +627,4 @@ class Transformer(TTTransformer):
 
         if mode == Mode.PREFILL:
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

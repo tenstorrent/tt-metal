@@ -49,9 +49,7 @@ class VisionAttention(LightweightModule):
         transformation_mats,
         configuration,
         paged_attention_config=None,
-        # use_paged_kv_cache=False,
         causal_mask=True,
-        # use_kv_cache=True,
     ):
         super().__init__()
 
@@ -65,17 +63,15 @@ class VisionAttention(LightweightModule):
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
         self.causal_mask = causal_mask
-        # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
+        self.num_devices_per_group = 1
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
-        # self.padded_head_dim = self.head_dim
         self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
 
         self.dtype = dtype
@@ -229,7 +225,6 @@ class VisionAttention(LightweightModule):
             qkv_list.append(qkv)
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-        # qkv_cat.shape = [1, 1, 1280, 4608])
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
@@ -367,8 +362,6 @@ class VisionAttention(LightweightModule):
         batch_size=1,
         user_id_tensor=None,
     ):
-        # print(f"{x_11SH.shape=}")
-
         # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
         # Following 70B Galaxy: concat before QKV matmul, then reshape back to batch after
         if batch_size > 1:
