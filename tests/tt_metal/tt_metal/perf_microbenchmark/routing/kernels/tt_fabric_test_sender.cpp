@@ -18,8 +18,7 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
 
-using SenderKernelConfigType =
-    SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
+using SenderKernelConfigType = SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(
@@ -75,24 +74,6 @@ void kernel_main() {
         const uint32_t num_warmup = conn->num_buffers_per_channel;
 
         traffic_config->template send_packets_stateful<BENCHMARK_MODE>(traffic_config, conn, num_packets, num_warmup);
-
-        // CRITICAL FIX: Stateful writes use update_counter=false, leaving software counter out of sync
-        // Must wait for ALL in-flight writes to complete, then sync counter to hardware
-        const uint8_t noc = get_fabric_worker_noc();
-
-        // Poll hardware register until it stops changing (all writes acked)
-        uint32_t prev_hw = 0;
-        uint32_t curr_hw = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-        while (prev_hw != curr_hw) {
-            prev_hw = curr_hw;
-            curr_hw = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-        }
-
-        DPRINT << "After stateful: HW reg=" << curr_hw << " SW counter=" << noc_nonposted_writes_acked[noc] << ENDL();
-
-        // NOW sync - all stateful writes are complete
-        noc_nonposted_writes_acked[noc] = curr_hw;
-        DPRINT << "Synced SW counter to " << noc_nonposted_writes_acked[noc] << ENDL();
 
     } else {
         while (packets_left_to_send) {
