@@ -61,6 +61,8 @@ class DecoderBlock:
         moe_gate_eps=1e-20,
         moe_gate_scaling_factor=2.5,
         moe_enable_routing=True,
+        moe_use_hardcoded_expert_index=False,
+        moe_hardcoded_expert_index=0,
     ):
         """
         PyTorch reference for the full decoder layer: h1 = x + MLA(RMSNorm(x)), h2 = MoE(h1).
@@ -118,6 +120,8 @@ class DecoderBlock:
             bias_tensor=moe_bias,
             eps=moe_gate_eps,
             scaling_factor=moe_gate_scaling_factor,
+            use_hardcoded_expert_index=moe_use_hardcoded_expert_index,
+            hardcoded_expert_index=moe_hardcoded_expert_index,
         )
 
         return full_q, new_kv, attn_output, moe_output
@@ -563,4 +567,4 @@ class DecoderBlock:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
         print("Running DecoderBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        return result
+        return result, attention_block_output_tensor, moe_final_output_tensor
