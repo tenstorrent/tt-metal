@@ -447,6 +447,7 @@ def generate_sdxl_test_inputs():
 
     ##### START: 1152x896 resolution #####
     inputs.append((1, 320, 144, 112))  # This test fails because of the Issue #36408
+    inputs.append((1, 320, 72, 56))  # This test fails because of the Issue #36408
     ###### END: 1152x896 resolution ######
 
     return inputs
@@ -465,6 +466,9 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
     # Use 5x5 grid for shape (1, 640, 16, 16) (temporary workaround for issue #36408)
     if (C, H, W) == (640, 16, 16):
         grid_size = ttnn.CoreGrid(y=4, x=4)
+    # Grid size of 7x8 is used for shape (1, 320, 72, 56) so the NHW dimension is divisible by TILE_HEIGHT
+    elif (C, H, W) == (320, 72, 56):
+        grid_size = ttnn.CoreGrid(y=7, x=8)
     else:
         grid_size = ttnn.CoreGrid(y=8, x=8)
 
@@ -487,13 +491,13 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
     )
 
     # Generate input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_shape = N * H * W // grid_size.x, C // grid_size.y
+    shard_shape = N * H * W // grid_size.y, C // grid_size.x
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
