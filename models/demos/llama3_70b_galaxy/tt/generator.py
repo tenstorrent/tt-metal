@@ -431,12 +431,14 @@ class Generator(WarmupForwardMixin):
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
         # For structured output in prefill sampling path, scatter request bitmasks into slot positions.
+        # Defer device copy until after switching to decode mode to keep allocator/sub-device context consistent.
+        prefill_sampling_bitmask = None
         if do_device_sampling and bitmask is not None:
             packed_vocab = bitmask.shape[-1]
             bitmask_scattered = torch.zeros((self.model_args.max_batch_size, packed_vocab), dtype=bitmask.dtype)
             for local_idx, slot in enumerate(empty_slots):
                 bitmask_scattered[slot, :] = bitmask[local_idx, :]
-            self.model.start_bitmask_to_device(bitmask_scattered)
+            prefill_sampling_bitmask = bitmask_scattered
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -577,6 +579,8 @@ class Generator(WarmupForwardMixin):
             # Logits are in sharded format (before all-gather), same as decode
             # sampling_params are already padded to 32 by format_sampling_params
             self.model.switch_mode("decode")
+            if prefill_sampling_bitmask is not None:
+                self.model.start_bitmask_to_device(prefill_sampling_bitmask)
 
             # Setting sampling module up after switch to decode mode
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
@@ -618,7 +622,7 @@ class Generator(WarmupForwardMixin):
             sampling_module.reset_output_state()
             sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
             sampling_module.seed_manager.get_new_values(empty_slots)
-            if bitmask is not None:
+            if prefill_sampling_bitmask is not None:
                 self.model.complete_bitmask_to_device()
                 tt_logits_batch = self.model.apply_bitmask_to_logits(tt_logits_batch)
             tt_sampled, tt_log_probs = sampling_module.sample(
