@@ -22,14 +22,14 @@ using namespace tt::tt_fabric::mesh::experimental;
 using namespace tt::tt_fabric::common::experimental;
 
 //
-// Unicast writer (fabric sender) kernel for route variants.
+// Unicast writer (fabric sender) kernel for connection manager variants.
 // Sends pages from CB c_0 to the dst device using RoutingPlaneConnectionManager.
 //   - OPERATION_TYPE: BasicWrite, Scatter, or FusedAtomicInc
-//   - API_VARIANT: RouteBasic, RouteWithState, or RouteSetState
+//   - API_VARIANT: ConnMgrBasic, ConnMgrWithState, or ConnMgrSetState
 //
 // CT args:
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
-//   1: API_VARIANT (ApiVariant enum: RouteBasic, RouteWithState, RouteSetState)
+//   1: API_VARIANT (ApiVariant enum: ConnMgrBasic, ConnMgrWithState, ConnMgrSetState)
 //   2: TOTAL_PAGES
 //   3: PAGE_SIZE (actual data size to transfer)
 //   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
@@ -73,7 +73,7 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    // Route variant: allocate route and build connection manager
+    // Connection manager variant: allocate route and build connection manager
     const uint32_t num_connections = get_arg_val<uint32_t>(idx++);
     tt::tt_fabric::RoutingPlaneConnectionManager connection_manager;
     uint8_t route_id = PacketHeaderPool::allocate_header_n(num_connections);
@@ -91,9 +91,9 @@ void kernel_main() {
         sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
     }
 
-    // Pre-loop setup for RouteWithState and RouteSetState variants
-    if constexpr (api_variant == ApiVariant::RouteWithState) {
-        // Route variant WithState setup: set route, noc_send_type, and initialize payload_size_bytes
+    // Pre-loop setup for ConnMgrWithState and ConnMgrSetState variants
+    if constexpr (api_variant == ApiVariant::ConnMgrWithState) {
+        // Connection manager variant WithState setup: set route, noc_send_type, and initialize payload_size_bytes
         if constexpr (operation_type == OperationType::BasicWrite) {
             PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
                 auto& slot = connection_manager.get(i);
@@ -119,8 +119,8 @@ void kernel_main() {
             });
             noc_async_writes_flushed();
         }
-    } else if constexpr (api_variant == ApiVariant::RouteSetState) {
-        // Route variant SetState setup
+    } else if constexpr (api_variant == ApiVariant::ConnMgrSetState) {
+        // Connection manager variant SetState setup
         if constexpr (operation_type == OperationType::BasicWrite) {
             fabric_unicast_noc_unicast_write_set_state(
                 connection_manager,
@@ -162,7 +162,7 @@ void kernel_main() {
 
         // Write operation - branch on operation_type and api_variant
         if constexpr (operation_type == OperationType::BasicWrite) {
-            if constexpr (api_variant == ApiVariant::RouteBasic) {
+            if constexpr (api_variant == ApiVariant::ConnMgrBasic) {
                 fabric_unicast_noc_unicast_write(
                     connection_manager,
                     route_id,
@@ -171,7 +171,7 @@ void kernel_main() {
                     i,
                     0  // offset
                 );
-            } else {  // RouteWithState or RouteSetState
+            } else {  // ConnMgrWithState or ConnMgrSetState
                 fabric_unicast_noc_unicast_write_with_state(
                     connection_manager,
                     route_id,
@@ -182,7 +182,7 @@ void kernel_main() {
                 );
             }
         } else if constexpr (operation_type == OperationType::Scatter) {
-            if constexpr (api_variant == ApiVariant::RouteBasic) {
+            if constexpr (api_variant == ApiVariant::ConnMgrBasic) {
                 fabric_unicast_noc_scatter_write(
                     connection_manager,
                     route_id,
@@ -193,7 +193,7 @@ void kernel_main() {
                     0,      // offset0
                     0       // offset1
                 );
-            } else {  // RouteWithState or RouteSetState
+            } else {  // ConnMgrWithState or ConnMgrSetState
                 fabric_unicast_noc_scatter_write_with_state(
                     connection_manager,
                     route_id,
@@ -206,7 +206,7 @@ void kernel_main() {
                 );
             }
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-            if constexpr (api_variant == ApiVariant::RouteBasic) {
+            if constexpr (api_variant == ApiVariant::ConnMgrBasic) {
                 fabric_unicast_noc_fused_unicast_with_atomic_inc(
                     connection_manager,
                     route_id,
@@ -218,7 +218,7 @@ void kernel_main() {
                     0,    // offset
                     true  // flush
                 );
-            } else {  // RouteWithState or RouteSetState
+            } else {  // ConnMgrWithState or ConnMgrSetState
                 fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
                     connection_manager,
                     route_id,
