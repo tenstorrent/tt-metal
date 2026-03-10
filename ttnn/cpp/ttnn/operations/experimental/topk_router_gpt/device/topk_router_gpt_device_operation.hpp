@@ -21,7 +21,7 @@ struct TopkRouterGptDeviceOperation {
     using tensor_return_value_t = topk_router_gpt::tensor_return_value_t;
     using spec_return_value_t = topk_router_gpt::spec_return_value_t;
 
-    using program_factory_t = std::variant<TopkRouterGptProgramFactory>;
+    using program_factory_t = std::variant<program::TopkRouterGptProgramFactory>;
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);

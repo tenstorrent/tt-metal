@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // DM1 Kernel: Inter-Core Communication + Helper Tile Generation + Output Writer
-// (RISCV_1, NOC 1)
+// (RISCV_0, NOC 1)
 //
 // Three paths:
 //   Sender: wait for compute partial → NOC write to worker's CB2 → signal sem
@@ -67,48 +67,56 @@ void kernel_main() {
     constexpr uint32_t collector_phys_x = get_named_compile_time_arg_val("collector_physical_x");
     constexpr uint32_t collector_phys_y = get_named_compile_time_arg_val("collector_physical_y");
 
-    // Runtime args
-    uint32_t is_sender = get_arg_val<uint32_t>(0);
-    uint32_t is_worker = get_arg_val<uint32_t>(1);
-    uint32_t is_collector = get_arg_val<uint32_t>(2);
-    uint32_t worker_phys_x = get_arg_val<uint32_t>(3);
-    uint32_t worker_phys_y = get_arg_val<uint32_t>(4);
-    uint32_t sem_partial_ready = get_arg_val<uint32_t>(5);
-    uint32_t sem_topk_ready = get_arg_val<uint32_t>(6);
-    uint32_t sender_slot = get_arg_val<uint32_t>(7);
-    uint32_t worker_gather_slot = get_arg_val<uint32_t>(8);
-    uint32_t n_tile_id = get_arg_val<uint32_t>(9);
-    uint32_t indices_rm_addr = get_arg_val<uint32_t>(10);
-    uint32_t weights_rm_addr = get_arg_val<uint32_t>(11);
-    uint32_t aligned_page_size = get_arg_val<uint32_t>(12);
-    uint32_t vchannel = get_arg_val<uint32_t>(13);
+    // Run-time arguments (shared layout with dm0 and compute)
+    uint32_t argidx = 0;
+    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    const auto weight_addr = get_arg_val<uint32_t>(argidx++);
+    const auto input_addr = get_arg_val<uint32_t>(argidx++);
+    const auto bias_addr = get_arg_val<uint32_t>(argidx++);
+    const auto sem_partial_ready = get_arg_val<uint32_t>(argidx++);
+    const auto is_sender = get_arg_val<uint32_t>(argidx++);
+    const auto is_worker = get_arg_val<uint32_t>(argidx++);
+    const auto is_collector = get_arg_val<uint32_t>(argidx++);
+    const auto num_k_tiles = get_arg_val<uint32_t>(argidx++);
+    const auto k_tile_offset = get_arg_val<uint32_t>(argidx++);
+    const auto n_tile_id = get_arg_val<uint32_t>(argidx++);
+    const auto worker_phys_x = get_arg_val<uint32_t>(argidx++);
+    const auto worker_phys_y = get_arg_val<uint32_t>(argidx++);
+    const auto sender_slot = get_arg_val<uint32_t>(argidx++);
+    const auto worker_gather_slot = get_arg_val<uint32_t>(argidx++);
+    const auto sem_topk_ready = get_arg_val<uint32_t>(argidx++);
+    const auto indices_rm_addr = get_arg_val<uint32_t>(argidx++);
+    const auto weights_rm_addr = get_arg_val<uint32_t>(argidx++);
+    const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
-    constexpr uint32_t CB_PARTIAL_RECV = tt::CBIndex::c_2;
-    constexpr uint32_t CB_LOCAL_OUT = tt::CBIndex::c_3;
-    constexpr uint32_t CB_INDEX = tt::CBIndex::c_5;
-    constexpr uint32_t CB_TOPK_VAL = tt::CBIndex::c_6;
-    constexpr uint32_t CB_GATHERED_VAL = tt::CBIndex::c_8;
-    constexpr uint32_t CB_GATHERED_IND = tt::CBIndex::c_9;
-    constexpr uint32_t CB_SOFTMAX_MASK = tt::CBIndex::c_12;
-    constexpr uint32_t CB_BCAST_SCALER = tt::CBIndex::c_15;
-    constexpr uint32_t CB_FINAL_OUT = tt::CBIndex::c_16;
-    constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
+    // CBs
+    constexpr auto cb_partial_recv = tt::CBIndex::c_2;
+    constexpr auto cb_local_out = tt::CBIndex::c_3;
+    constexpr auto cb_index = tt::CBIndex::c_5;
+    constexpr auto cb_topk_val = tt::CBIndex::c_6;
+    constexpr auto cb_gathered_val = tt::CBIndex::c_8;
+    constexpr auto cb_gathered_ind = tt::CBIndex::c_9;
+    constexpr auto cb_softmax_mask = tt::CBIndex::c_12;
+    constexpr auto cb_bcast_scaler = tt::CBIndex::c_15;
+    constexpr auto cb_final_out = tt::CBIndex::c_16;
+    constexpr auto cb_dispatch = tt::CBIndex::c_19;
 
     constexpr uint32_t tile_u32 = tile_size / sizeof(uint32_t);
 
-    // Pre-compute the CB_PARTIAL_RECV base address.
+    // Pre-compute the cb_partial_recv base address.
     // All cores have identical CB layout (CB0-CB3 same sizes), so the base
     // address of CB2 is at the same L1 offset on every core. We read it from
     // our own CB interface — valid because we allocated CB2 on all cores.
     // Then we use this stable base + slot offset for NOC writes to the worker.
-    const uint32_t cb2_base_addr = get_write_ptr(CB_PARTIAL_RECV);
+    const uint32_t cb2_base_addr = get_write_ptr(cb_partial_recv);
 
     if (is_sender) {
         // ============================================================
         // SENDER PATH
         // ============================================================
-        cb_wait_front(CB_LOCAL_OUT, 1);
-        uint32_t local_out_l1 = get_read_ptr(CB_LOCAL_OUT);
+        cb_wait_front(cb_local_out, 1);
+        uint32_t local_out_l1 = get_read_ptr(cb_local_out);
 
         // NOC write partial tile to worker's CB2 at our sender_slot.
         // cb2_base_addr is the same L1 address on all cores due to uniform CB layout.
@@ -122,7 +130,7 @@ void kernel_main() {
         uint64_t worker_sem_noc = get_noc_addr(worker_phys_x, worker_phys_y, get_semaphore(sem_partial_ready));
         noc_semaphore_inc(worker_sem_noc, 1);
 
-        cb_pop_front(CB_LOCAL_OUT, 1);
+        cb_pop_front(cb_local_out, 1);
         return;
     }
 
@@ -132,20 +140,20 @@ void kernel_main() {
 
     // 1. Generate index template tile (expert_base + 0..31)
     uint32_t expert_base = n_tile_id * 32;
-    cb_reserve_back(CB_INDEX, 1);
+    cb_reserve_back(cb_index, 1);
     {
-        uint32_t index_l1 = get_write_ptr(CB_INDEX);
+        uint32_t index_l1 = get_write_ptr(cb_index);
         volatile tt_l1_ptr uint32_t* tile32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1);
         generate_index_tile(tile32, expert_base);
     }
-    cb_push_back(CB_INDEX, 1);
+    cb_push_back(cb_index, 1);
 
     // Collector also generates softmax helper tiles
     if (is_collector) {
         // Softmax mask: cols 0..k-1 = 0.0, cols k..31 = -inf
-        cb_reserve_back(CB_SOFTMAX_MASK, 1);
+        cb_reserve_back(cb_softmax_mask, 1);
         {
-            uint32_t mask_l1 = get_write_ptr(CB_SOFTMAX_MASK);
+            uint32_t mask_l1 = get_write_ptr(cb_softmax_mask);
             volatile tt_l1_ptr uint32_t* mask32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1);
             constexpr uint32_t neg_inf_packed = 0xFF80FF80u;
             for (uint32_t i = 0; i < tile_u32; i++) {
@@ -159,23 +167,23 @@ void kernel_main() {
                 }
             }
         }
-        cb_push_back(CB_SOFTMAX_MASK, 1);
+        cb_push_back(cb_softmax_mask, 1);
 
         // Broadcast scaler: all 1.0
-        cb_reserve_back(CB_BCAST_SCALER, 1);
+        cb_reserve_back(cb_bcast_scaler, 1);
         {
-            uint32_t scaler_l1 = get_write_ptr(CB_BCAST_SCALER);
+            uint32_t scaler_l1 = get_write_ptr(cb_bcast_scaler);
             volatile tt_l1_ptr uint32_t* scaler32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_l1);
             constexpr uint32_t one_packed = 0x3F803F80u;
             for (uint32_t i = 0; i < tile_u32; i++) {
                 scaler32[i] = one_packed;
             }
         }
-        cb_push_back(CB_BCAST_SCALER, 1);
+        cb_push_back(cb_bcast_scaler, 1);
     }
 
     // 2. Reserve space in CB2 for the 2 incoming partial tiles
-    cb_reserve_back(CB_PARTIAL_RECV, 2);
+    cb_reserve_back(cb_partial_recv, 2);
 
     // Wait for both senders' partials to arrive
     volatile tt_l1_ptr uint32_t* partial_sem =
@@ -183,23 +191,23 @@ void kernel_main() {
     noc_semaphore_wait(partial_sem, 2);
     noc_semaphore_set(partial_sem, 0);
 
-    cb_push_back(CB_PARTIAL_RECV, 2);
+    cb_push_back(cb_partial_recv, 2);
 
-    // 3. Wait for compute to produce logit output (CB6).
-    cb_wait_front(CB_TOPK_VAL, 1);
+    // 3. Wait for compute to produce logit output (cb_topk_val).
+    cb_wait_front(cb_topk_val, 1);
 
     if (!is_collector) {
-        // ---- Non-collector worker: send logit+index tiles to collector ----
-        uint32_t val_l1 = get_read_ptr(CB_TOPK_VAL);
-        uint32_t ind_l1 = get_read_ptr(CB_INDEX);
+        // Non-collector worker: send logit+index tiles to collector
+        uint32_t val_l1 = get_read_ptr(cb_topk_val);
+        uint32_t ind_l1 = get_read_ptr(cb_index);
 
         // Use our own CB8/CB9 base addresses — identical L1 layout on all worker cores
-        uint32_t coll_val_base = get_write_ptr(CB_GATHERED_VAL);
+        uint32_t coll_val_base = get_write_ptr(cb_gathered_val);
         uint32_t coll_val_dst_l1 = coll_val_base + worker_gather_slot * tile_size;
         uint64_t coll_val_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_val_dst_l1);
         noc_async_write(val_l1, coll_val_noc, tile_size);
 
-        uint32_t coll_ind_base = get_write_ptr(CB_GATHERED_IND);
+        uint32_t coll_ind_base = get_write_ptr(cb_gathered_ind);
         uint32_t coll_ind_dst_l1 = coll_ind_base + worker_gather_slot * tile_size;
         uint64_t coll_ind_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_ind_dst_l1);
         noc_async_write(ind_l1, coll_ind_noc, tile_size);
@@ -210,8 +218,8 @@ void kernel_main() {
         uint64_t coll_sem_noc = get_noc_addr(collector_phys_x, collector_phys_y, get_semaphore(sem_topk_ready));
         noc_semaphore_inc(coll_sem_noc, 1);
 
-        cb_pop_front(CB_TOPK_VAL, 1);
-        cb_pop_front(CB_INDEX, 1);
+        cb_pop_front(cb_topk_val, 1);
+        cb_pop_front(cb_index, 1);
         return;
     }
 
@@ -221,14 +229,14 @@ void kernel_main() {
 
     // 4. Copy own logit+index tiles to gathered CB at slot 0 (collector = group 0)
     {
-        uint32_t own_val_l1 = get_read_ptr(CB_TOPK_VAL);
-        uint32_t own_ind_l1 = get_read_ptr(CB_INDEX);
+        uint32_t own_val_l1 = get_read_ptr(cb_topk_val);
+        uint32_t own_ind_l1 = get_read_ptr(cb_index);
 
-        cb_reserve_back(CB_GATHERED_VAL, num_groups);
-        cb_reserve_back(CB_GATHERED_IND, num_groups);
+        cb_reserve_back(cb_gathered_val, num_groups);
+        cb_reserve_back(cb_gathered_ind, num_groups);
 
-        uint32_t gathered_val_base = get_write_ptr(CB_GATHERED_VAL);
-        uint32_t gathered_ind_base = get_write_ptr(CB_GATHERED_IND);
+        uint32_t gathered_val_base = get_write_ptr(cb_gathered_val);
+        uint32_t gathered_ind_base = get_write_ptr(cb_gathered_ind);
 
         volatile tt_l1_ptr uint32_t* src_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_val_l1);
         volatile tt_l1_ptr uint32_t* dst_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gathered_val_base);
@@ -242,8 +250,8 @@ void kernel_main() {
             dst_ind[w] = src_ind[w];
         }
 
-        cb_pop_front(CB_TOPK_VAL, 1);
-        cb_pop_front(CB_INDEX, 1);
+        cb_pop_front(cb_topk_val, 1);
+        cb_pop_front(cb_index, 1);
     }
 
     // 5. Wait for other 3 workers' topk results
@@ -252,20 +260,19 @@ void kernel_main() {
     noc_semaphore_wait(topk_sem, num_groups - 1);
     noc_semaphore_set(topk_sem, 0);
 
-    cb_push_back(CB_GATHERED_VAL, num_groups);
-    cb_push_back(CB_GATHERED_IND, num_groups);
+    cb_push_back(cb_gathered_val, num_groups);
+    cb_push_back(cb_gathered_ind, num_groups);
 
-    // 6. Wait for compute to produce final output (2 tiles in CB16)
-    cb_wait_front(CB_FINAL_OUT, 2);
-    uint32_t final_out_l1 = get_read_ptr(CB_FINAL_OUT);
+    // 6. Wait for compute to produce final output (2 tiles in cb_final_out)
+    cb_wait_front(cb_final_out, 2);
+    uint32_t final_out_l1 = get_read_ptr(cb_final_out);
 
     // 7. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
-    constexpr uint32_t data_size = k_padded * 2;  // actual data bytes per page
+    constexpr uint32_t data_size = k_padded * 2;
 
-    // Use a local L1 scratch area. We use CB_DISPATCH as scratch storage.
-    // Reserve, write, then push+pop to maintain CB contract.
-    cb_reserve_back(CB_DISPATCH, 1);
-    uint32_t scratch = get_write_ptr(CB_DISPATCH);
+    // Use cb_dispatch as scratch storage.
+    cb_reserve_back(cb_dispatch, 1);
+    uint32_t scratch = get_write_ptr(cb_dispatch);
     uint32_t idx_base = scratch;
     uint32_t wgt_base = scratch + 32 * k_padded * 2;
 
@@ -289,7 +296,7 @@ void kernel_main() {
     }
 
     // Complete the CB reserve/push lifecycle
-    cb_push_back(CB_DISPATCH, 1);
+    cb_push_back(cb_dispatch, 1);
 
     const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = aligned_page_size};
     const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = aligned_page_size};
@@ -300,8 +307,8 @@ void kernel_main() {
     noc_async_write_barrier();
 
     // Clean up CB lifecycle
-    cb_wait_front(CB_DISPATCH, 1);
-    cb_pop_front(CB_DISPATCH, 1);
+    cb_wait_front(cb_dispatch, 1);
+    cb_pop_front(cb_dispatch, 1);
 
-    cb_pop_front(CB_FINAL_OUT, 2);
+    cb_pop_front(cb_final_out, 2);
 }
