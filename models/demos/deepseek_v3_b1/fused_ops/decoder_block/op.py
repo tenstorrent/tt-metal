@@ -154,7 +154,7 @@ class DecoderBlock:
             per_device_outputs.append(dev_output)
 
         moe_output = sum(per_device_outputs)
-        return full_q, new_kv, attn_output, None, None, moe_output
+        return full_q, new_kv, attn_output, scores, indices, moe_output
 
     @staticmethod
     def get_num_semaphores():
