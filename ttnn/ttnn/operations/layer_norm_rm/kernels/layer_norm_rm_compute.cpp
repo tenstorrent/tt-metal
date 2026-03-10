@@ -3,9 +3,15 @@
 
 // layer_norm_rm — Compute Kernel
 //
-// Stage 1 (data_pipeline): tilize + untilize (identity passthrough)
-// Stage 2 (reduce_mean):   + reduce SUM_ROW -> mean, sub COL bcast -> centered
-// Stage 3 (variance_normalize): + square, reduce var, add_eps+rsqrt, mul inv_std
+// Full pipeline:
+//   Phase 1: tilize(cb_in_rm -> cb_tilized)
+//   Phase 2: reduce SUM_ROW -> cb_mean
+//   Phase 3: sub COL(cb_tilized, cb_mean) -> cb_centered
+//   Phase 4: square(cb_centered) -> cb_var_input
+//   Phase 5: reduce SUM_ROW -> cb_var, add_eps+rsqrt -> cb_inv_std
+//   Phase 6: mul COL(cb_centered, cb_inv_std) -> cb_normed
+//   Phase 7: [optional] mul NONE(normed, gamma), add NONE(scaled, beta)
+//   Phase 8: untilize -> cb_out_rm
 //
 // Compile-time args:
 //   [0] Wt               — tiles per row (W / 32)
@@ -28,6 +34,8 @@ constexpr uint32_t cb_mean = 2;
 constexpr uint32_t cb_centered = 3;
 constexpr uint32_t cb_var_input = 4;
 constexpr uint32_t cb_var = 5;
+constexpr uint32_t cb_gamma = 6;
+constexpr uint32_t cb_beta = 7;
 constexpr uint32_t cb_eps = 8;
 constexpr uint32_t cb_scaler = 9;
 constexpr uint32_t cb_normed = 16;
@@ -38,7 +46,8 @@ constexpr uint32_t cb_inv_std = 24;
 void kernel_main() {
     // ========== Compile-time args ==========
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    // CT args [1]-[4] used in later stages
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(3);
 
     // ========== Runtime args ==========
     const uint32_t nblocks_per_core = get_arg_val<uint32_t>(0);
@@ -82,8 +91,6 @@ void kernel_main() {
                 cb_var_input, cb_scaler, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         // Phase 5b: Add epsilon + rsqrt post_op (var + eps -> inv_std)
-        // cb_eps: NoWaitNoPop (program-lifetime, already waited before loop)
-        // cb_var: WaitAndPopPerTile
         compute_kernel_lib::add<
             compute_kernel_lib::BroadcastDim::SCALAR,
             compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
@@ -94,8 +101,6 @@ void kernel_main() {
             });
 
         // Phase 6: Multiply by inv_std (COL broadcast)
-        // cb_centered: already waited from Phase 4, NoWaitNoPop
-        // cb_inv_std: WaitAndPopPerTile
         compute_kernel_lib::mul<
             compute_kernel_lib::BroadcastDim::COL,
             compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
@@ -103,10 +108,78 @@ void kernel_main() {
             cb_centered, cb_inv_std, cb_normed, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
         cb_pop_front(cb_centered, Wt);
 
-        // Phase 8: Untilize (cb_normed -> cb_out_rm)
+        // Phase 7: Optional affine transform (gamma * normed + beta)
+        // After Phase 6: cb_tilized is free, cb_centered is free.
+        // Strategy: reuse cb_tilized for tilized gamma/beta, cb_centered as intermediate.
+
+        // The CB that will be untilized (final output before untilize)
+        // Default: cb_normed (no affine). Updated below if affine is applied.
+        constexpr uint32_t cb_pre_untilize = []() -> uint32_t {
+            if constexpr (has_gamma && has_beta) {
+                return cb_normed;  // gamma*normed -> cb_centered, then centered+beta -> cb_normed
+            } else if constexpr (has_gamma) {
+                return cb_centered;  // gamma*normed -> cb_centered
+            } else if constexpr (has_beta) {
+                return cb_centered;  // normed+beta -> cb_centered
+            } else {
+                return cb_normed;
+            }
+        }();
+
+        if constexpr (has_gamma) {
+            // Tilize gamma RM data: cb_gamma -> cb_tilized
+            compute_kernel_lib::tilize<
+                cb_gamma,
+                cb_tilized,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
+
+            if constexpr (has_beta) {
+                // gamma*normed -> cb_centered (intermediate)
+                compute_kernel_lib::mul<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+                    cb_normed, cb_tilized, cb_centered, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+            } else {
+                // gamma*normed -> cb_centered (final)
+                compute_kernel_lib::mul<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+                    cb_normed, cb_tilized, cb_centered, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+            }
+        }
+
+        if constexpr (has_beta) {
+            // Tilize beta RM data: cb_beta -> cb_tilized
+            compute_kernel_lib::tilize<
+                cb_beta,
+                cb_tilized,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
+
+            if constexpr (has_gamma) {
+                // centered+beta -> cb_normed (final, reuse cb_normed)
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+                    cb_centered, cb_tilized, cb_normed, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+            } else {
+                // normed+beta -> cb_centered (final)
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+                    cb_normed, cb_tilized, cb_centered, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+            }
+        }
+
+        // Phase 8: Untilize (cb_pre_untilize -> cb_out_rm)
         compute_kernel_lib::untilize<
             Wt,
-            cb_normed,
+            cb_pre_untilize,
             cb_out_rm,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);

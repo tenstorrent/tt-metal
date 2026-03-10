@@ -330,10 +330,26 @@ def create_program_descriptor(
     beta_addr = beta.buffer_address() if has_beta else 0
     epsilon_packed = _float_to_uint32(epsilon)
 
+    # Reader compile-time args layout:
+    #   [0]  stick_size
+    #   [1]  gamma_ct_start  — index where gamma TensorAccessorArgs begin (0 if no gamma)
+    #   [2]  beta_ct_start   — index where beta TensorAccessorArgs begin (0 if no beta)
+    #   [3+] TensorAccessorArgs(input)
+    #   [?+] TensorAccessorArgs(gamma)   — only if has_gamma
+    #   [?+] TensorAccessorArgs(beta)    — only if has_beta
     reader_ct_args = [
         stick_size,  # index 0: bytes per RM stick
+        0,  # index 1: gamma_ct_start (placeholder, filled below)
+        0,  # index 2: beta_ct_start (placeholder, filled below)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+
+    if has_gamma:
+        reader_ct_args[1] = len(reader_ct_args)  # gamma_ct_start
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    if has_beta:
+        reader_ct_args[2] = len(reader_ct_args)  # beta_ct_start
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
 
     writer_ct_args = [
         stick_size,  # index 0: output stick size (same as input)
@@ -370,6 +386,7 @@ def create_program_descriptor(
             gamma_addr,  # 3: gamma buffer address (0 if absent)
             beta_addr,  # 4: beta buffer address (0 if absent)
             epsilon_packed,  # 5: epsilon as uint32 IEEE-754 bits
+            nblocks,  # 6: number of tile-row blocks (for gamma/beta repeat)
         ]
         writer_rt_args[x][y] = [
             output_addr,  # 0: dst_addr
