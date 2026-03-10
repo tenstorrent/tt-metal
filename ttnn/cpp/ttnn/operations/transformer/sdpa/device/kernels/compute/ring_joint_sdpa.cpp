@@ -130,6 +130,9 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
+    const uint32_t last_active_ring_iter =
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -181,7 +184,7 @@ void kernel_main() {
         }
 
         if constexpr (use_streaming_compute) {
-            const bool is_last_ring_iter = (ring_iter == ring_size - 1);
+            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,

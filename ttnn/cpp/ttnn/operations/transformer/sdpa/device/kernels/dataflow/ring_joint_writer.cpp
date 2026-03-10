@@ -167,6 +167,7 @@ void write_accumulators(
         noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
         max_write_addr += stats_tile_bytes;
     }
+    noc_async_writes_flushed();
     cb_pop_front(cb_max_out, Sq_chunk_t);
 
     // Write sum to stats DRAM (second half, offset by sum_offset)
@@ -176,6 +177,7 @@ void write_accumulators(
         noc_async_write_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
         sum_write_addr += stats_tile_bytes;
     }
+    noc_async_writes_flushed();
     cb_pop_front(cb_sum_out, Sq_chunk_t);
 }
 
@@ -344,6 +346,7 @@ void kernel_main() {
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
+
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -361,6 +364,9 @@ void kernel_main() {
     if constexpr (needs_lightweight_mask) {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>();
     }
+
+    const uint32_t last_active_ring_iter =
+        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -417,7 +423,7 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter = (ring_iter == ring_size - 1);
+            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
 
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
