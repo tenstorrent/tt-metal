@@ -78,41 +78,44 @@ TEST_F(BlackholeSingleCardFixture, DramKernelOnMultipleCores) {
     uint32_t result_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     uint64_t l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
-    // Use internal SoC descriptor to get DRAM worker grid: (num_banks, num_subchannels).
+    // DRAM worker grid: x = num_banks, y = num_subchannels.
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->build_id());
     auto dram_worker_grid = soc_desc.get_grid_size(CoreType::DRAM);
-    // Test the first row of DRAM worker cores (subchannel=0, up to 4 banks to keep it fast).
-    uint32_t num_cores = std::min(static_cast<size_t>(dram_worker_grid.x), static_cast<size_t>(4));
+    uint32_t num_banks = std::min(static_cast<size_t>(dram_worker_grid.x), static_cast<size_t>(4));
+    uint32_t num_subchannels = dram_worker_grid.y;
 
-    for (uint32_t col = 0; col < num_cores; col++) {
-        CoreCoord logical_dram_core{col, 0};
-        auto virtual_dram_core =
-            mesh_device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM_WORKER);
-        uint32_t expected_value = kMagicBase + col;
+    for (uint32_t row = 0; row < num_subchannels; row++) {
+        for (uint32_t col = 0; col < num_banks; col++) {
+            CoreCoord logical_dram_core{col, row};
+            auto virtual_dram_core =
+                mesh_device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM_WORKER);
+            uint32_t expected_value = kMagicBase + row * num_banks + col;
 
-        distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        workload.add_program(device_range, std::move(program));
-        auto& prog = workload.get_programs().at(device_range);
+            distributed::MeshWorkload workload;
+            Program program = CreateProgram();
+            workload.add_program(device_range, std::move(program));
+            auto& prog = workload.get_programs().at(device_range);
 
-        CreateKernel(
-            prog,
-            "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
-            logical_dram_core,
-            DramConfig{
-                .noc = NOC::NOC_0,
-                .compile_args = {result_l1_addr, expected_value},
-            });
+            CreateKernel(
+                prog,
+                "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
+                logical_dram_core,
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {result_l1_addr, expected_value},
+                });
 
-        distributed::EnqueueMeshWorkload(cq, workload, false);
-        distributed::Finish(cq);
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+            distributed::Finish(cq);
 
-        // Read back from DRAM core L1 (requires 64-bit NOC offset, so use cluster API directly).
-        uint64_t read_addr = static_cast<uint64_t>(result_l1_addr) + l1_noc_offset;
-        std::vector<uint32_t> result(1, 0);
-        MetalContext::instance().get_cluster().read_core(
-            result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), virtual_dram_core), read_addr);
+            // Read back from DRAM core L1 (requires 64-bit NOC offset, so use cluster API directly).
+            uint64_t read_addr = static_cast<uint64_t>(result_l1_addr) + l1_noc_offset;
+            std::vector<uint32_t> result(1, 0);
+            MetalContext::instance().get_cluster().read_core(
+                result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), virtual_dram_core), read_addr);
 
-        EXPECT_EQ(result[0], expected_value) << "Failed for DRAM core col=" << col;
+            EXPECT_EQ(result[0], expected_value)
+                << "Failed for DRAM core (bank=" << col << ", subchannel=" << row << ")";
+        }
     }
 }
