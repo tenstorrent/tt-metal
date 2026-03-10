@@ -12,6 +12,8 @@ Required Options:
 
 Optional:
     --config <4x32|8x16>                    Mesh configuration (default: 4x32)
+    --use-docker <docker-image>             Run validation via mpi-docker with the given image
+                                            (if not provided, uses plain mpirun with local build)
     --num-iterations <number>               Number of validation iterations (default: 5)
     --sleep-duration <seconds>              Sleep duration after reset, before validation (default: 5)
     --skip-reset                            Skip tt-smi reset, only run validation
@@ -38,6 +40,7 @@ EOF
 
 HOSTS=""
 CONFIG="4x32"
+DOCKER_IMAGE=""
 NUM_ITERATIONS=5
 SLEEP_DURATION=5
 SKIP_RESET=false
@@ -74,6 +77,14 @@ while [[ $# -gt 0 ]]; do
                 show_help
                 exit 1
             fi
+            shift 2
+            ;;
+        --use-docker)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --use-docker requires a non-empty value"
+                exit 1
+            fi
+            DOCKER_IMAGE="$2"
             shift 2
             ;;
         --num-iterations)
@@ -186,6 +197,11 @@ echo "=========================================="
 echo "Cluster recovery"
 echo "Using hosts: $HOSTS"
 echo "Configuration: $CONFIG"
+if [[ -n "$DOCKER_IMAGE" ]]; then
+    echo "Docker image: $DOCKER_IMAGE"
+else
+    echo "Using local build (no docker)"
+fi
 if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
     echo "Factory descriptor: $FACTORY_DESCRIPTOR_PATH"
 else
@@ -222,11 +238,19 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
 
     echo ""
     echo "Running cluster validation..."
-    mpirun --host "$HOSTS" \
-        --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
-        --tag-output \
-        ./build/tools/scaleout/run_cluster_validation \
-        "${VALIDATION_ARGS[@]}"
+    if [[ -n "$DOCKER_IMAGE" ]]; then
+        ./tools/scaleout/exabox/mpi-docker --host "$HOSTS" \
+            --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${VALIDATION_ARGS[@]}"
+    else
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --tag-output \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${VALIDATION_ARGS[@]}"
+    fi
 else
     echo "Skipping validation (--skip-validation)"
 fi
