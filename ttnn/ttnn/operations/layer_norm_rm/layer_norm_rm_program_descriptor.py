@@ -64,16 +64,13 @@ def create_program_descriptor(
     # RM stick size for input/output (row-major): W elements * 2 bytes (bf16)
     stick_size = W * 2  # bytes per RM stick
 
-    # Tile page size for bf16: standard 32x32 tile
-    bf16_tile_size = input_tensor.buffer_page_size()
-    # For intermediate CBs that don't have a tensor, use the same tile size
-    # bf16 tile = 2 * 32 * 32 + header = 2048 bytes (standard)
-    # We use the input tensor's page size as reference for bf16 tiles
+    # Tile page size for bf16: standard 32x32 tile = 2048 bytes
+    # NOTE: input_tensor.buffer_page_size() returns stick_size for RM tensors,
+    # NOT tile_size. We must use ttnn.tile_size() for CB page sizes.
+    bf16_tile_size = ttnn.tile_size(ttnn.bfloat16)  # 2048
 
     # fp32 tile size for variance accumulation (c_28)
-    # fp32 tile = 4 * 32 * 32 + header = 4096 bytes
-    # We can compute it: each element is 4 bytes instead of 2
-    fp32_tile_size = bf16_tile_size * 2  # approximate: fp32 is 2x bf16 tile size
+    fp32_tile_size = ttnn.tile_size(ttnn.float32)  # 4096
 
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
     device = input_tensor.device()

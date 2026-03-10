@@ -1,29 +1,46 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Layer Norm RM - Compute Kernel (Stub)
-// Runs on math RISC-V core (TRISC)
-//
-// Phases:
-//   1. Tilize c_0 -> c_24
-//   2. Reduce mean (SUM REDUCE_ROW) c_24 -> c_25
-//   3. Subtract mean (SUB COL) c_24,c_25 -> c_26
-//   4. Square centered c_26 -> c_27
-//   5. Reduce variance c_27 -> c_28
-//   6. Add epsilon + rsqrt c_28,c_10 -> c_29
-//   7. Multiply by inverse std c_26,c_29 -> c_30
-//   8. (Optional) Multiply gamma c_30,c_1 -> c_24
-//   9. (Optional) Add beta c_24,c_2 -> c_30
-//  10. Untilize -> c_16
+// Layer Norm RM - Compute Kernel
+// Phase 1: Tilize c_0 -> c_24
+// Phase 10: Untilize c_24 -> c_16 (passthrough for Stage 1)
+// Intermediate phases (2-9) will be added in later TDD stages.
 
 #include "api/compute/common.h"
-// Additional includes for TDD stages:
-//   ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp
-//   ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp
-//   ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp
-//   ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp  (not yet installed - add to build)
-//   api/compute/eltwise_unary/rsqrt.h
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+constexpr uint32_t c_0 = 0;    // RM input sticks (from reader)
+constexpr uint32_t c_8 = 8;    // Reduce scaler (persistent)
+constexpr uint32_t c_16 = 16;  // Untilized output (to writer)
+constexpr uint32_t c_24 = 24;  // Tilized input
 
 void kernel_main() {
-    // Stub: compute kernel - will be implemented in TDD stages
+    // Compile-time args
+    constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+
+    // Hardware initialization - required before using helpers
+    compute_kernel_hw_startup(c_0, c_8, c_16);
+
+    // Per-row loop
+    for (uint32_t row = 0; row < num_rows_per_core; row++) {
+        // Phase 1: Tilize c_0 -> c_24
+        compute_kernel_lib::tilize<
+            c_0,
+            c_24,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
+
+        // Stage 1: passthrough - directly untilize c_24 -> c_16
+        // Phase 10: Untilize
+        compute_kernel_lib::untilize<
+            Wt,
+            c_24,
+            c_16,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);
+    }
 }
