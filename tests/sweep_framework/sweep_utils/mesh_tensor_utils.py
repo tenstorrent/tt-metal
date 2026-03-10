@@ -152,7 +152,8 @@ def create_tensor_on_mesh(
             shard_dim = int(shard_dims[-1]) if shard_dims else -1
 
             try:
-                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dim)
+                mesh_shape = (1, num_devices)
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dim)
             except (TypeError, RuntimeError):
                 # Fallback to replicate if shard mapper creation fails
                 mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
