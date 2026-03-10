@@ -717,7 +717,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Construct chains: for each head that spans >= 2 cores, select injectors
     // based on physical X column distance for optimal DRAM channel spreading.
-    detail::build_chains_for_heads(head_segments, core_chain_info, core_work, NH);
+    detail::build_chains_for_heads(head_segments, core_chain_info, core_work, NH, /*allow_wrap_back=*/false);
 
     // Third pass: Check multicast eligibility and configure mcast for eligible chains
     const uint32_t mcast_chains = detail::configure_mcast_for_chains(head_segments, core_chain_info, core_work, NH);

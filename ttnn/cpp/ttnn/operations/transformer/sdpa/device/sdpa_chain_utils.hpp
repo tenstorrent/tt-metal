@@ -65,7 +65,8 @@ static inline void build_chains_for_heads(
     const std::vector<std::vector<HeadSegmentRef>>& head_segments,
     std::vector<CoreChainInfo>& core_chain_info,
     const std::vector<CoreWork>& core_work,
-    uint32_t num_heads_per_batch) {
+    uint32_t num_heads_per_batch,
+    bool allow_wrap_back = true) {
     uint32_t chains_built = 0;
     uint32_t chains_skipped = 0;
     // Track injector physical X columns for DRAM channel spreading
@@ -78,8 +79,7 @@ static inline void build_chains_for_heads(
         }
 
         // Find first non-conflicting single-segment core as chain start.
-        // Exclude the last segment: it must remain as a chain tail since the
-        // wrap-around build below needs at least one segment after start.
+        // Exclude the last segment so at least one segment remains after start.
         std::optional<std::size_t> chain_start_idx;
         for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
             const auto& seg = segments[idx];
@@ -87,9 +87,6 @@ static inline void build_chains_for_heads(
                 continue;
             }
             const auto& work = core_work[seg.core_idx];
-            if (work.global_q_count == 0) {
-                continue;
-            }
             if (seg.head_work_index >= work.head_work.size()) {
                 continue;
             }
@@ -102,38 +99,23 @@ static inline void build_chains_for_heads(
             }
         }
         if (!chain_start_idx.has_value()) {
-            for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
-                const auto& seg = segments[idx];
-                if (seg.core_idx >= core_work.size()) {
-                    continue;
-                }
-                if (core_work[seg.core_idx].global_q_count == 0) {
-                    continue;
-                }
-                if (!core_chain_info[seg.core_idx].participates) {
-                    chain_start_idx = idx;
-                    break;
-                }
-            }
-        }
-
-        if (!chain_start_idx.has_value()) {
             chains_skipped++;
             continue;
         }
 
         const std::size_t start = chain_start_idx.value();
 
-        // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
-        // Break on conflict (core already in a different chain).
+        // Build chain from start forward. When allow_wrap_back is true, wrap
+        // past the end back to segments before start (used by classic SDPA where
+        // q_iter_local is not inflated by prior-head work). When false, only
+        // visit segments from start to end (used by ring-joint SDPA to avoid
+        // pulling in straddling cores whose q_iter_local is inflated).
         std::vector<std::size_t> chain_order;
-        for (std::size_t step = 0; step < segments.size(); ++step) {
+        const std::size_t num_steps = allow_wrap_back ? segments.size() : (segments.size() - start);
+        for (std::size_t step = 0; step < num_steps; ++step) {
             std::size_t idx = (start + step) % segments.size();
             const auto& seg = segments[idx];
             const uint32_t core_idx = seg.core_idx;
-            if (core_work[core_idx].global_q_count == 0) {
-                continue;
-            }
             if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
                 continue;
             }
