@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Prefill dispatch writer kernel (combined metadata+payload variant)
-// Metadata is written in-place at offset 0 of the combined CB page (payload
-// sits at padded_metadata_bytes). A single DRAM write or fabric send
-// transfers both metadata and payload together.
+// Handles fabric sends only. Route/distance/page_idx are pre-computed by
+// the reader and communicated via cb_route_info. Combined pages (metadata+
+// payload) arrive via cb_combined.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -24,6 +24,8 @@
     if (0)              \
     DebugPrinter()
 #endif
+
+constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
@@ -84,10 +86,14 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(39);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(40);
 
+    // Additional CB IDs (indices 41-42)
+    constexpr uint32_t cb_route_info_id = get_compile_time_arg_val(41);
+    constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(42);
+
     constexpr uint32_t combined_cb_page_size = padded_metadata_bytes + aligned_input_page_size;
 
-    // TensorAccessorArgs for 6 tensors (starting at index 41)
-    constexpr auto input_args = TensorAccessorArgs<41>();
+    // TensorAccessorArgs for 6 tensors (starting at index 43)
+    constexpr auto input_args = TensorAccessorArgs<43>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -109,9 +115,8 @@ void kernel_main() {
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
-    DPRINT_DISPATCH << "Writer combined kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
-                    << " experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                    << " padded_metadata_bytes=" << padded_metadata_bytes << ENDL();
+    DPRINT_DISPATCH << "Writer combined kernel: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
+                    << ENDL();
 
 #ifndef DEST_CHIP_ID
 #define DEST_CHIP_ID
@@ -159,7 +164,6 @@ void kernel_main() {
             }
         }
 
-        // Use a second packet header slot for semaphore sends
         auto* sem_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
             packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
 
@@ -180,125 +184,59 @@ void kernel_main() {
         }
     }
 
-#ifdef AXIS
-    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
-    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
-    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
-    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
-    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
-    constexpr uint32_t device_end_idx =
-        (axis == ReplicateGroup::COLS) ? (col + mesh_rows * mesh_cols) : (row * mesh_cols + mesh_cols);
-    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
-#else
-    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
-    constexpr uint32_t dispatch_devices = num_devices;
-    constexpr uint32_t dispatch_index = linearized_mesh_coord;
-    constexpr uint32_t device_begin_idx = 0;
-    constexpr uint32_t device_end_idx = num_devices;
-    constexpr uint32_t device_stride = 1;
-#endif
-
     {
         DeviceZoneScopedN("dispatch-combined-wait-init");
         noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
         noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
     }
 
-    uint32_t fabric_send_counter = 0;
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif
 
-    // Wait for offsets
-    cb_wait_front(cb_offsets_id, offsets_pages);
-    int32_t* offsets = (int32_t*)(get_read_ptr(cb_offsets_id));
-
-    // TensorAccessor for the combined output buffer in DRAM
     const auto combined_addr_gen =
         TensorAccessor(combined_output_args, combined_output_address, aligned_combined_output_page_size);
 
     {
-        DeviceZoneScopedN("dispatch-combined-token-loop");
-        for (uint32_t token_idx = token_start_idx; token_idx < token_end_idx; ++token_idx) {
-            DPRINT_DISPATCH << "Processing token_idx: " << token_idx << ENDL();
+        DeviceZoneScopedN("dispatch-combined-fabric-loop");
+        while (true) {
+            cb_wait_front(cb_route_info_id, 1);
+            volatile uint32_t* route_info = (volatile uint32_t*)(get_read_ptr(cb_route_info_id));
+
+            uint32_t route = route_info[0];
+            if (route == ROUTE_INFO_SENTINEL) {
+                cb_pop_front(cb_route_info_id, 1);
+                break;
+            }
+            uint32_t distance = route_info[1];
+            uint32_t page_idx = route_info[2];
+            uint32_t link = route_info[3];
+            cb_pop_front(cb_route_info_id, 1);
+
+            cb_wait_front(cb_combined_id, 1);
+            uint32_t combined_read_addr = get_read_ptr(cb_combined_id);
+
+            DPRINT_DISPATCH << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << page_idx
+                            << " link=" << link << ENDL();
 
             {
-                DeviceZoneScopedN("dispatch-combined-wait-reader");
-                cb_wait_front(cb_indices_id, 1);
-                cb_wait_front(cb_weights_id, 1);
-                cb_wait_front(cb_combined_id, 1);
+                DeviceZoneScopedN("dispatch-combined-fabric");
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    combined_addr_gen,
+                    fabric_connections[route][link],
+                    unicast_packet_header,
+                    combined_read_addr,
+                    page_idx,
+                    (int)aligned_combined_output_page_size,
+                    l1_alignment);
             }
 
-            // The combined CB page layout: [metadata_area | payload]
-            // metadata_area: padded_metadata_bytes (writer fills in metadata here)
-            // payload: aligned_input_page_size bytes (reader already wrote input here)
-            uint32_t combined_read_addr = get_read_ptr(cb_combined_id);
-            int32_t* indices = (int32_t*)(get_read_ptr(cb_indices_id));
-            uint16_t* weights = (uint16_t*)(get_read_ptr(cb_weights_id));
-
-            for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
-                auto routed_expert = indices[k];
-                if ((uint32_t)routed_expert < expert_start_idx || (uint32_t)routed_expert >= expert_end_idx) {
-                    continue;
-                }
-                auto expert_chip = routed_expert / experts_per_chip;
-                auto expert_index_within_chip = routed_expert % experts_per_chip;
-
-                DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")"
-                                << ENDL();
-
-                auto& offset = offsets[routed_expert];
-                auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
-
-                // Write metadata in-place at the start of the combined CB page
-                volatile tt_l1_ptr int32_t* metadata =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(combined_read_addr);
-                metadata[0] = linearized_mesh_coord;
-                metadata[1] = token_idx;
-                metadata[2] = k;
-                metadata[3] = routed_expert;
-                metadata[4] = weights[k];
-
-                if (expert_chip == linearized_mesh_coord) {
-                    DPRINT_DISPATCH << "    Local dispatch" << ENDL();
-                    {
-                        DeviceZoneScopedN("dispatch-combined-local");
-                        noc_async_write_page(page_idx, combined_addr_gen, combined_read_addr);
-                        noc_async_writes_flushed();
-                    }
-                } else {
-                    DPRINT_DISPATCH << "    Remote dispatch to chip " << expert_chip << ENDL();
-                    if constexpr (is_1d_topology<topology>()) {
-                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                        uint32_t link = fabric_send_counter % num_links;
-                        fabric_send_counter++;
-
-                        uint32_t distance =
-                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-
-                        {
-                            DeviceZoneScopedN("dispatch-combined-fabric");
-                            fabric_set_unicast_route<false>(
-                                (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-
-                            fabric_send_noc_unicast<fabric_max_packet_size>(
-                                combined_addr_gen,
-                                fabric_connections[route][link],
-                                unicast_packet_header,
-                                combined_read_addr,
-                                page_idx,
-                                (int)aligned_combined_output_page_size,
-                                l1_alignment);
-                        }
-                    }
-                }
-
-                offset++;
+            {
+                DeviceZoneScopedN("dispatch-combined-write-barrier");
+                noc_async_write_barrier();
             }
-            noc_async_write_barrier();
-
-            cb_pop_front(cb_indices_id, 1);
-            cb_pop_front(cb_weights_id, 1);
             cb_pop_front(cb_combined_id, 1);
         }
     }

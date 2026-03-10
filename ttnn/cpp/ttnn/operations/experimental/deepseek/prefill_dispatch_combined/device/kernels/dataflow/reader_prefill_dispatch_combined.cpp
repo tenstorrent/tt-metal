@@ -3,13 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Prefill dispatch reader kernel (combined metadata+payload variant)
-// Writes payload at an offset within the combined CB page, leaving space
-// for the writer to prepend metadata before a single fabric/DRAM transfer.
+// Handles DRAM reads, metadata writing, local DRAM writes, and route/distance
+// computation for remote experts. Pushes combined pages and route info to
+// the writer via CBs for fabric sends.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
@@ -22,7 +24,11 @@
     DebugPrinter()
 #endif
 
+constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
+
 void kernel_main() {
+    using namespace ttnn::operations::ccl::common;
+
     // ===== Compile Time Args =====
     // CB IDs (indices 0-4)
     constexpr uint32_t cb_combined_id = get_compile_time_arg_val(0);
@@ -79,11 +85,14 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(39);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(40);
 
-    // Combined CB page = metadata padding + payload
+    // Additional CB IDs (indices 41-42)
+    constexpr uint32_t cb_route_info_id = get_compile_time_arg_val(41);
+    constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(42);
+
     constexpr uint32_t combined_cb_page_size = padded_metadata_bytes + aligned_input_page_size;
 
-    // TensorAccessorArgs for 6 tensors (starting at index 41)
-    constexpr auto input_args = TensorAccessorArgs<41>();
+    // TensorAccessorArgs for 6 tensors (starting at index 43)
+    constexpr auto input_args = TensorAccessorArgs<43>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -102,94 +111,149 @@ void kernel_main() {
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
 
     DPRINT_DISPATCH << "Reader combined kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
-                    << " hidden_size=" << hidden_size << " padded_metadata_bytes=" << padded_metadata_bytes
+                    << " experts=[" << expert_start_idx << "," << expert_end_idx << ")"
+                    << " padded_metadata_bytes=" << padded_metadata_bytes
                     << " combined_cb_page_size=" << combined_cb_page_size << ENDL();
 
-    // Read offsets tensor
+    // Read offsets tensor into local scratch (reader-only, no push to writer)
+    int32_t* offsets;
     {
         DeviceZoneScopedN("dispatch-combined-read-offsets");
         const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
+        cb_reserve_back(cb_offsets_id, offsets_pages);
+        uint32_t offsets_base_addr = get_write_ptr(cb_offsets_id);
         for (uint32_t i = 0; i < offsets_pages; i++) {
-            cb_reserve_back(cb_offsets_id, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_offsets_id);
-            noc_async_read_page(i, offsets_addr_gen, l1_write_addr);
+            noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
         }
         noc_async_read_barrier();
-        cb_push_back(cb_offsets_id, offsets_pages);
+        offsets = (int32_t*)offsets_base_addr;
     }
 
-    // Read input/indices/weights tokens in batches
+    // Scratch addresses for indices and weights (reader-only, reused per token)
+    cb_reserve_back(cb_indices_id, 1);
+    uint32_t indices_scratch_addr = get_write_ptr(cb_indices_id);
+    cb_reserve_back(cb_weights_id, 1);
+    uint32_t weights_scratch_addr = get_write_ptr(cb_weights_id);
+
+    // Scratch buffer for combined page (metadata + payload)
+    cb_reserve_back(cb_scratch_id, 1);
+    uint32_t scratch_addr = get_write_ptr(cb_scratch_id);
+
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
+    const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
+    const auto combined_addr_gen =
+        TensorAccessor(combined_output_args, combined_output_address, aligned_combined_output_page_size);
+
+    uint32_t fabric_send_counter = 0;
+
     {
-        constexpr uint32_t read_batch_size = 8;
-
-        const uint32_t indices_fifo_limit = get_local_cb_interface(cb_indices_id).fifo_limit;
-        const uint32_t indices_fifo_size = get_local_cb_interface(cb_indices_id).fifo_size;
-        const uint32_t weights_fifo_limit = get_local_cb_interface(cb_weights_id).fifo_limit;
-        const uint32_t weights_fifo_size = get_local_cb_interface(cb_weights_id).fifo_size;
-        const uint32_t combined_fifo_limit = get_local_cb_interface(cb_combined_id).fifo_limit;
-        const uint32_t combined_fifo_size = get_local_cb_interface(cb_combined_id).fifo_size;
-
-        DeviceZoneScopedN("dispatch-combined-read-tokens");
-        const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
-        const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
-        const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
-
-        for (uint32_t token = token_start_idx; token < token_end_idx; token += read_batch_size) {
-            uint32_t batch_end = (token + read_batch_size < token_end_idx) ? token + read_batch_size : token_end_idx;
-            uint32_t batch_count = batch_end - token;
-
-            {
-                DeviceZoneScopedN("dispatch-combined-read-wait-writer");
-                cb_reserve_back(cb_indices_id, batch_count);
-                cb_reserve_back(cb_weights_id, batch_count);
-                cb_reserve_back(cb_combined_id, batch_count);
-            }
+        DeviceZoneScopedN("dispatch-combined-reader-token-loop");
+        for (uint32_t token_idx = token_start_idx; token_idx < token_end_idx; ++token_idx) {
+            DPRINT_DISPATCH << "Reader processing token_idx: " << token_idx << ENDL();
 
             {
                 DeviceZoneScopedN("dispatch-combined-read-dram");
-                uint32_t indices_base = get_write_ptr(cb_indices_id);
-                uint32_t weights_base = get_write_ptr(cb_weights_id);
-                uint32_t combined_base = get_write_ptr(cb_combined_id);
-
-                for (uint32_t t = 0; t < batch_count; t++) {
-                    uint32_t indices_addr = indices_base + t * aligned_indices_page_size;
-                    if (indices_addr >= indices_fifo_limit) {
-                        indices_addr -= indices_fifo_size;
-                    }
-                    noc_async_read_page(token + t, indices_addr_gen, indices_addr);
-
-                    uint32_t weights_addr = weights_base + t * aligned_weights_page_size;
-                    if (weights_addr >= weights_fifo_limit) {
-                        weights_addr -= weights_fifo_size;
-                    }
-                    noc_async_read_page(token + t, weights_addr_gen, weights_addr);
-
-                    // Write payload at offset padded_metadata_bytes within the combined CB page
-                    uint32_t combined_page_addr = combined_base + t * combined_cb_page_size;
-                    if (combined_page_addr >= combined_fifo_limit) {
-                        combined_page_addr -= combined_fifo_size;
-                    }
-                    uint32_t payload_addr = combined_page_addr + padded_metadata_bytes;
-                    noc_async_read_page(token + t, input_addr_gen, payload_addr);
-                }
+                noc_async_read_page(token_idx, input_addr_gen, scratch_addr + padded_metadata_bytes);
+                noc_async_read_page(token_idx, indices_addr_gen, indices_scratch_addr);
+                noc_async_read_page(token_idx, weights_addr_gen, weights_scratch_addr);
                 noc_async_read_barrier();
             }
 
-            auto split_push_back = [](uint32_t cb_id, uint32_t count, uint32_t fifo_limit, uint32_t page_size) {
-                uint32_t pages_until_wrap = (fifo_limit - get_write_ptr(cb_id)) / page_size;
-                if (count <= pages_until_wrap) {
-                    cb_push_back(cb_id, count);
-                } else {
-                    cb_push_back(cb_id, pages_until_wrap);
-                    cb_push_back(cb_id, count - pages_until_wrap);
-                }
-            };
+            int32_t* indices = (int32_t*)indices_scratch_addr;
+            uint16_t* weights = (uint16_t*)weights_scratch_addr;
 
-            split_push_back(cb_indices_id, batch_count, indices_fifo_limit, aligned_indices_page_size);
-            split_push_back(cb_weights_id, batch_count, weights_fifo_limit, aligned_weights_page_size);
-            split_push_back(cb_combined_id, batch_count, combined_fifo_limit, combined_cb_page_size);
+            for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
+                auto routed_expert = indices[k];
+                if ((uint32_t)routed_expert < expert_start_idx || (uint32_t)routed_expert >= expert_end_idx) {
+                    continue;
+                }
+                auto expert_chip = routed_expert / experts_per_chip;
+                auto expert_index_within_chip = routed_expert % experts_per_chip;
+
+                DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")"
+                                << ENDL();
+
+                auto& offset = offsets[routed_expert];
+                auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
+
+                {
+                    DeviceZoneScopedN("dispatch-combined-write-metadata");
+                    volatile tt_l1_ptr int32_t* metadata = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scratch_addr);
+                    metadata[0] = linearized_mesh_coord;
+                    metadata[1] = token_idx;
+                    metadata[2] = k;
+                    metadata[3] = routed_expert;
+                    metadata[4] = weights[k];
+                }
+
+                if (expert_chip == linearized_mesh_coord) {
+                    DPRINT_DISPATCH << "    Local dispatch" << ENDL();
+                    {
+                        DeviceZoneScopedN("dispatch-combined-local");
+                        noc_async_write_page(page_idx, combined_addr_gen, scratch_addr);
+                        noc_async_writes_flushed();
+                    }
+                } else {
+                    DPRINT_DISPATCH << "    Remote dispatch to chip " << expert_chip << ENDL();
+                    if constexpr (is_1d_topology<topology>()) {
+                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        uint32_t distance =
+                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        uint32_t link = fabric_send_counter % num_links;
+                        fabric_send_counter++;
+
+                        {
+                            DeviceZoneScopedN("dispatch-combined-push-route-info");
+                            cb_reserve_back(cb_route_info_id, 1);
+                            uint32_t route_info_addr = get_write_ptr(cb_route_info_id);
+                            volatile tt_l1_ptr uint32_t* route_info =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_addr);
+                            route_info[0] = route;
+                            route_info[1] = distance;
+                            route_info[2] = page_idx;
+                            route_info[3] = link;
+                            cb_push_back(cb_route_info_id, 1);
+                        }
+
+                        {
+                            DeviceZoneScopedN("dispatch-combined-push-combined");
+                            cb_reserve_back(cb_combined_id, 1);
+                            uint32_t combined_write_addr = get_write_ptr(cb_combined_id);
+                            uint32_t* dst = (uint32_t*)combined_write_addr;
+                            const uint32_t* src = (const uint32_t*)scratch_addr;
+                            for (uint32_t i = 0; i < combined_cb_page_size / sizeof(uint32_t); i++) {
+                                dst[i] = src[i];
+                            }
+                            cb_push_back(cb_combined_id, 1);
+                        }
+                    }
+                }
+
+                offset++;
+            }
+
+            {
+                DeviceZoneScopedN("dispatch-combined-write-barrier");
+                noc_async_write_barrier();
+            }
         }
+    }
+
+    // Push sentinel to signal writer that all dispatches are done
+    {
+        DeviceZoneScopedN("dispatch-combined-push-sentinel");
+        cb_reserve_back(cb_route_info_id, 1);
+        uint32_t route_info_addr = get_write_ptr(cb_route_info_id);
+        volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_addr);
+        route_info[0] = ROUTE_INFO_SENTINEL;
+        route_info[1] = 0;
+        route_info[2] = 0;
+        route_info[3] = 0;
+        cb_push_back(cb_route_info_id, 1);
     }
 }

@@ -168,11 +168,11 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
             .set_page_size(tt::CBIndex::c_0, combined_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, combined_cb_config);
 
-    // Indices and weights CBs (unchanged)
+    // Indices and weights CBs (reader-only scratch, single-buffered)
     detail::create_tensor_cb(
-        program, sender_core_grid, indices_tensor, /*buffering_factor=*/16, tt::CBIndex::c_1, "indices_tensor");
+        program, sender_core_grid, indices_tensor, /*buffering_factor=*/1, tt::CBIndex::c_1, "indices_tensor");
     detail::create_tensor_cb(
-        program, sender_core_grid, weights_tensor, /*buffering_factor=*/16, tt::CBIndex::c_2, "weights_tensor");
+        program, sender_core_grid, weights_tensor, /*buffering_factor=*/1, tt::CBIndex::c_2, "weights_tensor");
     detail::create_tensor_cb(
         program,
         sender_core_grid,
@@ -201,6 +201,21 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
                 .set_page_size(tt::CBIndex::c_6, packet_header_size_bytes);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
     }
+
+    // Route info CB for reader -> writer communication (4 x uint32_t per entry)
+    uint32_t route_info_page_size = l1_alignment;
+    constexpr uint32_t route_info_buffering = 16;
+    tt::tt_metal::CircularBufferConfig route_info_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            route_info_buffering * route_info_page_size, {{tt::CBIndex::c_7, tt::DataFormat::UInt8}})
+            .set_page_size(tt::CBIndex::c_7, route_info_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
+
+    // Scratch CB for reader-side combined page staging (single-buffered)
+    tt::tt_metal::CircularBufferConfig scratch_cb_config =
+        tt::tt_metal::CircularBufferConfig(combined_cb_page_size, {{tt::CBIndex::c_8, input_data_format}})
+            .set_page_size(tt::CBIndex::c_8, combined_cb_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, scratch_cb_config);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -267,9 +282,13 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
         l1_alignment,
         (uint32_t)std::min(operation_attributes.num_links, 1u),
         static_cast<uint32_t>(topology),
+
+        // Additional CB IDs (2) - indices 41-42
+        static_cast<uint32_t>(tt::CBIndex::c_7),  // cb_route_info_id
+        static_cast<uint32_t>(tt::CBIndex::c_8),  // cb_scratch_id
     };
 
-    // Append TensorAccessorArgs for all 6 tensors
+    // Append TensorAccessorArgs for all 6 tensors (starting at index 43)
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(compile_time_args);
@@ -324,8 +343,8 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
         (uint32_t)init_semaphore.address(),
         0,  // token_start_idx
         0,  // token_end_idx
-        0,  // expert_start_idx (writer only)
-        0,  // expert_end_idx (writer only)
+        0,  // expert_start_idx
+        0,  // expert_end_idx
     };
 
     uint32_t core_idx = 0;
