@@ -12,12 +12,12 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
-    normalize_state_dict_to_bfloat16,
     run_module_forward,
 )
 
@@ -33,6 +33,31 @@ def reference_model(hf_config):
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+_moe_layer_path = "model.layers.3.mlp"
+
+
+def _get_test_state_dict(
+    reference_model: DeepseekV3MoE,
+    weight_type: str,
+    checkpoint_state_dict: dict[str, torch.Tensor] | None,
+) -> dict[str, torch.Tensor]:
+    if weight_type == "random":
+        # Keep the original random-init dtypes for the TT conversion path.
+        # In particular, the gate score-correction bias should remain fp32.
+        return {name: tensor.detach().clone() for name, tensor in reference_model.state_dict().items()}
+
+    assert weight_type == "real"
+    assert checkpoint_state_dict is not None
+    moe_state_dict = {
+        name: tensor
+        for name, tensor in sub_state_dict(checkpoint_state_dict, f"{_moe_layer_path}.").items()
+        if not name.startswith("shared_experts.")
+    }
+    if not moe_state_dict:
+        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{_moe_layer_path}'")
+
+    reference_model.load_state_dict(moe_state_dict)
+    return moe_state_dict
 
 
 @pytest.mark.timeout(1200)
@@ -56,21 +81,26 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         True,
     ],
 )
+@pytest.mark.parametrize("weight_type", ["random", "real"], ids=["random_weights", "real_weights"])
 def test_forward_pass(
     mode,
     num_tokens,
     set_deterministic_env,
     reference_model,
     hf_config,
+    request,
     cache_path,
     mesh_device,
     ccl,
     topk_fallback,
+    weight_type,
+    force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
-    # Get state dict from actual model - pass directly to convert_weights
-    state_dict = normalize_state_dict_to_bfloat16(reference_model.state_dict())
+    # Load checkpoint only for real weights; random path needs no checkpoint.
+    checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
+    state_dict = _get_test_state_dict(reference_model, weight_type, checkpoint_state_dict)
 
     # Create input tensor
     torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
@@ -87,9 +117,10 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate=force_recalculate_weight_config,
         test_name="test_moe",
-        real_weights=False,
+        real_weights=weight_type == "real",
+        layer_id=_moe_layer_path,
     )
 
     # Generate appropriate config using utility function
