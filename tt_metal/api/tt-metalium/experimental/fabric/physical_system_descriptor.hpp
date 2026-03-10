@@ -24,6 +24,10 @@ namespace tt {
 enum class TargetDevice : std::uint8_t;
 }
 
+namespace tt::fabric::proto {
+class PhysicalSystemDescriptor;
+}  // namespace tt::fabric::proto
+
 namespace tt::tt_metal {
 
 // Forward declaration for discovery setter interface
@@ -143,8 +147,12 @@ public:
     explicit PhysicalSystemDescriptor(tt::TargetDevice target_device_type);
 
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
-    // descriptor (can be used entirely offline).
+    // descriptor file (can be used entirely offline).
     PhysicalSystemDescriptor(const std::string& mock_proto_desc_path);
+
+    // Constructor generating a PhysicalSystemDescriptor based on a protobuf
+    // descriptor (can be used entirely offline).
+    PhysicalSystemDescriptor(const tt::fabric::proto::PhysicalSystemDescriptor& psd_proto);
 
     ~PhysicalSystemDescriptor();
 
