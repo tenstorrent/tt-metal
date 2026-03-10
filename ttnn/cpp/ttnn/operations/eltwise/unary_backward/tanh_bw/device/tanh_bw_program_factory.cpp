@@ -109,7 +109,7 @@ TanhBwProgramFactory::cached_program_t TanhBwProgramFactory::create(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         tt::tt_metal::SetRuntimeArgs(
@@ -171,7 +171,7 @@ void TanhBwProgramFactory::override_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         reader_runtime_args[core.x][core.y][0] = src0_buffer->address();
