@@ -6,8 +6,8 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.torch_impl.vc.hubert import MultiheadAttention as TorchMultiheadAttention
-from models.demos.rvc.tt_impl.vc.hubert import MultiheadAttention as TTMultiheadAttention
+from models.demos.rvc.torch_impl.vc.hubert import MultiheadSelfAttention as TorchMultiheadSelfAttention
+from models.demos.rvc.tt_impl.vc.hubert import MultiheadSelfAttention as TTMultiheadSelfAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -15,17 +15,17 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_hubert_multihead_attention(device):
     torch.manual_seed(0)
 
-    embed_dim = 64
+    embed_dim = 128
     num_heads = 4
     t = 24
     b = 2
 
-    torch_attn = TorchMultiheadAttention(
+    torch_attn = TorchMultiheadSelfAttention(
         embed_dim=embed_dim,
         num_heads=num_heads,
         self_attention=True,
     ).eval()
-    tt_attn = TTMultiheadAttention(
+    tt_attn = TTMultiheadSelfAttention(
         device=device,
         embed_dim=embed_dim,
         num_heads=num_heads,
@@ -36,10 +36,8 @@ def test_hubert_multihead_attention(device):
     tt_attn.load_parameters(parameters=parameters, prefix="attn.")
 
     torch_query = torch.randn(t, b, embed_dim, dtype=torch.float32)
-    torch_key = torch.randn(t, b, embed_dim, dtype=torch.float32)
-    torch_value = torch.randn(t, b, embed_dim, dtype=torch.float32)
 
-    torch_output = torch_attn(torch_query, torch_key, torch_value)
+    torch_output = torch_attn(torch_query)
 
     tt_query = ttnn.from_torch(
         torch_query.to(torch.bfloat16),
@@ -47,20 +45,8 @@ def test_hubert_multihead_attention(device):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    tt_key = ttnn.from_torch(
-        torch_key.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
-    tt_value = ttnn.from_torch(
-        torch_value.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
 
-    tt_output = tt_attn(tt_query, tt_key, tt_value)
+    tt_output = tt_attn(tt_query)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
 
     assert tuple(tt_output_torch.shape) == tuple(torch_output.shape)

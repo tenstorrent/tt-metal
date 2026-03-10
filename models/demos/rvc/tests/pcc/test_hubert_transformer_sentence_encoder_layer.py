@@ -18,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_hubert_transformer_sentence_encoder_layer(device, layer_norm_first):
     torch.manual_seed(0)
 
-    embed_dim = 64
+    embed_dim = 128
     ffn_embed_dim = 128
     attention_heads = 4
     activation_fn = "relu"

@@ -293,7 +293,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
-        self.self_attn = MultiheadAttention(
+        self.self_attn = MultiheadSelfAttention(
             self.embedding_dim,
             attention_heads,
             self_attention=True,
@@ -323,8 +323,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
             x = self.self_attn_layer_norm(x)
             x = self.self_attn(
                 query=x,
-                key=x,
-                value=x,
             )
             x = residual + x
 
@@ -337,8 +335,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
         else:
             x = self.self_attn(
                 query=x,
-                key=x,
-                value=x,
             )
 
             x = residual + x
@@ -504,7 +500,7 @@ class ConvolutionModule(nn.Module):
         return x.transpose(1, 2)
 
 
-class MultiheadAttention(nn.Module):
+class MultiheadSelfAttention(nn.Module):
     """Multi-headed attention.
 
     See "Attention Is All You Need" for more details.
@@ -539,19 +535,12 @@ class MultiheadAttention(nn.Module):
     def forward(
         self,
         query: Tensor,
-        key: Tensor | None,
-        value: Tensor | None,
     ) -> Tensor:
         """Input shape: Time x Batch x Channel"""
         tgt_len, bsz, embed_dim = query.size()
         src_len = tgt_len
         assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
-        if key is not None:
-            src_len, key_bsz, _ = key.size()
-            assert value is not None
-            assert src_len, key_bsz == value.shape[:2]
-
         if (
             # The Multihead attention implemented in pytorch forces strong dimension check
             # for input embedding dimention and K,Q,V projection dimension.
@@ -559,12 +548,10 @@ class MultiheadAttention(nn.Module):
             # it is preferred to bypass the pytorch MHA when we need to skip embed_dim_check
             True
         ):
-            assert key is not None and value is not None
-
             return F.multi_head_attention_forward(
                 query,
-                key,
-                value,
+                query,
+                query,
                 self.embed_dim,
                 self.num_heads,
                 torch.empty([0]),
