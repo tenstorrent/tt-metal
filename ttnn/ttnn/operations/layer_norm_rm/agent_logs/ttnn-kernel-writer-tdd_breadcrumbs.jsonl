@@ -7,3 +7,8 @@
 {"event":"cb_sync_check","stage":"data_pipeline","balanced":true,"cb_summary":"c0:Wt/Wt c1:Wt/Wt c8:1/unused c9:1/1 c16:Wt/Wt","ts":"2026-03-10T12:32:48+00:00"}
 {"event":"test_run","status":"pass","stage":"data_pipeline","test_file":"test_stage_data_pipeline.py","shapes":["1x1x32x32","1x1x32x128","1x1x32x256","1x1x64x128","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-10T12:33:36+00:00"}
 {"event":"stage_complete","stage":"data_pipeline","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-10T12:33:48+00:00"}
+{"event":"stage_start","stage":"subtract_mean","description":"Add reduce_mean (Phase 2) and sub_mean (Phase 3) to compute kernel. Untilize reads from c_25 instead of c_1.","ts":"2026-03-10T12:34:25+00:00"}
+{"event":"kernel_implemented","stage":"subtract_mean","kernel":"compute","approach":"Added Phase 2 reduce_mean(SUM,REDUCE_ROW,WaitUpfrontNoPop) c_1->c_24, Phase 3 sub(COL,NoWaitNoPop,WaitUpfrontPopAtEnd) c_1,c_24->c_25 + manual pop c_1. Untilize now reads c_25.","ts":"2026-03-10T12:35:03+00:00"}
+{"event":"cb_sync_check","stage":"subtract_mean","balanced":true,"cb_summary":"c0:Wt/Wt c1:Wt/Wt(manual_pop) c8:1/persist c9:1/1 c24:1/1 c25:Wt/Wt c16:Wt/Wt","ts":"2026-03-10T12:35:13+00:00"}
+{"event":"test_run","status":"pass","stage":"subtract_mean","test_file":"test_stage_subtract_mean.py","shapes":["1x1x32x32","1x1x32x128","1x1x32x256","1x1x64x128","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-10T12:35:42+00:00"}
+{"event":"stage_complete","stage":"subtract_mean","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-10T12:35:48+00:00"}
