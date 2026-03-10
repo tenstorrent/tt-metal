@@ -55,21 +55,12 @@ struct ReduceToOneB1 {
     // ========================================================================
 
     // Reader (NCRISC) compile-time args
-    template <
-        uint32_t deviceRole,
-        uint32_t numTiles,
-        uint32_t localCb,
-        uint32_t receivedCbR1,
-        uint32_t receivedCbR2,
-        uint32_t receivedCbR3,
-        uint32_t isFabricCore>
+    template <uint32_t deviceRole, uint32_t numTiles, uint32_t localCb, uint32_t receivedCb, uint32_t isFabricCore>
     struct ReaderCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
-        static constexpr uint32_t received_cb_r1 = receivedCbR1;
-        static constexpr uint32_t received_cb_r2 = receivedCbR2;
-        static constexpr uint32_t received_cb_r3 = receivedCbR3;
+        static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t is_fabric_core = isFabricCore;
     };
 
@@ -81,7 +72,6 @@ struct ReduceToOneB1 {
         uint32_t localCb,
         uint32_t scratchCb,
         uint32_t packetCb,
-        uint32_t packetHeaderCb,
         uint32_t numHops,
         uint32_t dstFabricNodeChipId,
         uint32_t dstFabricNodeMeshId,
@@ -98,7 +88,6 @@ struct ReduceToOneB1 {
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t packet_cb = packetCb;
-        static constexpr uint32_t packet_header_cb = packetHeaderCb;
         static constexpr uint32_t num_hops = numHops;
         static constexpr uint32_t dst_fabric_node_chip_id = dstFabricNodeChipId;
         static constexpr uint32_t dst_fabric_node_mesh_id = dstFabricNodeMeshId;
@@ -115,9 +104,7 @@ struct ReduceToOneB1 {
         uint32_t deviceRole,
         uint32_t numTiles,
         uint32_t localCb,
-        uint32_t receivedCbR1,
-        uint32_t receivedCbR2,
-        uint32_t receivedCbR3,
+        uint32_t receivedCb,
         uint32_t outputCb,
         uint32_t scratchCb,
         uint32_t isFabricCore>
@@ -125,9 +112,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
-        static constexpr uint32_t received_cb_r1 = receivedCbR1;
-        static constexpr uint32_t received_cb_r2 = receivedCbR2;
-        static constexpr uint32_t received_cb_r3 = receivedCbR3;
+        static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t output_cb = outputCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t is_fabric_core = isFabricCore;
@@ -213,33 +198,33 @@ struct ReduceToOneB1 {
                     cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
                 }
 
-                // Round 1: Wait for shard from LEAF
-                cb_reserve_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
+                // Round 1: Wait for shard from LEAF (page 0 of received_cb)
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
                 noc_semaphore_wait_min(recv_sem1_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem1_ptr);
-                cb_push_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
-                // Round 2: Wait for result from ROOT3
-                cb_reserve_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                // Round 2: Wait for result from ROOT3 (page 1 of received_cb)
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
                 noc_semaphore_wait_min(recv_sem2_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem2_ptr);
-                cb_push_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Round 3: Wait for result from ROOT2
-                cb_reserve_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                // Round 3: Wait for result from ROOT2 (page 2 of received_cb)
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
                 noc_semaphore_wait_min(recv_sem3_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem3_ptr);
-                cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -351,10 +336,9 @@ struct ReduceToOneB1 {
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
-            // Get packet header from CB (persistent across iterations)
-            uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
-                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            // Get packet header
+            PacketHeaderPool::reset();
+            auto* packet_header = PacketHeaderPool::allocate_header(1);
 
             // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
             set_unicast_route(
@@ -427,7 +411,7 @@ struct ReduceToOneB1 {
             }
 
             // Initialize for binary operations
-            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb_r1);
+            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
 
             // Load local tiles to dest
@@ -439,32 +423,32 @@ struct ReduceToOneB1 {
             }
             cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
 
-            // Accumulate from received_cb_r1 (LEAF data)
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb_r1);
-            cb_wait_front(CTArgs::received_cb_r1, CTArgs::num_tiles);
+            // Accumulate from received_cb page 0 (LEAF data)
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb);
+            cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb_r1, i, i);
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
             }
-            cb_pop_front(CTArgs::received_cb_r1, CTArgs::num_tiles);
+            cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
-                // Accumulate from received_cb_r2 (ROOT3 data)
-                cb_wait_front(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                // Accumulate from received_cb page 1 (ROOT3 data)
+                cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                        CTArgs::received_cb_r2, i, i);
+                        CTArgs::received_cb, i, i);
                 }
-                cb_pop_front(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Accumulate from received_cb_r3 (ROOT2 data)
-                cb_wait_front(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                // Accumulate from received_cb page 2 (ROOT2 data)
+                cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                        CTArgs::received_cb_r3, i, i);
+                        CTArgs::received_cb, i, i);
                 }
-                cb_pop_front(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             // Pack result to scratch_cb

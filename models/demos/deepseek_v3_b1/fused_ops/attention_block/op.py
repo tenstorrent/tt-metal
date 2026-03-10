@@ -891,11 +891,11 @@ class AttentionBlock:
         matmul3_output_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Output CB for third matmul (Qnope final output)
-        qrope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for Qrope (RoPE output)
+        qrope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: qrope_grid cols 8-11, rows 0-7)
         create_q_heads_out_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
         )  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
-        qrope_cos_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos Sin CB for RoPE
+        qkv_rope_cos_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos Sin CB for RoPE
         qrope_trans_mat_cb = matmul_weights_cb_overlapped
         assert (
             trans_mat_tensor.dtype == matmul_weights_tensor.dtype
@@ -909,15 +909,12 @@ class AttentionBlock:
         )  # Rotated input intermediate CB for RoPE
         qrope_cos_sin_interm_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos Sin intermediate CB for RoPE
         # KV cache branch
-        dkv_matmul_output_cb = cb_id_context.get_cb_id(
-            data_format, TD_1x32
-        )  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
-        kv_rmsnorm_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for KV Cache Branch RMSNorm
+        dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
+        kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_gamma_cb = rmsnorm2_gamma_cb
         # kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Gamma CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for KV Cache Branch RMSNorm
-        krope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for KV Cache Branch RoPE
-        krope_cos_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos Sin CB for RoPE
+        kv_rmsnorm_output_cb = rmsnorm2_output_cb  # Reuse rmsnorm2 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
+        krope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: krope_grid col 8, rows 8-9)
         create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
         )  # Intermediate CB for CreateQHeads (row-major data before tilization)
@@ -949,7 +946,6 @@ class AttentionBlock:
         sdpa_cb_r1_result_l = cb_id_context.get_cb_id(data_format, TD_SDPA)
         sdpa_cb_r1_result_ms = cb_id_context.get_cb_id(data_format, TD_SDPA)
         sdpa_cb_l_out = cb_id_context.get_cb_id(data_format, TD_SDPA)
-        sdpa_cb_packet_slot = cb_id_context.get_cb_id(ttnn.uint32, TD_32x32)
 
         matmul4_in0_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Matmul4 input (kv_b2 grid)
         matmul4_in1_cb = matmul_weights_cb_overlapped
@@ -1156,7 +1152,7 @@ class AttentionBlock:
         qrope_total_Wt = qrope_head_dim_per_core_t  # all cores read full head_dim, so total_Wt = Wt
         qrope_ncrisc_named_compile_time_args = [
             ("qrope_in_cb", matmul2_output_cb),
-            ("qrope_cos_sin_cb", qrope_cos_sin_cb),
+            ("qkv_rope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("qrope_trans_mat_cb", qrope_trans_mat_cb),
             ("qrope_Wt", qrope_head_dim_per_core_t),
             ("qrope_Ht", qrope_num_heads_per_core),
@@ -1168,7 +1164,7 @@ class AttentionBlock:
         # TRISC: in_cb, cos_cb, sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_interm_cb, sin_interm_cb, out_cb, Wt, Ht
         qrope_trisc_named_compile_time_args = [
             ("qrope_in_cb", matmul2_output_cb),
-            ("qrope_cos_sin_cb", qrope_cos_sin_cb),
+            ("qkv_rope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("qrope_trans_mat_cb", qrope_trans_mat_cb),
             ("qrope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
             ("qrope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
@@ -1451,7 +1447,7 @@ class AttentionBlock:
         krope_ncrisc_named_compile_time_args = [
             ("krope_output_cb", krope_output_cb),
             ("krope_in_cb", dkv_matmul_output_cb),
-            ("krope_cos_sin_cb", krope_cos_sin_cb),
+            ("krope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("krope_trans_mat_cb", qrope_trans_mat_cb),
             ("krope_Wt", krope_Wt),
             ("krope_Ht", krope_Ht),
@@ -1460,7 +1456,7 @@ class AttentionBlock:
         ]
         krope_trisc_named_compile_time_args = [
             ("krope_in_cb", dkv_matmul_output_cb),
-            ("krope_cos_sin_cb", krope_cos_sin_cb),
+            ("krope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("krope_trans_mat_cb", qrope_trans_mat_cb),
             ("krope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
             ("krope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
@@ -1821,7 +1817,6 @@ class AttentionBlock:
                 ("sdpa_cb_local_ms", sdpa_cb_local_ms),
                 ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                 ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                ("sdpa_cb_packet_slot", sdpa_cb_packet_slot),
                 ("sdpa_cb_l_out", sdpa_cb_l_out),
                 # SDPA tile/chunk sizes
                 ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
@@ -2045,7 +2040,7 @@ class AttentionBlock:
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset,  # 14336 B
             total_size=matmul_output_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=matmul_weights_core_grid,
         )
         matmul_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2057,14 +2052,16 @@ class AttentionBlock:
         ]
         sdpa_out_interm_running_offset += matmul_output_cb_descriptor.total_size  # +64 B
 
-        # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
-        # at offset 64 B. This CB is consumed before SDPA runs.
+        # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
+        # at offset 14400 B. This CB is consumed before SDPA runs.
+        # Covers gather_reduce senders (matmul_weights_core_grid, rows 0-7) + receiver (rmsnorm_core_grid)
+        # kv_rmsnorm_input_cb shares this CB ID on dkv_gather_sender_grid + dkv receiver (rows 8-9)
         rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             rmsnorm2_input_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 14400 B
             total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=matmul_weights_core_grid.merge(rmsnorm_core_grid),
         )
         rmsnorm2_input_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2099,13 +2096,15 @@ class AttentionBlock:
         ]
         sdpa_kv_cache_running_offset_mcast_core += gather_reduce_half1_scratch_cb_descriptor.total_size  # +3072 B
 
-        # CB: RMSNorm2 output buffer (3 tiles)
+        # CB: RMSNorm2 output buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
+        # at offset 20544 B. This CB is consumed before SDPA runs.
+        # kv_rmsnorm_output_cb shares this CB ID on dkv_gather_receiver_core_grid (rows 8-9)
         rmsnorm2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             rmsnorm2_output_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 20544 B
             total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=rmsnorm_core_grid,
         )
         rmsnorm2_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2169,6 +2168,7 @@ class AttentionBlock:
 
         # CB 14: Matmul3 output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 12608 B. This CB is consumed before SDPA runs.
+        # qrope_output_cb (qrope_grid) and krope_output_cb (krope_grid) share this CB ID
         matmul3_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul3_output_page_size = TILE_1x32.get_tile_size(data_format)
         matmul3_output_total_size = matmul3_out_w * matmul3_output_page_size  # 16 tiles
@@ -2177,7 +2177,7 @@ class AttentionBlock:
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset,  # 26944 B
             total_size=matmul3_output_total_size,
-            core_ranges=full_device_grid,
+            core_ranges=qnope_grid,
         )
         matmul3_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2191,6 +2191,7 @@ class AttentionBlock:
 
         # CB 15: Qrope output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 13632 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with matmul3_output_cb (qnope_grid) and krope_output_cb (krope_grid)
         qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         qrope_output_page_size = TILE_1x32.get_tile_size(data_format)
         qrope_output_total_size = matmul2_out_w * qrope_output_page_size  # 4 tiles
@@ -2199,7 +2200,7 @@ class AttentionBlock:
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset_qrope,  # 27968 B
             total_size=qrope_output_total_size,
-            core_ranges=full_device_grid,
+            core_ranges=qrope_grid,
         )
         qrope_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2213,21 +2214,21 @@ class AttentionBlock:
 
         # CB 17: Cos Sin (DRAM, read by NCRISC)
         qrope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        qrope_cos_sin_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=qrope_cos_sin_cb,
+        qkv_rope_cos_sin_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=qkv_rope_cos_sin_cb,
             data_format=data_format,
             page_size=qrope_rope_tile_size,
             tile=qrope_rope_tile_descriptor,
         )
-        qrope_cos_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            qrope_cos_sin_cb,
+        qkv_rope_cos_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            qkv_rope_cos_sin_cb,
             ref_sdpa_out_interm_buffer,
             address_offset=sdpa_out_interm_running_offset_qrope,
             total_size=qrope_head_dim_per_core_t * qrope_rope_tile_size * 2,
-            core_ranges=full_device_grid,
+            core_ranges=qrope_grid,
         )
-        qrope_cos_sin_cb_descriptor.format_descriptors = [qrope_cos_sin_cb_format]
-        sdpa_out_interm_running_offset_qrope += qrope_cos_sin_cb_descriptor.total_size
+        qkv_rope_cos_sin_cb_descriptor.format_descriptors = [qkv_rope_cos_sin_cb_format]
+        sdpa_out_interm_running_offset_qrope += qkv_rope_cos_sin_cb_descriptor.total_size
 
         # CB 19: Trans_mat (sharded tensor)
         # qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2325,8 +2326,9 @@ class AttentionBlock:
         ]
         sdpa_forwarder_scratch_running_offset += create_q_heads_out_cb_descriptor.total_size
 
-        # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
-        # at offset 14272 B. This CB is consumed before SDPA runs.
+        # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
+        # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
+        # dkv_matmul_output_cb covers dkv_matmul_weights_core_grid (rows 8-9)
         dkv_matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         dkv_matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2334,7 +2336,7 @@ class AttentionBlock:
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 37824 B
             total_size=dkv_matmul_output_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=dkv_matmul_weights_core_grid,
         )
         dkv_matmul_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2346,8 +2348,13 @@ class AttentionBlock:
         ]
         sdpa_kv_cache_running_offset += dkv_matmul_output_cb_descriptor.total_size  # +64 B
 
-        # CB 25: KV RMSNorm input buffer — overlap with sdpa_out_interm L1 buffer
-        # at offset 14336 B. This CB is consumed before SDPA runs.
+        # CB 25: KV RMSNorm input buffer — overlap with sdpa_kv_cache L1 buffer
+        # at offset 37888 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with rmsnorm2_input_cb (disjoint grids: rows 0-7 vs rows 8-9)
+        # Covers dkv gather senders (dkv_gather_sender_grid, rows 8-9) + dkv receiver core
+        dkv_gather_receiver_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(dkv_gather_receiver_core, dkv_gather_receiver_core)]
+        )
         kv_rmsnorm_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
         kv_rmsnorm_page_size = TILE_16x32.get_tile_size(input_tensor_sample.dtype)
         kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2355,7 +2362,7 @@ class AttentionBlock:
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 37888 B
             total_size=1 * kv_rmsnorm_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=dkv_gather_sender_grid.merge(dkv_gather_receiver_core_grid),
         )
         kv_rmsnorm_input_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2374,14 +2381,15 @@ class AttentionBlock:
         # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
         # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
 
-        # CB 27: KV RMSNorm output buffer — overlap with sdpa_out_interm L1 buffer
-        # at offset 15360 B. This CB is consumed before SDPA runs.
+        # CB 27: KV RMSNorm output buffer — overlap with sdpa_kv_cache L1 buffer
+        # at offset 38912 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with rmsnorm2_output_cb (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_output_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 38912 B
             total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
-            core_ranges=full_device_grid,
+            core_ranges=dkv_gather_receiver_core_grid,  # Only the nope core (BRISC) reads kv_rmsnorm_output_cb
         )
         kv_rmsnorm_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2395,30 +2403,31 @@ class AttentionBlock:
         # CB 29: Cos Sin (DRAM, read by NCRISC)
         krope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         krope_cos_sin_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=krope_cos_sin_cb,
+            buffer_index=qkv_rope_cos_sin_cb,
             data_format=data_format,
             page_size=krope_rope_tile_size,
             tile=krope_rope_tile_descriptor,
         )
         krope_cos_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            krope_cos_sin_cb,
+            qkv_rope_cos_sin_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,
             total_size=krope_Wt * krope_rope_tile_size * 2,
-            core_ranges=full_device_grid,
+            core_ranges=krope_grid,
         )
         krope_cos_sin_cb_descriptor.format_descriptors = [krope_cos_sin_cb_format]
         sdpa_kv_cache_running_offset += krope_cos_sin_cb_descriptor.total_size
 
-        # CB 28: KRoPE output — overlap with sdpa_out_interm L1 buffer
-        # at offset 16384 B. This CB is consumed before SDPA runs.
+        # CB 28: KRoPE output — overlap with sdpa_kv_cache L1 buffer
+        # at offset 39936 B. This CB is consumed before SDPA runs.
+        # Shares CB ID with matmul3_output_cb (qnope_grid) and qrope_output_cb (qrope_grid)
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             krope_output_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset,  # 39936 B
             total_size=1 * krope_tile_size,
-            core_ranges=full_device_grid,
+            core_ranges=krope_grid,
         )
         krope_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2885,24 +2894,6 @@ class AttentionBlock:
         )
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
-        # CB 21: SDPA packet slot (for fabric packet headers)
-        sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
-        sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=sdpa_cb_packet_slot,
-            data_format=ttnn.uint32,
-            page_size=sdpa_packet_header_cb_size,
-        )
-        sdpa_packet_slot_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            sdpa_cb_packet_slot,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=sdpa_packet_header_cb_size,
-            core_ranges=full_device_grid,
-        )
-        sdpa_packet_slot_cb_descriptor.format_descriptors = [sdpa_packet_slot_cb_format]
-        sdpa_forwarder_scratch_running_offset += sdpa_packet_slot_cb_descriptor.total_size
-        post_sdpa_cb_list.append(sdpa_packet_slot_cb_descriptor)
-
         # ========================================================================
         # Semaphore descriptors
         # ========================================================================
@@ -3325,7 +3316,7 @@ class AttentionBlock:
             matmul3_output_cb_descriptor,
             qrope_output_cb_descriptor,
             create_q_heads_out_cb_descriptor,
-            qrope_cos_sin_cb_descriptor,
+            qkv_rope_cos_sin_cb_descriptor,
             # qrope_trans_mat_cb_descriptor,
             qrope_rotated_input_interm_cb_descriptor,
             qrope_cos_sin_interm_cb_descriptor,

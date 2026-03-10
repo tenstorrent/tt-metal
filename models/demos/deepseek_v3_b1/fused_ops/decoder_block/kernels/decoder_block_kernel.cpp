@@ -211,7 +211,7 @@ void kernel_main() {
 
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{
         .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
-        .cos_sin_cb = get_named_compile_time_arg_val("qrope_cos_sin_cb"),
+        .cos_sin_cb = get_named_compile_time_arg_val("qkv_rope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
         .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
@@ -970,7 +970,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
-        get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
         get_named_compile_time_arg_val("sdpa_l1_alignment"),
         get_named_compile_time_arg_val("sdpa_page_size_bytes"),
         get_named_compile_time_arg_val("sdpa_slot_size"),
@@ -1439,7 +1438,7 @@ void kernel_main() {
     // Qrope compute args (from compile-time args)
     deepseek_b1_ops::Rope::ComputeArgs qrope_args{
         get_named_compile_time_arg_val("qrope_in_cb"),  // Input from matmul2 output
-        get_named_compile_time_arg_val("qrope_cos_sin_cb"),
+        get_named_compile_time_arg_val("qkv_rope_cos_sin_cb"),
         get_named_compile_time_arg_val("qrope_trans_mat_cb"),
         get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
         get_named_compile_time_arg_val("qrope_cos_sin_interm_cb"),
