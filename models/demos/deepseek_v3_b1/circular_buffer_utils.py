@@ -22,7 +22,7 @@ class CircularBufferIdManager:
     cross-context equality comparisons are between the same object type.
     """
 
-    NUM_CIRCULAR_BUFFERS = 128
+    NUM_CIRCULAR_BUFFERS = 64
 
     def __init__(self):
         self._id_to_format: dict[int, tuple] = {}
@@ -42,7 +42,6 @@ class CircularBufferIdManager:
 
         for cb_id, fmt_key in self._id_to_format.items():
             if fmt_key == key and cb_id not in exclude:
-                print(f"Reusing CB ID {cb_id} for data format {data_format} and tile {tile}")
                 return cb_id
 
         cb_id = self._next_id
@@ -51,7 +50,6 @@ class CircularBufferIdManager:
         self._next_id += 1
         # Make a copy of the tile descriptor to avoid dependencies
         self._id_to_format[cb_id] = (data_format, ttnn.TileDescriptor(tile))
-        print(f"Allocated CB ID {cb_id}")
         return cb_id
 
     class Context:
@@ -66,7 +64,6 @@ class CircularBufferIdManager:
             self._used_ids: set[int] = set()
 
         def get_cb_id(self, data_format: ttnn.DataType, tile: ttnn.TileDescriptor) -> int:
-            print(f"Getting CB ID for data format {data_format} and tile {tile.height}x{tile.width} {tile.transpose}")
             cb_id = self._manager._allocate_id(data_format, tile, self._used_ids)
             self._used_ids.add(cb_id)
             return cb_id
