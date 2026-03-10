@@ -260,11 +260,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
      *
      */
     const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
-    const uint32_t q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
+    const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
-    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
 
-    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
+    log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -473,7 +473,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
-        q_per_core,
     };
 
     std::map<std::string, std::string> defines;

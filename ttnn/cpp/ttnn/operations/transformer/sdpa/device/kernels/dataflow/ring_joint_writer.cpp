@@ -344,8 +344,6 @@ void kernel_main() {
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
-    const auto stats_generator = PaddedAddrGenerator(stats_writer, stats_tile_logical);
-
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
