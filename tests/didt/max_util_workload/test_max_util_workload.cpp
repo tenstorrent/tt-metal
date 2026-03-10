@@ -13,6 +13,9 @@
 //      - TRISC: Uses pre-filled L1 buffers directly, runs compute at full speed
 //   No CB dependencies between data movement and compute.
 
+#include <cstdio>
+
+#include <fmt/core.h>
 #include <gtest/gtest.h>
 
 #include <tt-metalium/buffer.hpp>
@@ -1124,11 +1127,19 @@ static bool run_all_devices(
 
     for (uint32_t i = 0; i < num_iterations; ++i) {
         bool is_last = (i == num_iterations - 1);
+        bool is_log_iter = ((i + 1) % 100 == 0) || is_last;
         if (has_slow_wl) {
             distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
-            distributed::EnqueueMeshWorkload(cq, slow_cos_mesh_workload, /*blocking=*/is_last);
+            distributed::EnqueueMeshWorkload(cq, slow_cos_mesh_workload, /*blocking=*/is_log_iter);
         } else {
-            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/is_last);
+            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/is_log_iter);
+        }
+        if (is_log_iter) {
+            fmt::print("\rIteration {}/{}   ", i + 1, num_iterations);
+            std::fflush(stdout);
+            if (is_last) {
+                fmt::print("\n");
+            }
         }
     }
     distributed::Finish(cq);
