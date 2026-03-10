@@ -28,8 +28,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool is_sharded = input_tensors[0].is_sharded();
 
     if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
-        std::cout << "GOT WHAT EXPECTED \n";
-        return ConcatProgramFactory{};  // discussed
+        return ConcatProgramFactory{};
     }
 
     if (!is_sharded) {
@@ -67,6 +66,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
 
     const auto& first_input = input_tensors[0];
+    const auto first_input_page_size = first_input.buffer()->page_size();
     auto shape_first = first_input.padded_shape();
     TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[args.dim] = 0;
@@ -116,14 +116,20 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             const uint32_t alignment_requirement = hal::get_l1_alignment();
             TT_FATAL(
                 page_size_bytes == in_ref.buffer()->aligned_page_size(),
-                "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
+                "Input shard width {} gives page size {} bytes, which must be aligned to {} bytes for ND sharded "
+                "tensor",
                 shard_width,
                 page_size_bytes,
                 alignment_requirement);
+            TT_FATAL(
+                page_size_bytes == first_input_page_size,
+                "ND sharded tensors should have the same page size for concat operation: expected {} vs. found {}",
+                first_input_page_size,
+                page_size_bytes);
 
             const tt::tt_metal::Shape& first_logical_shape = in_ref.logical_shape();
             const tt::tt_metal::Shape& first_padded_shape = in_ref.padded_shape();
-            // TODO: Verify later that it is possible to skip
+
             TT_FATAL(
                 first_logical_shape == first_padded_shape,
                 "ND Sharded tensors must have shard logical and padded shapes the same. "
