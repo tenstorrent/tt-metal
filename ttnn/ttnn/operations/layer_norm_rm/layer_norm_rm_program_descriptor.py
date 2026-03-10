@@ -291,7 +291,17 @@ def create_program_descriptor(
         has_gamma,  # arg 2: 1 if gamma provided
         has_beta,  # arg 3: 1 if beta provided
     ]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # arg 4: input accessor
+    # arg 5: gamma accessor (dummy 0 if not present -- guarded by if constexpr)
+    if gamma is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    else:
+        reader_ct_args.append(0)
+    # arg 6: beta accessor (dummy 0 if not present -- guarded by if constexpr)
+    if beta is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
+    else:
+        reader_ct_args.append(0)
 
     reader_rt_args = ttnn.RuntimeArgs()
     gamma_addr = gamma.buffer_address() if gamma is not None else 0

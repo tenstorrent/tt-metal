@@ -9,7 +9,9 @@
 // Phase 5:  Reduce variance (SUM REDUCE_ROW) c_27 -> c_28
 // Phase 6:  Add epsilon + rsqrt c_28, c_10 -> c_29
 // Phase 7:  Multiply by inverse std c_26, c_29 -> c_30
-// Phase 10: Untilize c_30 -> c_16
+// Phase 8:  (Optional) Multiply gamma c_30, c_1 -> c_24
+// Phase 9:  (Optional) Add beta c_24, c_2 -> c_30
+// Phase 10: Untilize -> c_16
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -19,16 +21,18 @@
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 constexpr uint32_t c_0 = 0;    // RM input sticks (from reader)
+constexpr uint32_t c_1 = 1;    // Gamma RM sticks / tilized gamma tiles (persistent)
+constexpr uint32_t c_2 = 2;    // Beta RM sticks / tilized beta tiles (persistent)
 constexpr uint32_t c_8 = 8;    // Reduce scaler (persistent, 1/W)
 constexpr uint32_t c_10 = 10;  // Epsilon (persistent)
 constexpr uint32_t c_16 = 16;  // Untilized output (to writer)
-constexpr uint32_t c_24 = 24;  // Tilized input
+constexpr uint32_t c_24 = 24;  // Tilized input / gamma-scaled output (reused)
 constexpr uint32_t c_25 = 25;  // Mean col vector
 constexpr uint32_t c_26 = 26;  // Centered (x - mean)
 constexpr uint32_t c_27 = 27;  // Squared centered
 constexpr uint32_t c_28 = 28;  // Variance col vector (fp32)
 constexpr uint32_t c_29 = 29;  // Inverse std
-constexpr uint32_t c_30 = 30;  // Pre-untilize (normalized)
+constexpr uint32_t c_30 = 30;  // Pre-untilize (normalized / final output)
 
 void kernel_main() {
     // Compile-time args
@@ -37,12 +41,28 @@ void kernel_main() {
     constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t has_beta = get_compile_time_arg_val(3);
 
+    // Determine which CB to untilize from based on affine config
+    // No gamma, no beta: c_30 (normalized result)
+    // Gamma only: c_24 (gamma-scaled result)
+    // Gamma + beta: c_30 (final affine result written back to c_30)
+    constexpr uint32_t cb_untilize_in = (has_gamma && !has_beta) ? c_24 : c_30;
+
     // Hardware initialization - required before using helpers
     compute_kernel_hw_startup(c_0, c_8, c_16);
 
     // Wait for persistent scalar CBs once (pushed by reader at program start)
     cb_wait_front(c_8, 1);   // reduce scaler (1/W)
     cb_wait_front(c_10, 1);  // epsilon
+
+    // Gamma/beta: if present, they are TILE_LAYOUT tensors pre-tilized on the host.
+    // The reader reads tile pages directly into c_1/c_2 from DRAM.
+    // Wait for them once (persistent -- never popped, reused every row).
+    if constexpr (has_gamma) {
+        cb_wait_front(c_1, Wt);
+    }
+    if constexpr (has_beta) {
+        cb_wait_front(c_2, Wt);
+    }
 
     // Per-row loop
     for (uint32_t row = 0; row < num_rows_per_core; row++) {
@@ -72,7 +92,6 @@ void kernel_main() {
         cb_wait_front(c_26, Wt);
         compute_kernel_lib::square<compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
             c_26, c_27, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
-        // c_26 NOT popped -- persists for Phase 7
 
         // Phase 5: Reduce variance (SUM REDUCE_ROW) c_27 -> c_28
         cb_wait_front(c_27, Wt);
@@ -100,10 +119,28 @@ void kernel_main() {
         cb_pop_front(c_26, Wt);  // free centered
         cb_pop_front(c_29, 1);   // free inv_std
 
-        // Phase 10: Untilize c_30 -> c_16
+        // Phase 8: (Optional) Multiply gamma c_30, c_1 -> c_24
+        if constexpr (has_gamma) {
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::NONE,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                c_30, c_1, c_24, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+        }
+
+        // Phase 9: (Optional) Add beta c_24, c_2 -> c_30
+        if constexpr (has_beta) {
+            compute_kernel_lib::add<
+                compute_kernel_lib::BroadcastDim::NONE,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                c_24, c_2, c_30, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+        }
+
+        // Phase 10: Untilize cb_untilize_in -> c_16
         compute_kernel_lib::untilize<
             Wt,
-            c_30,
+            cb_untilize_in,
             c_16,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);

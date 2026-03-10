@@ -59,21 +59,37 @@ def layer_norm_rm(
         output_memory_config,
     )
 
+    # Convert gamma/beta to TILE_LAYOUT for the kernel.
+    # Gamma/beta are (1,1,1,W) RM tensors. We need them as TILE_LAYOUT so the
+    # reader can push tile pages into c_1/c_2 for the compute binary_op helpers.
+    # Step 1: Repeat H dimension 32x so each tile row has the gamma/beta values.
+    #         (1,1,1,W) -> (1,1,32,W) RM
+    # Step 2: Tilize to convert to TILE_LAYOUT.
+    #         (1,1,32,W) RM -> (1,1,32,W) TILE with Wt tiles, each 32x32.
+    gamma_tiled = None
+    beta_tiled = None
+    if gamma is not None:
+        gamma_repeated = ttnn.repeat(gamma, ttnn.Shape([1, 1, 32, 1]))
+        gamma_tiled = ttnn.tilize(gamma_repeated)
+    if beta is not None:
+        beta_repeated = ttnn.repeat(beta, ttnn.Shape([1, 1, 32, 1]))
+        beta_tiled = ttnn.tilize(beta_repeated)
+
     # Create program descriptor with all CB/kernel configuration
     program_descriptor = create_program_descriptor(
         input_tensor,
         output_tensor,
-        gamma=gamma,
-        beta=beta,
+        gamma=gamma_tiled,
+        beta=beta_tiled,
         epsilon=epsilon,
     )
 
     # Build io_tensors list: inputs first, output LAST
     io_tensors = [input_tensor]
-    if gamma is not None:
-        io_tensors.append(gamma)
-    if beta is not None:
-        io_tensors.append(beta)
+    if gamma_tiled is not None:
+        io_tensors.append(gamma_tiled)
+    if beta_tiled is not None:
+        io_tensors.append(beta_tiled)
     io_tensors.append(output_tensor)
 
     return ttnn.generic_op(io_tensors, program_descriptor)
