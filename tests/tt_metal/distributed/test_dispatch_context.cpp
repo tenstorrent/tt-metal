@@ -162,7 +162,7 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ShardedBufferConfig sd_global_config{
-        .global_size = num_tiles * single_tile_size * system_shape.mesh_size(),
+        .global_size = num_tiles * single_tile_size,
         .global_buffer_shape = {system_shape[0], system_shape[1]},
         .shard_shape = {1, 1}};
     auto sd_buf = MeshBuffer::create(sd_global_config, sd_buffer_config, mesh_device_.get());
