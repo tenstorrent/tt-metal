@@ -20,7 +20,7 @@ parse_common_args "$@"
 resolve_docker_image dev
 setup_job
 
-ALLOC_DIR="/tmp/multihost-fabric-${PIPELINE_ID}-${SLURM_JOB_ID:-0}"
+ALLOC_DIR="${ARTIFACT_DIR}/multihost-$(hostname -s)"
 mkdir -p "${ALLOC_DIR}"
 
 cleanup_multihost() {

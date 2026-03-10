@@ -78,8 +78,10 @@ multihost_setup() {
     log_info "Generated hostfile.txt (${num_hosts} hosts), rankfile.txt, rank_bindings.yaml"
 
     # Distribute config files to worker nodes (skip head node = hosts[0])
-    if (( num_hosts > 1 )); then
+    if [[ "${MULTIHOST_SHARED_FS:-1}" != "1" ]] && (( num_hosts > 1 )); then
         _multihost_distribute "${output_dir}" "${hosts[@]:1}"
+    else
+        log_info "Shared filesystem detected, skipping SCP distribution"
     fi
 }
 
