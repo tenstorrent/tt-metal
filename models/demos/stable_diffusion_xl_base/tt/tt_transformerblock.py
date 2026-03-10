@@ -19,6 +19,7 @@ class TtBasicTransformerBlock(LightweightModule):
         query_dim,
         num_attn_heads,
         out_dim,
+        lora_weights_manager=None,
     ):
         super().__init__()
 
@@ -33,6 +34,7 @@ class TtBasicTransformerBlock(LightweightModule):
             query_dim,
             num_attn_heads,
             out_dim,
+            lora_weights_manager=lora_weights_manager,
         )
         self.attn2 = TtAttention(
             device,
@@ -42,9 +44,12 @@ class TtBasicTransformerBlock(LightweightModule):
             query_dim,
             num_attn_heads,
             out_dim,
+            lora_weights_manager=lora_weights_manager,
         )
 
-        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", model_config)
+        self.ff = TtFeedForward(
+            device, state_dict, f"{module_path}.ff", model_config, lora_weights_manager=lora_weights_manager
+        )
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]
         norm1_bias = state_dict[f"{module_path}.norm1.bias"]
