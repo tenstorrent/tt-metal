@@ -2,16 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-TTNN validation and performance tests.
-
-Compares TTNN implementation outputs against torch golden references
-using Pearson Correlation Coefficient (PCC) as the similarity metric.
-Also benchmarks torch vs TTNN execution time.
-
-These tests require Tenstorrent hardware and the ttnn package.
-Run with: python tests/test_ttnn_validation.py
-"""
 
 import torch
 import time
@@ -75,7 +65,6 @@ def print_kernels_operations(name_prefix="", is_ttnn=False):
     print(f"{'='*80}")
 
     if is_ttnn:
-        # TTNN operations used in fused_chunked_delta_rule_ttnn
         ttnn_ops = [
             "ttnn.transpose",
             "ttnn.typecast",
@@ -446,9 +435,6 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
     torch_out, _ = gated_deltanet_forward(**params, mode=torch_mode, chunk_size=chunk_size)
 
     device = ttnn.open_device(device_id=0, l1_small_size=16384)
-    # Note: Fast dispatch (default) already enables async execution
-    # The op-to-op gaps in the perf report are likely due to synchronization points
-    # or operation dependencies, not lack of async execution
     try:
         ttnn_params = {}
         skip_keys = {
@@ -513,7 +499,7 @@ def test_fused_chunked_delta_rule_ttnn(
     k = torch.randn(batch_size, seq_len, num_heads, head_k_dim, dtype=torch.float32)
     v = torch.randn(batch_size, seq_len, num_heads, head_v_dim, dtype=torch.float32)
     beta = torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32)
-    g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2  # negative log-decay
+    g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2
 
     # Print torch kernels/operations
     print_kernels_operations(name_prefix="TORCH ", is_ttnn=False)
@@ -550,7 +536,6 @@ def test_fused_chunked_delta_rule_ttnn(
         # Print TTNN kernels/operations
         print_kernels_operations(name_prefix="TTNN ", is_ttnn=True)
 
-        # Run fused implementation (may fail with kernel compilation issues)
         try:
             ttnn_out, ttnn_state = fused_chunked_delta_rule_ttnn(
                 q_ttnn, k_ttnn, v_ttnn, beta_ttnn, g_ttnn, chunk_size=chunk_size, device=device
@@ -575,7 +560,6 @@ def test_fused_chunked_delta_rule_ttnn(
                 f"(Output PCC={pcc_output:.6f}, State PCC={pcc_state:.6f})"
             )
         except Exception as e:
-            # Handle kernel compilation failures gracefully
             num_chunks = (seq_len + chunk_size - 1) // chunk_size
             batch_head = batch_size * num_heads
             total_batch = batch_head * num_chunks
@@ -771,7 +755,7 @@ def benchmark_fused_chunked_delta_rule(
     k = torch.randn(batch_size, seq_len, num_heads, head_k_dim, dtype=torch.float32)
     v = torch.randn(batch_size, seq_len, num_heads, head_v_dim, dtype=torch.float32)
     beta = torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32)
-    g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2  # negative log-decay
+    g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2
 
     # --- Torch benchmark ---
     for _ in range(warmup):
