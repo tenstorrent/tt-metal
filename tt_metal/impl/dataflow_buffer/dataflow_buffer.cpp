@@ -43,10 +43,17 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
     TT_FATAL(consumer_kernel != nullptr, "Consumer kernel not found");
 
     if (auto compute_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(producer_kernel)) {
-        TT_FATAL(dfb->config.num_producers == 1, "Only one Tensix is supported for now");
-        dfb->config.producer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
+        TT_FATAL(
+            dfb->config.num_producers >= 1 && dfb->config.num_producers <= 4,
+            "Tensix producer count must be between 1 and 4, got {}",
+            dfb->config.num_producers);
+        dfb->config.producer_risc_mask = static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::experimental::TENSIX_RISC_OFFSET);
         dfb->tensix_trisc_mask |= (1u << 2);  // Tensix producer uses trisc2
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
+        TT_FATAL(
+            dfb->config.num_producers >= 1 && dfb->config.num_producers <= 8,
+            "DM producer count must be between 1 and 8, got {}",
+            dfb->config.num_producers);
         const auto& producer_dm_riscvs = dm_producer->get_dm_processors();
         for (DataMovementProcessor dm : producer_dm_riscvs) {
             dfb->config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
@@ -56,10 +63,17 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
     }
 
     if (auto compute_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(consumer_kernel)) {
-        TT_FATAL(dfb->config.num_consumers == 1, "Only one Tensix is supported for now");
-        dfb->config.consumer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
+        TT_FATAL(
+            dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 4,
+            "Tensix consumer count must be between 1 and 4, got {}",
+            dfb->config.num_consumers);
+        dfb->config.consumer_risc_mask = static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::experimental::TENSIX_RISC_OFFSET);
         dfb->tensix_trisc_mask |= (1u << 0);  // Default: Tensix consumer uses trisc0; use (1u << 3) for trisc3
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
+        TT_FATAL(
+            dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 8,
+            "DM consumer count must be between 1 and 8, got {}",
+            dfb->config.num_consumers);
         const auto& consumer_dm_riscvs = dm_consumer->get_dm_processors();
         for (DataMovementProcessor dm : consumer_dm_riscvs) {
             dfb->config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
@@ -104,12 +118,13 @@ uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_tensix_id, u
         client_type = 4 + (consumer_risc_id - 8);
 
         // Validate: Tensix consumer's tensix_id must not conflict with producer's tensix_id
-        TT_FATAL(
-            (client_type % 4) != producer_tensix_id,
-            "Tensix consumer risc_id {} (tensix_id={}) conflicts with producer tensix_id {}",
-            consumer_risc_id,
-            client_type % 4,
-            producer_tensix_id);
+        // the tensix id can match but the clientR and clientL must be different
+        // TT_FATAL(
+        //     (client_type % 4) != producer_tensix_id,
+        //     "Tensix consumer risc_id {} (tensix_id={}) conflicts with producer tensix_id {}",
+        //     consumer_risc_id,
+        //     client_type % 4,
+        //     producer_tensix_id);
     } else {
         // DM RISC: find first available clientType whose tensix_id != producer_tensix_id
         client_type = 0xFF;  // Invalid until found
@@ -129,9 +144,20 @@ uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_tensix_id, u
     return client_type;
 }
 
+bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
+
+bool has_tensix_risc(uint16_t risc_mask) { return (risc_mask & 0x0F00) != 0; }
+
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
     if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-        return is_producer ? 1 : config.num_producers;
+        bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
+        bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
+        bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
+        bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
+        // bool use_remapper = core_has_remapper && (producer_is_tensix_only || consumer_is_tensix_only);
+        bool dm_dm_blocked = (config.cap == ::experimental::AccessPattern::BLOCKED) &&
+                            !producer_is_tensix_only && !consumer_is_tensix_only;
+        return is_producer ? (dm_dm_blocked ? config.num_consumers : 1) : config.num_producers;
     }
     // Strided mode:
     // Producer: num_consumers / num_producers (number of consumers each producer is paired with)
@@ -178,10 +204,6 @@ std::vector<uint8_t> extract_tensix_ids(uint16_t risc_mask) {
 // Get tensix_id for allocation when only DM RISCs are used
 // Round-robins through 0-3 based on pair index
 uint8_t get_dm_tensix_id_for_pair(uint8_t pair_index) { return pair_index % 4; }
-
-bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
-
-bool has_tensix_risc(uint16_t risc_mask) { return (risc_mask & 0x0F00) != 0; }
 
 // Holds tile counters allocated together for a producer-consumer group
 struct TileCounterGroup {
@@ -259,6 +281,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
 
         per_risc.num_tcs_and_init.num_tcs_to_rr = rc->config.num_tcs_to_rr;
         per_risc.num_tcs_and_init.tc_init_done = 0;  // set by device when this producer finishes TC init
+        per_risc.num_tcs_and_init.broadcast_tc = rc->config.broadcast_tc;
         log_info(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
         // Copy per-risc arrays
         for (int i = 0; i < rc->config.num_tcs_to_rr; i++) {
@@ -390,12 +413,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     log_info(
         tt::LogMetal,
-        "Creating DFB {} with {} producers (mask 0x{:x}) and {} consumers (mask 0x{:x})",
+        "Creating DFB {} with {} producers and {} consumers",
         dfb->id,
         config.num_producers,
-        config.producer_risc_mask,
-        config.num_consumers,
-        config.consumer_risc_mask);
+        config.num_consumers);
 
     uint32_t capacity;
     switch (config.cap) {
@@ -472,8 +493,13 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
         bool core_needs_remapper = false;
         for (const auto& dfb : core_dfbs) {
             if (dfb->config.cap == ::experimental::AccessPattern::BLOCKED) {
-                core_needs_remapper = true;
-                break;
+                // DM-DM BLOCKED uses software broadcast (no remapper needed)
+                bool dm_dm_blocked = !has_tensix_risc(dfb->config.producer_risc_mask) &&
+                                     !has_tensix_risc(dfb->config.consumer_risc_mask);
+                if (!dm_dm_blocked) {
+                    core_needs_remapper = true;
+                    break;
+                }
             }
         }
 
@@ -492,7 +518,7 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
 }
 
 void ProgramImpl::finalize_single_dfb_config(
-    std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool use_remapper) {
+    std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool core_has_remapper) {
     const auto& config = dfb->config;
 
     TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
@@ -515,6 +541,18 @@ void ProgramImpl::finalize_single_dfb_config(
         "Tensix producer with BLOCKED consumer pattern is not supported");
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
+
+    // DM-DM BLOCKED: producer broadcasts to N TCs (one per consumer) instead of using remapper.
+    // No Tensix involved on either side.
+    bool dm_dm_blocked = (config.cap == ::experimental::AccessPattern::BLOCKED) &&
+                         !producer_is_tensix_only && !consumer_is_tensix_only;
+
+    // Remapper is needed only for BLOCKED 1-to-many with Tensix
+    // Adding a TC to a remapper config entry removes it from the default Tensix<->DM mirror group, even with
+    // remapper enabled the default mirroring holds for STRIDED cases
+    bool use_remapper = core_has_remapper &&
+                        (config.cap == ::experimental::AccessPattern::BLOCKED) &&
+                        !dm_dm_blocked;
 
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
@@ -637,27 +675,41 @@ void ProgramImpl::finalize_single_dfb_config(
                     consumer_risc_id,
                     use_remapper);
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-                // Producer TC: use producer's risc_id % 4 as tensix_id
-                uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
+                if (dm_dm_blocked) {
+                    // DM-DM BLOCKED: allocate one TC per consumer (tc_slot == consumer_idx).
+                    // The TC is shared between producer and consumer i -- no remapper needed.
+                    uint8_t tensix_id = get_dm_tensix_id_for_pair(pair_counter++);
+                    group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
+                    group.consumer_tcs.push_back(group.producer_tc);  // shared
 
-                group.producer_tc = tile_counter_allocator_.allocate(producer_tensix_id);
+                    log_info(
+                        tt::LogMetal,
+                        "Blocked DM-DM: Producer[{}] TC[{}] (tensix_id={}) shared with Consumer[{}]",
+                        producer_idx,
+                        tc_slot,
+                        tensix_id,
+                        tc_slot);
+                } else {
+                    // Tensix-involved BLOCKED: use remapper for 1-to-many
+                    uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
+                    group.producer_tc = tile_counter_allocator_.allocate(producer_tensix_id);
 
-                // Allocate separate consumer TCs for Remapper 1-to-many mapping
-                for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
-                    uint8_t consumer_tensix_id =
-                        ClientTypeAllocator::get_tensix_id(consumer_client_types[consumer_idx]);
-                    ::experimental::PackedTileCounter consumer_tc =
-                        tile_counter_allocator_.allocate(consumer_tensix_id);
-                    group.consumer_tcs.push_back(consumer_tc);
+                    for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
+                        uint8_t consumer_tensix_id =
+                            ClientTypeAllocator::get_tensix_id(consumer_client_types[consumer_idx]);
+                        ::experimental::PackedTileCounter consumer_tc =
+                            tile_counter_allocator_.allocate(consumer_tensix_id);
+                        group.consumer_tcs.push_back(consumer_tc);
+                    }
+
+                    log_info(
+                        tt::LogMetal,
+                        "Blocked: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
+                        producer_idx,
+                        tc_slot,
+                        producer_tensix_id,
+                        group.consumer_tcs.size());
                 }
-
-                log_info(
-                    tt::LogMetal,
-                    "Blocked: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
-                    producer_idx,
-                    tc_slot,
-                    producer_tensix_id,
-                    group.consumer_tcs.size());
             } else {
                 TT_FATAL(false, "Unsupported consumer access pattern");
             }
@@ -688,6 +740,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 (uint32_t)::experimental::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
+        risc_config.config.broadcast_tc = dm_dm_blocked;
 
         if (use_remapper) {
             risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core);
@@ -768,10 +821,19 @@ void ProgramImpl::finalize_single_dfb_config(
                     risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
                 }
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-                uint8_t producer_idx = tc;
-                uint8_t producer_tc_slot = 0;
-                risc_config.config.packed_tile_counter[tc] =
-                    tc_groups[producer_idx][producer_tc_slot].consumer_tcs[consumer_idx];
+                if (dm_dm_blocked) {
+                    // DM-DM BLOCKED: consumer[consumer_idx] TC[tc] = shared TC from producer[tc][consumer_idx].
+                    // tc iterates over num_consumer_tcs = num_producers.
+                    uint8_t producer_idx = tc;
+                    risc_config.config.packed_tile_counter[tc] =
+                        tc_groups[producer_idx][consumer_idx].consumer_tcs[0];
+                } else {
+                    // Tensix-involved BLOCKED: consumer gets its remapper-translated TC
+                    uint8_t producer_idx = tc;
+                    uint8_t producer_tc_slot = 0;
+                    risc_config.config.packed_tile_counter[tc] =
+                        tc_groups[producer_idx][producer_tc_slot].consumer_tcs[consumer_idx];
+                }
             } else {
                 TT_FATAL(false, "Unsupported consumer access pattern");
             }
@@ -856,7 +918,11 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
                     rc.config.base_addr[tc] = base_addr;
                     rc.config.limit[tc] =
                         rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
-                    base_addr += entry_size;
+                    // DM-DM BLOCKED broadcast: all producer TC slots map to the same physical buffer,
+                    // so base_addr must not advance between slots.
+                    if (!rc.config.broadcast_tc) {
+                        base_addr += entry_size;
+                    }
                 }
             }
         }
@@ -877,7 +943,9 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
                 rc.config.base_addr[tc] = base_addr;
                 rc.config.limit[tc] =
                     rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
-                if (dfb->config.cap == ::experimental::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
+                if ((dfb->config.cap == ::experimental::AccessPattern::STRIDED ||
+                     (dfb->config.cap == ::experimental::AccessPattern::BLOCKED && dfb->config.num_producers > 1)) &&
+                    tc < rc.config.num_tcs_to_rr) {
                     base_addr += entry_size;
                 }
             }
