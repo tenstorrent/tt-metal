@@ -92,6 +92,28 @@ After Phase 3 (Build), nobody checks that the builder's CB allocation matches th
 
 ---
 
+### 12. Architect lacks REDUCE_ROW -> broadcast dimension validation
+**Status**: Proposed — HIGH PRIORITY
+
+**Observed in**: layer_norm_rm (2026-03-10) -- Phase 7 mul_inv_std specified SCALAR broadcast for a REDUCE_ROW-produced CB. REDUCE_ROW output stores per-row values in column 0, requiring COL broadcast. SCALAR only replicates [0][0], producing wrong normalization for rows 1-31. Cost: 1 hard attempt + ~3m debugging.
+
+**Root cause**: The architect has no rule enforcing that REDUCE_ROW output CBs use COL broadcast in downstream binary ops. The same design doc correctly used COL broadcast for cb_mean (also REDUCE_ROW output) in Phase 3 but incorrectly used SCALAR for cb_inv_std (also REDUCE_ROW output, via cb_var) in Phase 7 -- an internal inconsistency.
+
+**Proposal**: Add a validation rule to the architect's design checklist: "When a CB is populated by a REDUCE_ROW operation, its valid region is Col0. Any downstream binary op must use BroadcastDim::COL (not SCALAR). Similarly, REDUCE_COL output -> valid region is Row0 -> downstream must use ROW broadcast." Cross-check the Binary Op Broadcast Verification table against CB producers before finalizing.
+
+---
+
+### 13. In-place CB reuse with Bulk output policy deadlocks for Wt > 1
+**Status**: Proposed — HIGH PRIORITY
+
+**Observed in**: layer_norm_rm (2026-03-10) -- Phases 8-9 (gamma/beta affine transform) used BinaryOutputPolicy::Bulk on cb_out_pre_untilize where the same CB was both input A and output. Bulk reserves all Wt output pages upfront, but the CB already has Wt input pages occupying all capacity. For Wt=1 this works (pop frees space before reserve blocks), but for Wt>1 it deadlocks. Cost: 1 hard attempt + device hang + tt-smi reset.
+
+**Root cause**: The architect did not model CB capacity constraints when selecting output policies for in-place operations. The design doc even noted that "WaitAndPopPerTile for A ensures tiles are consumed before output tiles occupy the same slots" but failed to apply the complementary reasoning to the output policy.
+
+**Proposal**: Add a hard rule to the architect's instructions: "When input CB == output CB for a binary op (in-place reuse), ALWAYS use BinaryOutputPolicy::PerTile. Never use Bulk for in-place operations. Bulk pre-reserves all output pages, which deadlocks when the CB is already full."
+
+---
+
 ## Missing Capabilities
 
 ### 11. No incremental re-run capability
@@ -100,6 +122,15 @@ After Phase 3 (Build), nobody checks that the builder's CB allocation matches th
 If Phase 4 Stage 2 fails and you fix something manually, there's no way to resume from that point without manipulating `.tdd_state.json` by hand or re-running the whole pipeline.
 
 **Proposal**: Support `--resume-from-stage N` in the orchestrator.
+
+---
+
+### 14. Architect does not specify preprocessing for optional tensor parameters
+**Status**: Proposed
+
+**Observed in**: layer_norm_rm (2026-03-10) -- gamma/beta tensors (1,1,1,W) are RM but need to be read as tiles by the reader kernel. The architect's design doc did not specify how to convert them, leading to conflicting approaches: the builder advised "leave as RM, reader handles RM data" while the kernel writer correctly pad+tilized them on the host side. This caused 3 upstream_fix events during the affine_transform stage.
+
+**Proposal**: Add a "Parameter Preprocessing" section to the architect's design template. For each optional tensor parameter, specify: (1) input format, (2) host-side preprocessing (pad, tilize, etc.), (3) resulting format/shape when passed to program descriptor.
 
 ---
 
@@ -115,3 +146,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | REDUCE_ROW -> broadcast dim validation | HIGH | SMALL | HIGH |
+| 13 | In-place CB + Bulk output deadlock | HIGH | SMALL | HIGH |
+| 14 | Optional param preprocessing not specified | MEDIUM | SMALL | MEDIUM |
