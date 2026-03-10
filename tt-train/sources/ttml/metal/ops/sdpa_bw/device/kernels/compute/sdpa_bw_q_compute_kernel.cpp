@@ -64,7 +64,6 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-inf
 constexpr uint32_t block_size = get_compile_time_arg_val(6);       // block size
-constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
@@ -202,6 +201,8 @@ void kernel_main() {
 #endif
 
 #ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+
     for (uint32_t p = 0; p < num_pairs; ++p) {
         const uint32_t global_pair_idx = start_idx + p;
 

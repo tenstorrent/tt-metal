@@ -94,7 +94,6 @@ constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
 // in future optimization we can process data by chunks(for example 2 at once)
 const uint32_t tiles_per_row = qWt;       // assuming qWt == kWt == vWt
 const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
-constexpr uint32_t pairs_per_seq = Ht / 2;
 
 /**
  * Process a single K/V row of the SDPA backward KV computation.
@@ -230,6 +229,8 @@ void kernel_main() {
 #endif
 
 #ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+
     for (uint32_t p = 0; p < num_pairs; ++p) {
         const uint32_t global_pair_idx = start_idx + p;
 

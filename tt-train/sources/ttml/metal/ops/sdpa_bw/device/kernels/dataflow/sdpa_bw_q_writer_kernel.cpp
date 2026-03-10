@@ -18,10 +18,8 @@ void kernel_main() {
     constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;     // Output: grad_Q
 
     // Get compile-time arguments
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // query width in tiles
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);       // sequence length in tiles
-    constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // number of query heads
-    constexpr uint32_t pairs_per_seq = Ht / 2;
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);   // sequence length in tiles
 
     // Generate helper tiles once at the start
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
@@ -35,12 +33,14 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_grad_query);
 
     // TensorAccessor definitions
-    constexpr auto grad_query_args = TensorAccessorArgs<3>();
+    constexpr auto grad_query_args = TensorAccessorArgs<2>();
 
     // Create TensorAccessor generator for output gradient
     const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr, tile_bytes);
 
 #ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
         const uint32_t global_pair_idx = start_row + p;

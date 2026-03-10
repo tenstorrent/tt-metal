@@ -4,8 +4,6 @@
 
 #include "sdpa_bw_kv_program_factory.hpp"
 
-#include <fmt/core.h>
-
 #include <bit>
 #include <cmath>
 #include <tt-metalium/buffer.hpp>
@@ -309,40 +307,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         core_group_2 = std::get<3>(work_split);
         num_rows_per_core_group_1 = std::get<4>(work_split);
         num_rows_per_core_group_2 = std::get<5>(work_split);
-    }
-
-    fmt::print(
-        "[sdpa_bw_kv] mode={}, shape=({},{},{},{}), St={}, NC={}, num_cores={}, grid={}x{}"
-        ", total_rows={}, total_pairs={}, pairs_per_seq={}\n",
-        use_balanced_parallelism ? "BALANCED" : "STANDARD",
-        qB,
-        qNH,
-        qS,
-        qEmbd,
-        St,
-        NC,
-        num_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        total_rows_to_process,
-        total_pairs,
-        pairs_per_seq);
-
-    if (use_balanced_parallelism) {
-        const auto& first = pair_distribution.front();
-        const auto& last = pair_distribution.back();
-        fmt::print(
-            "[sdpa_bw_kv]   core[0]: start_pair={}, num_pairs={}  |  core[{}]: start_pair={}, num_pairs={}\n",
-            first.first,
-            first.second,
-            num_cores - 1,
-            last.first,
-            last.second);
-    } else {
-        fmt::print(
-            "[sdpa_bw_kv]   rows_per_core_g1={}, rows_per_core_g2={}\n",
-            num_rows_per_core_group_1,
-            num_rows_per_core_group_2);
     }
 
     const uint32_t block_size = get_block_size(qWt, 4U);

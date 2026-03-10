@@ -4,8 +4,6 @@
 
 #include "sdpa_bw_q_program_factory.hpp"
 
-#include <fmt/core.h>
-
 #include <bit>
 #include <cmath>
 #include <tt-metalium/buffer.hpp>
@@ -312,40 +310,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    fmt::print(
-        "[sdpa_bw_q] mode={}, shape=({},{},{},{}), St={}, NC={}, num_cores={}, grid={}x{}"
-        ", total_rows={}, total_pairs={}, pairs_per_seq={}\n",
-        use_balanced_parallelism ? "BALANCED" : "STANDARD",
-        qB,
-        qNH,
-        qS,
-        qEmbd,
-        St,
-        NC,
-        num_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        total_rows_to_process,
-        total_pairs,
-        pairs_per_seq);
-
-    if (use_balanced_parallelism) {
-        const auto& first = pair_distribution.front();
-        const auto& last = pair_distribution.back();
-        fmt::print(
-            "[sdpa_bw_q]   core[0]: start_pair={}, num_pairs={}  |  core[{}]: start_pair={}, num_pairs={}\n",
-            first.first,
-            first.second,
-            num_cores - 1,
-            last.first,
-            last.second);
-    } else {
-        fmt::print(
-            "[sdpa_bw_q]   rows_per_core_g1={}, rows_per_core_g2={}\n",
-            num_rows_per_core_group_1,
-            num_rows_per_core_group_2);
-    }
-
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
 
@@ -507,9 +471,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
-        qWt,      // 0: query width in tiles
-        St,       // 1: sequence length in tiles
-        q_heads,  // 2: number of query heads
+        qWt,  // 0: query width in tiles
+        St,   // 1: sequence length in tiles
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
 

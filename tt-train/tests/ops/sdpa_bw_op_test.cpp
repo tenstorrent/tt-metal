@@ -489,7 +489,7 @@ struct SDPABackwardTestConfig {
     float atol = 3e-2F;
     float rtol = 3e-2F;
     std::string test_name = "SDPA Backward Test";
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Arbitrary;
 };
 
 void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
@@ -785,19 +785,34 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
-    // Test causal mask with larger sequence length
+TEST_F(SDPABackwardTest, CausalMask_NanoGPTConfig) {
     SDPABackwardTestConfig config{
-        .batch_size = 1U,
-        .sequence_length = 512U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
-        .num_query_heads = 4U,
-        .num_kv_heads = 4U,
+        .batch_size = 64U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 6U,
+        .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
         .atol = 3e-2F,
         .rtol = 3e-2F,
-        .test_name = "CausalMask_LargerSeq (B=1, S=512, D=64, H=4)",
+        .test_name = "CausalMask_NanoGPTConfig (B=64, S=256, D=128, H=6)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
+    SDPABackwardTestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 8U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
 }
