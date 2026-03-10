@@ -26,6 +26,7 @@ CB Layout (from op_design.md):
 """
 
 from pathlib import Path
+import struct
 import ttnn
 
 
@@ -359,6 +360,7 @@ def create_program_descriptor(
         input_tensor,
         gamma,
         beta,
+        epsilon,
         core_group_1,
         core_group_2,
         blocks_per_core_group_1,
@@ -453,6 +455,7 @@ def _build_reader_runtime_args(
     input_tensor,
     gamma,
     beta,
+    epsilon,
     core_group_1,
     core_group_2,
     blocks_per_core_group_1,
@@ -470,11 +473,14 @@ def _build_reader_runtime_args(
       [3] start_stick_id  - First stick ID for this core
       [4] gamma_addr      - Gamma buffer address (0 if none)
       [5] beta_addr       - Beta buffer address (0 if none)
+      [6] eps_bits        - Epsilon as bit-cast uint32_t
     """
     rt_args = ttnn.RuntimeArgs()
     src_addr = input_tensor.buffer_address()
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
     beta_addr = beta.buffer_address() if beta is not None else 0
+    # Bit-cast epsilon float to uint32_t for passing as runtime arg
+    eps_bits = struct.unpack("I", struct.pack("f", epsilon))[0]
 
     current_block = 0
 
@@ -484,7 +490,7 @@ def _build_reader_runtime_args(
             for y in range(cr.start.y, cr.end.y + 1):
                 num_sticks = blocks_per_core_group_1 * 32
                 start_stick_id = current_block * 32
-                rt_args[x][y] = [src_addr, num_sticks, Wt, start_stick_id, gamma_addr, beta_addr]
+                rt_args[x][y] = [src_addr, num_sticks, Wt, start_stick_id, gamma_addr, beta_addr, eps_bits]
                 current_block += blocks_per_core_group_1
 
     # Core group 2
@@ -493,7 +499,7 @@ def _build_reader_runtime_args(
             for y in range(cr.start.y, cr.end.y + 1):
                 num_sticks = blocks_per_core_group_2 * 32
                 start_stick_id = current_block * 32
-                rt_args[x][y] = [src_addr, num_sticks, Wt, start_stick_id, gamma_addr, beta_addr]
+                rt_args[x][y] = [src_addr, num_sticks, Wt, start_stick_id, gamma_addr, beta_addr, eps_bits]
                 current_block += blocks_per_core_group_2
 
     # Set empty args for idle cores

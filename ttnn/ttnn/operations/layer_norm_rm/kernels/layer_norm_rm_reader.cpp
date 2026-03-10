@@ -3,8 +3,8 @@
 
 // layer_norm_rm - Reader Kernel
 // Reads RM input sticks from DRAM via TensorAccessor into c_0.
-// Generates reduce scaler tile (1/W) into c_2.
-// Later stages add: epsilon tile (c_7), gamma/beta sticks (c_27/c_28).
+// Generates reduce scaler tile (1/W) into c_2 and epsilon tile into c_7.
+// Later stages add: gamma/beta sticks (c_27/c_28).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -24,6 +24,7 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
     // gamma_addr, beta_addr at indices 4, 5 - used in later stages
+    const uint32_t eps_bits = get_arg_val<uint32_t>(6);  // epsilon as bit-cast uint32_t
 
     // Early exit for idle cores
     if (num_sticks == 0) {
@@ -36,12 +37,22 @@ void kernel_main() {
     // ========== CB CONSTANTS ==========
     constexpr uint32_t cb_input_rm = 0;       // c_0: input RM sticks
     constexpr uint32_t cb_reduce_scaler = 2;  // c_2: reduce scaler (1/W)
+    constexpr uint32_t cb_eps = 7;            // c_7: epsilon tile (persistent)
 
     // ========== GENERATE REDUCE SCALER (1/W) INTO c_2 ==========
     // W = Wt * 32 (total elements in width dimension)
     const uint32_t W = Wt * 32;
     const float scaler = 1.0f / static_cast<float>(W);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce_scaler>(scaler);
+
+    // ========== GENERATE EPSILON TILE INTO c_7 ==========
+    // Epsilon is passed as bit-cast uint32_t, reinterpret as float
+    union {
+        uint32_t u;
+        float f;
+    } eps_union;
+    eps_union.u = eps_bits;
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_union.f);
 
     // ========== MAIN LOOP: READ INPUT STICKS ==========
     // Each block = 32 sticks = 1 tile-row = Wt tile-sized pages
