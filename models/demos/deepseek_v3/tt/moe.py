@@ -322,21 +322,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             x, cfg, use_unoptimized_gate=use_unoptimized_gate
         )
 
-        if not use_unoptimized_gate:
-            # here we only take the 1x8  out of 32x32
-            topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-            topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-            topk_experts_weights = topk_experts_weights[:, 0, :8]
-            topk_experts_indices = topk_experts_indices[:, 0, :8]
-            topk_experts_weights = ttnn.reshape(
-                topk_experts_weights, (1, 1, topk_experts_weights.shape[-2], topk_experts_weights.shape[-1])
-            )
-            topk_experts_indices = ttnn.reshape(
-                topk_experts_indices, (1, 1, topk_experts_indices.shape[-2], topk_experts_indices.shape[-1])
-            )
-            topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, ttnn.L1_MEMORY_CONFIG)
-            topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.L1_MEMORY_CONFIG)
-
         # Repeat + Permute Expert weights
 
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)

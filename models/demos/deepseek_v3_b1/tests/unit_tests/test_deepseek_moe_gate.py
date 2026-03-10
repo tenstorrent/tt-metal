@@ -10,7 +10,7 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
-@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("batch_size", [1, 2, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
 def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
@@ -125,6 +125,9 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
 
     # Run Deepseek Moe Gate operation
     logger.info("Running Deepseek Moe Gate operation...")
+    import pdb
+
+    pdb.set_trace()
     ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
         ttnn_input,
         ttnn_bias,
