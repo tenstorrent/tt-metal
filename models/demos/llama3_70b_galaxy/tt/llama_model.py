@@ -717,15 +717,25 @@ class TtTransformer(LightweightModule):
         )
 
     def unpack_bitmask(self, bitmask):
-        op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
-        batch_dim, vocab_dim = bitmask.shape
-        bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
-        broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
-        broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
-        unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
-        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-        result = ttnn.where(converted_bitmask, 0, float("-inf"))
-        return result
+        mesh_device = getattr(self, "mesh_device", None)
+        prefetcher_setup = getattr(self, "prefetcher_setup", None)
+        worker_sub_device_id = getattr(prefetcher_setup, "worker_sub_device_id", None)
+
+        if mesh_device is not None and worker_sub_device_id is not None:
+            mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        try:
+            op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
+            batch_dim, vocab_dim = bitmask.shape
+            bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
+            broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+            broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+            unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
+            converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
+            result = ttnn.where(converted_bitmask, 0, float("-inf"))
+            return result
+        finally:
+            if mesh_device is not None and worker_sub_device_id is not None:
+                mesh_device.reset_sub_device_stall_group()
 
     def start_bitmask_to_device(self, bitmask):
         target = self._bitmask
