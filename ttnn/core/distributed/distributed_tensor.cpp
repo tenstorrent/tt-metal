@@ -29,6 +29,8 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 #include "distribution_mode.hpp"
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/buffer.hpp>
 
 namespace ttnn::distributed {
 namespace {
@@ -289,7 +291,8 @@ private:
             for (const auto& [_, view_opt] : sharded_xtensor_views) {
                 if (view_opt.has_value()) {
                     const auto& view = view_opt->get();
-                    for (int d = 0; d < shard_dim; ++d) {
+                    const int resolved_dim = shard_dim < 0 ? static_cast<int>(view.dimension()) + shard_dim : shard_dim;
+                    for (int d = 0; d < resolved_dim; ++d) {
                         if (view.shape()[d] != 1) {
                             return false;
                         }
