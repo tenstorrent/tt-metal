@@ -44,7 +44,7 @@ def layer_norm_rm(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    # Output shape same as input
+    # Output shape: same as input (centered output is full width)
     output_shape = list(input_tensor.shape)
 
     # Allocate output tensor on device (positional args)

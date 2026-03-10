@@ -78,13 +78,17 @@ def create_program_descriptor(
 
     # Page sizes
     # For ROW_MAJOR tensors, stick size = W * element_size
-    stick_size = W * input_tensor.element_size()  # bytes per stick (W * 2 for bfloat16)
+    input_stick_size = W * input_tensor.element_size()  # bytes per input stick (W * 2 for bfloat16)
+
+    # Output dimensions (may differ from input, e.g., reduce_mean stage outputs W=32)
+    output_W = output_tensor.shape[-1]
+    output_Wt = output_W // TILE_W
+    output_stick_size = output_W * output_tensor.element_size()
 
     # For tile-sized CBs, use tile_size from ttnn
     tile_size = ttnn.tile_size(input_tensor.dtype)  # 32x32 tile size in bytes
 
-    # For RM CBs (c_0, c_16, c_27, c_28), page_size = tile_size (tile-sized pages
-    # containing RM sticks, compatible with tilize/untilize)
+    # For RM CBs, page_size = tile_size (tile-sized pages for tilize/untilize compatibility)
     rm_page_size = tile_size
 
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
@@ -227,10 +231,10 @@ def create_program_descriptor(
         )
     )
 
-    # c_16: output RM sticks (tile-sized pages) - Wt pages per block
+    # c_16: output RM sticks (tile-sized pages) - output_Wt pages per block
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=Wt * rm_page_size,
+            total_size=output_Wt * rm_page_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -341,7 +345,7 @@ def create_program_descriptor(
 
     # --- Reader kernel ---
     reader_ct_args = [
-        stick_size,  # 0: stick_size (bytes per input stick)
+        input_stick_size,  # 0: stick_size (bytes per input stick)
         1 if has_gamma else 0,  # 1: has_gamma
         1 if has_beta else 0,  # 2: has_beta
     ]
@@ -415,8 +419,8 @@ def create_program_descriptor(
 
     # --- Writer kernel ---
     writer_ct_args = [
-        stick_size,  # 0: stick_size (bytes per output stick)
-        Wt,  # 1: Wt (tiles per row)
+        output_stick_size,  # 0: stick_size (bytes per output stick)
+        output_Wt,  # 1: Wt (tiles per row for output)
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 

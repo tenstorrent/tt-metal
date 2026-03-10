@@ -3,11 +3,13 @@
 
 // layer_norm_rm - Reader Kernel
 // Reads RM input sticks from DRAM via TensorAccessor into c_0.
-// Later stages add: reduce scaler (c_2), epsilon tile (c_7), gamma/beta sticks (c_27/c_28).
+// Generates reduce scaler tile (1/W) into c_2.
+// Later stages add: epsilon tile (c_7), gamma/beta sticks (c_27/c_28).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
     // ========== COMPILE-TIME ARGS ==========
@@ -32,7 +34,14 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_size);
 
     // ========== CB CONSTANTS ==========
-    constexpr uint32_t cb_input_rm = 0;  // c_0: input RM sticks
+    constexpr uint32_t cb_input_rm = 0;       // c_0: input RM sticks
+    constexpr uint32_t cb_reduce_scaler = 2;  // c_2: reduce scaler (1/W)
+
+    // ========== GENERATE REDUCE SCALER (1/W) INTO c_2 ==========
+    // W = Wt * 32 (total elements in width dimension)
+    const uint32_t W = Wt * 32;
+    const float scaler = 1.0f / static_cast<float>(W);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce_scaler>(scaler);
 
     // ========== MAIN LOOP: READ INPUT STICKS ==========
     // Each block = 32 sticks = 1 tile-row = Wt tile-sized pages
