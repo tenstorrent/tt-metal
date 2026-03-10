@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,8 @@ using namespace tt::tt_metal::blackhole::dram;
 #include "llrt/hal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
-#define GET_DRISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_DRISC_MAILBOX_BASE)->x))
+#define GET_DRISC_MAILBOX_ADDRESS_HOST(x) \
+    (reinterpret_cast<std::uint64_t>(&(reinterpret_cast<mailboxes_t*>(MEM_DRISC_MAILBOX_BASE)->x)))
 
 namespace tt::tt_metal::blackhole {
 
