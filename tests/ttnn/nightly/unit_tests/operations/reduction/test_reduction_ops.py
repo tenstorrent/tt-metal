@@ -60,7 +60,7 @@ def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_resul
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
-@pytest.mark.parametrize("dim", [None, 0])
+@pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -133,7 +133,7 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
 
 # @pytest.mark.parametrize("tensor_shape", [(60, 0, 32)])
 @pytest.mark.parametrize("tensor_shape", [(), (170,), (3, 6, 40, 63, 20), (60, 0, 32)])
-@pytest.mark.parametrize("dim", [0, None])
+@pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("k", [50])
@@ -242,7 +242,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
-@pytest.mark.parametrize("dim", [None, 0])
+@pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -360,7 +360,7 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
-@pytest.mark.parametrize("dim", [0])
+@pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("op", ["cumsum", "cumprod"])
