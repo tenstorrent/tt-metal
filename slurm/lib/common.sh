@@ -126,6 +126,33 @@ get_array_task_id() {
     printf '%s' "${SLURM_ARRAY_TASK_ID:-0}"
 }
 
+# Convenience aliases so library code can use a uniform SLURM_CI_ prefix
+# without worrying about which native SLURM_ variable names exist.
+export SLURM_CI_JOB_ID="${SLURM_JOB_ID:-0}"
+export SLURM_CI_JOB_NAME="${SLURM_JOB_NAME:-local}"
+export SLURM_CI_NODELIST="${SLURM_NODELIST:-${SLURM_JOB_NODELIST:-localhost}}"
+export SLURM_CI_ARRAY_TASK="${SLURM_ARRAY_TASK_ID:-0}"
+
+# ---------------------------------------------------------------------------
+# parse_common_args - Parse CLI flags shared across workflow scripts
+# ---------------------------------------------------------------------------
+# When workflows are submitted via sbatch, $@ is empty and this is a no-op.
+# When run directly for testing, it accepts the same flags as submit.sh.
+
+parse_common_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --docker-image)  export DOCKER_IMAGE="${2:?--docker-image requires a value}"; shift 2 ;;
+            --arch)          export ARCH_NAME="${2:?--arch requires a value}"; shift 2 ;;
+            --ref)           export GIT_REF="${2:?--ref requires a value}"; shift 2 ;;
+            --pipeline-id)   export PIPELINE_ID="${2:?--pipeline-id requires a value}"; shift 2 ;;
+            --partition)     shift 2 ;;  # consumed by submit.sh, ignored here
+            --)              break ;;
+            *)               log_warn "Unknown arg passed to workflow: $1"; shift ;;
+        esac
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Sourcing helpers
 # ---------------------------------------------------------------------------

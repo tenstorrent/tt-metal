@@ -107,3 +107,6 @@ _try_harbor_mirror() {
         DOCKER_IMAGE="${harbor_image}"
     fi
 }
+
+# Short alias used by some workflow scripts
+resolve_docker_image() { resolve_workflow_docker_image "$@"; }
