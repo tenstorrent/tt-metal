@@ -484,6 +484,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     std::vector<GroupingInfo> all_mesh_grouping_infos;
     for (const auto& [instance_name, groupings] : valid_groupings_map.at("MESH")) {
         for (const auto& grouping : groupings) {
+            log_info(tt::LogFabric, "Found mesh grouping from PGD file: {}", grouping.name);
             all_mesh_grouping_infos.push_back(grouping);
         }
     }
