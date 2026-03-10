@@ -8,3 +8,8 @@
 {"event":"cb_sync_check","stage":"data_pipeline","balanced":true,"cb_summary":"c0:Wt/Wt c8:1/unused c10:1/unused c24:Wt/Wt c16:Wt/Wt","ts":"2026-03-10T12:33:10+00:00"}
 {"event":"test_run","status":"pass","stage":"data_pipeline","test_file":"test_stage_data_pipeline.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-10T12:34:10+00:00"}
 {"event":"stage_complete","stage":"data_pipeline","attempts":1,"upstream_fixes":["fixed bf16_tile_size from buffer_page_size() to ttnn.tile_size(ttnn.bfloat16)"],"design_deviations":[],"ts":"2026-03-10T12:34:20+00:00"}
+{"event":"stage_start","stage":"reduce_mean_sub","description":"Add reduce-mean (SUM REDUCE_ROW with 1/W scaler) and subtract-mean (SUB COL broadcast) between tilize and untilize","ts":"2026-03-10T12:35:03+00:00"}
+{"event":"kernel_implemented","stage":"reduce_mean_sub","kernel":"compute","approach":"Added Phase 2: reduce<SUM,REDUCE_ROW,NoWaitNoPop> c_24->c_25 with explicit cb_wait_front(c_24,Wt). Added Phase 3: sub<COL,NoWaitNoPop,WaitUpfrontNoPop> c_24,c_25->c_26 with manual pops. Changed untilize from c_24 to c_26. Added persistent waits for c_8,c_10.","ts":"2026-03-10T12:35:37+00:00"}
+{"event":"cb_sync_check","stage":"reduce_mean_sub","balanced":true,"cb_summary":"c0:Wt/Wt c8:1/persist c10:1/persist c24:Wt/Wt(manual_pop) c25:1/1(manual_pop) c26:Wt/Wt c16:Wt/Wt","ts":"2026-03-10T12:35:49+00:00"}
+{"event":"test_run","status":"pass","stage":"reduce_mean_sub","test_file":"test_stage_reduce_mean_sub.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-10T12:36:17+00:00"}
+{"event":"stage_complete","stage":"reduce_mean_sub","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-10T12:36:27+00:00"}
