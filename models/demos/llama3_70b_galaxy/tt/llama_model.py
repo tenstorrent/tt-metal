@@ -68,6 +68,27 @@ class TtTransformer(LightweightModule):
                     self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
                 ),
             )
+            unpacked_shape = (self.args.max_batch_size, self.args.padded_vocab_size)
+            self._bitmask_zero = ttnn.from_torch(
+                torch.zeros(unpacked_shape, dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._bitmask_neg_inf = ttnn.from_torch(
+                torch.full(unpacked_shape, fill_value=float("-inf"), dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         self._active_bitmask = None
         self._bitmask_copy_event = None
         self.bitmask_arange = ttnn.arange(
@@ -731,7 +752,8 @@ class TtTransformer(LightweightModule):
             broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
             unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
             converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-            result = ttnn.where(converted_bitmask, 0, float("-inf"))
+
+            result = ttnn.where(converted_bitmask, self._bitmask_zero, self._bitmask_neg_inf, **op_kwargs)
             return result
         finally:
             if mesh_device is not None and worker_sub_device_id is not None:
