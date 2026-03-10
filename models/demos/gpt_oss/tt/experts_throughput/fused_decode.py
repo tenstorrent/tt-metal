@@ -27,7 +27,6 @@ path that the ThroughputExperts class can route to when fused_config is provided
 """
 
 from math import prod
-from typing import Optional
 
 import ttnn
 
@@ -41,7 +40,6 @@ def fused_decode_forward(
     config: ThroughputExpertConfig,
     fused_config: FusedMoeGptConfig,
     mesh_device,
-    routing_weight_map: Optional[ttnn.Tensor] = None,
 ) -> ttnn.Tensor:
     """Fused decode: all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
 
@@ -55,16 +53,10 @@ def fused_decode_forward(
         config: ThroughputExpertConfig with model dimensions.
         fused_config: FusedMoeGptConfig with pre-allocated resources and weight tensors.
         mesh_device: TTNN mesh device.
-        routing_weight_map: Optional pre-computed routing weight map [1, experts_per_ring, M, 1]
-            in TILE_LAYOUT on device. If provided, each expert's output is scaled by the
-            token's routing weight for that expert before summing across experts.
-            Build with: weight_map[e, m] = scores[m, k] where indices[m, k] == e.
-            If None, an unweighted sum is used (output scale will differ from reference).
-
     Returns:
         Tensor [1, 1, tokens_per_device, H] in L1, compatible with decode_forward's
-        return format. With routing_weight_map provided, PCC vs. reference without bias
-        should be reasonably good. Without it, outputs are an unweighted expert sum.
+        return format. Routing scores are applied to expert outputs before summing
+        (following the DeepSeek pattern: permute scores → mul → sum over K dim).
     """
     # Ensure hidden_states is in ROW_MAJOR L1 (all_to_all_dispatch_metadata requires both).
     # In production the prior layer outputs TILE_LAYOUT; dispatch needs ROW_MAJOR.
@@ -97,6 +89,11 @@ def fused_decode_forward(
     # Indices/scores are HEIGHT_SHARDED L1 - reshape logical shape but shard layout stays same
     topk_expert_indices = ttnn.reshape(topk_expert_indices, (tokens_per_device, 1, 1, config.num_experts_per_tok))
     topk_expert_scores = ttnn.reshape(topk_expert_scores, (tokens_per_device, 1, 1, config.num_experts_per_tok))
+
+    # Keep a reference to pre-dispatch scores for post-combine weighting.
+    # These are the original per-device routing scores [M, 1, 1, K] before dispatch
+    # shuffles them across devices. Used in the scale_experts step after combine.
+    pre_dispatch_scores = topk_expert_scores
 
     # ------------------------------------------------------------------
     # Step 1: all_to_all_dispatch_metadata
@@ -157,11 +154,10 @@ def fused_decode_forward(
     # Takes moe_gpt_outputs[3] directly (BLOCK_SHARDED L1) — no TM ops needed.
     # selective_reduce_combine uses set_globally_allocated_address to alias
     # its input CB to moe_gpt's combine shard, just like in test_moe_gpt_e2e.py.
-    # Output shape per device: [experts_per_ring, M, H]
-    # where experts_per_ring = global_experts // num_clusters = 128 // 8 = 16 for GPT-OSS.
-    # experts_per_device = global_experts / total_devices = 128 / 32 = 4 ✓
+    # Output shape per device: [K, M, H] where K = select_experts_k (top-k per token).
+    # The preallocated output tensor shape determines the combine output layout.
+    # Using [K, M, H] (not [experts_per_ring, M, H]) enables direct score application.
     # ------------------------------------------------------------------
-    experts_per_ring = global_experts // num_clusters  # 16 for GPT-OSS
     tt_combine_output = ttnn.experimental.selective_reduce_combine(
         moe_gpt_outputs[3],  # dense_input_tensor: BLOCK_SHARDED combine output from moe_gpt
         moe_gpt_outputs[1],  # dense_metadata_tensor:   expert activation metadata
@@ -188,32 +184,40 @@ def fused_decode_forward(
         ttnn.deallocate(moe_gpt_outputs[i])
 
     # ------------------------------------------------------------------
-    # Post-processing: reduce combine output to [1, 1, M, H] for compatibility
-    # with the dense decode_forward return format.
+    # Post-processing: apply routing scores and reduce to [1, 1, M, H].
     #
-    # combine_output: [experts_per_ring, M, H] (3D, DRAM ROW_MAJOR)
-    # Step 1: Convert to TILE_LAYOUT for ttnn.sum
-    # Step 2: Reshape to 4D [1, experts_per_ring, M, H]
-    # Step 3 (optional): Apply routing_weight_map [1, E, M, 1] via element-wise mul
-    #   to scale each expert's output by its routing weight before summing.
-    # Step 4: Sum over expert dim → [1, 1, M, H]
-    # Step 5: All-reduce across columns (cluster_axis=1) to aggregate results
-    #   from the 8 independent column rings.
+    # Following the DeepSeek pattern (PR #39503):
+    #   1. Tilize combine output
+    #   2. Unsqueeze to 4D: [K, M, H] -> [K, 1, M, H]
+    #   3. Permute pre-dispatch scores: [M, 1, 1, K] -> [K, 1, M, 1]
+    #   4. Broadcast multiply: [K, 1, M, H] * [K, 1, M, 1] -> [K, 1, M, H]
+    #   5. Sum over K dim -> [1, 1, M, H]
+    #   6. All-reduce across columns (cluster_axis=1)
+    #
+    # This works because selective_reduce_combine with a [K, M, H] preallocated
+    # output organizes results by top-k index (not ring-local expert ID), matching
+    # the order of the routing scores.
     # ------------------------------------------------------------------
+    K_sel = config.num_experts_per_tok
+
     tt_combine_tile = ttnn.to_layout(tt_combine_output, ttnn.TILE_LAYOUT)
     ttnn.deallocate(tt_combine_output)
 
-    tt_4d = ttnn.reshape(tt_combine_tile, [1, experts_per_ring, tokens_per_device, config.hidden_size])
-    # Note: ttnn.reshape returns a view sharing the same buffer — do NOT deallocate tt_combine_tile here.
+    # Unsqueeze: [K, M, H] -> [K, 1, M, H]
+    tt_unsqueezed = ttnn.unsqueeze(tt_combine_tile, dim=1)
 
-    if routing_weight_map is not None:
-        # routing_weight_map: [1, experts_per_ring, M, 1] broadcasts over hidden_size dim
-        tt_4d_weighted = ttnn.mul(tt_4d, routing_weight_map)
-        ttnn.deallocate(tt_4d)
-        tt_4d = tt_4d_weighted
+    # Permute pre-dispatch scores: [M, 1, 1, K] -> [K, 1, M, 1]
+    topk_weights = ttnn.permute(pre_dispatch_scores, (3, 1, 0, 2))
+    topk_weights = ttnn.to_layout(topk_weights, ttnn.TILE_LAYOUT)
 
-    tt_sum = ttnn.sum(tt_4d, dim=1, keepdim=True)  # [1, 1, M, H]
-    ttnn.deallocate(tt_4d)
+    # Scale expert outputs by routing scores
+    tt_scaled = ttnn.mul(tt_unsqueezed, topk_weights)
+    ttnn.deallocate(tt_unsqueezed)
+    ttnn.deallocate(topk_weights)
+
+    # Sum over K experts: [K, 1, M, H] -> [1, 1, M, H]
+    tt_sum = ttnn.sum(tt_scaled, dim=0, keepdim=True)
+    ttnn.deallocate(tt_scaled)
 
     # cluster_axis=1 (row direction) has fewer physical Ethernet links than cluster_axis=0.
     # rms_norm.py uses num_links=1 for cluster_axis=1; fused_config.num_links (=4) is for axis=0.

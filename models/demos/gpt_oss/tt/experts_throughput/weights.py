@@ -869,9 +869,12 @@ def create_fused_moe_gpt_config(
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
 
     # --- Pre-allocate combine output ---
-    # selective_reduce_combine output: [experts_per_ring, tokens_per_device, K] per device
+    # selective_reduce_combine output: [select_experts_k, tokens_per_device, K] per device.
+    # Using select_k (top-k) as first dim (not experts_per_ring) matches DeepSeek's pattern
+    # and enables direct score application via permute + mul without scatter.
+    select_k = config.num_experts_per_tok
     tt_combine_preallocated = ttnn.from_torch(
-        torch.zeros(experts_per_ring, tokens_per_device, K, dtype=torch.bfloat16),
+        torch.zeros(select_k, tokens_per_device, K, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,

@@ -309,11 +309,15 @@ Already wired in `ThroughputExperts.__init__` (accepts `fused_config`) and `forw
 Wired into the model via `use_fused_experts=True` flag: `model.py` → `layer.py` → `mlp.py`.
 Fixed bug (m): `row_wise=True` in `corerange_to_cores` call (same as bug (k) in the test).
 
-### 10.6 Routing weight map for accurate output
-`fused_decode_forward` accepts an optional `routing_weight_map` `[1, E_ring, M, 1]` for scaling expert outputs by routing scores before summing. Without it, the output is an unweighted sum and PCC vs reference will be degraded. This map must be built from the router output each step:
-```python
-weight_map[e, m] = scores[m, k] where indices[m, k] == local_expert_e
-```
+### 10.6 ~~Routing weight map for accurate output~~ DONE
+Adopted the DeepSeek pattern (PR #39503) instead of building a weight map:
+1. Changed combine preallocated output from `[experts_per_ring, M, H]` to `[K, M, H]`
+   (`selective_reduce_combine` organizes results by top-k index when output shape is `[K, M, H]`)
+2. Permute pre-dispatch scores: `[M, 1, 1, K]` → `[K, 1, M, 1]`
+3. Broadcast multiply: `[K, 1, M, H] * [K, 1, M, 1]` → scaled expert outputs
+4. Sum over K dim → `[1, 1, M, H]`
+
+No host round-trip or scatter op needed. The `routing_weight_map` parameter was removed.
 
 ### 10.7 End-to-end model accuracy test
 Once wired in, run a text generation test with `gpt-oss-20b` on Galaxy and compare:
