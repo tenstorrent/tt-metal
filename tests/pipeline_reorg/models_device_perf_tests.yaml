@@ -22,17 +22,17 @@
     pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
   model: llama3.1-8b
   skus:
-    wh_n150:
+    wh_n150_perf:
       timeout: 10
       tier: 1
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
-    bh_p150:
+    bh_p150_perf:
       timeout: 10
       tier: 1
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
-    bh_p300:
+    bh_p300_perf:
       timeout: 10
       tier: 1
       tt_cache_path: ""
