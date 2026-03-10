@@ -996,10 +996,15 @@ void kernel_main() {
                 get_named_compile_time_arg_val("bcast_num_pages_to_read"),
                 get_named_compile_time_arg_val("bcast_is_sender"),
                 get_named_compile_time_arg_val("bcast_use_socket")>;
+            // deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+            //     get_common_arg_val<uint32_t>(0),  // socket_config_addr
+            //     get_common_arg_val<uint32_t>(1),  // socket_page_size
+            //     get_common_arg_val<uint32_t>(2),  // socket_num_pages
+            // };
             deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
-                get_common_arg_val<uint32_t>(0),  // socket_config_addr
-                get_common_arg_val<uint32_t>(1),  // socket_page_size
-                get_common_arg_val<uint32_t>(2),  // socket_num_pages
+                get_named_compile_time_arg_val("bcast_socket_config_addr"),  // socket_config_addr
+                get_named_compile_time_arg_val("bcast_socket_page_size"),    // socket_page_size
+                get_named_compile_time_arg_val("bcast_socket_num_pages"),    // socket_num_pages
             };
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
             bcast_op(bcast_args);

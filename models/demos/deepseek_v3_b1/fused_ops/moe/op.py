@@ -4168,11 +4168,17 @@ class MoeOp:
             ]
         )
 
+        # int(ctx.socket.get_config_buffer_address()) if bcast_use_socket else 0,
+        #             int(bcast_socket_page_size) if bcast_use_socket else 0,
+        #             1 if bcast_use_socket else 0,
         self.brisc_args.extend(
             [
                 ("bcast_num_pages_to_read", bp["input_num_pages"]),
                 ("bcast_is_sender", int(bcast_is_sender)),
                 ("bcast_use_socket", int(bcast_use_socket)),
+                ("bcast_socket_config_addr", int(ctx.socket.get_config_buffer_address()) if bcast_use_socket else 0),
+                ("bcast_socket_page_size", int(bcast_socket_page_size) if bcast_use_socket else 0),
+                ("bcast_socket_num_pages", 1 if bcast_use_socket else 0),
             ]
         )
 
