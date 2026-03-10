@@ -28,17 +28,18 @@ def create_conv1d_input_tensor(batch_size: int, input_length: int, in_channels: 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    ("kernel_size", "padding"),
+    ("kernel_size", "padding", "activation"),
     [
-        (7, 0),
-        (7, 3),
-        (7, "same"),
-        (8, 0),
-        (8, 4),
-        (8, "same"),
+        (7, 0, None),
+        (7, 3, None),
+        (7, "same", None),
+        (8, 0, None),
+        (8, 4, None),
+        (8, "same", None),
+        (7, "same", "relu"),
     ],
 )
-def test_conv1d(device, kernel_size, padding):
+def test_conv1d(device, kernel_size, padding, activation):
     torch.manual_seed(0)
 
     batch_size = 1
@@ -64,6 +65,8 @@ def test_conv1d(device, kernel_size, padding):
         batch_size=batch_size, input_length=input_length, in_channels=in_channels, device=device
     )
     torch_output = torch_conv(torch_input)
+    if activation == "relu":
+        torch_output = torch.relu(torch_output)
 
     tt_conv = Conv1d(
         device,
@@ -75,6 +78,7 @@ def test_conv1d(device, kernel_size, padding):
         dilation=dilation,
         groups=groups,
         dtype=ttnn.bfloat16,
+        activation=activation,
     )
     tt_conv.load_parameters(
         {

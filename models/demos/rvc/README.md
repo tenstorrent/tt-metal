@@ -42,7 +42,11 @@ Run inference using the helper script:
 
 ```sh
 mkdir -p ./models/demos/rvc/data/output
-uv run --active models/demos/rvc/scripts/infer.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output.wav
+uv run --active models/demos/rvc/scripts/infer_ttnn.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output_ttnn.wav
+
+# torch version
+# uv run --active models/demos/rvc/scripts/infer_torch.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output_torch.wav
+
 ```
 
 Run inference using the Python API:

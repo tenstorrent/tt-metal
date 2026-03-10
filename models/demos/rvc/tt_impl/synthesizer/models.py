@@ -303,6 +303,7 @@ class Generator:
             kernel_size=7,
             stride=1,
             padding="same",
+            activation="tanh",
         )
         self.cond_linear = None
         if gin_channels != 0:
@@ -344,8 +345,7 @@ class Generator:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
         x = _to_nlc(self.conv_post(x))
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.tanh(x)
+        return x
 
 
 class SineGen:
@@ -497,6 +497,7 @@ class GeneratorNSF:
             kernel_size=7,
             stride=1,
             padding="same",
+            activation="tanh",
         )
         self.cond_linear = Linear(device=device, in_features=gin_channels, out_features=upsample_initial_channel)
 
@@ -543,8 +544,6 @@ class GeneratorNSF:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
         x = _to_nlc(self.conv_post(x))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.tanh(x)
         return x
 
 

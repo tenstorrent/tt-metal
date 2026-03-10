@@ -200,6 +200,7 @@ class FFN:
             out_channels=filter_channels,
             kernel_size=kernel_size,
             padding="same",
+            activation="relu",
         )
         self.conv_2 = Conv1d(
             device=device,
@@ -216,8 +217,5 @@ class FFN:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x0 = x
         x1 = self.conv_1(x0)
-        x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT)
-        x2 = ttnn.relu(x1)
-        x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
-        x3 = self.conv_2(x2)
-        return x3
+        x2 = self.conv_2(x1)
+        return x2

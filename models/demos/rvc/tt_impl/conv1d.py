@@ -103,6 +103,35 @@ class Conv1dConfiguration:
     # config_tensors_in_dram: bool = True
 
 
+def _normalize_conv2d_activation(activation: str | tuple[str, dict] | None) -> ttnn.UnaryWithParam | None:
+    if activation is None:
+        return None
+    if isinstance(activation, tuple):
+        activation_name, kwargs = activation
+    else:
+        activation_name = activation.strip().lower()
+    activation_aliases = {
+        "swish": "silu",
+    }
+    activation_name = activation_aliases.get(activation_name, activation_name)
+
+    if activation_name == "relu":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    if activation_name == "silu":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+    if activation_name == "gelu":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)
+    if activation_name == "sigmoid":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+    if activation_name == "tanh":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH)
+    if activation_name == "leaky_relu":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, kwargs["negative_slope"])
+
+    supported = "relu, silu (alias swish), gelu, sigmoid, tanh, leaky_relu"
+    raise ValueError(f"Unsupported conv activation '{activation}'. Supported activations: {supported}")
+
+
 def resolve_padding(
     padding: PaddingType,
     kernel_size: int,
@@ -173,11 +202,8 @@ def get_conv_configs(
         (output_length, conv1d_config.in_channels, conv1d_config.out_channels, conv1d_config.kernel_size),
         (1, 0, 1),
     )
-    slice_config = ttnn.Conv2dSliceConfig(
-        num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth
-    )  # if num_slices > 1 else None
+    slice_config = ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
 
-    activation = conv1d_config.activation if conv1d_config.activation is not None else None
     return (
         ttnn.Conv2dConfig(
             weights_dtype=conv1d_config.weights_dtype,
@@ -193,7 +219,7 @@ def get_conv_configs(
             act_block_h_override=act_block_h_override,
             act_block_w_div=act_block_w_div,
             # reshard_if_not_optimal=True,
-            activation=activation,
+            activation=conv1d_config.activation,
             # slice_config=slice_config,
         ),
         slice_config,
@@ -222,6 +248,7 @@ class Conv1d:
         dilation: int = 1,
         groups: int = 1,
         dtype: ttnn.DataType | None = None,
+        activation: str | tuple[str, dict] | None = None,
     ) -> None:
         # if configuration is None:
         if device is None:
@@ -246,7 +273,7 @@ class Conv1d:
             padding=padding_final,
             dilation=dilation,
             groups=groups,
-            activation=None,
+            activation=_normalize_conv2d_activation(activation),
             dtype=dtype or ttnn.bfloat16,
         )
 
