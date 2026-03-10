@@ -472,7 +472,8 @@ run_t3000_mixtral_tests() {
   HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-device_params0-8-performance-256-1-page_params0-paged_attention-quick] --timeout=720 ; fail+=$?
   HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-device_params0-8-performance-256-1-page_params0-default_attention-quick] --timeout=720 ; fail+=$?
   HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-paged_attention-8] --timeout=720 ; fail+=$?
-  HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-default_attention-8] --timeout=720 ; fail+=$?
+  # Disabled: TypeError in generator page_table_for_user when page_table is None (https://github.com/tenstorrent/tt-metal/issues/39372)
+  # HF_MODEL=$mixtral8x7 TT_CACHE_PATH=$tt_cache_mixtral8x7 CI=true pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-default_attention-8] --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
