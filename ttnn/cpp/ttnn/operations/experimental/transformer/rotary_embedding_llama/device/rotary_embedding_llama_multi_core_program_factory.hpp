@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/device_operation.hpp"
 #include "rotary_embedding_llama_device_operation_types.hpp"
@@ -18,11 +20,11 @@ struct RotaryEmbeddingLlamaMultiCore {
         std::vector<CoreCoord> cores;
         uint32_t num_active_cores{};
 
-        tt::tt_metal::CBHandle cb_input{};
-        tt::tt_metal::CBHandle cb_cos{};
-        tt::tt_metal::CBHandle cb_sin{};
-        tt::tt_metal::CBHandle cb_trans_mat{};
-        tt::tt_metal::CBHandle cb_output{};
+        // CB handles for globally-allocated (sharded) buffers; used by
+        // override_runtime_arguments to update addresses without re-creating CBs.
+        std::optional<tt::tt_metal::CBHandle> cb_cos;        // set iff cos is sharded
+        std::optional<tt::tt_metal::CBHandle> cb_sin;        // set iff sin is sharded
+        std::optional<tt::tt_metal::CBHandle> cb_trans_mat;  // set iff trans_mat is sharded
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
