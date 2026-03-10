@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t out_tile_size = get_tile_size(cb_s2c_out);
 
     // Constants for MLA WqkvAb
-    constexpr uint32_t k_tiles = 7168 / 32;
+    constexpr uint32_t k_tiles = 7168 / tt::constants::TILE_WIDTH;
     constexpr uint32_t n_tiles_this_core = 6;
     constexpr uint32_t num_w_tiles = k_tiles * n_tiles_this_core;
 
@@ -82,14 +82,22 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Rope reading constants
     //-------------------------------------------------------------------------
-    // We read just 2 rows of this tensor for a given position, which is 1/16 of the tile's rows
-    constexpr uint32_t rope_bytes_per_txn = rope_tile_size / 16;
+    // We read just 6 rows of this tensor for a given position, which is 1/16 of the tile's rows
+    constexpr uint32_t rope_elements_per_row = tt::constants::FACE_WIDTH;
+    constexpr uint32_t rope_bytes_per_row = rope_elements_per_row * sizeof(uint16_t);  // bf16
+    constexpr uint32_t rope_rows_per_pos = 2 * 2;                                      // 2 rows each for cos and sin
+    constexpr uint32_t rope_rows_per_pos_pair = rope_rows_per_pos * 2;
+    constexpr uint32_t rope_bytes_per_pos_pair = rope_rows_per_pos_pair * rope_bytes_per_row;
+    constexpr uint32_t rope_bytes_per_txn = 6 * rope_bytes_per_row;  // Need 2 rows + 2 rows (dummy) + 2 rows
 
     // DRAM bank's base NOC address
     const uint64_t rope_noc_addr =
         get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/rope_addr);
 
-    const uint32_t rope_dram_read_offset = rope_bytes_per_txn * pos;
+    const uint32_t rope_pos_pair_idx = pos / 2;
+    const uint32_t rope_dram_pair_offset = rope_pos_pair_idx * rope_bytes_per_pos_pair;
+    const uint32_t rope_dram_pos_offset = (pos & 1) * 2 * rope_bytes_per_row;
+    const uint32_t rope_dram_read_offset = rope_dram_pair_offset + rope_dram_pos_offset;
 
     //-------------------------------------------------------------------------
     // CB addresses

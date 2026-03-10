@@ -103,11 +103,7 @@ def create_torch_rope(hf_config):
     cos = reference_rope.cos_cached[:, : hf_config.qk_rope_head_dim // 2]
     sin = reference_rope.sin_cached[:, : hf_config.qk_rope_head_dim // 2]
 
-    cos_sin = torch.cat([cos, sin], dim=-1)
-
-    # Create zeros of shape cos_sin
-    cos_sin = torch.zeros_like(cos_sin)
-    return cos_sin
+    return cos, sin
 
 
 def prepare_rope_tensor(torch_rope, num_dram_banks):
@@ -115,14 +111,39 @@ def prepare_rope_tensor(torch_rope, num_dram_banks):
     Replicate the rope table for every DRAM bank so each worker can read from its local bank.
 
     Args:
-        torch_rope: Tensor of shape (1, 1, max_seq_len, 64) with fused [cos(32) | sin(32)].
+        torch_rope: Tuple of tensors of shape (1, 1, max_seq_len, head_dim//2) with cos and sin.
         num_dram_banks: Number of DRAM banks / worker cores.
 
     Returns:
         Tensor of shape (num_dram_banks, 1, max_seq_len * 2, 32) in the layout TT expects.
     """
-    torch_rope = torch_rope.view(1, 1, -1, ttnn.TILE_SIZE)
-    return torch_rope.repeat(num_dram_banks, 1, 1, 1)
+    cos, sin = torch_rope
+
+    # Rearrange value within each half
+    # The first 8 values are in even positions, and the last 8 values are in odd positions
+    cos_8 = cos.view(-1, 2, 2, ttnn.TILE_SIZE // 4)
+    cos_8_interleaved = cos_8.permute(0, 1, 3, 2)
+
+    # Now view this as a single 16 row
+    cos_16 = cos_8_interleaved.reshape(-1, 2, ttnn.TILE_SIZE // 2)
+
+    # Do the same for sin
+    sin_8 = sin.view(-1, 2, 2, ttnn.TILE_SIZE // 4)
+    sin_8_interleaved = sin_8.permute(0, 1, 3, 2)
+    sin_16 = sin_8_interleaved.reshape(-1, 2, ttnn.TILE_SIZE // 2)
+
+    # Now put the cos and sin together
+    cos_sin = torch.stack([cos_16, sin_16], dim=-2)
+
+    # Group positions in pairs
+    cos_sin_pairs = cos_sin.view(-1, 2, 2, 2, 16)
+
+    # Put values from each pair for first half before second half
+    cos_sin_pairs_first = cos_sin_pairs.permute(0, 2, 1, 3, 4)
+
+    # Now collapse all intemediate dimensions to height
+    cos_sin_pairs_first = cos_sin_pairs_first.reshape(1, -1, ttnn.TILE_SIZE // 2)
+    return cos_sin_pairs_first.repeat(num_dram_banks, 1, 1)
 
 
 def n_tiles_for_core(core_id, num_cores):
@@ -220,7 +241,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
     torch.manual_seed(0)
 
     logger.info(
-        f"Running test_mla_wqkv_ab with M={M}, K={K}, N={N}, L={L}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
+        f"Running test_mla_wqkv_ab with M={M}, K={K}, N={N}, L={L}, pos={pos}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
     )
 
     # --------------------------------------------------------------------------
@@ -288,8 +309,8 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
         rope_scaling=deepseek_config["rope_scaling"],
     )
 
-    rope_shard_height = rope_cfg.max_seq_len * rope_cfg.qk_rope_head_dim // ttnn.TILE_SIZE
-    rope_shard_width = ttnn.TILE_SIZE
+    rope_shard_height = rope_cfg.max_seq_len * rope_cfg.qk_rope_head_dim // (ttnn.TILE_SIZE // 2)
+    rope_shard_width = ttnn.TILE_SIZE // 2
     rope_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (rope_shard_height, rope_shard_width), ttnn.ShardOrientation.ROW_MAJOR
     )
@@ -346,7 +367,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             torch_rope_reordered,
             dtype=rope_dtype,
             device=device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=rope_mem_config,
         )
 
@@ -408,6 +429,27 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
         with torch.no_grad():
             torch_input_ref = torch_input[:, 0, ...]
             torch_mm_out = torch_input_ref @ torch_w
+
+            # Apply rope to the last 64 values of each row
+            k_pe_rope_input = torch_mm_out[:, :, -64:]
+
+            # View it has a complex number, where real and complex are interleaved
+            k_pe_rope_input_c = torch.view_as_complex(k_pe_rope_input.float().reshape(L, M, -1, 2))
+
+            # View the rope table as a complex number, where real and complex are interleaved
+            cos, sin = torch_rope
+            cos_pos, sin_pos = cos[pos], sin[pos]
+            cos_sin_pos = torch.stack([cos_pos, sin_pos], dim=-1)
+            rot_matrix_c = torch.view_as_complex(cos_sin_pos.float())
+
+            # Apply the rotation matrix to the k_pe_rope_input
+            k_pe_rope_output_c = k_pe_rope_input_c * rot_matrix_c
+
+            # View the output as a real number, where real and complex are interleaved
+            k_pe_rope_output = torch.view_as_real(k_pe_rope_output_c).reshape(L, M, -1)
+
+            # Do an in-place update of the last 64 values of each row
+            torch_mm_out[:, :, -64:] = k_pe_rope_output
 
         # Calculate accuracy metrics for each layer
         for layer_id in range(L):

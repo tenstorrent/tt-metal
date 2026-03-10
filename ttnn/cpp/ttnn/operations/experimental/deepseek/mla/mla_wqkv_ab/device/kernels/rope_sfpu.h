@@ -61,6 +61,8 @@ inline void _calculate_rope_row_group_() {
     //-------------------------------------------------------------------------
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_0, 128);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_0, 128 + 2);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_0, 128 + 4);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_0, 128 + 6);
 
     //-------------------------------------------------------------------------
     // Step 2a: Load 4 token rows (even columns only, cos components)
