@@ -42,6 +42,28 @@ TEST(FmtTest, VectorInt) {
     EXPECT_THAT(result, HasSubstr("3"));
 }
 
+// Test std::vector<bool> formatting (proxy reference edge case)
+// vector<bool> uses bit-packing; operator[] returns a proxy type, not a real bool.
+// This test guards against fmt 11's unformattable-type hard error regressing.
+TEST(FmtTest, VectorBool) {
+    // Mixed values
+    std::vector<bool> mixed = {true, false, true};
+    std::string result = fmt::format("{}", mixed);
+    EXPECT_THAT(result, HasSubstr("true"));
+    EXPECT_THAT(result, HasSubstr("false"));
+
+    // Empty vector
+    std::vector<bool> empty = {};
+    std::string empty_result = fmt::format("{}", empty);
+    EXPECT_EQ(empty_result, "{}");
+
+    // All-false
+    std::vector<bool> all_false = {false, false};
+    std::string all_false_result = fmt::format("{}", all_false);
+    EXPECT_THAT(all_false_result, HasSubstr("false"));
+    EXPECT_EQ(all_false_result.find("true"), std::string::npos);
+}
+
 // Test std::optional<T> formatting
 TEST(FmtTest, Optional) {
     std::optional<int> opt_val = 42;

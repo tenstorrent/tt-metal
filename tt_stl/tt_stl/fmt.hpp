@@ -182,6 +182,26 @@ struct fmt::formatter<std::vector<T, Alloc>> {
     }
 };
 
+// std::vector<bool> — special case: operator[] returns a proxy reference type, not a real bool.
+// fmt 11 cannot format such proxy references directly; cast each element to bool explicitly.
+template <typename Alloc>
+struct fmt::formatter<std::vector<bool, Alloc>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::vector<bool, Alloc>& vec, format_context& ctx) const -> format_context::iterator {
+        auto out = fmt::format_to(ctx.out(), "{{");
+        bool first = true;
+        for (bool val : vec) {
+            if (!first) {
+                out = fmt::format_to(out, ", ");
+            }
+            out = fmt::format_to(out, "{}", val);
+            first = false;
+        }
+        return fmt::format_to(out, "}}");
+    }
+};
+
 // std::array
 template <typename T, std::size_t N>
 struct fmt::formatter<std::array<T, N>> {
