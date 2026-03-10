@@ -81,14 +81,22 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    stride_h=1,
-    stride_w=1,
+    stride_h=None,
+    stride_w=None,
+    arg1=None,
+    arg2=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
+
+    # V2 JSON provides stride_h/stride_w as positional args: arg1, arg2
+    if stride_h is None:
+        stride_h = arg1 if arg1 is not None else 1
+    if stride_w is None:
+        stride_w = arg2 if arg2 is not None else 1
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -113,6 +121,11 @@ def run(
         return transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
 
     torch_output_tensor = fold_torch(torch_input_tensor_a, stride_h, stride_w)
+
+    # ttnn.fold outputs in TTNN format [1, 1, N*H'*W', C'] — reshape golden to match
+    if torch_output_tensor.ndim == 4:
+        N_out, H_out, W_out, C_out = torch_output_tensor.shape
+        torch_output_tensor = torch_output_tensor.reshape(1, 1, N_out * H_out * W_out, C_out)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)

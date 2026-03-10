@@ -89,8 +89,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.tilize)
-    torch_output_tensor = golden_function(torch_input_tensor_a)
+    # Golden function for tilize is a no-op (layout change only, data unchanged).
+    # However, if output dtype is a low-precision format (e.g., BFLOAT4_B), simulate
+    # the precision loss by round-tripping through ttnn to match hardware behavior.
+    torch_output_tensor = torch_input_tensor_a.clone()
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -116,12 +118,25 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Simulate output dtype precision loss in golden if dtype is specified.
+    # Use TILE + typecast path (matches hardware tilize dtype conversion exactly).
+    output_dtype = op_kwargs.get("dtype", None)
+    if output_dtype is not None and output_dtype != input_a_dtype and not is_host:
+        golden_tile = ttnn.from_torch(
+            torch_output_tensor,
+            dtype=input_a_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        golden_cast = ttnn.typecast(golden_tile, output_dtype)
+        torch_output_tensor = ttnn.to_torch(golden_cast)
+
     start_time = start_measuring_time()
     output_tensor = ttnn.tilize(input_tensor_a, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

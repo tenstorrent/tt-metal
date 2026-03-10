@@ -96,7 +96,9 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Create input tensor with mesh support
+    # Create input tensor with mesh support and interleaved→sharded fallback
+    input_is_sharded = hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded()
+
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -107,6 +109,17 @@ def run(
                 input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif input_is_sharded:
+            # Sharded memory configs can't be created directly via from_torch;
+            # create interleaved first, then convert to sharded
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,

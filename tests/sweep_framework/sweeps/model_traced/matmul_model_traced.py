@@ -127,6 +127,15 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
+    # Apply activation function to golden if present (e.g., gelu_approx fused with matmul)
+    activation = kwargs.get("activation", None)
+    if activation and activation != "__ABSENT__":
+        from ttnn.operations.activations import get_golden_function_for_activation
+
+        golden_activation = get_golden_function_for_activation(activation)
+        if golden_activation is not None:
+            torch_output_tensor = golden_activation(torch_output_tensor)
+
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -228,7 +237,6 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

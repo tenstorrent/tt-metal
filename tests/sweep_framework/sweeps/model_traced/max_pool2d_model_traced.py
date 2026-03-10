@@ -176,34 +176,45 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    if applied_shard_scheme is None:
-        applied_shard_scheme = kwargs.get("applied_shard_scheme", "BLOCK_SHARDED")
 
-    if applied_shard_scheme == "BLOCK_SHARDED":
-        applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    elif applied_shard_scheme == "HEIGHT_SHARDED":
-        applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    elif applied_shard_scheme == "WIDTH_SHARDED":
-        applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    elif applied_shard_scheme == "INTERLEAVED":
-        applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
-    else:
-        raise ValueError(f"Invalid applied_shard_scheme from JSON: {applied_shard_scheme}")
+    # Determine if input tensor is already sharded
+    input_is_sharded = False
+    if hasattr(input_a_memory_config, "is_sharded"):
+        input_is_sharded = input_a_memory_config.is_sharded()
 
-    result = ttnn.max_pool2d(
-        input_tensor=input_tensor_a,
-        batch_size=N,
-        input_h=H,
-        input_w=W,
-        channels=C,
-        kernel_size=[kH, kW],
-        stride=[stride_h, stride_w],
-        padding=[pad_h, pad_w],
-        dilation=[dil_h, dil_w],
-        memory_config=output_memory_config,
-        applied_shard_scheme=applied_shard_scheme_ttnn,
-        **op_kwargs,
-    )
+    # Only pass applied_shard_scheme if input is NOT already sharded
+    # (C++ code asserts: "A sharding scheme should not be specified for a sharded input tensor")
+    pool_kwargs = {
+        "input_tensor": input_tensor_a,
+        "batch_size": N,
+        "input_h": H,
+        "input_w": W,
+        "channels": C,
+        "kernel_size": [kH, kW],
+        "stride": [stride_h, stride_w],
+        "padding": [pad_h, pad_w],
+        "dilation": [dil_h, dil_w],
+        "memory_config": output_memory_config,
+    }
+
+    if not input_is_sharded:
+        if applied_shard_scheme is None:
+            applied_shard_scheme = kwargs.get("applied_shard_scheme", "BLOCK_SHARDED")
+
+        if applied_shard_scheme == "BLOCK_SHARDED":
+            applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        elif applied_shard_scheme == "HEIGHT_SHARDED":
+            applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        elif applied_shard_scheme == "WIDTH_SHARDED":
+            applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        elif applied_shard_scheme == "INTERLEAVED":
+            applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
+        else:
+            raise ValueError(f"Invalid applied_shard_scheme from JSON: {applied_shard_scheme}")
+        pool_kwargs["applied_shard_scheme"] = applied_shard_scheme_ttnn
+
+    pool_kwargs.update(op_kwargs)
+    result = ttnn.max_pool2d(**pool_kwargs)
 
     result = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

@@ -95,6 +95,7 @@ def run(
     input_a_shape,
     input_a_dtype,
     input_a_layout,
+    input_a_memory_config=None,
     output_memory_config=None,
     num_groups=None,
     epsilon=1e-5,
@@ -127,7 +128,17 @@ def run(
     weight_tensor_placement = kwargs.get("weight_tensor_placement", None)
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Let core_grid and memory_config flow through op_kwargs so they get parsed from dicts
+    # Exclude params we handle explicitly as named parameters
+    op_kwargs = build_op_kwargs(
+        kwargs,
+        exclude={"inplace", "num_out_blocks", "use_welford", "num_groups", "epsilon", "negative_mask"},
+        output_memory_config=output_memory_config,
+    )
+
+    if input_a_memory_config is None:
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     if num_groups is None:
         return [(False, "Missing num_groups"), 0.0]
@@ -143,72 +154,40 @@ def run(
     # TENSOR FORMAT CONVERSION - TTNN vs PyTorch
     # ========================================================================================================
     # TTNN group_norm format: [N, 1, H*W, C]
-    #   - N: batch size
-    #   - 1: fixed dimension (always 1 for TTNN)
-    #   - H*W: spatial dimensions (height x width) flattened into single dimension
-    #   - C: number of channels (must be divisible by num_groups)
-    #
     # PyTorch group_norm format: [N, C, H, W]
-    #   - N: batch size
-    #   - C: number of channels
-    #   - H: height
-    #   - W: width
-    #
-    # Conversion Strategy:
-    #   1. Input tensors from traced configs are in TTNN format [N, 1, H*W, C]
-    #   2. Convert to PyTorch format [N, C, H, W] to compute golden reference with torch.nn.functional.group_norm
-    #   3. Convert PyTorch output back to TTNN format [N, 1, H*W, C] for PCC comparison
     # ========================================================================================================
 
     # Extract number of channels from input shape (last dimension in both formats)
     C = shape[-1]
 
     # Create optional weight and bias tensors if provided in traced config
-    # IMPORTANT: Weight/bias must have total elements equal to C (number of channels)
-    # They will be reshaped to [C] for PyTorch group_norm
     torch_weight = None
     torch_bias = None
     if weight_shape:
-        # Validate weight shape: total elements must equal number of channels
         weight_elements = 1
         for dim in weight_shape:
             weight_elements *= dim
         if weight_elements == C:
             torch_weight = torch.ones(weight_shape, dtype=torch.float32)
-        # If weight_elements != C, skip weight (incompatible shape)
     if bias_shape:
-        # Validate bias shape: total elements must equal number of channels
         bias_elements = 1
         for dim in bias_shape:
             bias_elements *= dim
         if bias_elements == C:
             torch_bias = torch.zeros(bias_shape, dtype=torch.float32)
-        # If bias_elements != C, skip bias (incompatible shape)
 
-    # ========================================================================================================
-    # STEP 1: Convert TTNN format to PyTorch format for golden reference computation
-    # ========================================================================================================
+    # Convert TTNN format to PyTorch format for golden reference
     if len(shape) == 4 and shape[1] == 1:
-        # Input is in TTNN format: [N, 1, H*W, C]
-        # Need to convert to PyTorch format: [N, C, H, W]
         N, _, HW, C = shape
-
-        # Reconstruct spatial dimensions (H, W) from flattened dimension (H*W)
         import math
 
         H = W = int(math.sqrt(HW))
         if H * W != HW:
-            # HW is not a perfect square
-            # If not perfect square, use H=HW and W=1
             H = HW
             W = 1
 
-        # Convert TTNN [N, 1, H*W, C] -> PyTorch [N, C, H, W]
-        # Step 1: Reshape [N, H*W, C] to [N, H, W, C] (unflatten spatial dimensions)
-        # Step 2: Permute [N, H, W, C] to [N, C, H, W] (channels-first for PyTorch)
         torch_input_reshaped = torch_input_tensor_a.reshape(N, H, W, C).permute(0, 3, 1, 2)
 
-        # Reshape weight and bias to [C] for PyTorch group_norm
         if torch_weight is not None:
             torch_weight_reshaped = torch_weight.reshape(C)
         else:
@@ -218,33 +197,26 @@ def run(
         else:
             torch_bias_reshaped = None
     else:
-        # Input is NOT in TTNN format (may be standard PyTorch format or other)
-        # Use as-is without conversion
         torch_input_reshaped = torch_input_tensor_a
         torch_weight_reshaped = torch_weight
         torch_bias_reshaped = torch_bias
 
-    # ========================================================================================================
-    # STEP 2: Compute golden reference using PyTorch group_norm (expects [N, C, H, W] format)
-    # ========================================================================================================
+    # Compute golden reference
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_reshaped, num_groups, weight=torch_weight_reshaped, bias=torch_bias_reshaped, eps=epsilon
     )
 
-    # ========================================================================================================
-    # STEP 3: Convert PyTorch output back to TTNN format for comparison
-    # ========================================================================================================
+    # Convert PyTorch output back to TTNN format for comparison
     if len(shape) == 4 and shape[1] == 1:
-        # PyTorch output is in [N, C, H, W] format
-        # Convert back to TTNN format [N, 1, H*W, C]
-        # Step 1: Permute [N, C, H, W] to [N, H, W, C] (channels-last)
-        # Step 2: Reshape [N, H, W, C] to [N, 1, H*W, C] (flatten spatial dimensions)
         torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).reshape(shape)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Create input tensor with mesh support
+    # Create input tensor using traced memory config (may be sharded)
+    # For sharded configs, create interleaved first then shard
+    input_is_sharded = hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded()
+
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -252,16 +224,31 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                ttnn.DRAM_MEMORY_CONFIG,
+                input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif input_is_sharded:
+            # Create interleaved first, then shard (from_torch can't directly create sharded)
+            input_tensor_a_interleaved = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            try:
+                input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a_interleaved, input_a_memory_config)
+            except RuntimeError:
+                # If sharding fails, fall back to interleaved
+                input_tensor_a = input_tensor_a_interleaved
+                input_is_sharded = False
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=input_a_memory_config,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
@@ -291,8 +278,6 @@ def run(
             )
 
     if weight_shape and torch_weight is not None and not is_host:
-        # Use original weight shape from traced config (already correct for group_norm)
-        # group_norm requires last dim to be TILE_WIDTH (32), so shapes like [1, 1, 4, 32] are correct
         w_dtype = weight_dtype or ttnn.bfloat16
         w_mem = weight_memory_config or ttnn.DRAM_MEMORY_CONFIG
         if is_mesh_device and weight_tensor_placement:
@@ -303,14 +288,12 @@ def run(
             weight_tensor = ttnn.from_torch(
                 torch_weight,
                 dtype=w_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for weight
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=w_mem,
             )
 
     if bias_shape and torch_bias is not None and not is_host:
-        # Use original bias shape from traced config (already correct for group_norm)
-        # group_norm requires last dim to be TILE_WIDTH (32), so shapes like [1, 1, 4, 32] are correct
         b_dtype = bias_dtype or ttnn.bfloat16
         b_mem = bias_memory_config or ttnn.DRAM_MEMORY_CONFIG
         if is_mesh_device and bias_tensor_placement:
@@ -321,40 +304,33 @@ def run(
             bias_tensor = ttnn.from_torch(
                 torch_bias,
                 dtype=b_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for bias
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=b_mem,
             )
 
     if reciprocals_shape and use_welford and not is_host:
-        # Reciprocals are needed for Welford's algorithm, but traced configs often have issues:
-        # - Non-tile-aligned shard shapes (e.g., shard_shape=(1, 8192) where height=1)
-        # - L1 OOM when using sharded L1 memory
-        # Solution: Skip reciprocals with incompatible memory configs - operation will compute internally
-
         skip_reciprocals = False
         reciprocals_mem_cfg = reciprocals_memory_config if reciprocals_memory_config else ttnn.DRAM_MEMORY_CONFIG
 
-        # Check if memory config is L1 sharded (likely to cause OOM)
         if (
             reciprocals_mem_cfg
             and hasattr(reciprocals_mem_cfg, "memory_layout")
             and hasattr(reciprocals_mem_cfg, "buffer_type")
         ):
-            is_sharded = reciprocals_mem_cfg.memory_layout in [
+            is_recip_sharded = reciprocals_mem_cfg.memory_layout in [
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
             ]
             is_l1 = reciprocals_mem_cfg.buffer_type == ttnn.types.BufferType.L1
 
-            if is_sharded and is_l1:
-                # L1 sharded reciprocals often cause OOM - skip them
+            if is_recip_sharded and is_l1:
                 skip_reciprocals = True
 
         if not skip_reciprocals:
             torch_reciprocals = torch.ones(reciprocals_shape, dtype=torch.float32)
-            recip_layout = reciprocals_layout or ttnn.TILE_LAYOUT  # Prefer TILE for compatibility
+            recip_layout = reciprocals_layout or ttnn.TILE_LAYOUT
             recip_dtype = reciprocals_dtype or ttnn.float32
 
             if is_mesh_device and input_a_tensor_placement:
@@ -377,34 +353,31 @@ def run(
 
     start_time = start_measuring_time()
 
-    # Determine core_grid based on num_groups and use_welford
-    # Constraint: when use_welford=True, num_groups_per_core must be <= 16
-    # num_groups_per_core = num_groups / (grid.y * grid.x)
+    # inplace groupnorm is only supported for sharded tensors
+    actual_inplace = inplace and input_is_sharded
 
-    if use_welford and num_groups > 16:
-        # Need larger grid to keep num_groups_per_core <= 16
-        # For num_groups=32, need at least 2x1 grid -> 32/2 = 16 groups per core
-        min_cores = (num_groups + 15) // 16  # Round up to ensure <= 16 groups per core
-        try:
-            grid_size = device.compute_with_storage_grid_size()
-            # Use available grid, but ensure we have enough cores
-            if grid_size.y * grid_size.x >= min_cores:
-                core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
-            else:
-                # Use min required cores in a row
+    # Use traced core_grid if provided via op_kwargs, otherwise compute a default
+    if "core_grid" not in op_kwargs:
+        if use_welford and num_groups > 16:
+            min_cores = (num_groups + 15) // 16
+            try:
+                grid_size = device.compute_with_storage_grid_size()
+                if grid_size.y * grid_size.x >= min_cores:
+                    core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
+                else:
+                    core_grid = ttnn.CoreGrid(y=1, x=min_cores)
+            except Exception:
                 core_grid = ttnn.CoreGrid(y=1, x=min_cores)
-        except:
-            # Fallback: use min required cores
-            core_grid = ttnn.CoreGrid(y=1, x=min_cores)
+        else:
+            core_grid = ttnn.CoreGrid(y=1, x=1)
     else:
-        # For non-Welford or small num_groups, use simple 1x1 grid
-        core_grid = ttnn.CoreGrid(y=1, x=1)
+        core_grid = op_kwargs.pop("core_grid")
 
     # Build group_norm arguments
     group_norm_kwargs = {
         "num_groups": num_groups,
         "epsilon": epsilon,
-        "inplace": inplace,
+        "inplace": actual_inplace,
         "core_grid": core_grid,
         "memory_config": output_memory_config,
     }
@@ -428,7 +401,6 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

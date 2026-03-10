@@ -129,7 +129,9 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Convert to TTNN tensors with mesh support
+    # Convert to TTNN tensors with mesh support and interleaved→sharded fallback
+    input_is_sharded = hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded()
+
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor = create_tensor_on_mesh(
@@ -140,6 +142,15 @@ def run(
                 input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif input_is_sharded:
+            input_tensor = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor, input_a_memory_config)
         else:
             input_tensor = ttnn.from_torch(
                 torch_input_tensor,
@@ -155,6 +166,7 @@ def run(
     mask_dtype = input_b_dtype if input_b_dtype else input_a_dtype
     mask_layout = input_b_layout if input_b_layout else input_a_layout
     mask_memory_config = input_b_memory_config if input_b_memory_config else input_a_memory_config
+    mask_is_sharded = hasattr(mask_memory_config, "is_sharded") and mask_memory_config.is_sharded()
 
     if not is_host:
         if is_mesh_device and input_b_tensor_placement:
@@ -166,6 +178,15 @@ def run(
                 mask_memory_config,
                 input_b_tensor_placement,
             )
+        elif mask_is_sharded:
+            mask_tensor = ttnn.from_torch(
+                torch_mask_tensor,
+                dtype=mask_dtype,
+                layout=mask_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            mask_tensor = ttnn.interleaved_to_sharded(mask_tensor, mask_memory_config)
         else:
             mask_tensor = ttnn.from_torch(
                 torch_mask_tensor,
