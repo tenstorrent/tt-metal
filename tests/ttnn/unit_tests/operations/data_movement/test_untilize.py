@@ -1400,10 +1400,6 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
 )
 @pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.skipif(
-    os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="Known issue with uneven sharding in sharded-to-sharded untilize with tt-sim (out-of-bounds L1 access)",
-)
 def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_spec_uneven_input_shard_spec(
     device,
     dtype,
@@ -1554,10 +1550,6 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec(
     ],
 )
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.skipif(
-    os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="Known issue with uneven sharding in sharded-to-sharded untilize with tt-sim (out-of-bounds L1 access)",
-)
 def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec_uneven_shard_spec(
     device,
     dtype,
