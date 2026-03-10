@@ -69,20 +69,6 @@ class TtTransformer(LightweightModule):
                     self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
                 ),
             )
-            self._bitmask_zero_scalar = ttnn.from_torch(
-                torch.zeros((1, 1), dtype=torch.float32),
-                device=self.mesh_device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            self._bitmask_neg_inf_scalar = ttnn.from_torch(
-                torch.full((1, 1), fill_value=float("-inf"), dtype=torch.float32),
-                device=self.mesh_device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
         self._active_bitmask = None
         self._bitmask_copy_event = None
         self.bitmask_arange = ttnn.arange(
@@ -632,25 +618,7 @@ class TtTransformer(LightweightModule):
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-        zero_tensor = getattr(self, "_bitmask_zero_scalar", None)
-        neg_inf_tensor = getattr(self, "_bitmask_neg_inf_scalar", None)
-        if zero_tensor is None or neg_inf_tensor is None:
-            # Fallback for lightweight test stubs that don't run full model init.
-            zero_tensor = ttnn.from_torch(
-                torch.zeros((1, 1), dtype=torch.float32),
-                device=self.mesh_device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            neg_inf_tensor = ttnn.from_torch(
-                torch.full((1, 1), fill_value=float("-inf"), dtype=torch.float32),
-                device=self.mesh_device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        result = ttnn.where(converted_bitmask, zero_tensor, neg_inf_tensor, **op_kwargs)
+        result = ttnn.where(converted_bitmask, 0, float("-inf"))
         return result
 
     def start_bitmask_to_device(self, bitmask):
