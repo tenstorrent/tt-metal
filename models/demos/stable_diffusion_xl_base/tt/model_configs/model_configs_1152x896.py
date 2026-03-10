@@ -614,7 +614,7 @@ class ModelOptimisations1152x896:
 
         # region GROUPNORM CONFIGS
         self.groupnorm_configs = {}
-        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"] = {
+        self.groupnorm_configs["SHARDED_GROUPNORM_8x8_INPLACE"] = {
             "op_config": {
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
                 "num_out_blocks": None,
@@ -623,7 +623,16 @@ class ModelOptimisations1152x896:
             "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             "negative_mask": False,
         }
-        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"] = {
+        self.groupnorm_configs["SHARDED_GROUPNORM_8x7_INPLACE_NEGATIVE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=7, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": True,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_8x8_INPLACE_NEGATIVE"] = {
             "op_config": {
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
                 "num_out_blocks": None,
@@ -1011,15 +1020,17 @@ class ModelOptimisations1152x896:
 
     def _get_groupnorm_config(self, module_path):
         if "up_blocks.2" in module_path and "norm1" in module_path:
-            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
+            return self.groupnorm_configs["SHARDED_GROUPNORM_8x8_INPLACE_NEGATIVE"]
         if "resnets" in module_path:
-            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+            if "down_blocks.0" in module_path:
+                return self.groupnorm_configs["SHARDED_GROUPNORM_8x7_INPLACE_NEGATIVE"]
+            return self.groupnorm_configs["SHARDED_GROUPNORM_8x8_INPLACE"]
         if "attentions" in module_path:
             if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
                 return self.groupnorm_configs["SHARDED_GROUPNORM_4X8_NON_INPLACE"]
             else:
                 return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
-        return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+        return self.groupnorm_configs["SHARDED_GROUPNORM_8x8_INPLACE"]
 
     def get_groupnorm_params(self, module_path, weights, bias, groups, device):
         config = self._get_groupnorm_config(module_path)

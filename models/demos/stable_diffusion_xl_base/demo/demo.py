@@ -82,6 +82,26 @@ def run_demo_inference(
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
+    # Run reference diffusers pipeline for comparison
+    logger.info("Running reference diffusers pipeline...")
+    profiler.start("reference_diffusers_pipeline")
+    reference_images = pipeline(
+        prompt=prompts,
+        negative_prompt=negative_prompts,
+        prompt_2=prompt_2,
+        negative_prompt_2=negative_prompt_2,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        height=image_resolution[0],
+        width=image_resolution[1],
+        guidance_rescale=guidance_rescale,
+        timesteps=timesteps if timesteps is not None else None,
+    ).images
+    profiler.end("reference_diffusers_pipeline")
+    logger.info(
+        f"Reference diffusers pipeline completed in {profiler.times['reference_diffusers_pipeline'][-1]:.2f} seconds"
+    )
+
     assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
@@ -211,8 +231,9 @@ def run_demo_inference(
     [
         (1024, 1024),
         (512, 512),
+        (1152, 896),
     ],
-    ids=["1024x1024", "512x512"],
+    ids=["1024x1024", "512x512", "1152x896"],
 )
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.

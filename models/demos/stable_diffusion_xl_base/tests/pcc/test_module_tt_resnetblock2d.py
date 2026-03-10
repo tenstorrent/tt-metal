@@ -46,6 +46,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((512, 512), (1, 960, 32, 32), (1, 1280), 1, 2, True, "up_blocks", 0.999),
         ((512, 512), (1, 960, 64, 64), (1, 1280), 2, 0, True, "up_blocks", 0.999),
         ((512, 512), (1, 640, 64, 64), (1, 1280), 2, 1, True, "up_blocks", 0.999),
+        # 1152x896 image resolution
+        ((1152, 896), (1, 320, 144, 112), (1, 1280), 0, 0, False, "down_blocks", 0.999),
+        # ((1152, 896), (1, 320, 72, 56), (1, 1280), 1, 0, True, "down_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
