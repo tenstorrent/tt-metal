@@ -217,6 +217,7 @@ tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         args.num_buffers_per_channel,
         args.use_all_gather_async_llama_sharded,
         args.use_optimal_ccl_for_llama,
+        args.use_all_gather_async_via_broadcast,
         args.reverse_order,
         subdevice_core_range_set,
         tensor_args,
