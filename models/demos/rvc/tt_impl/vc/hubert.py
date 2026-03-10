@@ -24,8 +24,8 @@ def pad_to_multiple(x: ttnn.Tensor, multiple: int, value: float = 0.0) -> tuple[
     return ttnn.pad(x, [(0, 0), (0, remainder), (0, 0)], value=value), remainder
 
 
-class MultiheadAttention:
-    """TT port of huBERT MultiheadAttention used by TransformerSentenceEncoderLayer."""
+class MultiheadSelfAttention:
+    """Optimized TT HuBERT attention using TTNN transformer attention operators."""
 
     def __init__(self, device: ttnn.MeshDevice, embed_dim: int, num_heads: int, self_attention: bool = False) -> None:
         self.device = device
@@ -36,7 +36,6 @@ class MultiheadAttention:
         self.head_dim = embed_dim // num_heads
         if self.head_dim * num_heads != self.embed_dim:
             raise ValueError("embed_dim must be divisible by num_heads")
-        self.scaling = self.head_dim**-0.5
         self.self_attention = self_attention
 
         self.k_proj = Linear(device=device, in_features=self.kdim, out_features=embed_dim, dtype=ttnn.bfloat16)
@@ -50,50 +49,48 @@ class MultiheadAttention:
         self.q_proj.load_parameters(parameters=parameters, key="q_proj", prefix=prefix)
         self.out_proj.load_parameters(parameters=parameters, key="out_proj", prefix=prefix)
 
-    def __call__(self, query: ttnn.Tensor, key: ttnn.Tensor | None, value: ttnn.Tensor | None) -> ttnn.Tensor:
-        # Input shape: T x B x C
+    def __call__(self, query: ttnn.Tensor) -> ttnn.Tensor:
         tgt_len, bsz, embed_dim = query.shape
         if embed_dim != self.embed_dim:
             raise ValueError(f"query dim {embed_dim} != {self.embed_dim}")
 
-        if key is None or value is None:
-            raise ValueError("key/value must be provided")
+        src_len = query.shape[0]
 
-        src_len = key.shape[0]
+        query_btc = ttnn.permute(query, (1, 0, 2))
+        key_btc = ttnn.permute(query, (1, 0, 2))
+        value_btc = ttnn.permute(query, (1, 0, 2))
 
-        # TBC -> BTC
-        q = ttnn.permute(query, (1, 0, 2))
-        k = ttnn.permute(key, (1, 0, 2))
-        v = ttnn.permute(value, (1, 0, 2))
+        query_proj = self.q_proj(query_btc)
+        key_proj = self.k_proj(key_btc)
+        value_proj = self.v_proj(value_btc)
 
-        q = self.q_proj(q) * self.scaling
-        k = self.k_proj(k)
-        v = self.v_proj(v)
+        qkv_proj = ttnn.concat([query_proj, key_proj, value_proj], dim=-1)
+        query_heads, key_heads, value_heads = ttnn.transformer.split_query_key_value_and_split_heads(
+            ttnn.to_layout(qkv_proj, ttnn.TILE_LAYOUT),
+            num_heads=self.num_heads,
+            transpose_key=False,
+        )
+        ttnn.deallocate(qkv_proj)
 
-        q = ttnn.reshape(q, (bsz, tgt_len, self.num_heads, self.head_dim))
-        k = ttnn.reshape(k, (bsz, src_len, self.num_heads, self.head_dim))
-        v = ttnn.reshape(v, (bsz, src_len, self.num_heads, self.head_dim))
+        ttnn.deallocate(query_proj)
+        ttnn.deallocate(key_proj)
+        ttnn.deallocate(value_proj)
 
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_heads,
+            key_heads,
+            value_heads,
+            is_causal=False,
+        )
 
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(query_heads)
+        ttnn.deallocate(key_heads)
+        ttnn.deallocate(value_heads)
 
-        attn_weights = ttnn.matmul(q, k, transpose_b=True)
-        attn_weights = ttnn.to_layout(attn_weights, ttnn.TILE_LAYOUT)
-        attn_probs = ttnn.softmax(attn_weights, dim=-1)
-        attn = ttnn.matmul(attn_probs, v)
+        attn_output = ttnn.transformer.concatenate_heads(attn_output)
+        attn_output = self.out_proj(attn_output)
 
-        attn = ttnn.permute(attn, (0, 2, 1, 3))
-        attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
-        attn = ttnn.reshape(attn, (bsz, tgt_len, self.embed_dim))
-        attn = self.out_proj(attn)
-
-        # BTC -> TBC
-        return ttnn.permute(attn, (1, 0, 2))
+        return ttnn.permute(attn_output, (1, 0, 2))
 
     def deallocate(self) -> None:
         self.k_proj.deallocate()
@@ -115,7 +112,7 @@ class TransformerSentenceEncoderLayer:
         self.device = device
         self.embedding_dim = embed_dim
         self.activation_fn = activation_fn
-        self.self_attn = MultiheadAttention(
+        self.self_attn = MultiheadSelfAttention(
             device=device, embed_dim=embed_dim, num_heads=attention_heads, self_attention=True
         )
         self.layer_norm_first = layer_norm_first
@@ -176,7 +173,7 @@ class TransformerSentenceEncoderLayer:
 
         if self.layer_norm_first:
             x = self._layer_norm(x, self.self_attn_layer_norm_weight, self.self_attn_layer_norm_bias)
-            attn_out = self.self_attn(query=x, key=x, value=x)
+            attn_out = self.self_attn(query=x)
             x = residual + attn_out
 
             residual = x
@@ -185,7 +182,7 @@ class TransformerSentenceEncoderLayer:
             x = self.fc2(x)
             x = residual + x
         else:
-            x = self.self_attn(query=x, key=x, value=x)
+            x = self.self_attn(query=x)
 
             x = residual + x
 
