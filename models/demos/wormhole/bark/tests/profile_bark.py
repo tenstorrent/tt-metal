@@ -36,7 +36,7 @@ def profile_bark():
     # 3. Fine
     print("Starting Stage 3: Fine...")
     s3_start = time.time()
-    fine_tokens = model.generate_fine_tokens(coarse_tokens)
+    model.generate_fine_tokens(coarse_tokens)
     s3_end = time.time()
     print(f"Stage 3 done in {s3_end - s3_start:.2f}s")
 

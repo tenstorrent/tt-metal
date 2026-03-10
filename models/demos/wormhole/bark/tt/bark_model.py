@@ -21,7 +21,6 @@ import ttnn
 from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
 from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
 
-
 # ----- Bark upstream token constants (from HF BarkSemanticGenerationConfig / BarkCoarseGenerationConfig) -----
 SEMANTIC_VOCAB_SIZE = 10_000
 SEMANTIC_PAD_TOKEN = 10_000  # EOS for semantic stage
@@ -137,8 +136,7 @@ class TtBarkModel:
         # --- Defensive: verify hardcoded constants match the loaded checkpoint ---
         expected_infer = hf_model.semantic.config.input_vocab_size - 1
         assert expected_infer == SEMANTIC_INFER_TOKEN, (
-            f"SEMANTIC_INFER_TOKEN mismatch: checkpoint has {expected_infer}, "
-            f"code has {SEMANTIC_INFER_TOKEN}"
+            f"SEMANTIC_INFER_TOKEN mismatch: checkpoint has {expected_infer}, " f"code has {SEMANTIC_INFER_TOKEN}"
         )
 
         # Clean up full model reference
@@ -375,9 +373,9 @@ class TtBarkModel:
         # Transpose to [n_codebooks, batch, seq_len] for quantizer.decode
         # fine_tokens: [batch, seq, 8] -> [8, batch, seq]
         fine_output = fine_tokens.transpose(0, 2).transpose(1, 2)  # [8, batch, seq]
-        assert fine_output.shape[0] == 8 and fine_output.ndim == 3, (
-            f"EnCodec input shape wrong: expected [8, batch, seq], got {fine_output.shape}"
-        )
+        assert (
+            fine_output.shape[0] == 8 and fine_output.ndim == 3
+        ), f"EnCodec input shape wrong: expected [8, batch, seq], got {fine_output.shape}"
 
         with torch.no_grad():
             # Step 1: Decode codebook indices to continuous embeddings

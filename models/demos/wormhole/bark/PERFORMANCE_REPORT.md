@@ -20,7 +20,7 @@
 
 ## Host-Device Boundary
 
-> **Note**: The autoregressive decoding loop uses **host-side argmax** with logits 
+> **Note**: The autoregressive decoding loop uses **host-side argmax** with logits
 > suppression. Each step brings logits from device to host for:
 > 1. Semantic vocab masking ([0, 10000) range enforcement)
 > 2. Alternating-codebook masking for coarse generation

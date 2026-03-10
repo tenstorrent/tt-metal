@@ -271,7 +271,7 @@ class TtBarkAttention:
         # - Prefill mode (seq_q>=32): use chunked SDPA on device
         # - Decode/small seq: PyTorch SDPA (TTNN SDPA requires chunk_size >= 32)
         q_seq_len = query.shape[-2]
-        k_seq_len = key.shape[-2]
+        key.shape[-2]
 
         if q_seq_len >= 32:
             # Prefill mode: process full sequence with chunked SDPA
@@ -510,9 +510,7 @@ class TtBarkGPT:
             hidden = (tok_emb + pos_emb).float()
 
             # Transfer combined embeddings to device
-            inputs_embeds = ttnn.from_torch(
-                hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
+            inputs_embeds = ttnn.from_torch(hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         elif inputs_embeds is None:
             raise ValueError("Either input_ids or inputs_embeds must be provided")
         else:
