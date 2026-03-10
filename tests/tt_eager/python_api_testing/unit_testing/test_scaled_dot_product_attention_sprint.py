@@ -190,10 +190,9 @@ INPUT_IDS = [
     "wan_1xGLX_analog",
     "wan_4xGLX_analog",
 ]
+# Q_CHUNK_SIZES = [288]
 Q_CHUNK_SIZES = [224, 288]
 K_CHUNK_SIZES = [512]
-# Q_CHUNK_SIZES = [288]
-# K_CHUNK_SIZES = [512]
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
