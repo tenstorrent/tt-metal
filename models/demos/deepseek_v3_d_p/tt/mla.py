@@ -66,8 +66,8 @@ class ttMLA:
         )
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
-            q_chunk_size=32,
-            k_chunk_size=32,
+            q_chunk_size=256,
+            k_chunk_size=128,
             exp_approx_mode=False,
         )
 
@@ -258,7 +258,7 @@ class ttMLA:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=1,
+            num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -268,7 +268,7 @@ class ttMLA:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=1,
+            num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -337,7 +337,7 @@ class ttMLA:
             dim=1,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=1,
+            num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -398,7 +398,7 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-            num_links=1,
+            num_links=2,
             cluster_axis=0,
             mesh_device=self.mesh_device,
             topology=ttnn.Topology.Linear,
@@ -406,6 +406,7 @@ class ttMLA:
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             is_causal=True,
             scale=self.scale,
+            is_balanced=True,
         )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -420,7 +421,7 @@ class ttMLA:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=1,
+            num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,

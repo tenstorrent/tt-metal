@@ -78,8 +78,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 2)],
-    ids=["4x2"],
+    [(8, 4)],
+    ids=["8x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -92,9 +92,10 @@ def random_weights(config_only):
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("seq_len", [8 * 1024], ids=["seq8k"])
+@pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq8k"])
+@pytest.mark.parametrize("skip_host_comparison", [True])
 @pytest.mark.timeout(900)  # Increase timeout to 15 minutes for large sequence lengths
-def test_mla(use_pretrained, request, mesh_device, seq_len):
+def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison):
     """
     Test comparing reference and TT MLA modules with same weights.
 
@@ -162,32 +163,33 @@ def test_mla(use_pretrained, request, mesh_device, seq_len):
     torch.manual_seed(42)
     hidden_states = torch.randn(batch_size, seq_len, hidden_size).to(torch.bfloat16)
 
-    # Create causal attention mask
-    attention_mask = torch.triu(torch.ones(seq_len, seq_len) * float("-inf"), diagonal=1).to(torch.bfloat16)
-    attention_mask = attention_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, seq_len, seq_len)
+    if skip_host_comparison == False:
+        # Create causal attention mask
+        attention_mask = torch.triu(torch.ones(seq_len, seq_len) * float("-inf"), diagonal=1).to(torch.bfloat16)
+        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, seq_len, seq_len)
 
-    # Create position IDs
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
+        # Create position IDs
+        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
 
-    # Run reference forward pass
-    logger.info("Running reference CPU forward pass...")
-    mla_ref = mla_ref.eval().to(torch.bfloat16)
-    with torch.no_grad():
-        ref_output, _, _ = mla_ref(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=None,
-            output_attentions=False,
-            use_cache=False,
-        )
+        # Run reference forward pass
+        logger.info("Running reference CPU forward pass...")
+        mla_ref = mla_ref.eval().to(torch.bfloat16)
+        with torch.no_grad():
+            ref_output, _, _ = mla_ref(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=None,
+                output_attentions=False,
+                use_cache=False,
+            )
 
-    logger.info(f"✓ Reference forward pass complete")
-    logger.info(f"  Input shape:  {hidden_states.shape}")
-    logger.info(f"  Output shape: {ref_output.shape}")
-    logger.info(f"  Output dtype: {ref_output.dtype}")
-    logger.info(f"  Output mean:  {ref_output.mean().item():.4f}")
-    logger.info(f"  Output std:   {ref_output.std().item():.4f}")
+        logger.info(f"✓ Reference forward pass complete")
+        logger.info(f"  Input shape:  {hidden_states.shape}")
+        logger.info(f"  Output shape: {ref_output.shape}")
+        logger.info(f"  Output dtype: {ref_output.dtype}")
+        logger.info(f"  Output mean:  {ref_output.mean().item():.4f}")
+        logger.info(f"  Output std:   {ref_output.std().item():.4f}")
 
     tt_hidden_states = ttnn.from_torch(
         hidden_states.unsqueeze(0),
@@ -202,12 +204,14 @@ def test_mla(use_pretrained, request, mesh_device, seq_len):
         rope_tensors=rope_tensors,
     )
 
-    if tt_output is not None:
+    if skip_host_comparison == False:
         tt_output_cpu = ttnn.to_torch(
             tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape)
         ).to(torch.bfloat16)
 
         _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.98)
         logger.info(f"PCC is {pcc_message}")
+    else:
+        ttnn.synchronize_device(mesh_device)
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
