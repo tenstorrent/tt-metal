@@ -104,7 +104,7 @@ constexpr auto slice_sender_channels_for_vc(const std::array<T, N>& flat) {
     constexpr size_t offset = VC_SENDER_CHANNEL_START[vc];
     constexpr size_t count = ACTUAL_SENDER_CHANNELS_PER_VC[vc];
     std::array<T, count> result{};
-    static_assert(flat.size() > count, "trying to slice out of bounds of constexpr array");
+    static_assert(flat.size() > offset + count, "trying to slice out of bounds of constexpr array");
     for (size_t i = 0; i < count; i++) {
         result[i] = flat[offset + i];
     }
@@ -619,7 +619,7 @@ constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_se
         std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
 // not in symbol table - because not used
-constexpr INVALID_STREAM_ID = 33;
+constexpr size_t INVALID_STREAM_ID = 33;
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
