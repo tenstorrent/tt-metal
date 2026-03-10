@@ -13,13 +13,14 @@
 
 # Wormhole Galaxy e2e tests
 - name: Galaxy CCL tests
-  cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
+  cmd: pytest tests/nightly/tg/ccl
   skus:
     wh_galaxy:
       timeout: 37
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
+# MoE tests covering special 1x16 ring fabric config
 - name: Galaxy MoE tests
   cmd: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe
   skus:
