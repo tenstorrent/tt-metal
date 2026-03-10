@@ -9,7 +9,7 @@
 
 namespace ttnn::prim {
 
-struct TilizeMultiCoreInterleavedProgramFactory {
+struct TilizeMultiCoreDefaultProgramFactory {
     using shared_variables_t = ttnn::prim::MultiCoreSharedVariables::shared_variables_t;
     using cached_program_t =
         ttnn::device_operation::CachedProgram<ttnn::prim::MultiCoreSharedVariables::shared_variables_t>;
