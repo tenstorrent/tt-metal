@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     SharedExpert,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 
 
 def create_fabric_router_config(max_payload_size):
@@ -339,18 +340,31 @@ def create_decoder_block_tensors(
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
     kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
-    torch_kv_cache = torch.full((1, 1, max_seq_len, kvpe_dim), float("-inf"), dtype=torch.bfloat16)
-    for i in range(position_id):
-        torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
+    num_sp = mesh_rows
+    dcs = program_config.device_chunk_size
+    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
+    kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
     ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache,
+        torch_kv_cache_shuffled,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=kv_mem,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=kv_cache_2d_mesh_mapper,
     )
     kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # ── KV cache clone for standalone AttentionBlock.op sanity check ──
+    ttnn_kv_cache_attn_ref = ttnn.from_torch(
+        torch_kv_cache_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=kv_mem,
+        mesh_mapper=kv_cache_2d_mesh_mapper,
+    )
 
     # ── SDPA output tensor ──
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
@@ -365,6 +379,15 @@ def create_decoder_block_tensors(
     )
     sdpa_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
+    )
+    ttnn_sdpa_output = ttnn.from_torch(
+        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=sdpa_mem,
+        mesh_mapper=mesh_mapper,
+        tile=sdpa_tile,
     )
 
     # ── Post-SDPA tensors ──
@@ -382,6 +405,15 @@ def create_decoder_block_tensors(
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
     attn_output = ttnn.from_torch(
+        mesh_output_torch,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,
+        mesh_mapper=shard_mesh_mapper,
+    )
+    attn_ref_output = ttnn.from_torch(
         mesh_output_torch,
         device=submesh,
         layout=ttnn.TILE_LAYOUT,
@@ -612,10 +644,12 @@ def create_decoder_block_tensors(
         "ttnn_krope_cos": ttnn_krope_cos,
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
+        "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
         "ttnn_position_ids": ttnn_position_ids,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
+        "ttnn_sdpa_output": ttnn_sdpa_output,
         "sender_coord": sender_coord,
         "ttnn_sdpa_input_l": ttnn_sdpa_input_l,
         "ttnn_sdpa_input_ms": ttnn_sdpa_input_ms,
@@ -624,6 +658,7 @@ def create_decoder_block_tensors(
         "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
         "device_chunk_size": program_config.device_chunk_size,
         "ttnn_attention_block_output": attn_output,
+        "ttnn_attn_ref_output": attn_ref_output,
         # MoE tensors (attention_block_output IS the MoE residual input — overlapped with kv cache)
         "ttnn_residual_mcast_src": attn_output,
         "ttnn_gate_bias": layer.gate_bias,
@@ -781,6 +816,60 @@ def test_decoder(
 
     attn_semaphores = AttentionBlock.create_semaphores(submesh)
     moe_semaphores = MoeOp.create_semaphores(submesh)
+
+    # ========================================================================
+    # Run standalone AttentionBlock.op as sanity reference (uses cloned KV cache)
+    # ========================================================================
+    logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
+    attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+    ttnn_attn_ref_result = AttentionBlock.op(
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache_attn_ref"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["ttnn_sdpa_output"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attn_ref_output"],
+        attn_ref_semaphores,
+        bcast_cluster_axis,
+        bcast_secondary_cluster_axis,
+        reduce_cluster_axis,
+        0,  # sdpa_cluster_axis
+        1.0,  # sdpa_scale_fp32
+        1,  # num_links
+        epsilon,
+        use_fp32,
+        False,  # skip_ccl
+        noc_mode,
+        num_iterations=num_internal_iterations,
+    )
+    ttnn.synchronize_device(submesh)
+    ttnn_attn_ref_output_torch = ttnn.to_torch(
+        d["ttnn_attn_ref_output"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    logger.info("Standalone AttentionBlock.op completed.")
 
     # ========================================================================
     # Run decoder operation
@@ -1084,10 +1173,14 @@ def test_decoder(
     # ========================================================================
     for device_idx in range(mesh_rows * mesh_cols):
         received = ttnn_attention_output[device_idx : device_idx + 1, :]
+        pure_mla = ttnn_attn_ref_output_torch[device_idx : device_idx + 1, :]
         passing, pcc = comp_pcc(mla_output, received, 0.996)
+        pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.996)
         logger.info(f"Device {device_idx} DecoderBlock Output PCC: {pcc}")
+        logger.info(f"Pure MLA PCC: {pure_mla_pcc}")
         logger.info(f"Golden MLA output: {mla_output}")
         logger.info(f"TTNN MLA output: {received}")
+        logger.info(f"Pure MLA output: {pure_mla}")
         # assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
 
     logger.info("✓ DecoderBlock mesh test passed!")

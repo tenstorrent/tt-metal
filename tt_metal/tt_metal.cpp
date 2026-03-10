@@ -749,9 +749,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             program.impl().finalize_offsets(device);
         }
 
-        if (device->id() == 0) {
-            std::cout << "Writing runtime args to device " << device->id() << std::endl;
-        }
+        // if (device->id() == 0) {
+        //     std::cout << "Writing runtime args to device " << device->id() << std::endl;
+        // }
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
         detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
 
@@ -877,13 +877,14 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                     }  // PROF_END("CBS")
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
-                    if (device_id == 0) {
-                        std::cout << "Writing circular buffer config to device " << device_id << " "
-                                  << physical_core.str() << std::endl;
-                        std::cout << "Circular buffer config address: " << addr << std::endl;
-                        std::cout << "Circular buffer config size: " << circular_buffer_config_vec.size() << std::endl;
-                        // std::cout << "Circular buffer config: " << circular_buffer_config_vec << std::endl;
-                    }
+                    // if (device_id == 0) {
+                    //     std::cout << "Writing circular buffer config to device " << device_id << " "
+                    //               << physical_core.str() << std::endl;
+                    //     std::cout << "Circular buffer config address: " << addr << std::endl;
+                    //     std::cout << "Circular buffer config size: " << circular_buffer_config_vec.size() <<
+                    //     std::endl;
+                    //     // std::cout << "Circular buffer config: " << circular_buffer_config_vec << std::endl;
+                    // }
                     TT_FATAL(addr != 0, "Circular buffer config address is 0");
                     MetalContext::instance().get_cluster().write_core(
                         device_id, physical_core, circular_buffer_config_vec, addr);
@@ -954,13 +955,13 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             auto rta_offset = kernel_config.rta_offset()[processor_index];
                             if (!rt_args.empty()) {
                                 auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
-                                if (device_id == 0) {
-                                    std::cout << "Writing unique runtime args to device " << device_id << " "
-                                              << logical_core.str() << std::endl;
-                                    std::cout << "Unique runtime args address: " << rt_args_addr << std::endl;
-                                    std::cout << "Unique runtime args size: " << rt_args.size() << std::endl;
-                                    // std::cout << "Unique runtime args: " << rt_args << std::endl;
-                                }
+                                // if (device_id == 0) {
+                                //     std::cout << "Writing unique runtime args to device " << device_id << " "
+                                //               << logical_core.str() << std::endl;
+                                //     std::cout << "Unique runtime args address: " << rt_args_addr << std::endl;
+                                //     std::cout << "Unique runtime args size: " << rt_args.size() << std::endl;
+                                //     // std::cout << "Unique runtime args: " << rt_args << std::endl;
+                                // }
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -979,13 +980,15 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (!common_rt_args.empty()) {
                                 auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
-                                if (device_id == 0) {
-                                    std::cout << "Writing common runtime args to device " << device_id << " "
-                                              << logical_core.str() << std::endl;
-                                    std::cout << "Common runtime args address: " << common_rt_args_addr << std::endl;
-                                    std::cout << "Common runtime args size: " << common_rt_args.size() << std::endl;
-                                    // std::cout << "Common runtime args: " << common_rt_args << std::endl;
-                                }
+                                // if (device_id == 0) {
+                                //     // std::cout << "Writing common runtime args to device " << device_id << " "
+                                //     //           << logical_core.str() << std::endl;
+                                //     // std::cout << "Common runtime args address: " << common_rt_args_addr <<
+                                //     std::endl;
+                                //     // std::cout << "Common runtime args size: " << common_rt_args.size() <<
+                                //     std::endl;
+                                //     // std::cout << "Common runtime args: " << common_rt_args << std::endl;
+                                // }
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
