@@ -118,11 +118,9 @@ def sine_positional_encoding_ttnn(
     pos_y = ttnn.concat([sin_y, cos_y], dim=-1)
     pos_y = ttnn.reshape(pos_y, (1, H, W, num_feats))
     pos = ttnn.concat([pos_y, pos_x], dim=-1)
-
-    # pos = ttnn.permute(pos, (0, 3, 1, 2))
-    # pos = ttnn.reshape(pos, (1, num_feats * 2, H * W))
-    # pos = ttnn.permute(pos, (0, 2, 1))
-    pos = ttnn.reshape(pos, (1, H * W, -1))
+    pos = ttnn.permute(pos, (0, 3, 1, 2))
+    pos = ttnn.reshape(pos, (1, num_feats * 2, H * W))
+    pos = ttnn.permute(pos, (0, 2, 1))
     return ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -325,35 +323,7 @@ class TtDINO:
             TtRegBranch(decoder_params["reg_branches"][i], device) for i in range(decoder_num_layers)
         ]
 
-        self._pe_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
-        self._pe_dim_t_cache = None
         self._dram_cfg = ttnn.DRAM_MEMORY_CONFIG
-
-    def _get_pe_dim_t(self):
-        if self._pe_dim_t_cache is None:
-            num_feats = self.embed_dims // 2
-            # Small tensor (128 elements) -> L1
-            l1_cfg = ttnn.L1_MEMORY_CONFIG
-            dim_t = ttnn.arange(0, num_feats, 1, dtype=ttnn.bfloat16, device=self.device, memory_config=l1_cfg)
-            dim_t = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=l1_cfg))
-            dim_t = ttnn.multiply(dim_t, 2.0, memory_config=l1_cfg)
-            dim_t = ttnn.divide(dim_t, float(num_feats), memory_config=l1_cfg)
-            self._pe_dim_t_cache = ttnn.pow(float(self.pe_temperature), dim_t, memory_config=l1_cfg)
-        return self._pe_dim_t_cache
-
-    def _get_pe_tt(self, H: int, W: int) -> ttnn.Tensor:
-        key = (H, W)
-        if key not in self._pe_cache:
-            self._pe_cache[key] = sine_positional_encoding_ttnn(
-                self.device,
-                H,
-                W,
-                num_feats=self.embed_dims // 2,
-                temperature=self.pe_temperature,
-                memory_config=self._dram_cfg,
-                dim_t_cache=self._get_pe_dim_t(),
-            )
-        return self._pe_cache[key]
 
     def pre_transformer_tt(
         self,
@@ -402,8 +372,15 @@ class TtDINO:
             feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
             feat_padded_list.append(feat_flat_tt)
 
-            # PE on device: cached [1, H*W, 256] + level_embed, then pad and expand to B
-            pos_tt = self._get_pe_tt(int(H), int(W))
+            # PE on device: [1, H*W, 256] + level_embed, then pad and expand to B
+            pos_tt = sine_positional_encoding_ttnn(
+                self.device,
+                int(H),
+                int(W),
+                num_feats=self.embed_dims // 2,
+                temperature=self.pe_temperature,
+                memory_config=self._dram_cfg,
+            )
             level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
             pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
             if padded_hw > hw:
@@ -673,17 +650,32 @@ class TtDINO:
         ttnn.deallocate(output_proposals_valid)
 
         mfc = self._decoder_params["memory_trans_fc"]
-        output_memory = ttnn.linear(output_memory, mfc["weight"], bias=mfc["bias"], memory_config=self._dram_cfg)
+        output_memory = ttnn.linear(
+            output_memory,
+            mfc["weight"],
+            bias=mfc["bias"],
+            memory_config=self._dram_cfg,
+        )
         mnorm = self._decoder_params["memory_trans_norm"]
         output_memory = ttnn.layer_norm(output_memory, weight=mnorm["weight"], bias=mnorm["bias"])
 
         cls6 = self._decoder_params["cls_branches"][6]
-        enc_cls = ttnn.linear(output_memory, cls6["weight"], bias=cls6["bias"], memory_config=self._dram_cfg)
+        enc_cls = ttnn.linear(
+            output_memory,
+            cls6["weight"],
+            bias=cls6["bias"],
+            memory_config=self._dram_cfg,
+        )
 
         reg6 = self._decoder_params["reg_branches"][6]
         reg_out = output_memory
         for i, layer in enumerate(reg6):
-            reg_out = ttnn.linear(reg_out, layer["weight"], bias=layer["bias"], memory_config=self._dram_cfg)
+            reg_out = ttnn.linear(
+                reg_out,
+                layer["weight"],
+                bias=layer["bias"],
+                memory_config=self._dram_cfg,
+            )
             if i < len(reg6) - 1:
                 reg_out = ttnn.relu(reg_out)
         enc_coords_unact = ttnn.add(reg_out, output_proposals)
@@ -752,7 +744,11 @@ class TtDINO:
             # Classification: Linear(256, num_classes) on device
             cls_w = self.cls_branches[layer_id]["weight"]
             cls_b = self.cls_branches[layer_id]["bias"]
-            cls_out_tt = ttnn.linear(hidden_state, cls_w, bias=cls_b)
+            cls_out_tt = ttnn.linear(
+                hidden_state,
+                cls_w,
+                bias=cls_b,
+            )
             all_cls_tt.append(cls_out_tt)
 
             # Regression: reg_branch on device
@@ -799,6 +795,7 @@ class TtDINO:
     def __call__(
         self,
         mlvl_feats_tt: List[ttnn.Tensor],
+        profile_mode: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         DINO inference from neck features → detections.
@@ -813,14 +810,16 @@ class TtDINO:
         pre_trans = self.pre_transformer_tt(mlvl_feats_tt)
 
         # feat_tt = ttnn.from_torch(
-        #     pre_trans["feat_flatten"].to(torch.bfloat16),
+        #     pre_trans["feat_flatten"],
         #     device=self.device,
         #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
         # feat_pos_tt = ttnn.from_torch(
-        #     pre_trans["feat_pos"].to(torch.bfloat16),
+        #     pre_trans["feat_pos"],
         #     device=self.device,
         #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
 
         logger.info("Running encoder...")
@@ -860,6 +859,7 @@ class TtDINO:
         self,
         image: torch.Tensor,
         return_intermediates: bool = False,
+        profile_mode: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Full end-to-end inference from raw image tensor.
@@ -877,6 +877,7 @@ class TtDINO:
                 encoder_memory: [B, N, 256] torch tensor
                 decoder_hidden_states: list of 6 torch [B, 900, 256]
                 decoder_references: list of 7 torch [B, 900, 4]
+            profile_mode: if True, ReadDeviceProfiler after each stage (slower, for debugging)
         """
         assert self.backbone is not None, "Backbone not initialized — pass backbone_params"
         assert self.neck is not None, "Neck not initialized — pass neck_params"
@@ -892,7 +893,8 @@ class TtDINO:
         )
         backbone_feats_tt = self.backbone(image_tt)
         ttnn.synchronize_device(self.device)
-        ttnn.ReadDeviceProfiler(self.device)
+        if profile_mode:
+            ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Backbone: {len(backbone_feats_tt)} feature maps")
 
         backbone_feats_torch = None
@@ -906,7 +908,8 @@ class TtDINO:
         logger.info("Neck: ChannelMapper...")
         neck_feats_tt = self.neck(backbone_feats_tt)
         ttnn.synchronize_device(self.device)
-        ttnn.ReadDeviceProfiler(self.device)
+        if profile_mode:
+            ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Neck: {len(neck_feats_tt)} output levels")
 
         neck_feats_torch = None
@@ -935,7 +938,8 @@ class TtDINO:
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
         ttnn.synchronize_device(self.device)
-        ttnn.ReadDeviceProfiler(self.device)
+        if profile_mode:
+            ttnn.ReadDeviceProfiler(self.device)
 
         encoder_memory_torch = None
         if return_intermediates:
@@ -957,7 +961,8 @@ class TtDINO:
         )
 
         ttnn.synchronize_device(self.device)
-        ttnn.ReadDeviceProfiler(self.device)
+        if profile_mode:
+            ttnn.ReadDeviceProfiler(self.device)
 
         all_cls, all_coords = self.forward_heads(hidden_states, references)
 

@@ -15,7 +15,7 @@ import torch
 import ttnn
 from loguru import logger
 
-UPLOAD_CHUNK_QUERIES = 512
+UPLOAD_CHUNK_QUERIES = 2048
 
 
 def compute_sampling_locations_and_attention_weights(
@@ -98,6 +98,10 @@ def split_value_into_levels(value_tt, value_spatial_shapes, num_heads, head_dim)
         val_l = value_level_list[level]
         val_l = ttnn.permute(val_l, (0, 2, 1, 3))
         val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
+        # Keep value levels in ROW_MAJOR once so chunk loop does not repeatedly
+        # trigger layout-side conversions around grid_sample.
+        val_l = ttnn.to_layout(val_l, ttnn.ROW_MAJOR_LAYOUT)
+        val_l = ttnn.to_memory_config(val_l, ttnn.DRAM_MEMORY_CONFIG)
         value_l_tts.append(val_l)
     return value_l_tts
 
@@ -124,7 +128,7 @@ def multi_scale_deformable_attn_ttnn(
         grid = sampling_grids[:, :, :, level, :, :]
         grid = ttnn.permute(grid, (0, 2, 3, 1, 4))
         grid = ttnn.reshape(grid, (bs * num_heads, num_points * chunk_Q, 1, 2))
-        grid = ttnn.to_memory_config(grid, ttnn.L1_MEMORY_CONFIG)
+        grid = ttnn.to_memory_config(grid, ttnn.DRAM_MEMORY_CONFIG)
         grid = ttnn.to_layout(grid, ttnn.ROW_MAJOR_LAYOUT)
 
         sampled = ttnn.grid_sample(value_l_tts[level], grid, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -310,7 +314,6 @@ class TtMSDeformAttn:
             query, self.params["attention_weights"]["weight"], bias=self.params["attention_weights"]["bias"]
         )
 
-        # Option 1: Value reshape on device in ROW_MAJOR (no host transfer)
         logger.info("  MSDeformAttn: value reshape on device (ROW_MAJOR)...")
         value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
         value = ttnn.reshape(value, (bs, num_keys, self.num_heads, self.head_dim))
@@ -318,121 +321,99 @@ class TtMSDeformAttn:
         if key_padding_mask is not None:
             mask = ttnn.reshape(key_padding_mask, (bs, num_keys, 1))
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
-        if num_queries <= 2048:
-            sampling_locations, aw_tt = compute_sampling_locations_and_attention_weights(
-                sampling_offsets_flat,
-                attention_weights_flat,
-                reference_points,
-                spatial_shapes,
-                bs,
-                num_queries,
-                self.num_heads,
-                self.num_levels,
-                self.num_points,
-                self.device,
+
+        logger.info("  MSDeformAttn: computing sampling locations and attention weights on host...")
+        so_torch = ttnn.to_torch(sampling_offsets_flat).float()
+        aw_torch = ttnn.to_torch(attention_weights_flat).float()
+        ttnn.deallocate(sampling_offsets_flat)
+        ttnn.deallocate(attention_weights_flat)
+
+        so_torch = so_torch[:, :num_queries, :].reshape(
+            bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2
+        )
+        aw_torch = aw_torch[:, :num_queries, :].reshape(
+            bs, num_queries, self.num_heads, self.num_levels * self.num_points
+        )
+        aw_torch = torch.softmax(aw_torch, dim=-1)
+        aw_torch = aw_torch.reshape(bs, num_queries, self.num_heads, self.num_levels, self.num_points)
+
+        if isinstance(reference_points, ttnn.Tensor):
+            ref_pts = ttnn.to_torch(reference_points).float()
+        else:
+            ref_pts = reference_points.float()
+
+        if ref_pts.shape[-1] == 2:
+            offset_normalizer = torch.stack([spatial_shapes[..., 1].float(), spatial_shapes[..., 0].float()], dim=-1)
+            so_torch = so_torch / offset_normalizer[None, None, None, :, None, :]
+            ref_xy = ref_pts.reshape(bs, num_queries, 1, ref_pts.shape[2], 1, 2)
+            sampling_locations_torch = ref_xy + so_torch
+        elif ref_pts.shape[-1] == 4:
+            ref_xy = ref_pts[:, :, None, :, None, :2]
+            ref_wh = ref_pts[:, :, None, :, None, 2:]
+            sampling_locations_torch = ref_xy + (so_torch / self.num_points) * ref_wh * 0.5
+        else:
+            raise ValueError(f"reference_points last dim must be 2 or 4, got {ref_pts.shape[-1]}")
+
+        sampling_locations_tt = ttnn.from_torch(
+            sampling_locations_torch.to(torch.bfloat16),
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attention_weights_tt = ttnn.from_torch(
+            aw_torch.to(torch.bfloat16),
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
+
+        num_upload_chunks = (num_queries + UPLOAD_CHUNK_QUERIES - 1) // UPLOAD_CHUNK_QUERIES
+        logger.info(
+            f"  MSDeformAttn: {num_upload_chunks} chunks (chunk={UPLOAD_CHUNK_QUERIES}), "
+            f"grid+attention on device ({num_queries} queries)..."
+        )
+        output_chunks_host = []
+        for q_start in range(0, num_queries, UPLOAD_CHUNK_QUERIES):
+            q_end = min(q_start + UPLOAD_CHUNK_QUERIES, num_queries)
+            loc_chunk_tt = ttnn.slice(
+                sampling_locations_tt,
+                [0, q_start, 0, 0, 0, 0],
+                [bs, q_end, self.num_heads, self.num_levels, self.num_points, 2],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            logger.info(f"  MSDeformAttn: UniAD-style batched grid_sample ({num_queries} queries)...")
-            output = multi_scale_deformable_attn_uniad_style(
-                value_tt=value,
-                value_spatial_shapes=spatial_shapes,
-                sampling_locations_tt=sampling_locations,
-                attention_weights_tt=aw_tt,
+            aw_chunk_tt = ttnn.slice(
+                attention_weights_tt,
+                [0, q_start, 0, 0, 0],
+                [bs, q_end, self.num_heads, self.num_levels, self.num_points],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            chunk_out = multi_scale_deformable_attn_ttnn(
+                value_l_tts=value_l_tts,
+                sampling_locations_tt=loc_chunk_tt,
+                attention_weights_tt=aw_chunk_tt,
                 device=self.device,
                 num_heads=self.num_heads,
                 head_dim=self.head_dim,
             )
-        else:
-            logger.info("  MSDeformAttn: computing sampling locations and attention weights on host...")
-            so_torch = ttnn.to_torch(sampling_offsets_flat).float()
-            aw_torch = ttnn.to_torch(attention_weights_flat).float()
+            ttnn.deallocate(loc_chunk_tt)
+            ttnn.deallocate(aw_chunk_tt)
+            output_chunks_host.append(ttnn.to_torch(chunk_out))
+            ttnn.deallocate(chunk_out)
 
-            so_torch = so_torch[:, :num_queries, :].reshape(
-                bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2
-            )
-            aw_torch = aw_torch[:, :num_queries, :].reshape(
-                bs, num_queries, self.num_heads, self.num_levels * self.num_points
-            )
-            aw_torch = torch.softmax(aw_torch, dim=-1)
-            aw_torch = aw_torch.reshape(bs, num_queries, self.num_heads, self.num_levels, self.num_points)
+        ttnn.deallocate(sampling_locations_tt)
+        ttnn.deallocate(attention_weights_tt)
+        for vl in value_l_tts:
+            ttnn.deallocate(vl)
 
-            if isinstance(reference_points, ttnn.Tensor):
-                ref_pts = ttnn.to_torch(reference_points).float()
-            else:
-                ref_pts = reference_points.float()
+        output_cat = torch.cat(output_chunks_host, dim=1)
+        output = ttnn.from_torch(
+            output_cat,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-            if ref_pts.shape[-1] == 2:
-                offset_normalizer = torch.stack(
-                    [spatial_shapes[..., 1].float(), spatial_shapes[..., 0].float()], dim=-1
-                )
-                so_torch = so_torch / offset_normalizer[None, None, None, :, None, :]
-                ref_xy = ref_pts.reshape(bs, num_queries, 1, ref_pts.shape[2], 1, 2)
-                sampling_locations_torch = ref_xy + so_torch
-            elif ref_pts.shape[-1] == 4:
-                ref_xy = ref_pts[:, :, None, :, None, :2]
-                ref_wh = ref_pts[:, :, None, :, None, 2:]
-                sampling_locations_torch = ref_xy + (so_torch / self.num_points) * ref_wh * 0.5
-            else:
-                raise ValueError(f"reference_points last dim must be 2 or 4, got {ref_pts.shape[-1]}")
-
-            sampling_locations_tt = ttnn.from_torch(
-                sampling_locations_torch.to(torch.bfloat16),
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            attention_weights_tt = ttnn.from_torch(
-                aw_torch.to(torch.bfloat16),
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
-
-            num_upload_chunks = (num_queries + UPLOAD_CHUNK_QUERIES - 1) // UPLOAD_CHUNK_QUERIES
-            logger.info(
-                f"  MSDeformAttn: {num_upload_chunks} chunks (chunk={UPLOAD_CHUNK_QUERIES}), "
-                f"grid+attention on device ({num_queries} queries)..."
-            )
-            output_chunks_host = []
-            for q_start in range(0, num_queries, UPLOAD_CHUNK_QUERIES):
-                q_end = min(q_start + UPLOAD_CHUNK_QUERIES, num_queries)
-                loc_chunk_tt = ttnn.slice(
-                    sampling_locations_tt,
-                    [0, q_start, 0, 0, 0, 0],
-                    [bs, q_end, self.num_heads, self.num_levels, self.num_points, 2],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                aw_chunk_tt = ttnn.slice(
-                    attention_weights_tt,
-                    [0, q_start, 0, 0, 0],
-                    [bs, q_end, self.num_heads, self.num_levels, self.num_points],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
-                chunk_out = multi_scale_deformable_attn_ttnn(
-                    value_l_tts=value_l_tts,
-                    sampling_locations_tt=loc_chunk_tt,
-                    attention_weights_tt=aw_chunk_tt,
-                    device=self.device,
-                    num_heads=self.num_heads,
-                    head_dim=self.head_dim,
-                )
-                ttnn.deallocate(loc_chunk_tt)
-                ttnn.deallocate(aw_chunk_tt)
-                output_chunks_host.append(ttnn.to_torch(chunk_out))
-                ttnn.deallocate(chunk_out)
-
-            ttnn.deallocate(sampling_locations_tt)
-            ttnn.deallocate(attention_weights_tt)
-            for vl in value_l_tts:
-                ttnn.deallocate(vl)
-
-            output_cat = torch.cat(output_chunks_host, dim=1)
-            output = ttnn.from_torch(
-                output_cat,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
         logger.info("  MSDeformAttn: output projection on device...")
         output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
 
@@ -454,8 +435,7 @@ class TtFFN:
     def __call__(self, x, identity=None):
         if identity is None:
             identity = x
-        x = ttnn.linear(x, self.w1, bias=self.b1)
-        x = ttnn.relu(x)
+        x = ttnn.linear(x, self.w1, bias=self.b1, activation="relu")
         x = ttnn.linear(x, self.w2, bias=self.b2)
         return ttnn.add(x, identity)
 
@@ -512,10 +492,21 @@ class TtDINOEncoder:
     Output: encoder memory [B, sum(H_i*W_i), 256]
     """
 
-    def __init__(self, params, device, num_layers=6, embed_dims=256, num_heads=8, num_levels=5, num_points=4):
+    def __init__(
+        self,
+        params,
+        device,
+        num_layers=6,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=5,
+        num_points=4,
+        profile_per_layer=False,
+    ):
         self.device = device
         self.num_layers = num_layers
         self.embed_dims = embed_dims
+        self.profile_per_layer = profile_per_layer
         self.layers = [
             TtDINOEncoderLayer(
                 params["layers"][i],
@@ -648,6 +639,7 @@ class TtDINOEncoder:
                 reference_points=reference_points,
             )
             ttnn.synchronize_device(self.device)
-            ttnn.ReadDeviceProfiler(self.device)
+            if self.profile_per_layer:
+                ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Encoder layer {i} done.")
         return query
