@@ -601,6 +601,7 @@ TEST_F(GeluFwUlpTest, ReferenceImplementationVerification) {
 TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
     // Collect all valid BF16 values, sorted
     std::vector<float> all_values;
+    all_values.reserve(65536);
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
         if ((bf16_bits & bf16_ulp_fw::BF16_EXP_MASK) == bf16_ulp_fw::BF16_EXP_MASK &&
@@ -684,8 +685,10 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
     // --- Collect tail values for hardware verification ---
     // Negative tail: only deep saturation region (x <= neg_sat_boundary_zero)
     std::vector<float> neg_tail_values;
+    neg_tail_values.reserve(all_values.size());
     // Positive tail: golden says identity (x >= pos_first_identity)
     std::vector<float> pos_tail_values;
+    pos_tail_values.reserve(all_values.size());
     for (float x : all_values) {
         if (x < 0.0f && x <= neg_sat_boundary_zero) {
             neg_tail_values.push_back(x);
@@ -839,6 +842,7 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
         std::string region;
     };
     std::vector<ULP2Entry> ulp2_entries;
+    ulp2_entries.reserve(256);
 
     // Also collect detailed info for all values near x=-5 boundary
     struct BoundaryEntry {
@@ -850,6 +854,7 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
         std::string region;
     };
     std::vector<BoundaryEntry> boundary_entries;
+    boundary_entries.reserve(1024);
 
     for (size_t i = 0; i < valid_count; ++i) {
         float x = bf16_ulp_fw::bf16_bits_to_float(bf16_ulp_fw::float_to_bf16_bits(input_values[i]));
