@@ -145,21 +145,15 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
 
     // Verify sharded buffer readback in FD mode
     std::vector<uint32_t> fd_dst_vec = {};
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
-        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
-    }
-
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, true);
+    EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
     // Transition from FD to SD
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 
     // Verify sharded buffer still works after FD->SD transition
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        std::vector<uint32_t> fd_buf_readback_in_sd = {};
-        ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
-        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec) << "Sharded buffer data mismatch after FD->SD transition";
-    }
-
+    std::vector<uint32_t> fd_buf_readback_in_sd = {};
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, true);
+    EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec) << "Sharded buffer data mismatch after FD->SD transition";
     // Write and verify interleaved L1 buffer in SD mode
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
