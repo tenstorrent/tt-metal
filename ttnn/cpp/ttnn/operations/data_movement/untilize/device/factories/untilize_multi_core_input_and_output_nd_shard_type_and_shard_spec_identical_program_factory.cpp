@@ -57,6 +57,26 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
+    // Detect if ND sharding is uneven
+    uint32_t tensor_width = a.padded_shape()[-1];
+    uint32_t tensor_height = a.physical_volume() / tensor_width;
+    bool has_uneven_sharding = false;
+    {
+        uint32_t height_remainder = tensor_height % shard_height;
+        uint32_t width_remainder = tensor_width % shard_width;
+        has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
+    }
+
+    // Detect if ND sharding is uneven
+    uint32_t tensor_width = a.padded_shape()[-1];
+    uint32_t tensor_height = a.physical_volume() / tensor_width;
+    bool has_uneven_sharding = false;
+    {
+        uint32_t height_remainder = tensor_height % shard_height;
+        uint32_t width_remainder = tensor_width % shard_width;
+        has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
+    }
+
     const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
 
     uint32_t total_shards = distribution_spec.num_shards();
@@ -70,7 +90,8 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         num_cores,
         num_shards_per_core);
 
-    // Input CB
+    // Input CB - don't back with buffer if we have uneven sharding to prevent out-of-bounds access
+    Buffer* cb_backing_buffer = (!has_uneven_sharding) ? src0_buffer : nullptr;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -78,9 +99,10 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         input_single_tile_size,
         num_tiles_per_shard * num_shards_per_core,
         input_cb_data_format,
-        src0_buffer);
+        cb_backing_buffer);
 
-    // Output CB
+    // Output CB - don't back with buffer if we have uneven sharding to prevent out-of-bounds access
+    Buffer* output_cb_backing_buffer = (!has_uneven_sharding) ? dst_buffer : nullptr;
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
         program,
@@ -88,17 +110,28 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         output_single_tile_size,
         num_tiles_per_shard * num_shards_per_core,
         output_cb_data_format,
-        dst_buffer);
+        output_cb_backing_buffer);
 
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
 
-    // Reader kernel
-    KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    // Reader kernel - use different kernel for uneven sharding
+    KernelHandle unary_reader_kernel_id;
+    if (has_uneven_sharding) {
+        // Use reader that copies from sharded buffer to CB for uneven sharding
+        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_sharded_rm.cpp",
+            grid,
+            tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    } else {
+        // Use standard sharded reader for even sharding
+        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+            grid,
+            tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    }
 
     // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
@@ -165,7 +198,13 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         }
 
         // Reader run-time args
-        std::vector<uint32_t> reader_run_time_args = {num_tiles_to_process};
+        std::vector<uint32_t> reader_run_time_args;
+        if (has_uneven_sharding) {
+            // For uneven sharding, reader needs buffer address for L1-to-L1 copy
+            reader_run_time_args = {num_tiles_to_process, src0_buffer->address()};
+        } else {
+            reader_run_time_args = {num_tiles_to_process};
+        }
 
         // Writer run-time args
         std::vector<uint32_t> writer_run_time_args = {num_tiles_to_process};
