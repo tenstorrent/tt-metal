@@ -6,6 +6,7 @@
 
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/assert.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -266,7 +267,7 @@ std::vector<Tensor> topk(
             // the correct shapes (validated above), so fill the values with the input tensor
             // and a zero as the index and return.
             auto& [values, indices] = preallocated_output_tensors.value();
-            copy_to_device(input_tensor.cpu(), values);
+            ttnn::copy(input_tensor, values);
 
             // Creating indices tensor on host and copying to device (there is no direct way to write
             // to a device tensor with a scalar value).

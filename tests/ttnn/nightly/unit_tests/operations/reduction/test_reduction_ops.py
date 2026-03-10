@@ -24,14 +24,14 @@ from models.common.utility_functions import torch_random
 def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
     """Re-runs topk with preallocated output tensors and returns (values, indices) as torch tensors."""
     prealloc_values = ttnn.empty(
-        list(ttnn_result[0].shape),
+        ttnn_result[0].shape,
         dtype=ttnn_result[0].dtype,
         layout=ttnn_result[0].layout,
         device=device,
         memory_config=ttnn_result[0].memory_config(),
     )
     prealloc_indices = ttnn.empty(
-        list(ttnn_result[1].shape),
+        ttnn_result[1].shape,
         dtype=ttnn_result[1].dtype,
         layout=ttnn_result[1].layout,
         device=device,
@@ -45,16 +45,30 @@ def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
 
 
 # Helper function that calls argmax with preallocated output tensor, whose shape is
-# determined by the ttnn_result obtained from a previous run of topk without preallocated output tensors.
+# determined by the ttnn_result obtained from a previous run of argmax without preallocated output tensors.
 def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_result):
     prealloc_output = ttnn.empty(
-        list(ttnn_result.shape),
+        ttnn_result.shape,
         dtype=ttnn_result.dtype,
         layout=ttnn_result.layout,
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
     ttnn.argmax(input_tensor, dim=dim, keepdim=keepdim, output_tensor=prealloc_output)
+    return ttnn.to_torch(ttnn.from_device(prealloc_output))
+
+
+# Helper function that calls a cumulative op (cumsum/cumprod) with preallocated output tensor,
+# whose shape is determined by the ttnn_result obtained from a previous run without preallocated output.
+def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn_result_tensor):
+    prealloc_output = ttnn.empty(
+        ttnn_result_tensor.shape,
+        dtype=ttnn_result_tensor.dtype,
+        layout=ttnn_result_tensor.layout,
+        device=device,
+        memory_config=ttnn_result_tensor.memory_config(),
+    )
+    ttnn_op(input_tensor, dim, out=prealloc_output)
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
@@ -403,17 +417,32 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     if torch_errored:
         return
 
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+    ttnn_result_in_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
     # For 0-volume results, verify shapes match
-    if torch_result.numel() == 0 and ttnn_result.numel() == 0:
+    if torch_result.numel() == 0 and ttnn_result_in_torch.numel() == 0:
         assert (
-            torch_result.shape == ttnn_result.shape
-        ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result.shape}"
+            torch_result.shape == ttnn_result_in_torch.shape
+        ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result_in_torch.shape}"
+
+        # Repeat the test with preallocated output tensor.
+        prealloc_result = _run_accumulation_with_preallocated(ttnn_op, ttnn_tensor, dim, device, ttnn_result)
+        # The two methods should produce identical results.
+        assert (
+            torch_result.shape == prealloc_result.shape
+        ), f"Preallocated shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {prealloc_result.shape}"
+
         # Other checks are not meaningful for empty tensors.
         return
 
     atol = rtol = 0.1
     pcc = 0.999
-    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_in_torch, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_in_torch}"
+
+    # Repeat the test with preallocated output tensor.
+    prealloc_result = _run_accumulation_with_preallocated(ttnn_op, ttnn_tensor, dim, device, ttnn_result)
+    # The two methods should produce identical results.
+    assert torch.equal(
+        prealloc_result, ttnn_result_in_torch
+    ), f"Preallocated {op} result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
