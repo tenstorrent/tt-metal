@@ -144,9 +144,22 @@ def create_program_descriptor(
     ]
 
     # ========== 4. COMPILE-TIME ARGS ==========
-    # Reader compile-time args: [stick_size, TensorAccessorArgs(input)...]
-    reader_ct_args = [stick_size]
+    # Reader compile-time args layout:
+    #   [0]: stick_size
+    #   [1]: gamma_accessor_ct_start (0 if no gamma)
+    #   [2]: beta_accessor_ct_start (0 if no beta)
+    #   [3+]: TensorAccessorArgs(input)
+    #   [3+N]: TensorAccessorArgs(gamma) if has_gamma
+    #   [3+N+M]: TensorAccessorArgs(beta) if has_beta
+    reader_ct_args = [stick_size, 0, 0]  # slots 0, 1, 2
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+
+    if has_gamma:
+        reader_ct_args[1] = len(reader_ct_args)  # gamma accessor starts here
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    if has_beta:
+        reader_ct_args[2] = len(reader_ct_args)  # beta accessor starts here
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
 
     # Compute compile-time args: [Wt, has_gamma, has_beta]
     compute_ct_args = [Wt, int(has_gamma), int(has_beta)]

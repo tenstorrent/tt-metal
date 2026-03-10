@@ -59,21 +59,34 @@ def layer_norm_rm(
         output_memory_config,
     )
 
+    # Convert gamma/beta to TILE_LAYOUT so reader can read tile-sized pages.
+    # Gamma/beta are (1,1,1,W) RM tensors. ttnn.tilize requires volume >= TILE_HW (1024),
+    # so we pad H to 32 first, tilize, then the reader reads Wt tiles.
+    gamma_tiled = None
+    beta_tiled = None
+    if gamma is not None:
+        # Pad (1,1,1,W) -> (1,1,32,W) then tilize
+        gamma_padded = ttnn.pad(gamma, padding=((0, 0), (0, 0), (0, 31), (0, 0)), value=0.0)
+        gamma_tiled = ttnn.tilize(gamma_padded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if beta is not None:
+        beta_padded = ttnn.pad(beta, padding=((0, 0), (0, 0), (0, 31), (0, 0)), value=0.0)
+        beta_tiled = ttnn.tilize(beta_padded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     # Build program descriptor
     program_descriptor = create_program_descriptor(
         input_tensor=input_tensor,
         output_tensor=output_tensor,
-        gamma=gamma,
-        beta=beta,
+        gamma=gamma_tiled,
+        beta=beta_tiled,
         epsilon=epsilon,
     )
 
     # Assemble io_tensors list -- output MUST be last
     io_tensors = [input_tensor]
-    if gamma is not None:
-        io_tensors.append(gamma)
-    if beta is not None:
-        io_tensors.append(beta)
+    if gamma_tiled is not None:
+        io_tensors.append(gamma_tiled)
+    if beta_tiled is not None:
+        io_tensors.append(beta_tiled)
     io_tensors.append(output_tensor)
 
     return ttnn.generic_op(io_tensors, program_descriptor)

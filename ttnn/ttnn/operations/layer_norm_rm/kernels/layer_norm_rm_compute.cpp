@@ -56,6 +56,14 @@ void kernel_main() {
     // cb_eps: needed by Phase 6 (add eps), NoWaitNoPop policy there
     cb_wait_front(cb_eps, 1);
 
+    // cb_gamma/cb_beta: needed by Phase 8/9 (ROW broadcast), NoWaitNoPop policy
+    if constexpr (has_gamma) {
+        cb_wait_front(cb_gamma, Wt);
+    }
+    if constexpr (has_beta) {
+        cb_wait_front(cb_beta, Wt);
+    }
+
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Phase 1: Tilize (cb_rm_in -> cb_tilized)
         compute_kernel_lib::
@@ -130,6 +138,39 @@ void kernel_main() {
         // Manual pop cb_centered after Phase 7
         cb_pop_front(cb_centered, Wt);
 
+        // Phase 8 (optional): Multiply gamma with ROW broadcast
+        // In-place on cb_out_pre_untilize: A consumed per-tile, output pushed back.
+        // MUST use PerTile output (not Bulk) for in-place CB reuse: Bulk tries to
+        // reserve all Wt output pages upfront while Wt input pages still occupy the CB,
+        // which deadlocks for Wt>1. PerTile reserves 1 page after popping the input tile.
+        if constexpr (has_gamma) {
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                compute_kernel_lib::BinaryOutputPolicy::PerTile,
+                compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                cb_out_pre_untilize,
+                cb_gamma,
+                cb_out_pre_untilize,
+                compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+        }
+
+        // Phase 9 (optional): Add beta with ROW broadcast
+        // Same PerTile output policy for in-place CB reuse safety.
+        if constexpr (has_beta) {
+            compute_kernel_lib::add<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                compute_kernel_lib::BinaryOutputPolicy::PerTile,
+                compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                cb_out_pre_untilize,
+                cb_beta,
+                cb_out_pre_untilize,
+                compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+        }
+
         // Phase 10: Untilize (cb_out_pre_untilize -> cb_rm_out)
         compute_kernel_lib::untilize<
             Wt,
@@ -142,4 +183,10 @@ void kernel_main() {
 
     // Pop program-lifetime CBs at kernel end
     cb_pop_front(cb_eps, 1);
+    if constexpr (has_gamma) {
+        cb_pop_front(cb_gamma, Wt);
+    }
+    if constexpr (has_beta) {
+        cb_pop_front(cb_beta, Wt);
+    }
 }
