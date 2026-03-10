@@ -24,9 +24,8 @@ namespace tt {
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 #define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                                                \
-    ((tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(                                  \
-          tt::tt_metal::HalProgrammableCoreType::DRAM) <                                                              \
-          tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_count() &&                          \
+    ((tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(                                        \
+          tt::tt_metal::HalProgrammableCoreType::DRAM) &&                                                             \
       (((a) >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                        \
                    tt::tt_metal::HalProgrammableCoreType::DRAM)) &&                                                   \
        ((a) + (l) <=                                                                                                  \
