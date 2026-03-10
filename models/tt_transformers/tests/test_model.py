@@ -143,7 +143,7 @@ def test_model_inference(
         model_name = model_args.base_model_name
 
         # Define tight final PCC thresholds for quick mode
-        final_model_pcc_map = {
+        final_model_pcc = {
             "Llama-3.1-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
             "Meta-Llama-3-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.973,
@@ -152,10 +152,9 @@ def test_model_inference(
             "Llama-3.2-11B": 0.952 if mode_accuracy else 0.940,
             "Llama-3.2-90B": 0.971,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
-        }
-        final_model_pcc = final_model_pcc_map[model_name]
+        }[model_name]
 
-        final_k_cache_pcc_map = {
+        final_k_cache_pcc = {
             "Llama-3.1-8B": 0.9997,
             "Meta-Llama-3-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
@@ -164,9 +163,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9995,
             "Llama-3.2-90B": 0.9995,
             "Mistral-7B": 0.68,
-        }
-        final_k_cache_pcc = final_k_cache_pcc_map[model_name]
-        final_v_cache_pcc_map = {
+        }[model_name]
+        final_v_cache_pcc = {
             "Llama-3.1-8B": 0.9997,
             "Meta-Llama-3-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
@@ -175,10 +173,9 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9996,
             "Llama-3.2-90B": 0.9996,
             "Mistral-7B": 0.68,
-        }
-        final_v_cache_pcc = final_v_cache_pcc_map[model_name]
+        }[model_name]
 
-        quick_iterations_map = {
+        quick_iterations = {
             "Llama-3.1-8B": 6,
             "Meta-Llama-3-8B": 6,
             "Llama-3.1-70B": 6,
@@ -187,8 +184,7 @@ def test_model_inference(
             "Llama-3.2-11B": 6,
             "Llama-3.2-90B": 6,
             "Mistral-7B": 2,
-        }
-        quick_iterations = quick_iterations_map[model_name]
+        }[model_name]
 
         iterations = quick_iterations
     else:
