@@ -1184,6 +1184,7 @@ void sdpa_standard_v2(
         };
 
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
+            MaybeDeviceZoneScopedN(true, "K chunk");
             bool is_first = (k_chunk == 0);
             bool is_last = (k_chunk == k_num_chunks - 1);
 
