@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
@@ -26,8 +27,10 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
     SharedExpert,
+    extract_routed_expert_output,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 
 
 def create_fabric_router_config(max_payload_size):
@@ -216,6 +219,26 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
 
+    # ── Fresh gate output buffers for standalone MoeOp.op sanity check ──
+    moe_ref_gate_output_scores = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_output_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+    moe_ref_gate_output_indices = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_output_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+
     # ══════════════════════════════════════════════════════════════════════════
     # Attention input/intermediate/output mesh tensors
     # ══════════════════════════════════════════════════════════════════════════
@@ -338,16 +361,30 @@ def create_decoder_block_tensors(
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
     kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
-    torch_kv_cache = torch.full((1, 1, max_seq_len, kvpe_dim), float("-inf"), dtype=torch.bfloat16)
-    for i in range(position_id):
-        torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
+    num_sp = mesh_rows
+    dcs = program_config.device_chunk_size
+    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
+    kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
     ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache,
+        torch_kv_cache_shuffled,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=kv_mem,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=kv_cache_2d_mesh_mapper,
+    )
+    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # ── KV cache clone for standalone AttentionBlock.op sanity check ──
+    ttnn_kv_cache_attn_ref = ttnn.from_torch(
+        torch_kv_cache_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=kv_mem,
+        mesh_mapper=kv_cache_2d_mesh_mapper,
     )
 
     # ── SDPA output tensor ──
@@ -363,6 +400,15 @@ def create_decoder_block_tensors(
     )
     sdpa_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
+    )
+    ttnn_sdpa_output = ttnn.from_torch(
+        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=sdpa_mem,
+        mesh_mapper=mesh_mapper,
+        tile=sdpa_tile,
     )
 
     # ── Post-SDPA tensors ──
@@ -380,6 +426,15 @@ def create_decoder_block_tensors(
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
     attn_output = ttnn.from_torch(
+        mesh_output_torch,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,
+        mesh_mapper=shard_mesh_mapper,
+    )
+    attn_ref_output = ttnn.from_torch(
         mesh_output_torch,
         device=submesh,
         layout=ttnn.TILE_LAYOUT,
@@ -532,12 +587,82 @@ def create_decoder_block_tensors(
         mesh_mapper=reduce_mesh_mapper,
     )
 
+    # ── Fresh reduce tensors for standalone MoeOp.op sanity check ──
+    moe_ref_reduce_intermediate = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+    moe_ref_reduce_output = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=reduce_output_mem,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+
     # ── Shared expert mcast grid ──
     def _unwrap(t):
         return t.fused_tensor if isinstance(t, OverlappedTensor) else t
 
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Golden model PyTorch tensors (attention / MLA)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _sd_key(suffix):
+        return f"model.layers.{layer_idx}.{suffix}"
+
+    golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
+    golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
+    golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
+    golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
+    golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
+    golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
+    golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+
+    V_HEAD_DIM = 128
+    KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
+    kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
+    kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
+    total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
+    kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
+    golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
+    golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
+    golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
+
+    golden_total_qnope_heads = total_kv_heads
+    golden_total_qrope_heads = total_kv_heads
+
+    # ── Golden model PyTorch tensors (MoE) ──
+    golden_moe_rmsnorm_gamma = (
+        state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
+    )
+    golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
+    golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
+    golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
+    golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
+    golden_moe_bias = (
+        state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+    )
+
+    golden_moe_gate_proj_dict = {}
+    golden_moe_up_proj_dict = {}
+    golden_moe_down_proj_dict = {}
+    for e in range(num_routed_experts):
+        w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
+        golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+        w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
+        golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+        w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
+        golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
 
     return {
         # Attention weights (from prepare_moe_layer_weights via BDW)
@@ -560,10 +685,12 @@ def create_decoder_block_tensors(
         "ttnn_krope_cos": ttnn_krope_cos,
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
+        "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
         "ttnn_position_ids": ttnn_position_ids,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
+        "ttnn_sdpa_output": ttnn_sdpa_output,
         "sender_coord": sender_coord,
         "ttnn_sdpa_input_l": ttnn_sdpa_input_l,
         "ttnn_sdpa_input_ms": ttnn_sdpa_input_ms,
@@ -572,6 +699,7 @@ def create_decoder_block_tensors(
         "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
         "device_chunk_size": program_config.device_chunk_size,
         "ttnn_attention_block_output": attn_output,
+        "ttnn_attn_ref_output": attn_ref_output,
         # MoE tensors (attention_block_output IS the MoE residual input — overlapped with kv cache)
         "ttnn_residual_mcast_src": attn_output,
         "ttnn_gate_bias": layer.gate_bias,
@@ -593,8 +721,45 @@ def create_decoder_block_tensors(
         "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,
         "reduce_root_coord": root_coord,
+        # Standalone MoE ref tensors
+        "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
+        "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
+        "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
+        "moe_ref_reduce_output": moe_ref_reduce_output,
+        "num_gate_proj_cores": num_gate_proj_cores,
+        "per_core_down_proj_N": per_core_down_proj_N,
         # MoE mcast grid (for shared expert)
         "mcast_grid": mcast_grid,
+        # Golden model PyTorch tensors (attention / MLA)
+        "golden_torch_input": torch_input,
+        "golden_torch_gamma": golden_torch_gamma,
+        "golden_torch_matmul_weights": golden_torch_matmul_weights,
+        "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
+        "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
+        "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
+        "golden_torch_sin": torch_sin,
+        "golden_torch_cos": torch_cos,
+        "golden_position_ids": position_ids,
+        "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
+        "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
+        "golden_torch_kv_cache": torch_kv_cache,
+        "golden_scale": scale,
+        "golden_torch_kv_b2_proj_weights": golden_kv_b2,
+        "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
+        "golden_total_qnope_heads": golden_total_qnope_heads,
+        "golden_total_qrope_heads": golden_total_qrope_heads,
+        "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
+        "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
+        # Golden model PyTorch tensors (MoE)
+        "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
+        "golden_moe_shared_gate": golden_moe_shared_gate,
+        "golden_moe_shared_up": golden_moe_shared_up,
+        "golden_moe_shared_down": golden_moe_shared_down,
+        "golden_moe_routing_weights": golden_moe_routing_weights,
+        "golden_moe_bias": golden_moe_bias,
+        "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
+        "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
+        "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
     }
 
 
@@ -639,6 +804,14 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize(
+    "enable_routing, use_hardcoded_expert_index, num_routed_experts",
+    [
+        (True, True, 8),
+        pytest.param(True, False, 256, marks=pytest.mark.skip_post_commit),
+    ],
+    ids=["hardcoded_experts", "full_routing"],
+)
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
@@ -656,6 +829,9 @@ def test_decoder(
     position_id,
     noc_mode,
     num_internal_iterations,
+    enable_routing,
+    use_hardcoded_expert_index,
+    num_routed_experts,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
@@ -668,7 +844,6 @@ def test_decoder(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    num_routed_experts = 1
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
@@ -701,11 +876,65 @@ def test_decoder(
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     # ========================================================================
+    # Run standalone AttentionBlock.op as sanity reference (uses cloned KV cache)
+    # ========================================================================
+    logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
+    attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+    ttnn_attn_ref_result = AttentionBlock.op(
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache_attn_ref"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["ttnn_sdpa_output"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attn_ref_output"],
+        attn_ref_semaphores,
+        bcast_cluster_axis,
+        bcast_secondary_cluster_axis,
+        reduce_cluster_axis,
+        0,  # sdpa_cluster_axis
+        1.0,  # sdpa_scale_fp32
+        1,  # num_links
+        epsilon,
+        use_fp32,
+        False,  # skip_ccl
+        noc_mode,
+        num_iterations=num_internal_iterations,
+    )
+    ttnn.synchronize_device(submesh)
+    ttnn_attn_ref_output_torch = ttnn.to_torch(
+        d["ttnn_attn_ref_output"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    logger.info("Standalone AttentionBlock.op completed.")
+
+    # ========================================================================
     # Run decoder operation
     # ========================================================================
     logger.info(f"Running decoder operation with position_id={position_id}...")
     for i in range(num_iters):
-        ttnn_output_result = DecoderBlock.op(
+        ttnn_output_result, attention_block_output_tensor, moe_final_output_tensor = DecoderBlock.op(
             # AttentionBlock parameters
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -778,12 +1007,80 @@ def test_decoder(
 
     kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
-    # validate_local_flash_mla = False
+    validate_local_flash_mla = False
 
-    # if validate_local_flash_mla:
-    #     sdpa_output_torch = ttnn.to_torch(t.ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    if validate_local_flash_mla:
+        sdpa_output_torch = ttnn.to_torch(t.ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
-    output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    ttnn_final_output = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    ttnn_attention_output = ttnn.to_torch(
+        attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    # ttnn_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # ========================================================================
+    # Run standalone MoeOp.op on MLA output (validate golden MoE path)
+    # ========================================================================
+    logger.info(
+        f"Running standalone MoeOp.op (enable_routing={enable_routing}, hardcoded={use_hardcoded_expert_index})..."
+    )
+    moe_ref_semaphores = MoeOp.create_semaphores(submesh)
+    moe_ref_reduce_sems = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    ttnn.synchronize_device(submesh)
+
+    moe_ref_result = MoeOp.op(
+        attention_block_output_tensor,
+        gate_mm_weights_tensor=d["gate_mm_overlapped"],
+        gate_bias_tensor=d["ttnn_gate_bias"],
+        gate_indices_tensor=d["ttnn_gate_indices"],
+        gate_output_scores_tensor=d["moe_ref_gate_output_scores"],
+        gate_output_indices_tensor=d["moe_ref_gate_output_indices"],
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        enable_routing=enable_routing,
+        use_hardcoded_expert_index=use_hardcoded_expert_index,
+        sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
+        sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
+        num_iterations=num_internal_iterations,
+        reduce_intermediate_tensors=d["moe_ref_reduce_intermediate"],
+        reduce_output_tensor=d["moe_ref_reduce_output"],
+        reduce_semaphores=moe_ref_reduce_sems,
+        reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+        semaphores=moe_ref_semaphores,
+        noc_mode=noc_mode,
+    )
+    ttnn.synchronize_device(submesh)
+    logger.info("Standalone MoeOp.op completed.")
+
+    if enable_routing:
+        moe_ref_scores_tensor, moe_ref_indices_tensor, moe_ref_result = moe_ref_result
+        moe_ref_scores_torch = ttnn.to_torch(
+            moe_ref_scores_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        moe_ref_indices_torch = ttnn.to_torch(
+            moe_ref_indices_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+    else:
+        moe_ref_scores_torch = None
+        moe_ref_indices_torch = None
+
+    moe_reduce_torch = ttnn.to_torch(moe_ref_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    root_coord_tuple = d["reduce_root_coord"]
+    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
+    moe_reduce_root = moe_reduce_torch[root_device_idx]
+    moe_device_output_valid = extract_routed_expert_output(
+        moe_reduce_root.unsqueeze(0),
+        d["num_gate_proj_cores"],
+        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+        d["per_core_down_proj_N"],
+    )
 
     # ========================================================================
     # Compute golden reference
@@ -794,185 +1091,205 @@ def test_decoder(
     num_sp = mesh_rows
     owning_sp_device = (position_id // device_chunk_size) % num_sp
 
-    # _, golden_new_kv, torch_output_expected = DecoderBlock.golden(
-    #     t.torch_input,
-    #     t.torch_gamma,
-    #     t.torch_matmul_weights,
-    #     t.torch_rmsnorm2_gamma,
-    #     t.torch_matmul2_weights_full_unshuffled,
-    #     t.torch_matmul3_weights,
-    #     t.torch_sin,
-    #     t.torch_cos,
-    #     t.position_ids,
-    #     t.torch_dkv_matmul_weights,
-    #     t.torch_dkv_rmsnorm_gamma,
-    #     t.torch_kv_cache,
-    #     t.scale,
-    #     t.torch_kv_b2_proj_weights,
-    #     t.torch_o_proj_weights,
-    #     epsilon=epsilon,
-    #     num_qnope_heads=t.total_qnope_heads,
-    #     num_qrope_heads=t.total_qrope_heads,
-    #     qnope_head_dim=QNOPE_HEAD_DIM,
-    #     qrope_head_dim=QROPE_HEAD_DIM,
-    #     heads_per_row=HEADS_PER_ROW,
-    #     nope_dim=KNOPE_DIM,
-    #     rope_dim=KROPE_DIM,
-    # )
+    QNOPE_HEAD_DIM = 128
+    QROPE_HEAD_DIM = 64
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
+    HEADS_PER_ROW = 8
 
-    # logger.info(f"Golden computed (owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})")
+    full_q, golden_new_kv, mla_output, moe_scores, moe_indices, moe_output = DecoderBlock.golden(
+        d["golden_torch_input"],
+        d["golden_torch_gamma"],
+        d["golden_torch_matmul_weights"],
+        d["golden_torch_rmsnorm2_gamma"],
+        d["golden_torch_matmul2_weights"],
+        d["golden_torch_matmul3_weights"],
+        d["golden_torch_sin"],
+        d["golden_torch_cos"],
+        d["golden_position_ids"],
+        d["golden_torch_dkv_matmul_weights"],
+        d["golden_torch_dkv_rmsnorm_gamma"],
+        d["golden_torch_kv_cache"],
+        d["golden_scale"],
+        d["golden_torch_kv_b2_proj_weights"],
+        d["golden_torch_o_proj_weights"],
+        epsilon=epsilon,
+        num_qnope_heads=d["golden_total_qnope_heads"],
+        num_qrope_heads=d["golden_total_qrope_heads"],
+        qnope_head_dim=QNOPE_HEAD_DIM,
+        qrope_head_dim=QROPE_HEAD_DIM,
+        heads_per_row=HEADS_PER_ROW,
+        nope_dim=KNOPE_DIM,
+        rope_dim=KROPE_DIM,
+        # MoE golden parameters
+        moe_shared_gate_weights=d["golden_moe_shared_gate"],
+        moe_shared_up_weights=d["golden_moe_shared_up"],
+        moe_shared_down_weights=d["golden_moe_shared_down"],
+        moe_gate_proj_weights_dict=d["golden_moe_gate_proj_dict"],
+        moe_up_proj_weights_dict=d["golden_moe_up_proj_dict"],
+        moe_down_proj_weights_dict=d["golden_moe_down_proj_dict"],
+        moe_rmsnorm_gamma=d["golden_moe_rmsnorm_gamma"],
+        moe_rmsnorm_epsilon=epsilon,
+        moe_routing_weights=d["golden_moe_routing_weights"],
+        moe_bias=d["golden_moe_bias"],
+        moe_gate_eps=RoutedExpert.GATE_EPS,
+        moe_gate_scaling_factor=RoutedExpert.GATE_SCALING_FACTOR,
+        moe_enable_routing=enable_routing,
+        moe_use_hardcoded_expert_index=use_hardcoded_expert_index,
+        moe_hardcoded_expert_index=0,
+        moe_num_devices=num_devices,
+    )
 
-    # def get_local_seq_len(sp_idx):
-    #     """Return how many KV positions SP device sp_idx holds for the current global position_id."""
-    #     sp_block = device_chunk_size * num_sp
-    #     num_full_blocks = position_id // sp_block
-    #     remainder = position_id % sp_block
-    #     dev_start = sp_idx * device_chunk_size
-    #     dev_end = dev_start + device_chunk_size
-    #     dev_contrib = max(0, min(remainder, dev_end) - dev_start)
-    #     return num_full_blocks * device_chunk_size + dev_contrib
+    logger.info(f"MLA output: {mla_output}")
 
-    # if validate_local_flash_mla:
+    logger.info(f"Golden computed (owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})")
 
-    #     def build_local_kv_cache(sp_idx):
-    #         """Extract sp_idx's local KV cache from torch_kv_cache_shuffled."""
-    #         sp_block = device_chunk_size * num_sp
-    #         num_full_blocks = position_id // sp_block
-    #         remainder = position_id % sp_block
-    #         dev_start = sp_idx * device_chunk_size
-    #         dev_end = dev_start + device_chunk_size
-    #         dev_contrib = max(0, min(remainder, dev_end) - dev_start)
-    #         local_len = num_full_blocks * device_chunk_size + dev_contrib
-    #         if local_len == 0:
-    #             return None, 0
-    #         shard_offset = sp_idx * t.per_device_max_seq_len
-    #         local_kv = t.torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
-    #         return local_kv, local_len
+    def get_local_seq_len(sp_idx):
+        """Return how many KV positions SP device sp_idx holds for the current global position_id."""
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        return num_full_blocks * device_chunk_size + dev_contrib
 
-    #     kvpe_dim = KNOPE_DIM + KROPE_DIM
+    if validate_local_flash_mla:
 
-    #     pre_sdpa_golden_args = dict(
-    #         input_tensor=t.torch_input,
-    #         gamma_tensor=t.torch_gamma,
-    #         matmul_weights_tensor=t.torch_matmul_weights,
-    #         rmsnorm2_gamma_tensor=t.torch_rmsnorm2_gamma,
-    #         matmul2_weights_tensor=t.torch_matmul2_weights_full_unshuffled,
-    #         matmul3_weights_tensor=t.torch_matmul3_weights,
-    #         sin_tensor=t.torch_sin,
-    #         cos_tensor=t.torch_cos,
-    #         dkv_matmul_weights_tensor=t.torch_dkv_matmul_weights,
-    #         dkv_rmsnorm_gamma_tensor=t.torch_dkv_rmsnorm_gamma,
-    #         scale=t.scale,
-    #         epsilon=epsilon,
-    #         num_qnope_heads=t.total_qnope_heads,
-    #         num_qrope_heads=t.total_qrope_heads,
-    #         qnope_head_dim=QNOPE_HEAD_DIM,
-    #         qrope_head_dim=QROPE_HEAD_DIM,
-    #         heads_per_row=HEADS_PER_ROW,
-    #         nope_dim=KNOPE_DIM,
-    #         rope_dim=KROPE_DIM,
-    #     )
+        def build_local_kv_cache(sp_idx):
+            """Extract sp_idx's local KV cache from torch_kv_cache_shuffled."""
+            sp_block = device_chunk_size * num_sp
+            num_full_blocks = position_id // sp_block
+            remainder = position_id % sp_block
+            dev_start = sp_idx * device_chunk_size
+            dev_end = dev_start + device_chunk_size
+            dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+            local_len = num_full_blocks * device_chunk_size + dev_contrib
+            if local_len == 0:
+                return None, 0
+            shard_offset = sp_idx * t.per_device_max_seq_len
+            local_kv = t.torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
+            return local_kv, local_len
 
-    #     golden_per_sp = {}
-    #     for sp_idx in range(num_sp):
-    #         local_kv, local_seq_len = build_local_kv_cache(sp_idx)
-    #         is_owner = sp_idx == owning_sp_device
-    #         if local_kv is None:
-    #             if is_owner:
-    #                 local_kv = torch.zeros(1, 1, 0, kvpe_dim, dtype=torch.bfloat16)
-    #             else:
-    #                 continue
-    #         local_pos = torch.tensor([local_seq_len if is_owner else local_seq_len - 1])
-    #         _, _, mla_output = PreSDPA.golden(
-    #             **pre_sdpa_golden_args,
-    #             local_position_ids=local_pos,
-    #             global_position_ids=torch.tensor([position_id]),
-    #             kv_cache_tensor=local_kv,
-    #             kv_cache_update=is_owner,
-    #         )
-    #         golden_per_sp[sp_idx] = mla_output
+        kvpe_dim = KNOPE_DIM + KROPE_DIM
 
-    #     logger.info(
-    #         f"Per-SP golden computed for {len(golden_per_sp)} SP devices "
-    #         f"(owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})"
-    #     )
+        pre_sdpa_golden_args = dict(
+            input_tensor=t.torch_input,
+            gamma_tensor=t.torch_gamma,
+            matmul_weights_tensor=t.torch_matmul_weights,
+            rmsnorm2_gamma_tensor=t.torch_rmsnorm2_gamma,
+            matmul2_weights_tensor=t.torch_matmul2_weights_full_unshuffled,
+            matmul3_weights_tensor=t.torch_matmul3_weights,
+            sin_tensor=t.torch_sin,
+            cos_tensor=t.torch_cos,
+            dkv_matmul_weights_tensor=t.torch_dkv_matmul_weights,
+            dkv_rmsnorm_gamma_tensor=t.torch_dkv_rmsnorm_gamma,
+            scale=t.scale,
+            epsilon=epsilon,
+            num_qnope_heads=t.total_qnope_heads,
+            num_qrope_heads=t.total_qrope_heads,
+            qnope_head_dim=QNOPE_HEAD_DIM,
+            qrope_head_dim=QROPE_HEAD_DIM,
+            heads_per_row=HEADS_PER_ROW,
+            nope_dim=KNOPE_DIM,
+            rope_dim=KROPE_DIM,
+        )
 
-    # # ========================================================================
-    # # Validate KV cache outputs (per SP device)
-    # # ========================================================================
-    # for device_idx in range(mesh_rows * mesh_cols):
-    #     sp_group = device_idx // mesh_cols
-    #     local_seq_len = get_local_seq_len(sp_group)
+        golden_per_sp = {}
+        for sp_idx in range(num_sp):
+            local_kv, local_seq_len = build_local_kv_cache(sp_idx)
+            is_owner = sp_idx == owning_sp_device
+            if local_kv is None:
+                if is_owner:
+                    local_kv = torch.zeros(1, 1, 0, kvpe_dim, dtype=torch.bfloat16)
+                else:
+                    continue
+            local_pos = torch.tensor([local_seq_len if is_owner else local_seq_len - 1])
+            _, _, mla_output = PreSDPA.golden(
+                **pre_sdpa_golden_args,
+                local_position_ids=local_pos,
+                global_position_ids=torch.tensor([position_id]),
+                kv_cache_tensor=local_kv,
+                kv_cache_update=is_owner,
+            )
+            golden_per_sp[sp_idx] = mla_output
 
-    #     if local_seq_len == 0 and sp_group != owning_sp_device:
-    #         logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
-    #         continue
+        logger.info(
+            f"Per-SP golden computed for {len(golden_per_sp)} SP devices "
+            f"(owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})"
+        )
 
-    #     assert torch.equal(
-    #         t.kv_cache_bfp8_before_op[device_idx, ..., :local_seq_len, :],
-    #         kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
-    #     ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
-    #     logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
+    # ========================================================================
+    # Validate KV cache outputs (per SP device)
+    # ========================================================================
+    for device_idx in range(mesh_rows * mesh_cols):
+        sp_group = device_idx // mesh_cols
+        local_seq_len = get_local_seq_len(sp_group)
 
-    #     if sp_group == owning_sp_device:
-    #         compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
-    #         expected_nope = golden_new_kv[..., :KNOPE_DIM]
-    #         expected_rope = golden_new_kv[..., KNOPE_DIM:]
-    #         compare_nope = compare_kv_cache[..., :KNOPE_DIM]
-    #         compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+        if local_seq_len == 0 and sp_group != owning_sp_device:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
+            continue
 
-    #         nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
-    #         logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
-    #         assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+        assert torch.equal(
+            d["golden_kv_cache_bfp8_before_op"][device_idx, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
-    #         rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
-    #         logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
-    #         assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+        if sp_group == owning_sp_device:
+            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-    # # ========================================================================
-    # # Validate pre-SDPA output (per-SP golden)
-    # # ========================================================================
-    # if validate_local_flash_mla:
-    #     slice_size = t.sdpa_input_output_shape[0]
-    #     for device_idx in range(mesh_rows * mesh_cols):
-    #         tp_group = device_idx % mesh_cols
-    #         sp_group = device_idx // mesh_cols
+            logger.info(f"Golden NOPE: {expected_nope}")
+            logger.info(f"TTNN NOPE: {compare_nope}")
+            logger.info(f"Golden ROPE: {expected_rope}")
+            logger.info(f"TTNN ROPE: {compare_rope}")
 
-    #         if sp_group not in golden_per_sp:
-    #             logger.info(f"Device {device_idx} (SP={sp_group}) no work, skipped")
-    #             continue
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            # assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
 
-    #         golden_mla_output = golden_per_sp[sp_group]
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
 
-    #         start = device_idx * slice_size
-    #         end = start + slice_size
-    #         received = sdpa_output_torch[start:end, :]
+    if moe_scores is not None:
+        logger.info(f"Golden MoE scores: {moe_scores}")
+        logger.info(f"Golden MoE indices: {moe_indices}")
 
-    #         tp_start = tp_group * slice_size
-    #         tp_end = tp_start + slice_size
-    #         expected = golden_mla_output[tp_start:tp_end, :]
-    #         print(expected[:8, :32:8])
+    # ========================================================================
+    # Validate decoder output (full pipeline)
+    # ========================================================================
+    for device_idx in range(mesh_rows * mesh_cols):
+        received = ttnn_attention_output[device_idx : device_idx + 1, :]
+        pure_mla = ttnn_attn_ref_output_torch[device_idx : device_idx + 1, :]
+        passing, pcc = comp_pcc(mla_output, received, 0.996)
+        pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.996)
+        logger.info(f"Device {device_idx} DecoderBlock Output PCC: {pcc}")
+        logger.info(f"Pure MLA PCC: {pure_mla_pcc}")
+        logger.info(f"Golden MLA output: {mla_output}")
+        logger.info(f"DecoderBlock MLA output: {received}")
+        logger.info(f"Pure MLA output: {pure_mla}")
+        assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
 
-    #         if received.shape != expected.shape:
-    #             logger.error(
-    #                 f"Device {device_idx} (TP={tp_group}, SP={sp_group}) output shape mismatch: "
-    #                 f"got {received.shape}, expected {expected.shape}"
-    #             )
-    #             continue
+    # ========================================================================
+    # Validate standalone MoE output vs DecoderBlock golden MoE output
+    # ========================================================================
+    # Golden with moe_num_devices>1 computes per-device golden with TP-sharded shared
+    # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
+    passing, pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.996)
+    pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.996)
+    logger.info(f"MoE PCC: {pcc}")
+    logger.info(f"Pure MoE PCC: {pure_moe_pcc}")
+    logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
+    logger.info(f"DecoderBlock MoE output: {moe_device_output_valid.flatten()[:8]}")
+    logger.info(f"Pure MoE output: {moe_device_output_valid.flatten()[:8]}")
+    if use_hardcoded_expert_index:
+        assert pure_moe_passing, f"Standalone MoE PCC check failed: {pure_moe_pcc}"
 
-    #         passing, pcc = comp_pcc(expected, received, 0.84)
-    #         logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {pcc}")
-    #         assert passing, f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {pcc}"
+    logger.info("✓ DecoderBlock mesh test passed!")
 
-    # # ========================================================================
-    # # Validate decoder output (full pipeline)
-    # # ========================================================================
-    # for device_idx in range(mesh_rows * mesh_cols):
-    #     received = output_torch[device_idx : device_idx + 1, :]
-    #     passing, pcc = comp_pcc(torch_output_expected, received, 0.996)
-    #     logger.info(f"Device {device_idx} DecoderBlock Output PCC: {pcc}")
-    #     assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
-
-    # logger.info("✓ DecoderBlock mesh test passed!")
-
-    # ttnn.synchronize_device(submesh)
+    ttnn.synchronize_device(submesh)

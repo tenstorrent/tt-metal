@@ -47,8 +47,25 @@ class DecoderBlock:
         heads_per_row=8,
         nope_dim=512,
         rope_dim=64,
+        # MoE parameters (when None, only attention golden is computed)
+        moe_shared_gate_weights=None,
+        moe_shared_up_weights=None,
+        moe_shared_down_weights=None,
+        moe_gate_proj_weights_dict=None,
+        moe_up_proj_weights_dict=None,
+        moe_down_proj_weights_dict=None,
+        moe_rmsnorm_gamma=None,
+        moe_rmsnorm_epsilon=None,
+        moe_routing_weights=None,
+        moe_bias=None,
+        moe_gate_eps=1e-20,
+        moe_gate_scaling_factor=2.5,
+        moe_enable_routing=True,
+        moe_use_hardcoded_expert_index=False,
+        moe_hardcoded_expert_index=0,
+        moe_num_devices=1,
     ):
-        return AttentionBlock.golden(
+        full_q, new_kv, attn_output = AttentionBlock.golden(
             input_tensor,
             gamma_tensor,
             matmul_weights_tensor,
@@ -73,6 +90,54 @@ class DecoderBlock:
             nope_dim=nope_dim,
             rope_dim=rope_dim,
         )
+        if moe_shared_gate_weights is None:
+            return full_q, new_kv, attn_output, None, None, None
+
+        if moe_rmsnorm_epsilon is None:
+            moe_rmsnorm_epsilon = epsilon
+
+        moe_golden_kwargs = dict(
+            gate_proj_weights_dict=moe_gate_proj_weights_dict,
+            up_proj_weights_dict=moe_up_proj_weights_dict,
+            down_proj_weights_dict=moe_down_proj_weights_dict,
+            rmsnorm_gamma=moe_rmsnorm_gamma,
+            rmsnorm_epsilon=moe_rmsnorm_epsilon,
+            enable_routing=moe_enable_routing,
+            routing_weights_tensor=moe_routing_weights,
+            bias_tensor=moe_bias,
+            eps=moe_gate_eps,
+            scaling_factor=moe_gate_scaling_factor,
+            use_hardcoded_expert_index=moe_use_hardcoded_expert_index,
+        )
+
+        if moe_num_devices <= 1:
+            moe_scores, moe_indices, moe_output = MoeOp.golden(
+                attn_output,
+                shared_gate_weights=moe_shared_gate_weights,
+                shared_up_weights=moe_shared_up_weights,
+                shared_down_weights=moe_shared_down_weights,
+                hardcoded_expert_index=moe_hardcoded_expert_index,
+                **moe_golden_kwargs,
+            )
+            return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
+
+        K_down_per_device = moe_shared_gate_weights.shape[1] // moe_num_devices
+        per_device_outputs = []
+        for dev_idx in range(moe_num_devices):
+            shard_start = dev_idx * K_down_per_device
+            shard_end = shard_start + K_down_per_device
+            scores, indices, dev_output = MoeOp.golden(
+                attn_output,
+                shared_gate_weights=moe_shared_gate_weights[:, shard_start:shard_end],
+                shared_up_weights=moe_shared_up_weights[:, shard_start:shard_end],
+                shared_down_weights=moe_shared_down_weights[shard_start:shard_end, :],
+                hardcoded_expert_index=dev_idx,
+                **moe_golden_kwargs,
+            )
+            per_device_outputs.append(dev_output)
+
+        moe_output = sum(per_device_outputs)
+        return full_q, new_kv, attn_output, scores, indices, moe_output
 
     @staticmethod
     def get_num_semaphores():
@@ -516,4 +581,4 @@ class DecoderBlock:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
         print("Running DecoderBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        return result
+        return result, attention_block_output_tensor, moe_final_output_tensor
