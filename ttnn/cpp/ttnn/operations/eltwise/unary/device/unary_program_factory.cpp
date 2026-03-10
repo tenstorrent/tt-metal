@@ -127,6 +127,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
             case UnaryOpType::HARDSHRINK:
+            case UnaryOpType::MISH:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
             case UnaryOpType::WHERE_TSS:
@@ -373,6 +374,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
             case UnaryOpType::HARDSHRINK:
+            case UnaryOpType::MISH:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
             case UnaryOpType::WHERE_TSS:
