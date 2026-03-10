@@ -5,6 +5,9 @@
 #pragma once
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <regex>
 #include <set>
 #include <vector>
 #include <cctype>
