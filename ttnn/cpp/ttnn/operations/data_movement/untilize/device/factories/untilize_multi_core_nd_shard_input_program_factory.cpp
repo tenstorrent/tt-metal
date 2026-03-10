@@ -77,6 +77,16 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     uint32_t num_blocks_per_shard = num_planes_per_shard * num_blocks_per_shard_plane;
     uint32_t num_input_blocks_per_full_core = groups.num_shards_per_core_in_group_1 * num_blocks_per_shard;
 
+    // Detect if sharding is uneven - check last 2 dimensions for ND sharding
+    // TODO: ND shard factory doesn't use CB backing, so uneven sharding needs different handling
+    // bool has_uneven_sharding = false;
+    // {
+    //     uint32_t tensor_height = a.physical_volume() / tensor_width;
+    //     uint32_t height_remainder = tensor_height % input_shard_height;
+    //     uint32_t width_remainder = tensor_width % input_shard_width;
+    //     has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
+    // }
+
     // Input CB
     uint32_t input_cb_num_tiles;
     if (num_input_blocks_per_full_core == 1) {
