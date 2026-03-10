@@ -105,21 +105,36 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
 
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace) {
     bool first_begin_found = false;
-    bool last_end_found = false;
 
     std::unordered_set<int> intermediate_tensors;
     std::unordered_set<int> output_tensors;
 
+    // Walk backwards to find the last function_end whose connections include
+    // at least one tensor node.  Python wrapper and deallocate function_end
+    // nodes connect to non-tensor nodes (other functions or capture_end).
     int last_end_index = -1;
+    for (int i = static_cast<int>(trace.size()) - 1; i >= 0; --i) {
+        const auto& v = trace[i];
+        if (v[kNodeType] != kNodeFunctionEnd) {
+            continue;
+        }
+        for (const auto& conn : v[kConnections]) {
+            auto idx = conn.get<int>();
+            if (trace[idx][kNodeType] == kNodeTensor) {
+                last_end_index = i;
+                break;
+            }
+        }
+        if (last_end_index != -1) {
+            break;
+        }
+    }
 
-    for (int i = 0; i < trace.size(); ++i) {
+    for (int i = 0; i < static_cast<int>(trace.size()); ++i) {
         const auto& v = trace[i];
         if (v[kNodeType] == kNodeFunctionStart && !first_begin_found) {
             first_begin_found = true;
         } else if (v[kNodeType] == kNodeFunctionEnd) {
-            last_end_found = true;
-            last_end_index = i;
-
             if (v[kParams][kName] == "create_device_tensor") {
                 auto id = v[kConnections][0].get<int>();
                 intermediate_tensors.insert(id);
@@ -128,11 +143,10 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
     }
 
     TT_ASSERT(first_begin_found);
-    TT_ASSERT(last_end_found);
+    TT_ASSERT(last_end_index != -1, "No function_end node with tensor connections found");
 
     auto connections = trace[last_end_index][kConnections].get<std::unordered_set<uint32_t>>();
     for (auto index : connections) {
-        // It can be tensor or some other node like
         if (trace[index][kNodeType] == kNodeTensor) {
             output_tensors.insert(index);
         }
@@ -185,15 +199,22 @@ std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
 }
 
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace) {
-    // Lambda to find the last 'function_end' node
+    // Find the last function_end node whose connections include a tensor node.
+    // Python wrapper and deallocate function_end nodes connect to non-tensor
+    // nodes (other functions or capture_end).
     auto find_function_end_node = [](const auto& trace) -> const nlohmann::json& {
         for (int i = trace.size() - 1; i >= 0; --i) {
             const auto& v = trace[i];
-            if (v[kNodeType] == kNodeFunctionEnd) {
-                return v;
+            if (v[kNodeType] != kNodeFunctionEnd) {
+                continue;
+            }
+            for (const auto& conn : v[kConnections]) {
+                if (trace[conn.template get<int>()][kNodeType] == kNodeTensor) {
+                    return v;
+                }
             }
         }
-        TT_THROW("No function_end node found in the trace");
+        TT_THROW("No function_end node with tensor connections found in the trace");
     };
 
     const auto& function_end_node = find_function_end_node(trace);
@@ -284,13 +305,13 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
 
 // calculate the size of buffer allocated/deallocated on each core
 static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
-    uint32_t page_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kPageSize)));
-    uint32_t num_of_cores = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kNumCores)));
+    uint32_t page_size = json_to_int(node.at(kParams).at(kPageSize));
+    uint32_t num_of_cores = json_to_int(node.at(kParams).at(kNumCores));
     if (num_of_cores == 0) {
         num_of_cores = interleaved_storage_cores;
     }
 
-    uint32_t total_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kSize)));
+    uint32_t total_size = json_to_int(node.at(kParams).at(kSize));
     return detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
 }
 
@@ -317,7 +338,7 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
         if (node.at(kNodeType) == kNodeCBAllocate) {
             bool is_globally_allocated = json_to_int(node.at(kParams).at(kGloballyAllocated)) == 1;
             if (!is_globally_allocated) {
-                uint32_t alloc_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kSize)));
+                uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
                 current_cb += alloc_size;
                 peak_cb = std::max(peak_cb, current_cb);
                 current_total += alloc_size;
@@ -353,14 +374,14 @@ DRAMUsage extract_dram_usage(const nlohmann::json& trace) {
         const auto& v = trace[i];
 
         if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
-            size_t buffer_size = static_cast<size_t>(json_to_int(v[kParams][kSize]));
+            size_t buffer_size = json_to_int(v[kParams][kSize]);
             current_buffer += buffer_size;
             result.total_allocations += buffer_size;
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
             if (buffer[kParams][kType] == "DRAM") {
-                size_t buffer_size = static_cast<size_t>(json_to_int(buffer[kParams][kSize]));
+                size_t buffer_size = json_to_int(buffer[kParams][kSize]);
                 current_buffer -= buffer_size;
                 result.total_deallocations += buffer_size;
             }
