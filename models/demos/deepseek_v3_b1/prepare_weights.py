@@ -37,9 +37,9 @@ _DTYPE_TO_STR = {
 }
 _STR_TO_DTYPE = {v: k for k, v in _DTYPE_TO_STR.items()}
 
-# MoE gate bias: HEIGHT_SHARDED on sender core (10, 9), tile [16, 16]
-_MOE_SENDER_CORE = ttnn.CoreCoord(10, 9)
-_MOE_SENDER_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_MOE_SENDER_CORE, _MOE_SENDER_CORE)])
+# MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
+# Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
+MOE_SENDER_GRID_SIZE = (13, 10)
 _GATE_BIAS_TILE = ttnn.Tile([16, 16])
 
 # Fusion group name per field (for grouping by fused_tensor)
@@ -207,6 +207,34 @@ def _key(layer_idx: int, suffix: str) -> str:
     return f"model.layers.{layer_idx}.{suffix}"
 
 
+def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
+    """Build gate_bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core, replicated across mesh.
+
+    raw_tensor: shape (256,) from state dict (model.layers.{i}.mlp.gate.e_score_correction_bias).
+    Returns ttnn.Tensor with layout expected by MoE op: (16, 16) on sender core, tile 16x16.
+    Sender core uses MOE_SENDER_GRID_SIZE so cache layout is consistent across slow/fast dispatch.
+    When move_to_device is False (default), tensor is not placed (device=None) for cache generation.
+    When move_to_device is True, tensor is placed on device so is_sharded() is true for runtime use.
+    """
+    sender_core = ttnn.CoreCoord(MOE_SENDER_GRID_SIZE[0] - 1, MOE_SENDER_GRID_SIZE[1] - 1)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+    gate_bias_reshaped = raw_tensor.reshape(16, 16).T.contiguous().to(torch.bfloat16)
+    gate_bias_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sender_core_grid, (16, 16), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.from_torch(
+        gate_bias_reshaped,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device if move_to_device else None,
+        memory_config=gate_bias_mem_config,
+        tile=_GATE_BIAS_TILE,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
 def _split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Split HF kv_b_proj (out_features, in_features) into kv_b1 and kv_b2.
 
@@ -342,46 +370,6 @@ _GATE_BIAS_INDICES_SHAPE = (16, 16)
 _GATE_NUM_INDICES = 256
 
 
-def create_gate_bias_tensor(
-    raw: torch.Tensor,
-    device: Any,
-    sender_core_grid: ttnn.CoreRangeSet,
-    *,
-    mesh_mapper: Any = None,
-) -> ttnn.Tensor:
-    """Build gate bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core.
-
-    Args:
-        raw: Shape (256,) from state dict mlp.gate.e_score_correction_bias.
-        device: ttnn device or mesh device.
-        sender_core_grid: Single-core range set for the sender core.
-        mesh_mapper: Optional mesh mapper for multi-device.
-
-    Returns:
-        ttnn.Tensor with shape (16, 16), HEIGHT_SHARDED on sender_core_grid, tile 16x16, bfloat16.
-    """
-    assert raw.shape == (_GATE_NUM_INDICES,), f"gate bias raw must be ({_GATE_NUM_INDICES},), got {raw.shape}"
-    # (256,) -> (1, 8, 32) -> (16, 16) then transpose to match op layout
-    reshaped = raw.reshape(1, 8, 32).reshape(_GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1])
-    transposed = torch.transpose(reshaped, 0, 1).contiguous().to(torch.bfloat16)
-    shard_spec = ttnn.ShardSpec(
-        sender_core_grid,
-        _GATE_BIAS_INDICES_SHAPE,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
-    return ttnn.from_torch(
-        transposed,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        tile=ttnn.Tile([16, 16]),
-        **kwargs,
-    )
-
-
 def create_gate_indices_tensor(
     device: Any,
     sender_core_grid: ttnn.CoreRangeSet,
@@ -448,8 +436,7 @@ def prepare_attention_weights(
         gate_bias_tt = create_gate_bias_tensor(
             state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")],
             bdw._device,
-            _MOE_SENDER_CORE_GRID,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(bdw._device),
+            move_to_device=move_to_device,
         )
         logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
@@ -586,13 +573,15 @@ def prepare_dense_layer_weights(
     bdw: BlitzDecodeWeights,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
+    *,
+    move_to_device: bool = False,
 ) -> DeepSeekV3DenseLayerWeights:
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False)
-    routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False)
+    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
     assert isinstance(routed, DenseRoutedExpertWeights)
     return DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
@@ -656,22 +645,29 @@ def prepare_moe_layer_weights(
     logger.info("  MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
 
 
+def _to_tt_embedding(embedding_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
+    """Convert a torch embedding tensor to TT (DRAM, ROW_MAJOR, ReplicateTensorToMesh). Shared by prepare and synthetic."""
+    return ttnn.from_torch(
+        embedding_torch.contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device if move_to_device else None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
 def prepare_embedding_weights(
     state_dict: dict[str, torch.Tensor],
     device,
+    *,
+    move_to_device: bool = False,
 ) -> DeepSeekV3EmbeddingLayerWeights:
     """Prepare embedding weights from state dict (model.embed_tokens.weight)."""
     logger.info("Preparing embedding weights...")
     w = state_dict["model.embed_tokens.weight"]
     assert w.shape == (129280, 7168), f"Expected embedding shape (129280, 7168), got {w.shape}"
-    embedding_tt = ttnn.from_torch(
-        w.contiguous(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=None,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    embedding_tt = _to_tt_embedding(w, device, move_to_device=move_to_device)
     return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
 
 
@@ -729,23 +725,10 @@ _LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
 _LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE, _LM_HEAD_MCAST_CORE)])
 
 
-def prepare_lm_head_weights(
-    state_dict: dict[str, torch.Tensor],
-    device,
-) -> DeepSeekV3LMHeadWeights:
-    """Prepare LM head and final norm weights from state dict.
-
-    device must be the mesh device (e.g. 4x2 submesh). The LM head weight matrix is sharded
-    along the vocabulary dimension (TP = mesh size). Per-device layout matches the LM head
-    sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
-    """
-    # lm_head.weight: HF (vocab_size, hidden_size) = (129280, 7168) -> (7168, 129280) for matmul
-    lm_w = state_dict["lm_head.weight"]
-    assert lm_w.shape == (
-        _LM_HEAD_VOCAB_SIZE,
-        _LM_HEAD_K,
-    ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
-
+def _to_tt_lm_head_matrix(
+    lm_head_torch: torch.Tensor, device, *, mesh_mapper, move_to_device: bool = False
+) -> ttnn.Tensor:
+    """Convert (K, N) lm_head torch tensor to TT (WIDTH_SHARDED 101 cores, L1). Shared by prepare and synthetic."""
     lm_head_shard_shape = (_LM_HEAD_K, _LM_HEAD_N_PER_CORE)
     lm_head_shard_spec = ttnn.ShardSpec(
         _LM_HEAD_MATMUL_CORE_GRID,
@@ -757,35 +740,65 @@ def prepare_lm_head_weights(
         ttnn.BufferType.L1,
         lm_head_shard_spec,
     )
-    mesh_mapper = ttnn.ShardTensorToMesh(device, dim=1)
-    lm_head_tt = ttnn.from_torch(
-        lm_w.T.contiguous(),
+    return ttnn.from_torch(
+        lm_head_torch.contiguous(),
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
-        device=None,
+        device=device if move_to_device else None,
         memory_config=lm_head_mem_config,
         mesh_mapper=mesh_mapper,
         tile=_LM_HEAD_B_TILE,
     )
 
-    # model.norm.weight: (7168,) -> (1, 7168), HEIGHT_SHARDED on the mcast core
-    norm_w = state_dict["model.norm.weight"]
-    assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
 
+def _to_tt_lm_head_final_norm(norm_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
+    """Convert (1, K) final norm torch tensor to TT (HEIGHT_SHARDED on mcast core). Shared by prepare and synthetic."""
     norm_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(_LM_HEAD_MCAST_CORE_GRID, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
     )
-    final_norm_tt = ttnn.from_torch(
-        norm_w.unsqueeze(0).contiguous(),
+    return ttnn.from_torch(
+        norm_torch.contiguous(),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         tile=_LM_HEAD_A_TILE,
-        device=None,
+        device=device if move_to_device else None,
         memory_config=norm_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
+
+
+def prepare_lm_head_weights(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    move_to_device: bool = False,
+) -> DeepSeekV3LMHeadWeights:
+    """Prepare LM head and final norm weights from state dict.
+
+    device must be the mesh device (e.g. 4x2 submesh). The LM head weight matrix is sharded
+    along the vocabulary dimension (TP = mesh size). Per-device layout matches the LM head
+    sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
+    """
+    logger.info("Preparing LM head weights...")
+    # lm_head.weight: HF (vocab_size, hidden_size) = (129280, 7168) -> (7168, 129280) for matmul
+    lm_w = state_dict["lm_head.weight"]
+    assert lm_w.shape == (
+        _LM_HEAD_VOCAB_SIZE,
+        _LM_HEAD_K,
+    ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
+
+    lm_head_tt = _to_tt_lm_head_matrix(
+        lm_w.T, device, mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1), move_to_device=move_to_device
+    )
+
+    # model.norm.weight: (7168,) -> (1, 7168), HEIGHT_SHARDED on the mcast core
+    logger.info("Preparing LM head norm...")
+    norm_w = state_dict["model.norm.weight"]
+    assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
+
+    final_norm_tt = _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
     return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
 
 

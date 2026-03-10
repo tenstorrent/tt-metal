@@ -340,55 +340,58 @@ class WanCausalConv3d(Module):
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
 
-        # Height halo
-        if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
-            ttnn.synchronize_device(x_BTHWC.device())
-            x_BTHWC = ttnn.experimental.neighbor_pad_async(
-                x_BTHWC,
-                dim=2,
-                padding_left=self.external_padding[1],
-                padding_right=self.external_padding[1],
-                padding_mode="zeros",
-                cluster_axis=self.parallel_config.height_parallel.mesh_axis,
-                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
-                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis
-                )[0],
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis
-                ),
-                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
-                topology=self.ccl_manager.topology,
-            )
-            ttnn.synchronize_device(x_BTHWC.device())
+        # Halo exchange (height and/or width padding)
+        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # Width halo
-        if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
-            # TODO: Fix validation in neighbor_pad_async to allow halo on dim3
-            x_THWC = ttnn.squeeze(x_BTHWC, dim=0)
-            ttnn.synchronize_device(x_THWC.device())
-            x_THWC = ttnn.experimental.neighbor_pad_async(
-                x_THWC,
-                dim=2,
-                padding_left=self.external_padding[2],
-                padding_right=self.external_padding[2],
+        if h_pad_needed or w_pad_needed:
+            dims, pad_left, pad_right = [], [], []
+            axes, neighbor_sems, links = [], [], []
+            if h_pad_needed:
+                dims.append(2)
+                pad_left.append(self.external_padding[1])
+                pad_right.append(self.external_padding[1])
+                axes.append(self.parallel_config.height_parallel.mesh_axis)
+                neighbor_sems.append(
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
+                )
+                links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
+            if w_pad_needed:
+                dims.append(3)
+                pad_left.append(self.external_padding[2])
+                pad_right.append(self.external_padding[2])
+                axes.append(self.parallel_config.width_parallel.mesh_axis)
+                neighbor_sems.append(
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
+                )
+                links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                x_BTHWC,
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
                 padding_mode="zeros",
-                cluster_axis=self.parallel_config.width_parallel.mesh_axis,
-                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
-                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.width_parallel.mesh_axis
-                )[0],
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
-                # memory_config=mem_config_output,
-                topology=self.ccl_manager.topology,
+                axes=axes,
+                neighbor_sems=neighbor_sems,
+                num_links=links,
             )
-            ttnn.synchronize_device(x_THWC.device())
-            x_BTHWC = ttnn.unsqueeze(x_THWC, dim=0)
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -404,12 +407,6 @@ class WanCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
@@ -745,58 +742,62 @@ class WanConv2d(Module):
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
+
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
 
-        # Height halo
-        if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
-            ttnn.synchronize_device(x_BTHWC.device())
-            x_BTHWC = ttnn.experimental.neighbor_pad_async(
+        # Halo exchange (height and/or width padding)
+        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        if h_pad_needed or w_pad_needed:
+            dims, pad_left, pad_right = [], [], []
+            axes, neighbor_sems, links = [], [], []
+            if h_pad_needed:
+                dims.append(2)
+                pad_left.append(self.external_padding[1])
+                pad_right.append(self.external_padding[1])
+                axes.append(self.parallel_config.height_parallel.mesh_axis)
+                neighbor_sems.append(
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
+                )
+                links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
+            if w_pad_needed:
+                dims.append(3)
+                pad_left.append(self.external_padding[2])
+                pad_right.append(self.external_padding[2])
+                axes.append(self.parallel_config.width_parallel.mesh_axis)
+                neighbor_sems.append(
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
+                )
+                links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
-                dim=2,
-                padding_left=self.external_padding[1],
-                padding_right=self.external_padding[1],
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
                 padding_mode="zeros",
-                cluster_axis=self.parallel_config.height_parallel.mesh_axis,
-                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
-                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis
-                )[0],
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis
-                ),
-                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
-                # memory_config=mem_config_output,
-                topology=self.ccl_manager.topology,
+                axes=axes,
+                neighbor_sems=neighbor_sems,
+                num_links=links,
             )
-            ttnn.synchronize_device(x_BTHWC.device())
-        # Width halo
-        if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
-            # TODO: Fix validation in neighbor_pad_async to allow halo on dim3
-            x_THWC = ttnn.squeeze(x_BTHWC, dim=0)
-            ttnn.synchronize_device(x_THWC.device())
-            x_THWC = ttnn.experimental.neighbor_pad_async(
-                x_THWC,
-                dim=2,
-                padding_left=self.external_padding[2],
-                padding_right=self.external_padding[2],
-                padding_mode="zeros",
-                cluster_axis=self.parallel_config.width_parallel.mesh_axis,
-                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
-                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.width_parallel.mesh_axis
-                )[0],
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
-                # memory_config=mem_config_output,
-                topology=self.ccl_manager.topology,
-            )
-            ttnn.synchronize_device(x_THWC.device())
-            x_BTHWC = ttnn.unsqueeze(x_THWC, dim=0)
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -812,12 +813,6 @@ class WanConv2d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 

@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -517,7 +515,7 @@ TEST_F(RoPETest, BackwardTest) {
         /*head_dim=*/32);
     auto rope_mod = modules::RotaryEmbedding(rope_params);
 
-    auto xq_autograd_tensor = autograd::create_tensor(core::from_xtensor(xq, device));
+    auto xq_autograd_tensor = autograd::create_tensor(core::from_xtensor(xq, device), /* requires_grad */ true);
 
     auto actual_xq_out = rope_mod(xq_autograd_tensor);
     auto target = autograd::create_tensor(core::from_xtensor(xq, device));  // just need ones for mse target, reusing xq

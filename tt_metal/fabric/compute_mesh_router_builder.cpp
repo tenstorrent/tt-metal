@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_mesh_router_builder.hpp"
+#include <limits>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -19,6 +20,142 @@
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric {
+
+namespace {
+
+// Set bits [0, channels_per_vc[0]) | [offset1, offset1+channels_per_vc[1]) | ... in a bitfield.
+void set_all_channel_bits(
+    uint16_t& bitfield, const std::array<std::size_t, builder_config::MAX_NUM_VCS>& channels_per_vc) {
+    size_t offset = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        bitfield |= static_cast<uint16_t>(((1u << channels_per_vc[vc]) - 1) << offset);
+        offset += channels_per_vc[vc];
+    }
+}
+
+// Replace a VC's channel bits in a bitfield using override settings.
+// Clears all bits in [offset, offset+count), then sets only override-specified bits.
+void apply_vc_override_to_bitfield(
+    uint16_t& bitfield,
+    size_t offset,
+    size_t count,
+    size_t vc,
+    const std::optional<bool>& force_enable_all,
+    const std::optional<std::vector<size_t>>& force_enable_indices,
+    const char* direction_name) {
+    uint16_t vc_mask = static_cast<uint16_t>(((1u << count) - 1) << offset);
+
+    // CLEAR all bits for this VC range
+    bitfield &= ~vc_mask;
+
+    // SET only what the override says
+    if (force_enable_all.value_or(false)) {
+        bitfield |= vc_mask;
+    } else if (force_enable_indices.has_value()) {
+        for (size_t idx : *force_enable_indices) {
+            TT_FATAL(
+                idx < count,
+                "Override {} channel index {} exceeds VC{} {} count {}",
+                direction_name,
+                idx,
+                vc,
+                direction_name,
+                count);
+            bitfield |= (1u << (offset + idx));
+        }
+    }
+}
+
+}  // namespace
+
+void apply_global_overrides_to_entry(
+    ChannelTrimmingOverrides& entry,
+    const ChannelTrimmingGlobalOverrides& global_overrides,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) {
+    size_t sender_offset = 0;
+    size_t receiver_offset = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        const auto& vc_override = global_overrides.per_vc[vc];
+
+        if (vc_override.has_sender_override()) {
+            apply_vc_override_to_bitfield(
+                entry.sender_channel_used_bitfield_by_vc,
+                sender_offset,
+                sender_channels_per_vc[vc],
+                vc,
+                vc_override.force_enable_all_sender_channels,
+                vc_override.force_enable_sender_channels,
+                "sender");
+        }
+        sender_offset += sender_channels_per_vc[vc];
+
+        if (vc_override.has_receiver_override()) {
+            apply_vc_override_to_bitfield(
+                entry.receiver_channel_data_forwarded_bitfield_by_vc,
+                receiver_offset,
+                receiver_channels_per_vc[vc],
+                vc,
+                vc_override.force_enable_all_receiver_channels,
+                vc_override.force_enable_receiver_channels,
+                "receiver");
+        }
+        receiver_offset += receiver_channels_per_vc[vc];
+    }
+}
+
+namespace {
+
+// Resolve the effective channel trimming overrides for a single router.
+//
+// Looks up the router in the capture map (if present), then conditionally applies
+// global overrides. Returns nullopt if neither capture nor global override applies
+// (meaning the builder should use its default: all channels enabled).
+//
+// Priority:
+//   - No capture, no global override → nullopt (builder default)
+//   - Capture only → capture entry (existing behavior)
+//   - Global override only → fully-enabled baseline with override applied
+//   - Capture + global override → capture entry with override applied
+std::optional<ChannelTrimmingOverrides> resolve_channel_trimming_for_router(
+    const std::optional<ChannelTrimmingOverrideMap>& capture_overrides,
+    const ChannelTrimmingGlobalOverrides& global_overrides,
+    ChipId chip_id,
+    chan_id_t eth_chan,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) {
+    // Look up capture entry for this router
+    std::optional<ChannelTrimmingOverrides> result;
+    if (capture_overrides.has_value()) {
+        auto key = make_override_key(chip_id, eth_chan);
+        auto it = capture_overrides->find(key);
+        if (it != capture_overrides->end()) {
+            result = it->second;
+        }
+    }
+
+    bool has_global_override = global_overrides.has_any_override();
+    if (!result.has_value() && !has_global_override) {
+        return std::nullopt;  // No trimming — builder default
+    }
+
+    if (!result.has_value()) {
+        // No capture entry — construct a fully-enabled baseline for the override to modify
+        ChannelTrimmingOverrides baseline;
+        baseline.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+        set_all_channel_bits(baseline.sender_channel_used_bitfield_by_vc, sender_channels_per_vc);
+        set_all_channel_bits(baseline.receiver_channel_data_forwarded_bitfield_by_vc, receiver_channels_per_vc);
+        result = baseline;
+    }
+
+    if (has_global_override) {
+        apply_global_overrides_to_entry(*result, global_overrides, sender_channels_per_vc, receiver_channels_per_vc);
+    }
+
+    return result;
+}
+
+}  // namespace
 
 ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     FabricNodeId local_node,
@@ -142,16 +279,14 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
-    // Look up channel trimming overrides for this router (if a profile is loaded)
-    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides_for_router;
-    const auto& trimming_overrides = builder_context.get_channel_trimming_overrides();
-    if (trimming_overrides.has_value()) {
-        auto key = make_override_key(device->id(), location.eth_chan);
-        auto it = trimming_overrides->find(key);
-        if (it != trimming_overrides->end()) {
-            channel_trimming_overrides_for_router = it->second;
-        }
-    }
+    // Resolve channel trimming for this router: capture lookup + global override application
+    auto channel_trimming_overrides_for_router = resolve_channel_trimming_for_router(
+        builder_context.get_channel_trimming_overrides(),
+        builder_context.get_channel_trimming_global_overrides(),
+        device->id(),
+        location.eth_chan,
+        actual_sender_channels_per_vc,
+        actual_receiver_channels_per_vc);
 
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
@@ -664,10 +799,10 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
 
         const auto is_master_risc_core = (eth_chan == ctx.master_router_chan) && (risc_id == 0);
-        ct_args.push_back(is_master_risc_core);
-        ct_args.push_back(ctx.master_router_chan);
-        ct_args.push_back(ctx.num_local_fabric_routers);
-        ct_args.push_back(ctx.router_channels_mask);
+        named_ct_args["IS_LOCAL_HANDSHAKE_MASTER"] = is_master_risc_core;
+        named_ct_args["LOCAL_HANDSHAKE_MASTER_ETH_CHAN"] = ctx.master_router_chan;
+        named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
+        named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
 
         // Determine processor
         auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
@@ -678,10 +813,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
         }
 
-        // Use Os (optimize for size) when VC1 is active to fit in code space
-        // Use O3 (optimize for performance) otherwise
-        bool vc1_active = erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0;
-        auto opt_level = vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+        auto opt_level = erisc_builder_->get_kernel_opt_level();
 
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
