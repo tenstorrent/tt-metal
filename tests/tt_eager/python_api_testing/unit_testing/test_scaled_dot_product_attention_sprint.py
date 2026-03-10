@@ -178,10 +178,20 @@ INPUT_IDS = [
     "wan_4xGLX_analog",
 ]
 
-Q_CHUNK_SIZES = [224, 288]
-K_CHUNK_SIZES = [512]
-# Q_CHUNK_SIZES = [224, 256, 288]
-# K_CHUNK_SIZES = [128, 256, 512]
+Q_CHUNK_SIZES = [224, 256, 288]
+K_CHUNK_SIZES = [128, 256, 512]
+
+# INPUT_SHAPES = [
+#     # batch, num_heads, sequence_length, head_dim
+#     # [1, 10, 9472, 128],
+#     [1, 10, 2368, 128],
+# ]
+# INPUT_IDS = [
+#     # "wan_1xGLX_analog",
+#     "wan_4xGLX_analog",
+# ]
+# Q_CHUNK_SIZES = [224]
+# K_CHUNK_SIZES = [512]
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
@@ -368,6 +378,7 @@ def test_sdpa_create_perf_table(b, nh, s, d):
     # NOTE: Hardcoded for Blackhole (11x10 grid = 110 cores)
     # Cannot query device here as it causes TLB resource contention with subprocess tests
     num_cores = 110
+    torch.manual_seed(1010)
 
     subdir = "ttnn_sdpa_performance"
     perf_results = []

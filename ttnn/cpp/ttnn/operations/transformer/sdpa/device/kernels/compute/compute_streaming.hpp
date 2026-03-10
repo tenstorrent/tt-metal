@@ -14,6 +14,7 @@
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #include "api/compute/experimental/tile_move_copy_custom.h"
+#include "api/compute/experimental/pack_custom.h"
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -165,53 +166,39 @@ void reduce_c_row_group(
     if (!respect_trigger) {
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
-
-    // if (do_eltwise_max) {
-    //     reduce_block_max_row_reinit_runtime(reduce_cols, respect_trigger);
-    // } else {
-    //     reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
-    // }
 #ifdef ARCH_BLACKHOLE
     if (!do_eltwise_max) {
-        reduce_block_max_row_init<cols, respect_trigger>();
+        MaybeDeviceZoneScopedN(false, "Reduce max row init runtime");
+        reduce_block_max_row_init_runtime(cols, respect_trigger);
     } else if (row_group_index == 0) {
         // After sub_exp + matmul, need full MOP reprogramming
-        reduce_block_max_row_reinit_short<cols, respect_trigger>();
+        MaybeDeviceZoneScopedN(false, "Reduce max row reinit short runtime");
+        reduce_block_max_row_reinit_short_runtime(cols, respect_trigger);
     } else {
         // Within same K chunk, sub_exp custom + mm_no_mop doesn't disturb reduce MOP
-        reduce_block_max_row_reinit_minimal<cols, respect_trigger>();
+        MaybeDeviceZoneScopedN(false, "Reduce max row reinit minimal runtime");
+        reduce_block_max_row_reinit_minimal_runtime(cols, respect_trigger);
     }
 #endif
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row<cols, respect_trigger>(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
     }
-    reduce_block_max_row_uninit<false, respect_trigger>(in0_cb);
-    // #ifdef ARCH_BLACKHOLE
-    //     if (!do_eltwise_max) {
-    //         reduce_block_max_row_init_runtime(cols, respect_trigger);
-    //     } else if (row_group_index == 0) {
-    //         // After sub_exp + matmul, need full MOP reprogramming
-    //         reduce_block_max_row_reinit_short_runtime(cols, respect_trigger);
-    //     } else {
-    //         // Within same K chunk, sub_exp custom + mm_no_mop doesn't disturb reduce MOP
-    //         reduce_block_max_row_reinit_minimal_runtime(cols, respect_trigger);
-    //     }
-    // #endif
-    //     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-    //         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-    //         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
-    //     }
-    //     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
+    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
 
     tile_regs_commit();
-    tile_regs_wait();
-
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        pack_tile<false>(i, out_cb);
+    {
+        MaybeDeviceZoneScopedN(false, "Reduce max row wait");
+        tile_regs_wait();
     }
-
-    tile_regs_release();
+    {
+        MaybeDeviceZoneScopedN(false, "Reduce max row pack");
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            pack_tile<false>(i, out_cb);
+            // pack_tile_no_mop<false>(i, out_cb);
+        }
+        tile_regs_release();
+    }
 }
 
 /**
@@ -743,7 +730,7 @@ static void sdpa_inner_loop_step(
                     sbh,
                     qkt_subblock_w);
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+                mm_no_mop_reinit_after_sub(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #else
                 mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
@@ -1272,7 +1259,11 @@ void sdpa_standard_v2(
             // Last chunk with padding: pass effective_Sk to narrow Q@KT and V matmul.
             // Non-padded chunks: pass 0 (= use full Sk_chunk_t).
             uint32_t eff_Sk = (is_last && padded_k_tiles_inner > 0) ? effective_Sk : 0;
-            call_step(std::false_type{}, is_last, is_first, eff_Sk);
+            if (!is_first) {
+                call_step(std::true_type{}, is_last, is_first, eff_Sk);
+            } else {
+                call_step(std::false_type{}, is_last, is_first, eff_Sk);
+            }
 
             // Post-iteration cleanup
             if (!is_first) {
