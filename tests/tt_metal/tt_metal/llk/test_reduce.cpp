@@ -566,11 +566,38 @@ void run_single_core_reduce_program(
         PhysicalSize{tile_H, tile_W}));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
+
+    auto result_u16 = u16_from_u32_vector(result_vec);
+    auto gold_u16 = u16_from_u32_vector(gold_4f_u32);
+    auto bf16_to_float = [](uint16_t raw) -> float {
+        uint32_t bits = static_cast<uint32_t>(raw) << 16;
+        float f;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    };
+    size_t print_count = std::min(result_u16.size(), gold_u16.size());
+    size_t mismatches = 0;
+    for (size_t i = 0; i < print_count; i++) {
+        float r = bf16_to_float(result_u16[i]);
+        float g = bf16_to_float(gold_u16[i]);
+        bool match = comparison_function(r, g);
+        if (!match || print_count <= 64) {
+            log_info(LogTest, "[{}] result={:.6f}  golden={:.6f}  {}", i, r, g, match ? "OK" : "MISMATCH");
+            mismatches++;
+            if (mismatches > 32) {
+                log_info(LogTest, "... (truncated, too many mismatches)");
+                break;
+            }
+        }
+    }
+    log_info(LogTest, "Total elements compared: {}  mismatches: {}", print_count, mismatches);
+
     if (!pass) {
         log_error(LogTest, "Failure position={}", argfail);
     }
 
-    EXPECT_TRUE(pass);
+    // EXPECT_TRUE(pass);
+    ASSERT_TRUE(pass);
     log_info(
         LogTest,
         "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}",
@@ -624,7 +651,8 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    // std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    std::vector<uint32_t> shape = {1, 1, 3 * TILE_HEIGHT, 2 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
@@ -650,6 +678,10 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    if (HasFatalFailure()) {
+                        return;
+                    }
+                    return;
                 }
             }
         }

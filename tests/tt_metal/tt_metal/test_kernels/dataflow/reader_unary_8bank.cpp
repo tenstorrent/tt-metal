@@ -9,7 +9,7 @@
 #include "experimental/noc.h"
 #endif
 
-// #include "api/debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void generate_bcast_scaler() {
 #ifdef ARCH_QUASAR
@@ -23,10 +23,11 @@ void generate_bcast_scaler() {
         uint32_t u;
     } u;
     u.u = scaler;
-    // DPRINT << "basic Scaler = " << F32(u.f) << ENDL();
+    DPRINT << "RD: scaler raw=" << HEX() << scaler << DEC() << " float=" << F32(u.f) << ENDL();
 #ifdef ARCH_QUASAR
     dfb1.reserve_back(1);
-    auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr());
+    auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
+    DPRINT << "RD: scaler DFB1 write_ptr=" << HEX() << dfb1.get_write_ptr() << DEC() << ENDL();
 #else
     cb_reserve_back(cb_in_2, 1);
     auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
@@ -41,6 +42,9 @@ void generate_bcast_scaler() {
         }
     }
 #ifdef ARCH_QUASAR
+    DPRINT << "RD: scaler verify[0..7]=" << HEX() << (uint32_t)ptr[0] << " " << (uint32_t)ptr[1] << " "
+           << (uint32_t)ptr[2] << " " << (uint32_t)ptr[3] << " " << (uint32_t)ptr[4] << " " << (uint32_t)ptr[5] << " "
+           << (uint32_t)ptr[6] << " " << (uint32_t)ptr[7] << DEC() << ENDL();
     dfb1.push_back(1);
 #else
     cb_push_back(cb_in_2, 1);
@@ -81,13 +85,17 @@ void kernel_main() {
     constexpr uint32_t tile_offset = 0;
 #endif
     // DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
-
+    DPRINT << "RD: start num_tiles=" << num_tiles << " tile_bytes=" << tile_bytes << " src_addr=" << HEX() << src_addr
+           << DEC() << ENDL();
+    DPRINT << "RD: input DFB0 base info: entry_size=" << dfb0.get_entry_size() << ENDL();
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t i_tile = 0;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
         uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
 #ifdef ARCH_QUASAR
         dfb0.reserve_back(rem);
+        auto ptr = reinterpret_cast<uint16_t*>(dfb0.get_write_ptr());
+        // DPRINT << "RD: DFB0 write_ptr=" << HEX() << dfb0.get_write_ptr() << DEC() << ENDL();
         uint32_t l1_write_addr = dfb0.get_write_ptr();
 
         for (uint32_t r = 0; r < rem; r++) {
@@ -111,5 +119,7 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, rem);
 #endif
+        // DPRINT << "RD: iteration i=" << i << ENDL();
     }
+    DPRINT << "RD: done" << ENDL();
 }

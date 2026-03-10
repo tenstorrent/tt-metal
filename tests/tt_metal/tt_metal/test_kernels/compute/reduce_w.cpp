@@ -10,6 +10,7 @@
 #else
 #include "experimental/circular_buffer.h"
 #endif
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
@@ -81,4 +82,5 @@ void kernel_main() {
         }
     }
     reduce_uninit();
+    DPRINT << "CMP: done" << ENDL();
 }
