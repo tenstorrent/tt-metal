@@ -227,7 +227,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         prefill_max_tokens: int | None = None,
         force_recalculate: bool = False,
         profile_decode: bool = False,
-        mtp_mode: str = "on",
+        enable_mtp: bool = True,
         min_mtp_accept_rate: float | None = None,
         mtp_skip_on_accept: bool | None = None,
     ) -> None:
@@ -264,10 +264,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 )
                 self.hf_config.first_k_dense_replace = self.hf_config.num_hidden_layers
         config_supports_mtp = self._config_supports_mtp(self.hf_config, random_weights=random_weights)
-        mtp_mode = (mtp_mode or "on").lower()
-        if mtp_mode not in {"on", "off"}:
-            raise ValueError(f"Invalid mtp_mode '{mtp_mode}'. Expected one of: on, off.")
-        if mtp_mode == "on":
+        if enable_mtp:
             if random_weights:
                 raise ValueError("MTP cannot be enabled with --random-weights.")
             if not config_supports_mtp:
@@ -281,7 +278,6 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if not self.enable_mtp and hasattr(self.hf_config, "num_nextn_predict_layers"):
             self.hf_config.num_nextn_predict_layers = 0
-        self.mtp_mode = mtp_mode
         self.min_mtp_accept_rate = min_mtp_accept_rate
         self.mtp_skip_on_accept = mtp_skip_on_accept
         logger.info(f"MTP enabled: {self.enable_mtp}")

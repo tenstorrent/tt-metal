@@ -386,11 +386,11 @@ def _trace_mtp_conflict_requested(
     profile_decode: bool,
     max_new_tokens: int,
     random_weights: bool,
-    mtp: str,
+    enable_mtp: bool,
 ) -> bool:
     if not enable_trace or token_accuracy or profile_decode or max_new_tokens <= 1 or random_weights:
         return False
-    return (mtp or "on").lower() == "on"
+    return enable_mtp
 
 
 def _assert_demo_mtp_available(
@@ -398,10 +398,9 @@ def _assert_demo_mtp_available(
     model_path: Path,
     random_weights: bool,
     override_num_layers: int | None,
-    mtp: str,
+    enable_mtp: bool,
 ) -> None:
-    mtp_mode = (mtp or "on").lower()
-    if mtp_mode == "off":
+    if not enable_mtp:
         return
     if random_weights:
         raise SystemExit("MTP cannot be enabled with --random-weights.")
@@ -443,7 +442,7 @@ def run_demo(
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
     force_recalculate: bool = False,
-    mtp: str = "on",
+    enable_mtp: bool = True,
     min_mtp_accept_rate: float | None = None,
     mtp_skip_on_accept: str = "auto",
 ) -> dict:
@@ -471,7 +470,7 @@ def run_demo(
         model_path=model_path,
         random_weights=random_weights,
         override_num_layers=override_num_layers,
-        mtp=mtp,
+        enable_mtp=enable_mtp,
     )
 
     if _trace_mtp_conflict_requested(
@@ -480,7 +479,7 @@ def run_demo(
         profile_decode=profile_decode,
         max_new_tokens=max_new_tokens,
         random_weights=random_weights,
-        mtp=mtp,
+        enable_mtp=enable_mtp,
     ):
         raise SystemExit(
             "--enable-trace is not supported with active MTP decode in the DeepSeek demo. "
@@ -571,7 +570,7 @@ def run_demo(
                 prefill_max_tokens=prefill_max_tokens,
                 profile_decode=profile_decode,
                 force_recalculate=force_recalculate,
-                mtp_mode=mtp,
+                enable_mtp=enable_mtp,
                 min_mtp_accept_rate=min_mtp_accept_rate,
                 mtp_skip_on_accept=mtp_skip_on_accept_override,
             )
@@ -734,7 +733,7 @@ def main() -> None:
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
-        mtp=args.mtp,
+        enable_mtp=(args.mtp == "on"),
         min_mtp_accept_rate=args.min_mtp_accept_rate,
         mtp_skip_on_accept=args.mtp_skip_on_accept,
     )

@@ -91,7 +91,7 @@ def _run_reference_decode_replay_consistency(
     cache_path,
     force_recalculate_weight_config,
     set_deterministic_env,
-    mtp_mode: str,
+    enable_mtp: bool,
 ):
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     steps_to_check = min(int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", str(DEFAULT_VERIFY_STEPS))), num_steps)
@@ -114,14 +114,15 @@ def _run_reference_decode_replay_consistency(
     start_tokens = payload["start_tokens"].to(torch.long)
     steps_to_check = min(steps_to_check, int(next_tokens.shape[0]))
 
+    mtp_label = "on" if enable_mtp else "off"
     with _prepare_generator(
         mesh_device=mesh,
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode=mtp_mode,
+        enable_mtp=enable_mtp,
     ) as gen:
-        _assert_reference_start_tokens(payload, gen, context=f"MTP reference decode replay ({mtp_mode})")
+        _assert_reference_start_tokens(payload, gen, context=f"MTP reference decode replay ({mtp_label})")
 
         positions = torch.zeros((gen.batch_size,), dtype=torch.int32)
         tokens_step = start_tokens.clone()
@@ -150,7 +151,7 @@ def _run_reference_decode_replay_consistency(
                 f"sample_pred={int(pred_tokens[0].item())} sample_gt={int(gt_tokens[0].item())}"
             )
             mismatch_rows.append(row)
-            logger.info("MTP reference replay [{}] {}", mtp_mode, row)
+            logger.info("MTP reference replay [{}] {}", mtp_label, row)
 
             if mismatch_count > 0 and first_mismatch_step is None:
                 first_mismatch_step = step
@@ -161,7 +162,7 @@ def _run_reference_decode_replay_consistency(
                 ]
                 logger.info(
                     "MTP reference replay [{}] first mismatch step={} details={}",
-                    mtp_mode,
+                    mtp_label,
                     step,
                     details,
                 )
@@ -171,12 +172,12 @@ def _run_reference_decode_replay_consistency(
 
         logger.info(
             "MTP reference replay [{}] summary: steps_checked={} first_mismatch_step={}",
-            mtp_mode,
+            mtp_label,
             steps_to_check,
             first_mismatch_step,
         )
         assert first_mismatch_step is None, (
-            f"Fresh base decode ({mtp_mode}) does not reproduce the stored reference stream. "
+            f"Fresh base decode ({mtp_label}) does not reproduce the stored reference stream. "
             f"first_mismatch_step={first_mismatch_step}\n" + "\n".join(mismatch_rows)
         )
 
@@ -207,7 +208,7 @@ def test_mtp_reference_decode_replay_consistency(
         cache_path,
         force_recalculate_weight_config,
         set_deterministic_env,
-        mtp_mode="on",
+        enable_mtp=True,
     )
 
 
@@ -237,7 +238,7 @@ def test_mtp_reference_decode_replay_consistency_mtp_off(
         cache_path,
         force_recalculate_weight_config,
         set_deterministic_env,
-        mtp_mode="off",
+        enable_mtp=False,
     )
 
 
@@ -285,13 +286,13 @@ def _prepare_generator(
     model_path: Path,
     cache_path: Path,
     force_recalculate: bool,
-    mtp_mode: str,
+    enable_mtp: bool,
 ) -> DeepseekGenerator:
     gen = DeepseekGenerator(
         mesh_device=mesh_device,
         model_path=model_path,
         cache_dir=cache_path,
-        mtp_mode=mtp_mode,
+        enable_mtp=enable_mtp,
         force_recalculate=force_recalculate,
     )
     gen._prepare_run_configs("prefill")
@@ -792,7 +793,7 @@ def test_generate_mtp_reference_io(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="off",
+        enable_mtp=False,
     ) as gen:
         batch_size = gen.batch_size
         hidden_size = gen.hf_config.hidden_size
@@ -907,7 +908,7 @@ def test_mtp_accept_rate_and_perf(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="on",
+        enable_mtp=True,
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP module test.")
@@ -1048,7 +1049,7 @@ def test_mtp_prefill_priming(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="on",
+        enable_mtp=True,
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP prefill priming test.")
@@ -1175,7 +1176,7 @@ def test_mtp_verify_batching_aliasing(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="on",
+        enable_mtp=True,
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping verify-lane batching test.")
