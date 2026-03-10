@@ -35,7 +35,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<operations::transformer::SDPAProgramConfig> program_config,
     const std::optional<Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<uint32_t> sliding_window_size) {
     /*
     Q: B x NQH x S*ring_size x DH
     K: B x NKH x DH x S
@@ -261,11 +262,11 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         packed_identity_scalar,
         scale_union.u,
         num_cores,
-        true,   //(std::uint32_t)is_causal,
-        false,  //(std::uint32_t)use_provided_mask,
-        false,  //(std::uint32_t)use_padded_mask,
-        true,   //(uint32_t)is_chunked,
-        0,      //(uint32_t)sliding_window_size,
+        true,                             //(std::uint32_t)is_causal,
+        false,                            //(std::uint32_t)use_provided_mask,
+        false,                            //(std::uint32_t)use_padded_mask,
+        true,                             //(uint32_t)is_chunked,
+        sliding_window_size.value_or(0),  //(uint32_t)sliding_window_size,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -299,8 +300,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_union.u,
-        0,  //(uint32_t)sliding_window_size,
-        0,  //(std::uint32_t)use_attention_sink,
+        sliding_window_size.value_or(0),  //(uint32_t)sliding_window_size,
+        0,                                //(std::uint32_t)use_attention_sink,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
@@ -616,7 +617,8 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
                 operation_attributes.compute_kernel_config,
                 operation_attributes.program_config,
                 tensor_args.page_table,
-                operation_attributes.chunk_start_idx);
+                operation_attributes.chunk_start_idx,
+                operation_attributes.sliding_window_size);
             shared_variables[single_coord_range] = cached_program.shared_variables;
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }

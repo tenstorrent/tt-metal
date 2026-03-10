@@ -20,6 +20,7 @@ struct RingDistributedSDPAParams {
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<int64_t> chunk_start_idx;
+    std::optional<uint32_t> sliding_window_size;  // Sliding window attention size (None = full attention)
 };
 
 struct RingDistributedSDPAInputs {

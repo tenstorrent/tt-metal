@@ -118,6 +118,34 @@ class TtTransformerBlock(LightweightModule):
         self.attention_norm.tt_ccl = tt_ccl
         self.ff_norm.tt_ccl = tt_ccl
 
+    def _debug_check(self, name, tensor):
+        """Check tensor for Inf/NaN and log stats."""
+        import os
+
+        if os.environ.get("DEBUG_DECODE", "0") != "1":
+            return
+        try:
+            import torch
+            from loguru import logger
+
+            # Get tensor from mesh device
+            torch_tensor = ttnn.to_torch(
+                tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            has_inf = torch.isinf(torch_tensor).any().item()
+            has_nan = torch.isnan(torch_tensor).any().item()
+            max_val = torch_tensor.float().abs().max().item()
+            status = "OK" if not (has_inf or has_nan) else "BAD"
+            logger.info(f"  [{status}] {name}: max={max_val:.4e}, Inf={has_inf}, NaN={has_nan}")
+        except Exception as e:
+            import traceback
+            from loguru import logger
+
+            logger.error(f"  [ERROR] {name}: {e}\n{traceback.format_exc()}")
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -138,6 +166,9 @@ class TtTransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+
+        self._debug_check("input_x", x)
+
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
         if self.layer_num == 0 or mode == "prefill":
@@ -155,6 +186,8 @@ class TtTransformerBlock(LightweightModule):
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
 
+        self._debug_check("attn_in_sharded", attn_in_sharded)
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -167,6 +200,9 @@ class TtTransformerBlock(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+
+        self._debug_check("attn_out", attn_out)
+
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
             x.deallocate(True)
@@ -179,8 +215,12 @@ class TtTransformerBlock(LightweightModule):
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
 
+        self._debug_check("ff_in_sharded", ff_in_sharded)
+
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
+
+        self._debug_check("ff_out", ff_out)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":

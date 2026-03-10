@@ -593,6 +593,8 @@ void bind_sdpa(nb::module_& mod) {
             page_table (ttnn.Tensor, optional): Page table tensor for paged KV cache access [b x num_pages]. Defaults to `None`.
             chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts (for prefix caching).
                 Must be a multiple of program_config.q_chunk_size. Defaults to `None`.
+            sliding_window_size (int, optional): Size of sliding window for attention. If provided, only attends to the last
+                `sliding_window_size` tokens. Use for hybrid sliding/full attention patterns. Defaults to `None` (full attention).
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -617,7 +619,8 @@ void bind_sdpa(nb::module_& mod) {
                const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<ttnn::Tensor>& page_table,
-               std::optional<int64_t> chunk_start_idx) {
+               std::optional<int64_t> chunk_start_idx,
+               std::optional<uint32_t> sliding_window_size) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -629,7 +632,8 @@ void bind_sdpa(nb::module_& mod) {
                     program_config,
                     compute_kernel_config,
                     page_table,
-                    chunk_start_idx);
+                    chunk_start_idx,
+                    sliding_window_size);
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
@@ -642,6 +646,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("page_table") = nb::none(),
-            nb::arg("chunk_start_idx") = nb::none()});
+            nb::arg("chunk_start_idx") = nb::none(),
+            nb::arg("sliding_window_size") = nb::none()});
 }
 }  // namespace ttnn::operations::transformer

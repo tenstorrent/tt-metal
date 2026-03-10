@@ -294,7 +294,8 @@ Tensor ring_distributed_sdpa(
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<uint32_t> sliding_window_size) {
     using OperationType = ttnn::prim::RingDistributedSdpaDeviceOperation;
 
     if (not scale.has_value()) {
@@ -308,6 +309,7 @@ Tensor ring_distributed_sdpa(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .chunk_start_idx = chunk_start_idx,
+        .sliding_window_size = sliding_window_size,
     };
 
     auto tensor_args = OperationType::tensor_args_t{
