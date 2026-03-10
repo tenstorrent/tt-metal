@@ -247,7 +247,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         std::move(output_shard_shape), first_spec.grid, first_spec.orientation, first_spec.shard_distribution_strategy);
     const MemoryConfig output_mem_config(ref_in_tensor.memory_config().buffer_type(), std::move(output_nd_spec));
 
-    // ensure correct memory config
+    // ensure correct memory config for verification routine
     if (args.output_mem_config == ttnn::DRAM_MEMORY_CONFIG ||   // default if it came empty
         !args.output_mem_config.nd_shard_spec().has_value()) {  // output for nd sharding should be the same as input
         const_cast<decltype(args.output_mem_config)&>(args.output_mem_config) = output_mem_config;
