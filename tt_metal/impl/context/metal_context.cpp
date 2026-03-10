@@ -759,17 +759,18 @@ void MetalContext::init_context_descriptor(
 }
 
 void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size) {
-    // Various settings are not known and not relevant for risc firmware
+    // Fabric settings are used during risc init. In some cases, fabric is already running
+    // and we don't want to reset the cores
     risc_fw_context_descriptor_ = std::make_shared<ContextDescriptor>(
         hal(),
         get_cluster(),
         rtoptions(),
-        tt::tt_fabric::FabricConfig::DISABLED,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricTensixConfig::DISABLED,
-        tt::tt_fabric::FabricUDMMode::DISABLED,
-        tt::tt_fabric::FabricManagerMode::DEFAULT,
-        tt::tt_fabric::FabricRouterConfig{},
+        fabric_config_,
+        fabric_reliability_mode_,
+        fabric_tensix_config_,
+        fabric_udm_mode_,
+        fabric_manager_,
+        fabric_router_config_,
         num_hw_cqs,
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,
