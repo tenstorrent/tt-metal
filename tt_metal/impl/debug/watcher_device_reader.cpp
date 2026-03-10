@@ -415,7 +415,8 @@ void WatcherDeviceReader::Dump(FILE* file) {
         if (has_dram_fw) {
             const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                Core::Create(dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
+                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
+                    .Dump();
             }
         }
     }
