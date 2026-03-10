@@ -7,6 +7,7 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_combine)
 target_sources(
     ttnn_op_experimental_deepseek_prefill_combine
     PRIVATE
+        combine.cpp
         device/combine_device_operation.cpp
         device/combine_program_factory.cpp
 )

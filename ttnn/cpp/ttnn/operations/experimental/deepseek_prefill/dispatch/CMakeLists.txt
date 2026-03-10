@@ -7,6 +7,7 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_dispatch)
 target_sources(
     ttnn_op_experimental_deepseek_prefill_dispatch
     PRIVATE
+        dispatch.cpp
         device/dispatch_device_operation.cpp
         device/dispatch_program_factory.cpp
 )
