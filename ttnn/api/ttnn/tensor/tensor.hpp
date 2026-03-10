@@ -245,6 +245,7 @@ public:
     distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
+    std::vector<CoreCoord> get_cores_with_shards() const;
 
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;

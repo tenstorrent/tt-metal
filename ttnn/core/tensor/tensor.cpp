@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/core.hpp"
@@ -409,6 +410,19 @@ Tensor Tensor::unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) c
 
 bool Tensor::is_sharded() const {
     return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
+}
+
+std::vector<CoreCoord> Tensor::get_cores_with_shards() const {
+    if (this->is_sharded()) {
+        if (this->buffer()->buffer_distribution_spec().has_value()) {
+            // If the tensor has an nd_shard_spec, then it has a bufferdistributionspec. Use it.
+            return this->buffer()->buffer_distribution_spec().value().cores_with_data();
+        }
+        return shard_builder::get_shard_cores(*this);
+    }
+    log_warning(
+        tt::LogTTNN, "Tensor::get_cores_with_shards returning an empty vector because the tensor is not sharded");
+    return {};
 }
 
 uint32_t Tensor::element_size() const {
