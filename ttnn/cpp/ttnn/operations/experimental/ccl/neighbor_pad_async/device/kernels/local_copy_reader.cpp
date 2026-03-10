@@ -12,10 +12,11 @@ constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 
 void kernel_main() {
-    // Args
+    // Common runtime args (uniform across all cores, updated between dispatches)
+    const address_t input_tensor_address = get_common_arg_val<address_t>(0);
+
+    // Per-core runtime args
     uint32_t arg_idx = 0;
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);  // not used in reader
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);

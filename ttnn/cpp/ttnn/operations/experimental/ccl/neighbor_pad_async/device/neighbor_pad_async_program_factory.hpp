@@ -11,19 +11,20 @@
 namespace ttnn::experimental::prim {
 
 struct NeighborPadAsyncSharedVariables {
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    // Additional local-copy workers (do not send over fabric)
-    std::vector<tt::tt_metal::KernelHandle> local_reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> local_writer_kernel_ids;
-    std::vector<tt::tt_metal::CoreCoord> local_copy_core_coords;  // logical coords used for local copy
-    uint32_t num_links = 0;
-    uint32_t num_directions = 0;  // Always 2 (left/right padding)
-    // Phase 2 W fabric cores (for 2D padding)
-    std::vector<tt::tt_metal::KernelHandle> w_reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> w_writer_kernel_ids;
-    std::vector<tt::tt_metal::CoreCoord> w_fabric_core_coords;
-    uint32_t num_w_links = 0;
+    // H fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
+    tt::tt_metal::KernelHandle h_reader_kernel_id;
+    tt::tt_metal::KernelHandle h_writer_kernel_id;
+
+    // Local copy (1 consolidated reader kernel, 1 consolidated writer kernel)
+    tt::tt_metal::KernelHandle local_reader_kernel_id;
+    tt::tt_metal::KernelHandle local_writer_kernel_id;
+
+    // W fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
+    tt::tt_metal::KernelHandle w_reader_kernel_id;
+    tt::tt_metal::KernelHandle w_writer_kernel_id;
+
+    bool has_local_copy = false;
+    bool has_w_fabric = false;
 };
 
 struct NeighborPadAsyncMeshWorkloadFactory {
