@@ -28,18 +28,38 @@ enum class AddrgenApiVariant {
     MulticastScatterWrite,                  // fabric_multicast_noc_scatter_write
     MulticastScatterWriteWithState,         // fabric_multicast_noc_scatter_write_with_state
     MulticastScatterWriteSetState,          // fabric_multicast_noc_scatter_write_set_state + _with_state
+    MulticastScatterWriteRoute,             // fabric_multicast_noc_scatter_write (route variant)
+    MulticastScatterWriteWithStateRoute,    // fabric_multicast_noc_scatter_write_with_state (route variant)
+    MulticastScatterWriteSetStateRoute,     // fabric_multicast_noc_scatter_write_set_state (route variant)
     MulticastFusedAtomicIncWrite,           // fabric_multicast_noc_fused_unicast_with_atomic_inc
     MulticastFusedAtomicIncWriteWithState,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state
     MulticastFusedAtomicIncWriteSetState,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
-    ScatterWrite,                          // fabric_unicast_noc_scatter_write
-    ScatterWriteWithState,                 // fabric_unicast_noc_scatter_write_with_state
-    ScatterWriteSetState                   // fabric_unicast_noc_scatter_write_set_state + _with_state
+    MulticastFusedAtomicIncWriteRoute,     // fabric_multicast_noc_fused_unicast_with_atomic_inc (route variant)
+    MulticastFusedAtomicIncWriteWithStateRoute,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state
+                                                 // (route)
+    MulticastFusedAtomicIncWriteSetStateRoute,   // fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state (route)
+    MulticastWriteRoute,                         // fabric_multicast_noc_unicast_write (route variant)
+    MulticastWriteWithStateRoute,                // fabric_multicast_noc_unicast_write_with_state (route variant)
+    MulticastWriteSetStateRoute,                 // fabric_multicast_noc_unicast_write_set_state (route variant)
+    ScatterWrite,                                // fabric_unicast_noc_scatter_write
+    ScatterWriteWithState,                       // fabric_unicast_noc_scatter_write_with_state
+    ScatterWriteSetState,                        // fabric_unicast_noc_scatter_write_set_state + _with_state
+    UnicastWriteRoute,                           // fabric_unicast_noc_unicast_write (route variant)
+    UnicastWriteWithStateRoute,                  // fabric_unicast_noc_unicast_write_with_state (route variant)
+    UnicastWriteSetStateRoute,                   // fabric_unicast_noc_unicast_write_set_state (route variant)
+    FusedAtomicIncWriteRoute,                    // fabric_unicast_noc_fused_unicast_with_atomic_inc (route variant)
+    FusedAtomicIncWriteWithStateRoute,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state (route variant)
+    FusedAtomicIncWriteSetStateRoute,   // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state (route variant)
+    ScatterWriteRoute,                  // fabric_unicast_noc_scatter_write (route variant)
+    ScatterWriteWithStateRoute,         // fabric_unicast_noc_scatter_write_with_state (route variant)
+    ScatterWriteSetStateRoute           // fabric_unicast_noc_scatter_write_set_state (route variant)
 };
 
 // ---- Reusable defaults for addrgen tests ----
 inline constexpr uint32_t kDefaultMeshId = 0;
 inline constexpr ChipId kDefaultSrcChip = 0;
 inline constexpr ChipId kDefaultDstChip = 1;
+inline constexpr ChipId kDefaultDst2Chip = 5;  // Second destination for route variants
 inline constexpr bool kDefaultUseDramDst = false;
 inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
 inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
@@ -53,6 +73,7 @@ struct AddrgenTestParams {
     uint32_t mesh_id = kDefaultMeshId;
     ChipId src_chip = kDefaultSrcChip;
     ChipId dst_chip = kDefaultDstChip;
+    ChipId dst2_chip = kDefaultDst2Chip;  // Second destination for route variants
     bool use_dram_dst = kDefaultUseDramDst;
     uint32_t tensor_bytes = kDefaultTensorBytes;
     uint32_t page_size = kDefaultPageSize;
