@@ -30,6 +30,7 @@ class TT_CCL:
         mode="decode",
         allocate_prefill_buffers=True,
         is_qwen=False,
+        is_olmo=False,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
@@ -52,6 +53,7 @@ class TT_CCL:
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
         self.is_qwen = is_qwen
+        self.is_olmo = is_olmo
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -491,23 +493,30 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
-            buffers_dict = (
-                {
+            if self.is_olmo:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF1": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
+                    "FF3": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                 }
-                if not self.is_qwen
-                else {
+            elif self.is_qwen:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
                     # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                 }
-            )
+            else:
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                }
             for key, shape in buffers_dict.items():
                 tt_buffers = []
                 for i in range(1):
@@ -560,21 +569,21 @@ class TT_CCL:
 
             # Batched entries to be removed once https://github.com/tenstorrent/tt-metal/issues/35087 and
             # https://github.com/tenstorrent/tt-metal/issues/35319 gets resolved
-            buffers_dict = (
-                {
+            if self.is_olmo:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF1": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
+                    "FF3": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    # "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
-                    "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
-                    "FF3_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
-                    "FF2_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    # "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    "FF1_batched": [(1, 32, seqlen // 32, 3456), (1, 32, seqlen // 32, 3456 // 4)],
+                    "FF3_batched": [(1, 32, seqlen // 32, 3456), (1, 32, seqlen // 32, 3456 // 4)],
+                    "FF2_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                 }
-                if not self.is_qwen
-                else {
+            elif self.is_qwen:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
                     # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
@@ -586,7 +595,19 @@ class TT_CCL:
                     "FF3_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
                     "FF2_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                 }
-            )
+            else:
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    # "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF3_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF2_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                }
             for key, shape in buffers_dict.items():
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -622,19 +643,23 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = (
-                {
-                    "QKV": [(1, 1, seqlen, 1280)],
-                    "SDPA": [(1, 1, seqlen // 2, 1024)],
-                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                    "WO_AG": [(8, 1, seqlen, 2048)],
-                    "FF1": [(1, 1, seqlen, 3584)],
-                    "FF3": [(1, 1, seqlen, 3584)],
-                    "FF2": [(1, 1, seqlen, 2048)],
-                    "LAYERNORM": [(1, 1, seqlen, 128)],
+            if self.is_olmo:
+                # OLMo dimensions:
+                # - qkv_size_per_device = 128 * (2*8 + 40) / 8 = 896, padded to 1536
+                # - n_local_heads * head_dim = 5 * 128 = 640
+                # - dim_per_tp = 5120 / 4 = 1280
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 896)],  # qkv_size_per_device (unpadded for all_gather)
+                    "SDPA": [(1, 1, seqlen // 2, 640)],  # n_local_heads * head_dim = 5 * 128
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 640)],
+                    "WO_AG": [(8, 1, seqlen, 1280)],  # dim_per_tp = 5120/4
+                    "FF1": [(1, 1, seqlen, 3456)],  # intermediate/8
+                    "FF3": [(1, 1, seqlen, 3456)],
+                    "FF2": [(1, 1, seqlen, 1280)],  # dim_per_tp
+                    "LAYERNORM": [(1, 1, seqlen, 128)],  # head_dim
                 }
-                if not self.is_qwen
-                else {
+            elif self.is_qwen:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
@@ -644,7 +669,17 @@ class TT_CCL:
                     "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
                 }
-            )
+            else:
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
+                    "WO_AG": [(8, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3584)],
+                    "FF3": [(1, 1, seqlen, 3584)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                }
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),

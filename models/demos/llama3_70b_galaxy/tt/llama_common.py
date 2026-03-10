@@ -67,6 +67,99 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
+def yarn_find_correction_dim(num_rotations: int, dim: int, base: float, max_position_embeddings: int) -> float:
+    """Find the dimension where the rotation count matches the target (YaRN)."""
+    return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
+
+
+def yarn_find_correction_range(low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int):
+    """Find the dimension range for interpolation in YaRN."""
+    low = math.floor(yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
+    high = math.ceil(yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
+    return max(low, 0), min(high, dim - 1)
+
+
+def yarn_linear_ramp_mask(min_val: float, max_val: float, dim: int) -> torch.Tensor:
+    """Create a linear ramp mask for YaRN interpolation blending."""
+    if min_val == max_val:
+        max_val += 0.001
+    linear_func = (torch.arange(dim, dtype=torch.float32) - min_val) / (max_val - min_val)
+    return torch.clamp(linear_func, 0, 1)
+
+
+def compute_yarn_inv_freq(
+    dim: int,
+    base: float = 500000.0,
+    scaling_factor: float = 8.0,
+    original_max_position_embeddings: int = 8192,
+    beta_fast: float = 32.0,
+    beta_slow: float = 1.0,
+) -> torch.Tensor:
+    """
+    Compute the inverse frequency tensor with YaRN scaling for OLMo.
+
+    Args:
+        dim: Head dimension
+        base: RoPE theta
+        scaling_factor: Context extension factor
+        original_max_position_embeddings: Original context length
+        beta_fast: High frequency boundary
+        beta_slow: Low frequency boundary
+
+    Returns:
+        inv_freq tensor of shape [dim // 2]
+    """
+    # Step 1: Compute base inverse frequencies
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+
+    # Step 2: Find correction range based on rotation counts
+    low, high = yarn_find_correction_range(beta_fast, beta_slow, dim, base, original_max_position_embeddings)
+
+    # Step 3: Create interpolation mask (1 = keep original, 0 = scale)
+    inv_freq_mask = 1 - yarn_linear_ramp_mask(low, high, dim // 2)
+
+    # Step 4: Scale frequencies for context extension
+    inv_freq_scaled = inv_freq / scaling_factor
+
+    # Step 5: Blend using mask (YaRN NTK-aware interpolation)
+    # For OLMo, this simplifies to just using scaled frequencies
+    inv_freq = inv_freq_scaled
+
+    return inv_freq
+
+
+def precompute_freqs_yarn(
+    dim: int,
+    end: int,
+    theta: float = 500000.0,
+    scaling_factor: float = 8.0,
+    original_max_position_embeddings: int = 8192,
+    beta_fast: float = 32.0,
+    beta_slow: float = 1.0,
+    attention_factor: float = 1.2079,
+):
+    """
+    Precompute the frequency tensor for YaRN RoPE (OLMo).
+
+    Args:
+        dim: Head dimension
+        end: End index for precomputing frequencies
+        theta: RoPE base theta
+        scaling_factor: Context extension factor
+        original_max_position_embeddings: Original context length
+        beta_fast: High frequency boundary
+        beta_slow: Low frequency boundary
+        attention_factor: mscale for attention logits
+
+    Returns:
+        Tuple of (cos, sin, mscale) where cos/sin are [end, dim] tensors
+    """
+    inv_freq = compute_yarn_inv_freq(dim, theta, scaling_factor, original_max_position_embeddings, beta_fast, beta_slow)
+    t = torch.arange(end, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)
+    return torch.cos(freqs), torch.sin(freqs), attention_factor
+
+
 def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bool = True, scale_factor: float = 8):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.

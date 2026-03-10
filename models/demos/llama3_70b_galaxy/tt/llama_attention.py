@@ -207,6 +207,9 @@ class TtLlamaAttention(LightweightModule):
             self.init_kv_cache(configuration, weight_cache_path)
 
         self.scale = self.head_dim**-0.5
+        # Apply YaRN attention factor (mscale) if present (OLMo uses YaRN RoPE)
+        if hasattr(configuration, "yarn_attention_factor"):
+            self.scale *= configuration.yarn_attention_factor
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 

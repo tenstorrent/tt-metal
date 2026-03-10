@@ -270,7 +270,7 @@ class TTSampling(LightweightModule):
         indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
         for i in range(padded_per_device):
             indices_tensor_torch[:, :, :, i] = i
-        indices_dtype = self._select_topk_indices_dtype(per_device_vocab_size, self.multi_step_reduction)
+        indices_dtype = self._select_topk_indices_dtype(padded_per_device, self.multi_step_reduction)
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
             dtype=indices_dtype,
