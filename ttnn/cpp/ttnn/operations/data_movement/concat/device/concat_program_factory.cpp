@@ -44,8 +44,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const uint32_t num_dims = output.padded_shape().rank();
     const uint32_t num_input_tensors = static_cast<uint32_t>(input_tensors.size());
 
-    uint32_t num_pages_in_row = 1;                                              // pages in a row in input tensors
-    uint32_t size_of_valid_data_in_last_page_in_row = dst_buffer->page_size();  // just page size
+    uint32_t num_pages_in_row = 1;  // pages in a row in input tensors
     uint32_t num_output_pages;
     uint32_t single_page_size;
     const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), dst_buffer->alignment());
@@ -226,8 +225,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index, num_input_tensors, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_input_tensors};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
@@ -238,7 +236,6 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     if (rm_layout && dim == num_dims - 1 && !nd_sharded) {
         concat_defines["WIDTH_CONCAT"] = "1";
-        std::cout << "WIDTH_CONCAT is in\n";
     }
 
     std::vector<uint32_t> writer_compile_time_args;
