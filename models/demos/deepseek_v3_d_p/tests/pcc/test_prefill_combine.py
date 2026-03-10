@@ -319,6 +319,7 @@ def test_ttnn_combine(
         indices,
         num_dispatch_groups,
         num_routed_experts,
+        verbose=True,
     )
 
     log_validation_results(
