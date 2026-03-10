@@ -341,6 +341,7 @@ class PositionalConvEmbedding:
             padding="same",
             groups=groups,
             dtype=ttnn.bfloat16,
+            activation="gelu",
         )
         self.remove = 1 if kernel_size % 2 == 0 else 0
 
@@ -352,11 +353,7 @@ class PositionalConvEmbedding:
         input_length = x.shape[1]
         output_length = input_length + 2 * (self.kernel_size // 2) - self.kernel_size + 1
         x = self.conv(x)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        # x = ttnn.reshape(x, (batch_size, output_length, self.embed_dim))
-        # if self.remove > 0:
-        #     x = ttnn.slice(x, (0, 0, 0), (batch_size, output_length - self.remove, self.embed_dim))
-        return ttnn.gelu(x)
+        return x
 
     def deallocate(self) -> None:
         self.conv.deallocate()
