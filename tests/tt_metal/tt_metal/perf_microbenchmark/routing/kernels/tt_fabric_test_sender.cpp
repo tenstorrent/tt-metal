@@ -65,7 +65,6 @@ void kernel_main() {
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
-                                                         //
 
     if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
