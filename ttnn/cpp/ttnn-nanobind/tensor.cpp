@@ -613,6 +613,24 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             >>> ttnn.tile_size(ttnn.float32)   # Returns 4096
         )doc");
 
+    m_tensor.def(
+        "element_size",
+        [](DataType dtype) -> uint32_t { return tt::datum_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get element size in bytes for the given data type.
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+
+            Example:
+            >>> ttnn.element_size(ttnn.bfloat16)  # Returns 2
+            >>> ttnn.element_size(ttnn.float32)   # Returns 4
+        )doc");
+
     m_tensor
         .def(
             "dump_tensor_flatbuffer",
