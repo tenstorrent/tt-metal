@@ -359,51 +359,6 @@ class PositionalConvEmbedding:
         self.conv.deallocate()
 
 
-class FeedForwardModule:
-    """TT port of huBERT FeedForwardModule (conformer positionwise FFN)."""
-
-    def __init__(
-        self,
-        device: ttnn.MeshDevice,
-        input_feat: int,
-        hidden_units: int,
-        activation_fn: str = "swish",
-        bias: bool = True,
-    ) -> None:
-        self.device = device
-        self.input_feat = input_feat
-        self.hidden_units = hidden_units
-        self.activation_fn = activation_fn
-        self.use_bias = bias
-
-        self.layer_norm = LayerNorm(device=device, normalized_shape=input_feat, eps=1e-5, dtype=ttnn.bfloat16)
-        self.w_1 = Linear(
-            device=device,
-            in_features=input_feat,
-            out_features=hidden_units,
-            dtype=ttnn.bfloat16,
-            activation=activation_fn,
-        )
-        self.w_2 = Linear(device=device, in_features=hidden_units, out_features=input_feat, dtype=ttnn.bfloat16)
-
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.layer_norm.load_parameters(parameters=parameters, key="layer_norm", prefix=prefix)
-        self.w_1.load_parameters(parameters=parameters, key="w_1", prefix=prefix)
-        self.w_2.load_parameters(parameters=parameters, key="w_2", prefix=prefix)
-
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # x: T x B x C
-        x = self.layer_norm(x)
-        x = self.w_1(x)
-        x = self.w_2(x)
-        return x
-
-    def deallocate(self) -> None:
-        self.layer_norm.deallocate()
-        self.w_1.deallocate()
-        self.w_2.deallocate()
-
-
 class ConvolutionModule:
     """TT port of huBERT ConvolutionModule used in conformer blocks."""
 
@@ -461,12 +416,6 @@ class ConvolutionModule:
         self.batch_norm_bias: ttnn.Tensor | None = None
         self.batch_norm_running_mean: ttnn.Tensor | None = None
         self.batch_norm_running_inv_std: ttnn.Tensor | None = None
-
-    def _conv_output_to_nlc(
-        self, x: ttnn.Tensor, batch_size: int, output_length: int, out_channels: int
-    ) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.reshape(x, (batch_size, output_length, out_channels))
 
     def _conv_output_length(
         self, input_length: int, kernel_size: int, stride: int, padding: int, dilation: int = 1
@@ -536,12 +485,6 @@ class ConvolutionModule:
 
         # pointwise conv1: C -> 2*channels
         x = self.pointwise_conv1(x)
-        x = self._conv_output_to_nlc(
-            x=x,
-            batch_size=batch_size,
-            output_length=self._conv_output_length(input_length, kernel_size=1, stride=1, padding=0),
-            out_channels=2 * self.channels,
-        )
 
         # GLU on channel dim
         xa = ttnn.slice(x, (0, 0, 0), (x.shape[0], x.shape[1], self.channels))
@@ -550,17 +493,6 @@ class ConvolutionModule:
 
         # depthwise conv
         x = self.depthwise_conv(x)
-        x = self._conv_output_to_nlc(
-            x=x,
-            batch_size=batch_size,
-            output_length=self._conv_output_length(
-                input_length,
-                kernel_size=self.depthwise_kernel_size,
-                stride=1,
-                padding=(self.depthwise_kernel_size - 1) // 2,
-            ),
-            out_channels=self.channels,
-        )
 
         # eval-mode BatchNorm1d over channels
         if (
@@ -576,12 +508,6 @@ class ConvolutionModule:
 
         # pointwise conv2: channels -> embed_dim
         x = self.pointwise_conv2(x)
-        x = self._conv_output_to_nlc(
-            x=x,
-            batch_size=batch_size,
-            output_length=input_length,
-            out_channels=self.embed_dim,
-        )
         return x
 
     def deallocate(self) -> None:
