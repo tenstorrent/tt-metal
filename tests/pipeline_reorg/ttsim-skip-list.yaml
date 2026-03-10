@@ -26,6 +26,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_roll.py
   - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
 
   # Slow tests (Tier 3-4: 5-20+ minutes, would cause CI timeouts)
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
