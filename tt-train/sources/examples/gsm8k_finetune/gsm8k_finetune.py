@@ -9,6 +9,7 @@ Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 """
 
 import os
+import time
 import datasets
 import numpy as np
 import torch
@@ -23,6 +24,7 @@ import ttml
 from ttml.common.config import (
     TrainingConfig,
     DeviceConfig,
+    TransformerConfig,
     SchedulerConfig,
     load_config,
     yaml_deep_update,
@@ -39,6 +41,7 @@ from ttml.common.utils import (
     get_tt_metal_home,
 )
 from ttml.common.data import build_causal_mask
+from ttml.common.generate import generate
 
 # Configuration
 CONFIG = "training_gsm8k_tinyllama.yaml"
@@ -141,119 +144,14 @@ def get_batch_generator(
             yield (X, y, loss_scaler)
 
 
-def generate_text_tt(
-    model,
-    tokenizer: AutoTokenizer,
-    question: str,
-    max_sequence_length: int,
-    causal_mask: ttml.autograd.Tensor,
-    temperature: float,
-    logits_mask_tensor: ttml.autograd.Tensor,
-    max_gen_tokens: int = 576,
-    pad_token_id: int = None,
-    return_with_prompt: bool = False,
-):
-    """
-    Greedy/temperature=0 generation that prints the *full* text once at the end.
-    Uses a sliding window if prompt exceeds max_sequence_length.
-
-    model: TT model
-    tokenizer: HuggingFace tokenizer
-    question: input question string
-    max_sequence_length: maximum sequence length
-    causal_mask: causal mask tensor
-    temperature: sampling temperature (0.0 for greedy)
-    logits_mask_tensor: logits mask tensor (mask that keeps answer tokens)
-    max_gen_tokens: maximum number of tokens to generate
-    pad_token_id: padding token id
-    return_with_prompt: if True, return full text including prompt
-    """
-    model.eval()
-
-    # --- Tokenize once ---
-    prompt_tokens = tokenizer.encode(question)
-    if pad_token_id is None:
-        # Try tokenizer.pad_token_id, else fall back to 0
-        pad_token_id = getattr(tokenizer, "pad_token_id", None) or 0
-
-    generated_tokens = []
-
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-
-    # Preallocate once
-    padded_prompt_tokens = np.full(
-        (1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32
-    )
-
-    with no_grad():
-        for _ in range(max_gen_tokens):
-            # Sliding window for long prompts
-            if len(prompt_tokens) > max_sequence_length:
-                start_idx = len(prompt_tokens) - max_sequence_length
-                window = prompt_tokens[start_idx:]
-            else:
-                start_idx = 0
-                window = prompt_tokens
-
-            # Refill buffer (fully) to avoid stale ids
-            padded_prompt_tokens[...] = pad_token_id
-            padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(
-                window, dtype=np.uint32
-            )
-
-            # [1,1,1,T] -> TT tensor
-            padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
-                padded_prompt_tokens,
-                ttnn.Layout.ROW_MAJOR,
-                ttnn.DataType.UINT32,
-            )
-
-            # Forward: logits [1,1,T,V]
-            logits = model(padded_prompt_tensor, causal_mask)
-
-            # Sample: next tokens for all positions [1,1,T,1]
-            # With temperature=0.0 this behaves like argmax/greedy.
-            next_token_tensor = ttml.ops.sample.sample_op(
-                logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
-            )
-
-            # Take the token at the last active position in the current window
-            next_token_idx = (
-                max_sequence_length - 1
-                if len(prompt_tokens) > max_sequence_length
-                else len(window) - 1
-            )
-            next_token = int(
-                next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
-                    next_token_idx
-                ][0]
-            )
-
-            if next_token == tokenizer.eos_token_id:
-                break
-
-            generated_tokens.append(next_token)
-            prompt_tokens.append(next_token)
-
-        # Decode once at the end
-        out = tokenizer.decode(
-            prompt_tokens if return_with_prompt else generated_tokens
-        )
-
-    model.train()
-
-    return out
-
-
 def validate(
     tt_model,
+    config: TransformerConfig,
     tokenizer: AutoTokenizer,
     val_batch_generator,
     testing_data,
     loss_fn,
     causal_mask: ttml.autograd.Tensor,
-    logits_mask_tensor: ttml.autograd.Tensor,
     max_sequence_length: int,
     current_step: int,
 ):
@@ -274,6 +172,9 @@ def validate(
 
     tt_model.eval()
 
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
     with no_grad():
         eval_batch_count = 4
         cur_val_losses = []
@@ -291,28 +192,25 @@ def validate(
 
     with open("validation.txt", "a+") as val_file:
         val_file.write(f"Validation at step {current_step}\n")
-        for check in range(checks_count):
-            val_file.write(f"Validation check: {check}\n")
-            val_file.write("====================================\n")
+        # for check in range(checks_count):
+        #     val_file.write(f"Validation check: {check}\n")
+        #     val_file.write("====================================\n")
 
-            tokenized_question, tokenized_answer = testing_data[check]
-            question = tokenizer.decode(tokenized_question, skip_special_tokens=True)
+        #     tokenized_question, tokenized_answer = testing_data[check]
+        #     question = tokenizer.decode(tokenized_question, skip_special_tokens=True)
 
-            val_file.write(f"Question: {question}\n")
-            val_file.write("====================================\n")
+        #     val_file.write(f"Question: {question}\n")
+        #     val_file.write("====================================\n")
 
-            gen_text = generate_text_tt(
-                tt_model,
-                tokenizer,
-                question,
-                max_sequence_length,
-                causal_mask,
-                0.0,
-                logits_mask_tensor,
-            )
+        #     gen_tokens = generate(tt_model,
+        #                         tokenized_question,
+        #                         config,
+        #                         temperature=0.0,
+        #                         vocab_size=tokenizer.vocab_size,
+        #                         composer=composer)
 
-            val_file.write(f"Generated Answer: {gen_text}\n")
-            val_file.write("\n====================================\n")
+        #     val_file.write(f"Generated Answer: {tokenizer.decode(gen_tokens, skip_special_tokens=False)}\n")
+        #     val_file.write("\n====================================\n")
 
         val_file.write(
             f"Last validation loss: {float(np.mean(cur_val_losses)):.4f}\n\n\n"
@@ -444,6 +342,8 @@ def train():
     tt_model_factory = TransformerModelFactory(model_config)
     tt_model_factory.transformer_config.vocab_size = orig_vocab_size
     print("Created Model Factory")
+
+    model_config = TransformerConfig(model_config)
 
     max_sequence_length = tt_model_factory.transformer_config.max_sequence_length
 
@@ -599,22 +499,25 @@ def train():
 
         # Disable validation by commenting out for demo
         # Validation every eval_every steps
-        # if (
-        #     total_steps % training_config.eval_every == 0
-        #     or total_steps + 1 == training_config.steps
-        # ):
-        #     last_val_loss = validate(
-        #         tt_model,
-        #         tokenizer,
-        #         val_batch_generator,
-        #         testing_data,
-        #         loss_fn,
-        #         causal_mask,
-        #         logits_mask_tensor,
-        #         max_sequence_length,
-        #         total_steps,
-        #     )
-        #     val_losses.append(last_val_loss)
+        if (
+            total_steps % training_config.eval_every == 0
+            or total_steps + 1 == training_config.steps
+        ):
+            start_time = time.time()
+            last_val_loss = validate(
+                tt_model,
+                model_config,
+                tokenizer,
+                val_batch_generator,
+                testing_data,
+                loss_fn,
+                causal_mask,
+                max_sequence_length,
+                total_steps,
+            )
+            val_losses.append(last_val_loss)
+            end_time = time.time()
+            print(f"Validation time: {end_time - start_time} seconds")
 
         with open("output.txt", "a") as f:
             f.write(

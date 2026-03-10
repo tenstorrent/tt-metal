@@ -284,7 +284,6 @@ class JobManager:
         nodes: int,
         job_name: str,
         output_dir: Path,
-        selected_node: Optional[str] = None,
     ) -> str:
         """Generate a SLURM batch script.
 
@@ -294,7 +293,6 @@ class JobManager:
             nodes: Number of nodes to request
             job_name: Name for the job
             output_dir: Directory for job outputs
-            selected_node: For non-lb partitions, the specific Galaxy node to use
 
         Returns:
             Generated SLURM script content
@@ -423,26 +421,6 @@ class JobManager:
 
         return config_path
 
-    def _get_next_galaxy_node(self) -> str:
-        """Get the next Galaxy node using round-robin selection.
-
-        Returns:
-            The next available Galaxy node name.
-        """
-        # Count how many jobs are on each node
-        node_counts = {node: 0 for node in GALAXY_NODES}
-
-        for job in self._jobs_cache.values():
-            if job.status in [JobStatus.PENDING.value, JobStatus.RUNNING.value]:
-                # Check if this job has a node assignment stored
-                job_config = job.config or {}
-                assigned_node = job_config.get("_assigned_node")
-                if assigned_node and assigned_node in node_counts:
-                    node_counts[assigned_node] += 1
-
-        # Return the node with the fewest active jobs
-        return min(node_counts, key=node_counts.get)
-
     def submit_job(
         self,
         config: Dict,
@@ -472,19 +450,13 @@ class JobManager:
         is_lb_partition = "lb" in partition.lower()
         if is_lb_partition:
             mesh_shape = [8, 1]
-            selected_node = None
         else:
             mesh_shape = [32, 1]
-            # Automatically select a Galaxy node using round-robin
-            selected_node = self._get_next_galaxy_node()
 
         # Update config with correct mesh shape
         config = config.copy()
         config["mesh_shape"] = mesh_shape
         config["enable_ddp"] = True
-        # Store the assigned node for tracking (internal use)
-        if selected_node:
-            config["_assigned_node"] = selected_node
 
         try:
             # Create job-specific training overrides
@@ -497,7 +469,7 @@ class JobManager:
             return False, f"Failed to create config: {e}", None
 
         script_content = self.generate_slurm_script(
-            config, partition, nodes, job_name, job_dir, selected_node
+            config, partition, nodes, job_name, job_dir
         )
         script_path = job_dir / "submit.sh"
         with open(script_path, "w") as f:

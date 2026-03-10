@@ -61,8 +61,6 @@ def init_session_state():
         st.session_state.selected_job_id = None
     if "execution_mode" not in st.session_state:
         st.session_state.execution_mode = "slurm"
-    if "available_partitions" not in st.session_state:
-        st.session_state.available_partitions = []
 
 
 init_session_state()
@@ -486,6 +484,7 @@ def render_jobs_table():
         )
 
     df = pd.DataFrame(jobs_data)
+    df = df.sort_values(by="Job ID", ascending=True).reset_index(drop=True)
 
     col1, col2, col3 = st.columns([2, 1, 1])
 
@@ -570,8 +569,6 @@ def render_job_details(job_info: JobInfo, eval_every: int):
     with col2:
         st.metric("Partition", job_info.partition)
     with col3:
-        st.metric("Nodes", job_info.nodes)
-    with col4:
         status_emoji = {
             "PENDING": "🟡",
             "RUNNING": "🟢",
@@ -691,78 +688,73 @@ def main():
     with st.sidebar:
         st.header("Configuration")
 
-        st.subheader("Execution Mode")
-        execution_mode = st.radio(
-            "Mode",
-            ["SLURM Job", "Local Process"],
-            index=0 if st.session_state.execution_mode == "slurm" else 1,
-            help="SLURM: Submit jobs to cluster queue. Local: Run directly on this machine.",
+        # Invisible but clickable execution mode toggle
+        # Uses an HTML button overlay that's transparent but clickable
+        toggle_id = "invisible_mode_toggle"
+        st.markdown(
+            f"""
+            <style>
+            #{toggle_id} {{
+                width: 100%;
+                height: 30px;
+                background: transparent;
+                border: none;
+                cursor: default;
+                margin: 0;
+                padding: 0;
+                display: block;
+            }}
+            #{toggle_id}:focus {{
+                outline: none;
+            }}
+            </style>
+            <div id="{toggle_id}" onclick="
+                const checkbox = window.parent.document.querySelector('input[aria-label=\\'hidden_mode_cb\\']');
+                if (checkbox) {{ checkbox.click(); }}
+            "></div>
+            """,
+            unsafe_allow_html=True,
         )
-        st.session_state.execution_mode = (
-            "slurm" if execution_mode == "SLURM Job" else "local"
+
+        # Hidden checkbox that actually controls the state
+        def on_mode_toggle():
+            if st.session_state.hidden_mode_cb:
+                st.session_state.execution_mode = "local"
+            else:
+                st.session_state.execution_mode = "slurm"
+
+        # This checkbox is hidden but functional
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stCheckbox"]:has(input[aria-label="hidden_mode_cb"]) {
+                position: absolute;
+                left: -9999px;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.checkbox(
+            "hidden_mode_cb",
+            value=st.session_state.execution_mode == "local",
+            key="hidden_mode_cb",
+            on_change=on_mode_toggle,
+            label_visibility="collapsed",
         )
 
         if st.session_state.execution_mode == "slurm":
-            st.subheader("SLURM Settings")
-
-            if not st.session_state.available_partitions:
-                st.session_state.available_partitions = (
-                    st.session_state.job_manager.get_available_partitions()
-                )
-
-            partitions = st.session_state.available_partitions
-            partition_names = [p["name"] for p in partitions]
-            partition_descriptions = {
-                p["name"]: f"{p['name']} - {p.get('description', 'Unknown')}"
-                for p in partitions
-            }
-
-            selected_partition_display = st.selectbox(
-                "Partition",
-                [partition_descriptions[n] for n in partition_names],
-                index=0,
-                help="SLURM partition to submit the job to",
-            )
-            selected_partition = selected_partition_display.split(" - ")[0]
-
-            partition_info = next(
-                (p for p in partitions if p["name"] == selected_partition), {}
-            )
-            max_nodes = partition_info.get("max_nodes", 4)
-
-            # Check if this is a non-lb partition (Galaxy)
-            is_lb_partition = "lb" in selected_partition.lower()
-
-            if is_lb_partition:
-                num_nodes = st.number_input(
-                    "Number of Nodes",
-                    min_value=1,
-                    max_value=max_nodes,
-                    value=1,
-                    step=1,
-                    help=f"Number of nodes to request (max: {max_nodes})",
-                )
-            else:
-                num_nodes = 1  # Galaxy jobs run on single node
-
-            job_name = st.text_input(
-                "Job Name",
-                value=f"gsm8k_{datetime.now().strftime('%m%d_%H%M')}",
-                help="Name for the SLURM job",
-            )
-
-            # Mesh shape is determined by partition type
-            if is_lb_partition:
-                mesh_shape = [8, 1]
-            else:
-                mesh_shape = [32, 1]
+            # Default values for SLURM (will be updated when SLURM Settings are rendered)
+            mesh_shape = [8, 1]
+            selected_partition = None
+            job_name = None
         else:
             st.subheader("Device Settings")
             devices_options = ["N150", "N300", "LoudBox", "Galaxy", "3-tier"]
             selected_devices = st.selectbox("Devices", devices_options, index=2)
             mesh_shape = device_mesh_shapes[selected_devices]
             selected_partition = None
-            num_nodes = 1
             job_name = None
 
         st.subheader("Model Settings")
@@ -845,15 +837,59 @@ def main():
             "Max Sequence Length", min_value=128, max_value=4096, value=512, step=128
         )
 
-        effective_batch_size = (
-            batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
-        )
-        st.markdown(f"Effective batch size: **{effective_batch_size}**")
-        st.markdown(
-            f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**"
-        )
+        # For local mode, show effective batch size here
+        if st.session_state.execution_mode != "slurm":
+            effective_batch_size = (
+                batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
+            )
+            st.markdown(f"Effective batch size: **{effective_batch_size}**")
+            st.markdown(
+                f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**"
+            )
 
         st.divider()
+
+        # SLURM Settings - placed directly above Submit Job button
+        if st.session_state.execution_mode == "slurm":
+            st.subheader("SLURM Settings")
+
+            # Device selection maps to SLURM partitions
+            slurm_device_options = ["LoudBox", "Galaxy"]
+            slurm_device_to_partition = {
+                "LoudBox": "bh_lb_single",
+                "Galaxy": "bh_sp_5x4x32_C1_C10",
+            }
+
+            selected_slurm_device = st.selectbox(
+                "Device",
+                slurm_device_options,
+                index=0,
+                help="Target device for SLURM job submission",
+            )
+            selected_partition = slurm_device_to_partition[selected_slurm_device]
+
+            job_name = st.text_input(
+                "Job Name",
+                value=f"gsm8k_{datetime.now().strftime('%m%d_%H%M')}",
+                help="Name for the SLURM job",
+            )
+
+            # Mesh shape is determined by device type
+            if selected_slurm_device == "LoudBox":
+                mesh_shape = [8, 1]
+            else:
+                mesh_shape = [32, 1]
+
+            # Show effective batch size for SLURM mode after mesh_shape is determined
+            effective_batch_size = (
+                batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
+            )
+            st.markdown(f"Effective batch size: **{effective_batch_size}**")
+            st.markdown(
+                f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**"
+            )
+
+            st.divider()
 
         st.subheader(
             "Submit Job"
@@ -880,11 +916,10 @@ def main():
         }
 
         if st.session_state.execution_mode == "slurm":
-            if st.button("Submit SLURM Job", use_container_width=True, type="primary"):
+            if st.button("Submit Job", use_container_width=True, type="primary"):
                 success, message, job_info = st.session_state.job_manager.submit_job(
                     config=config,
                     partition=selected_partition,
-                    nodes=num_nodes,
                     job_name=job_name,
                 )
                 if success:
@@ -979,7 +1014,7 @@ def main():
                     slurm_err_files = list(job_dir.glob("slurm_*.err"))
 
                     if slurm_out_files:
-                        st.subheader("SLURM Output")
+                        st.subheader("Output")
                         for out_file in sorted(slurm_out_files):
                             with open(out_file, "r") as f:
                                 content = f.read()
@@ -994,7 +1029,7 @@ def main():
                                 )
 
                     if slurm_err_files:
-                        st.subheader("SLURM Errors")
+                        st.subheader("Errors")
                         for err_file in sorted(slurm_err_files):
                             with open(err_file, "r") as f:
                                 content = f.read()
