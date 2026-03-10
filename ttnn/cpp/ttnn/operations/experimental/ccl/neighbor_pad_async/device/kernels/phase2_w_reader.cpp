@@ -15,14 +15,12 @@
 
 using address_t = uint32_t;
 
-constexpr bool is_first_chip = get_compile_time_arg_val(0);
-constexpr bool is_last_chip = get_compile_time_arg_val(1);
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
-constexpr bool direction = get_compile_time_arg_val(3);
-constexpr bool is_padding_zeros = get_compile_time_arg_val(4);
-constexpr uint32_t stick_size = get_compile_time_arg_val(5);
-// Output TensorAccessorArgs start at index 6 (variable length)
-constexpr auto dst_args = TensorAccessorArgs<6>();
+// Compile-time args (uniform across all W fabric reader cores)
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
+constexpr bool is_padding_zeros = get_compile_time_arg_val(1);
+constexpr uint32_t stick_size = get_compile_time_arg_val(2);
+// Output TensorAccessorArgs start at index 3 (variable length)
+constexpr auto dst_args = TensorAccessorArgs<3>();
 constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst);
 
@@ -54,6 +52,10 @@ void kernel_main() {
     const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);
+    // Per-core direction args (moved from compile-time for kernel consolidation)
+    const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
+    const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
