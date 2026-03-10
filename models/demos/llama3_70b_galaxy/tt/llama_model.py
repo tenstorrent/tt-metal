@@ -48,7 +48,26 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
-        self.bitmask = None
+        self._bitmask_packed_width = (self.vocab_size + 31) // 32
+        self._bitmask_shape = (self.args.max_batch_size, self._bitmask_packed_width)
+        self._compute_cq_id = 0
+        try:
+            num_cqs = int(self.mesh_device.num_hw_cqs())
+        except Exception:
+            num_cqs = 1
+        self._bitmask_copy_cq_id = 1 if num_cqs > 1 else 0
+        with ttnn.command_queue(self._bitmask_copy_cq_id):
+            self._bitmask = ttnn.from_torch(
+                torch.zeros(self._bitmask_shape, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
+                ),
+            )
+        self._active_bitmask = None
+        self._bitmask_copy_event = None
         self.bitmask_arange = ttnn.arange(
             start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
@@ -710,7 +729,8 @@ class TtTransformer(LightweightModule):
         result = ttnn.where(full_mask, 0, float("-inf"))
         return result
 
-    def bitmask_to_device(self, bitmask):
+    def start_bitmask_to_device(self, bitmask):
+        target = self._bitmask
         bitmask_tt = ttnn.from_torch(
             bitmask,
             device=None,
@@ -718,10 +738,24 @@ class TtTransformer(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape),
         )
-        if self.bitmask is not None:
-            copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=self.bitmask)
-        else:
-            self.bitmask = copy_host_to_device(host_tensors=[bitmask_tt], mesh_device=self.mesh_device)
+        with ttnn.command_queue(self._bitmask_copy_cq_id):
+            ttnn.copy_host_to_device_tensor(bitmask_tt, target)
+            self._bitmask_copy_event = ttnn.record_event(self.mesh_device, cq_id=self._bitmask_copy_cq_id)
+        self._active_bitmask = target
+
+    def complete_bitmask_to_device(self):
+        if self._bitmask_copy_event is not None:
+            ttnn.wait_for_event(cq_id=self._compute_cq_id, mesh_event=self._bitmask_copy_event)
+            self._bitmask_copy_event = None
+
+    def apply_bitmask_to_logits(self, tt_logits):
+        if self._active_bitmask is None:
+            return tt_logits
+        with ttnn.trace_allocation_safe_scope(self.mesh_device):
+            bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
+            ttnn.add_(tt_logits, bitmask_unpacked)
+            bitmask_unpacked.deallocate(True)
+        return tt_logits
 
     def ttnn_decode_forward(
         self,
@@ -767,12 +801,9 @@ class TtTransformer(LightweightModule):
 
         tt_logits = tt_logits[0]
 
-        # apply bit mask for stuctured outputs
-        if self.bitmask is not None:
-            bitmask_unpacked = self.unpack_bitmask(self.bitmask)
-            tt_logits = ttnn.add(tt_logits, bitmask_unpacked, output_tensor=tt_logits)
-            bitmask_unpacked.deallocate(True)
-
+        # TODO because we don't apply bitmask here, it means running with capture_sampling_trace=False is not supported
+        # This is not a problem as that option doens't work already due to trace invalidation.
+        assert capture_sampling_trace, "capture_sampling_trace=False is deprecated"
         # Save output logits to global python object
         if tt_out_logits_saved is not None:
             tt_out_logits = ttnn.to_torch(

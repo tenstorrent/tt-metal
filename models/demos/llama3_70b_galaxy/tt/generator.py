@@ -333,7 +333,7 @@ class Generator(WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         start_pos: list[int] | None = None,  # Cached prefixes lengths
-        bitmask=None,  # TODO apply in prefill
+        bitmask=None,
     ):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
@@ -430,6 +430,13 @@ class Generator(WarmupForwardMixin):
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
+        # For structured output in prefill sampling path, scatter request bitmasks into slot positions.
+        if do_device_sampling and bitmask is not None:
+            packed_vocab = bitmask.shape[-1]
+            bitmask_scattered = torch.zeros((self.model_args.max_batch_size, packed_vocab), dtype=bitmask.dtype)
+            for local_idx, slot in enumerate(empty_slots):
+                bitmask_scattered[slot, :] = bitmask[local_idx, :]
+            self.model.start_bitmask_to_device(bitmask_scattered)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -611,6 +618,9 @@ class Generator(WarmupForwardMixin):
             sampling_module.reset_output_state()
             sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
             sampling_module.seed_manager.get_new_values(empty_slots)
+            if bitmask is not None:
+                self.model.complete_bitmask_to_device()
+                tt_logits_batch = self.model.apply_bitmask_to_logits(tt_logits_batch)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
@@ -1048,8 +1058,8 @@ class Generator(WarmupForwardMixin):
         else:
             return_logits = False
 
-        if bitmask is not None:
-            self.model.bitmask_to_device(bitmask)
+        if (not return_logits) and bitmask is not None:
+            self.model.start_bitmask_to_device(bitmask)
 
         if self.prev_page_table is None:
             self.prev_page_table = (
@@ -1146,8 +1156,10 @@ class Generator(WarmupForwardMixin):
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
         )
-        # TODO this actually never calls sampling, because we're telling the model we'll do it ourselves.
-        # We also never set the sampling module up with the right parameters.
+        if self.enable_split_sampling and not return_logits:
+            self.model.complete_bitmask_to_device()
+            tt_tok = self.model.apply_bitmask_to_logits(tt_tok)
+            return self.model.sampling.sample(logits=tt_tok, tt_out_tok=tt_tokens)
         return tt_tok
 
     def _capture_trace_text(
@@ -1265,6 +1277,9 @@ class Generator(WarmupForwardMixin):
         )
 
         if self.enable_split_sampling and not return_logits:
+            # Apply bitmask outside trace to keep trace reusable.
+            self.model.complete_bitmask_to_device()
+            trace_tok_rm = self.model.apply_bitmask_to_logits(trace_tok_rm)
             return self.model.sampling.sample(
                 logits=trace_tok_rm,
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
