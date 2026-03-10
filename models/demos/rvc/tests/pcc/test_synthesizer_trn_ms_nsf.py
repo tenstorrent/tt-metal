@@ -19,7 +19,7 @@ def test_synthesizer_trn_ms_nsf(device):
     seq_len = 64
     embedding_dims = 96
     inter_channels = 8
-    hidden_channels = 8
+    hidden_channels = 64
     filter_channels = 32
     n_heads = 2
     n_layers = 1

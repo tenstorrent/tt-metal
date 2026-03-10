@@ -17,7 +17,7 @@ def test_multiheadattention(device, window_size):
     torch.manual_seed(0)
 
     batch_size = 1
-    channels = 16
+    channels = 128
     out_channels = 16
     n_heads = 4
     input_length = 64
