@@ -6,6 +6,7 @@
 
 #include "dev_mem_map.h"
 #include "experimental/noc.h"
+#include "api/debug/dprint.h"
 
 namespace experimental {
 
@@ -42,6 +43,10 @@ public:
 #ifdef ARCH_QUASAR
         local_l1_addr_ += MEM_L1_UNCACHED_BASE;
 #endif
+        DPRINT << "Semaphore ID: " << semaphore_id << ENDL();
+        DPRINT << "Semaphore base address: " << (uint32_t)(uintptr_t)sem_l1_base[static_cast<int>(core_type)] << ENDL();
+        DPRINT << "L1 alignment: " << L1_ALIGNMENT << ENDL();
+        DPRINT << "Semaphore address: " << local_l1_addr_ << ENDL();
     }
 
     /**
@@ -52,7 +57,9 @@ public:
      */
     void up(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        DPRINT << "Incrementing semaphore " << local_l1_addr_ << " by " << value << ENDL();
         *sem_addr += value;
+        DPRINT << "Semaphore " << local_l1_addr_ << " incremented to " << *sem_addr << ENDL();
     }
 
     /**
@@ -82,7 +89,9 @@ public:
             invalidate_l1_cache();
         } while ((*sem_addr) < value);
         WAYPOINT("NSDD");
+        DPRINT << "Decrementing semaphore " << local_l1_addr_ << " by " << value << ENDL();
         *sem_addr -= value;
+        DPRINT << "Semaphore " << local_l1_addr_ << " decremented to " << *sem_addr << ENDL();
     }
 
     // The following methods provide parity with existing semaphore API, but have non-standard semantics.
