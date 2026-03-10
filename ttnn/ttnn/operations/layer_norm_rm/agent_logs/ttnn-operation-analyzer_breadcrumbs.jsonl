@@ -4,3 +4,5 @@
 {"ts":"2026-03-10T10:21:55+00:00","event":"start","agent":"ttnn-operation-analyzer","operation":"tilize","input_files":["/localdev/mstaletovic/metal_metal_metal/tt-metal/ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_multi_core_interleaved_program_factory.cpp"]}
 {"event":"action","type":"analysis","description":"Writing tilize_analysis.md with focus on reader kernel, input CB, stick batching, core distribution","ts":"2026-03-10T10:23:48+00:00"}
 {"event":"complete","final_status":"SUCCESS","stages_completed":["analysis"],"ts":"2026-03-10T10:24:12+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["analysis"],"output_file":"batch_norm_analysis.md","ts":"2026-03-10T10:25:51+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["analysis"],"output_file":"tilize_analysis.md","ts":"2026-03-10T10:25:55+00:00"}
