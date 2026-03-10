@@ -153,7 +153,7 @@ class Flux1Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
             for device in self._submesh_devices
         ]
 
@@ -199,7 +199,7 @@ class Flux1Pipeline:
 
             self._text_encoder_1.load_torch_state_dict(torch_text_encoder_1.state_dict())
             self._clip_tracer = Tracer(
-                self._text_encoder_1.forward, device=self.encoder_device, num_prep_runs=1, clone_prep_inputs=False
+                self._text_encoder_1.forward, device=self.encoder_device, num_prep_runs=0, clone_prep_inputs=False
             )
 
         if enable_t5_text_encoder:
@@ -238,7 +238,7 @@ class Flux1Pipeline:
                     mesh_shape=tuple(self.encoder_device.shape),
                 )
                 self._t5_tracer = Tracer(
-                    self._t5_text_encoder.forward, device=self.encoder_device, num_prep_runs=1, clone_prep_inputs=False
+                    self._t5_text_encoder.forward, device=self.encoder_device, num_prep_runs=0, clone_prep_inputs=False
                 )
         else:
             self._t5_text_encoder = None
@@ -253,8 +253,19 @@ class Flux1Pipeline:
             ccl_manager=self._ccl_managers[self.vae_submesh_idx],
         )
         self._vae_decoder_tracer = Tracer(
-            self._vae_decoder.forward, device=self.vae_device, num_prep_runs=1, clone_prep_inputs=False
+            self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
         )
+
+        self.allocate_persistent_buffers()
+
+    def allocate_persistent_buffers(self) -> None:
+        """Allocate persistent buffers by running a pipeline pass without tracing.
+
+        This is important so they do not get allocated after trace capture, which would lead to
+        them being overwritten during trace execution.
+        """
+        logger.info("Pipeline allocation run...")
+        self.run_single_prompt(prompt="", num_inference_steps=2, seed=0, traced=False)
 
     @staticmethod
     def create_pipeline(
@@ -503,6 +514,8 @@ class Flux1Pipeline:
 
                         tt_timestep_list = []
                         for submesh_device in self._submesh_devices:
+                            # Allocation on device is fine, because timesteps are not used after
+                            # trace execution, and can be overwritten during trace execution.
                             tt_timestep = ttnn.full(
                                 [1, 1],
                                 fill_value=t,
