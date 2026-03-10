@@ -119,7 +119,13 @@ class MoEGatePrefill:
 
         ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
         expert_histograms = ttnn.moe_dispatch_offsets(ttnn_top_k_experts_indices, self.n_routed_experts)
-        dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
+        # dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
+        dispatch_offsets = ttnn.offset_cumsum(
+            expert_histograms,
+            cluster_axis=self.ccl_config["DISPATCH_AXIS"],
+            num_links=self.ccl_config["NUM_LINKS"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
 
