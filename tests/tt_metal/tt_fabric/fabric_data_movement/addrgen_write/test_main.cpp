@@ -205,6 +205,11 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
         case tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWrite: return "LinearScatterWrite";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWriteWithState: return "LinearScatterWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWriteSetState: return "LinearScatterWriteSetState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWrite: return "LinearFusedAtomicIncWrite";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteWithState:
+            return "LinearFusedAtomicIncWriteWithState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
+            return "LinearFusedAtomicIncWriteSetState";
         default: return "UnknownVariant";
     }
 }
@@ -276,7 +281,10 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteSetState,
             tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWrite,
             tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWriteWithState,
-            tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWriteSetState),
+            tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWriteSetState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWrite,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteWithState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),

@@ -21,12 +21,12 @@ using namespace tt::tt_fabric::linear::experimental;
 //
 // Linear (1D) unicast writer kernel using addrgen overload.
 // Sends pages from CB c_0 to the dst device using compile-time parameters to select:
-//   - OPERATION_TYPE: BasicWrite or Scatter
+//   - OPERATION_TYPE: BasicWrite, Scatter, or FusedAtomicInc
 //   - API_VARIANT: Basic, WithState, or SetState
 //
 // CT args:
 //   TensorAccessorArgs at offset 0
-//   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter)
+//   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
 //   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState)
 //   2: TOTAL_PAGES
 //   3: PAGE_SIZE (actual data size to transfer)
@@ -85,6 +85,8 @@ void kernel_main() {
             header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
         } else if constexpr (operation_type == OperationType::Scatter) {
             header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
         }
     }
 
@@ -94,6 +96,13 @@ void kernel_main() {
     // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
     const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
+
+    // FusedAtomicInc: compute semaphore NOC address before loop
+    uint64_t sem_noc = 0;
+    if constexpr (operation_type == OperationType::FusedAtomicInc) {
+        ASSERT(sem_l1_addr != 0);
+        sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
+    }
 
     // Pre-loop setup for WithState and SetState variants
     if constexpr (api_variant == ApiVariant::WithState) {
@@ -108,6 +117,10 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastScatterCommandHeader{
                     {noc_addr0, noc_addr1}, static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)},
                 SRC_ALIGNED_PAGE_SIZE * 2);
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            auto initial_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_acc, 0, 0);
+            header->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{initial_noc_addr, sem_noc, 1, true}, PAGE_SIZE);
         }
     } else if constexpr (api_variant == ApiVariant::SetState) {
         if constexpr (operation_type == OperationType::BasicWrite) {
@@ -127,6 +140,17 @@ void kernel_main() {
                 1,  // page_id1
                 0,  // offset0
                 0   // offset1
+            );
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+                header,
+                num_hops,
+                dst_acc,
+                0,  // page_id for initial configuration
+                sem_noc,
+                1,    // val (increment by 1)
+                0,    // offset
+                true  // flush
             );
         }
     }
@@ -191,6 +215,34 @@ void kernel_main() {
                     0          // offset1
                 );
             }
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            if constexpr (api_variant == ApiVariant::Basic) {
+                fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                    &sender,
+                    header,
+                    src_l1_addr,
+                    dst_acc,
+                    i,  // page_id
+                    sem_noc,
+                    1,         // val (increment by 1)
+                    num_hops,  // unicast hop count
+                    0,         // offset
+                    true       // flush
+                );
+            } else {  // WithState or SetState
+                fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+                    &sender,
+                    header,
+                    src_l1_addr,
+                    dst_acc,
+                    i,  // page_id
+                    sem_noc,
+                    1,         // val (increment by 1)
+                    num_hops,  // unicast hop count
+                    0,         // offset
+                    true       // flush
+                );
+            }
         }
 
         noc_async_writes_flushed();
@@ -200,14 +252,17 @@ void kernel_main() {
     noc_async_writes_flushed();
 
     // Post-loop completion: send atomic inc to signal receiver
-    ASSERT(sem_l1_addr != 0);
-    const uint64_t sem_noc_final = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
+    // For FusedAtomicInc, the atomic inc is already fused into each write, so skip separate atomic inc
+    if constexpr (operation_type != OperationType::FusedAtomicInc) {
+        ASSERT(sem_l1_addr != 0);
+        const uint64_t sem_noc_final = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-    fabric_unicast_noc_unicast_atomic_inc(
-        &sender,
-        header,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32),
-        num_hops);
+        fabric_unicast_noc_unicast_atomic_inc(
+            &sender,
+            header,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32),
+            num_hops);
+    }
 
     sender.close();
 }

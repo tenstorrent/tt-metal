@@ -59,12 +59,16 @@ enum class AddrgenApiVariant {
     ScatterWriteWithStateConnMgr,         // fabric_unicast_noc_scatter_write_with_state (connection manager variant)
     ScatterWriteSetStateConnMgr,          // fabric_unicast_noc_scatter_write_set_state (connection manager variant)
     // Linear (1D) API variants
-    LinearUnicastWrite,           // linear fabric_unicast_noc_unicast_write with addrgen
-    LinearUnicastWriteWithState,  // linear fabric_unicast_noc_unicast_write_with_state with addrgen
-    LinearUnicastWriteSetState,   // linear fabric_unicast_noc_unicast_write_set_state with addrgen
-    LinearScatterWrite,           // linear fabric_unicast_noc_scatter_write with addrgen
-    LinearScatterWriteWithState,  // linear fabric_unicast_noc_scatter_write_with_state with addrgen
-    LinearScatterWriteSetState    // linear fabric_unicast_noc_scatter_write_set_state with addrgen
+    LinearUnicastWrite,                  // linear fabric_unicast_noc_unicast_write with addrgen
+    LinearUnicastWriteWithState,         // linear fabric_unicast_noc_unicast_write_with_state with addrgen
+    LinearUnicastWriteSetState,          // linear fabric_unicast_noc_unicast_write_set_state with addrgen
+    LinearScatterWrite,                  // linear fabric_unicast_noc_scatter_write with addrgen
+    LinearScatterWriteWithState,         // linear fabric_unicast_noc_scatter_write_with_state with addrgen
+    LinearScatterWriteSetState,          // linear fabric_unicast_noc_scatter_write_set_state with addrgen
+    LinearFusedAtomicIncWrite,           // linear fabric_unicast_noc_fused_unicast_with_atomic_inc with addrgen
+    LinearFusedAtomicIncWriteWithState,  // linear fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state with
+                                         // addrgen
+    LinearFusedAtomicIncWriteSetState  // linear fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state with addrgen
 };
 
 // ---- Reusable defaults for addrgen tests ----
