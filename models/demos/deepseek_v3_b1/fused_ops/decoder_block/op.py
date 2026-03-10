@@ -63,6 +63,7 @@ class DecoderBlock:
         moe_enable_routing=True,
         moe_use_hardcoded_expert_index=False,
         moe_hardcoded_expert_index=0,
+        moe_num_devices=1,
     ):
         """
         PyTorch reference for the full decoder layer: h1 = x + MLA(RMSNorm(x)), h2 = MoE(h1).
@@ -70,9 +71,15 @@ class DecoderBlock:
         When MoE weights are None, returns only the attention output (h1).
         When MoE weights are provided, chains AttentionBlock.golden -> MoeOp.golden.
 
+        When moe_num_devices > 1, computes per-device golden outputs with TP-sharded
+        shared expert weights and per-device hardcoded expert indices, then sums them
+        to produce the expected reduce-to-one output.
+
         Returns:
             (full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output)
             moe_scores/indices/output are None when MoE weights are not provided.
+            When moe_num_devices > 1, moe_scores and moe_indices are None (routing
+            happens independently per device).
         """
         full_q, new_kv, attn_output = AttentionBlock.golden(
             input_tensor,
@@ -106,11 +113,7 @@ class DecoderBlock:
         if moe_rmsnorm_epsilon is None:
             moe_rmsnorm_epsilon = epsilon
 
-        moe_scores, moe_indices, moe_output = MoeOp.golden(
-            attn_output,
-            shared_gate_weights=moe_shared_gate_weights,
-            shared_up_weights=moe_shared_up_weights,
-            shared_down_weights=moe_shared_down_weights,
+        moe_golden_kwargs = dict(
             gate_proj_weights_dict=moe_gate_proj_weights_dict,
             up_proj_weights_dict=moe_up_proj_weights_dict,
             down_proj_weights_dict=moe_down_proj_weights_dict,
@@ -122,10 +125,36 @@ class DecoderBlock:
             eps=moe_gate_eps,
             scaling_factor=moe_gate_scaling_factor,
             use_hardcoded_expert_index=moe_use_hardcoded_expert_index,
-            hardcoded_expert_index=moe_hardcoded_expert_index,
         )
 
-        return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
+        if moe_num_devices <= 1:
+            moe_scores, moe_indices, moe_output = MoeOp.golden(
+                attn_output,
+                shared_gate_weights=moe_shared_gate_weights,
+                shared_up_weights=moe_shared_up_weights,
+                shared_down_weights=moe_shared_down_weights,
+                hardcoded_expert_index=moe_hardcoded_expert_index,
+                **moe_golden_kwargs,
+            )
+            return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
+
+        K_down_per_device = moe_shared_gate_weights.shape[1] // moe_num_devices
+        per_device_outputs = []
+        for dev_idx in range(moe_num_devices):
+            shard_start = dev_idx * K_down_per_device
+            shard_end = shard_start + K_down_per_device
+            _, _, dev_output = MoeOp.golden(
+                attn_output,
+                shared_gate_weights=moe_shared_gate_weights[:, shard_start:shard_end],
+                shared_up_weights=moe_shared_up_weights[:, shard_start:shard_end],
+                shared_down_weights=moe_shared_down_weights[shard_start:shard_end, :],
+                hardcoded_expert_index=dev_idx,
+                **moe_golden_kwargs,
+            )
+            per_device_outputs.append(dev_output)
+
+        moe_output = sum(per_device_outputs)
+        return full_q, new_kv, attn_output, None, None, moe_output
 
     @staticmethod
     def get_num_semaphores():

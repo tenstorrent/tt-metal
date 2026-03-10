@@ -1137,6 +1137,7 @@ def test_decoder(
         moe_enable_routing=enable_routing,
         moe_use_hardcoded_expert_index=use_hardcoded_expert_index,
         moe_hardcoded_expert_index=0,
+        moe_num_devices=num_devices,
     )
 
     logger.info(f"MLA output: {mla_output}")
@@ -1308,17 +1309,12 @@ def test_decoder(
     # ========================================================================
     # Validate standalone MoE output vs DecoderBlock golden MoE output
     # ========================================================================
-    # Reduce-to-one sums partial results from all 8 devices. Each device independently
-    # adds the residual (h1 = device MLA output), so the root gets: full_moe + 8*h1.
-    # Golden computes: full_moe + 1*h1.  Subtract the 7 extra copies using the actual
-    # device-side bfloat16 MLA output (not the golden float32 version).
-    device_h1 = ttnn_attn_ref_output_torch[0:1, :].float()
-    adjusted_reduce = moe_device_output_valid.float() - 7 * device_h1
-    _, pcc_moe = comp_pcc(moe_output.flatten(), adjusted_reduce.flatten(), 0.0)
-    logger.info(f"Standalone MoeOp PCC (adjusted reduce vs DecoderBlock golden): {pcc_moe}")
-    logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
-    logger.info(f"Adjusted device MoE output: {adjusted_reduce.flatten()[:8]}")
-    logger.info(f"Raw device MoE reduce output: {moe_device_output_valid.flatten()[:8]}")
+    # Golden with moe_num_devices>1 computes per-device golden with TP-sharded shared
+    # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
+    _, pcc_moe = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.0)
+    logger.info(f"Standalone MoeOp PCC (device reduce vs expected reduce golden): {pcc_moe}")
+    logger.info(f"Golden expected reduce: {moe_output.flatten()[:8]}")
+    logger.info(f"Device MoE reduce output: {moe_device_output_valid.flatten()[:8]}")
 
     if moe_scores is not None:
         logger.info(f"Golden MoE scores: {moe_scores}")
