@@ -492,6 +492,7 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
+    @classmethod
     def _fwd_reduce_scatter(
         cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
     ) -> ttnn.Tensor:
