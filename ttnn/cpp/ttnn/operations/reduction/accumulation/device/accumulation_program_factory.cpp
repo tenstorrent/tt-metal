@@ -58,6 +58,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
 
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
+    TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
 
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
@@ -69,6 +70,8 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const uint32_t num_rows_total{input_tensor.physical_volume() / tile.get_tile_hw() / tiles_per_row};
     // tiles between consecutive tiles along accumulation row
     const uint32_t input_tile_offset{calc_input_tile_offset(input_shape, dim, tile.get_height(), tile.get_width())};
+    TT_FATAL(
+        input_tile_offset != 0, "input_tile_offset must be non-zero (got 0 for dim={}, shape={})", dim, input_shape);
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
