@@ -24,6 +24,7 @@ except ImportError:
     tqdm = None
 
 from models.demos.deepseek_v3.utils.hf_model_utils import (
+    DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE,
     apply_with_names,
     load_model_uninitialized,
     load_model_weights,
@@ -33,7 +34,7 @@ from models.demos.deepseek_v3.utils.hf_model_utils import (
 MODEL_PATH = Path(
     os.getenv(
         "DEEPSEEK_V3_HF_MODEL",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
     )
 )
 
@@ -110,7 +111,7 @@ def generate_reference(
         if loaded_weight.dtype == torch.float8_e4m3fn:
             raise RuntimeError(
                 f"Expected already-dequantized bf16 weights for '{name}', but found float8 tensor. "
-                "Pass a dequantized HF checkpoint."
+                f"{DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE}"
             )
 
         target_dtype = torch.bfloat16

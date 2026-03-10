@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _dequantize_state_dict
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -32,6 +33,15 @@ def load_state_dict(model_path: Path, module_path: str):
         # Ensure dot suffix so that keys are trimmed properly in the view
         return lazy.view_with_prefix(module_path + ".")
     return lazy
+
+
+def dequantize_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    hf_config: PretrainedConfig,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Compatibility shim for older tests that still import from `test_utils`."""
+    return _dequantize_state_dict(state_dict, hf_config, dtype)
 
 
 def torch_cache_from_paged(

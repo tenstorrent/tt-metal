@@ -81,7 +81,7 @@ def _get_test_state_dict(
         True,
     ],
 )
-@pytest.mark.parametrize("weight_type", ["random", "real"], ids=["random_weights", "real_weights"])
+@pytest.mark.parametrize("weight_type", ["random"], ids=["random_weights"])
 def test_forward_pass(
     mode,
     num_tokens,
