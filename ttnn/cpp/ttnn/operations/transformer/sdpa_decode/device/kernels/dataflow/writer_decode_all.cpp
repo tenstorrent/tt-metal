@@ -6,7 +6,6 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "api/debug/assert.h"
-
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
@@ -257,7 +256,6 @@ void kernel_main() {
 
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
                 uint32_t child_id = active_children_per_round[round];
-
                 if (child_id != UINT32_MAX) {
                     // Wait for this specific child to send its results
                     // Poll until round-specific nibble is >= 1
