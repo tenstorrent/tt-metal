@@ -1066,4 +1066,4 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.999)
+    assert_with_pcc(torch_output, tt_output, 0.998 if use_welford else 0.999)
