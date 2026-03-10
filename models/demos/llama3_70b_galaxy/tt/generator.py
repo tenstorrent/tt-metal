@@ -672,10 +672,7 @@ class Generator(WarmupForwardMixin):
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
         )
-        if self.enable_split_sampling and not return_logits:
-            self.model.complete_bitmask_to_device()
-            tt_tok = self.model.apply_bitmask_to_logits(tt_tok)
-            return self.model.sampling.sample(logits=tt_tok, tt_out_tok=tt_tokens)
+        # Sampling without tracing is not currently supported.
         return tt_tok
 
     def _capture_trace_text(
