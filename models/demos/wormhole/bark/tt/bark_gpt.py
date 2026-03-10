@@ -53,12 +53,17 @@ def preprocess_linear_weight(weight_tensor, device):
     PyTorch stores linear weights as (out_features, in_features).
     ttnn.linear expects [1, 1, in_features, out_features] (4D TILE).
     This is the standard TTNN transformer convention (Llama/GPT2/Falcon).
+
+    Weights are stored in DRAM to avoid NCRISC compiler pressure when
+    all 12 transformer layers are loaded simultaneously.
     """
     weight = weight_tensor.detach().float()
     if weight.dim() == 2:
         weight = weight.t()  # (out, in) -> (in, out) for ttnn.linear
         weight = weight.unsqueeze(0).unsqueeze(0)  # [1, 1, in, out]
-    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_weight = ttnn.from_torch(
+        weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     return tt_weight
 
 
@@ -67,7 +72,9 @@ def preprocess_layernorm_weight(weight_tensor, device):
     w = weight_tensor.detach().float()
     if w.dim() == 1:
         w = w.unsqueeze(0).unsqueeze(0).unsqueeze(0)  # [1, 1, 1, hidden]
-    tt_w = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_w = ttnn.from_torch(
+        w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     return tt_w
 
 
@@ -78,7 +85,9 @@ def preprocess_embedding_weight(weight_tensor, device):
     instead of CPU-side nn.Embedding.
     """
     w = weight_tensor.detach().float()
-    return ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return ttnn.from_torch(
+        w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
 
 class TtBarkMLP:
