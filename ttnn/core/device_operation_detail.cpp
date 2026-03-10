@@ -53,6 +53,8 @@ compute_output_placements_and_shape(
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
 
+    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
+
     std::vector<std::reference_wrapper<const Tensor>> sharded_tensors;
     for (const auto& tensor_ref : tensors) {
         if (!is_fully_replicated(tensor_ref.get())) {
