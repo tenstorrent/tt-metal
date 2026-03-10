@@ -1088,10 +1088,10 @@ def test_moe_fused_with_reduce(
     device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     device_gate_scores = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
-    # Compute expected output for each device, then sum
-    # Each device uses a different hardcoded expert index (chip_id)
-    # and a different TP shard of shared expert weights
+    # Compute expected output for each device, then sum.
+    # Residual is only added on ROOT1 device; non-root devices skip it.
     K_down = s.K_down
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     expected_final_outputs = []
     for device_idx in range(num_devices):
         chip_id = device_idx
@@ -1124,6 +1124,7 @@ def test_moe_fused_with_reduce(
             use_hardcoded_expert_index=True,
             hardcoded_expert_index=actual_expert_idx,
             explicit_expert_scale=actual_expert_scale,
+            include_residual=(device_idx == root_device_idx),
         )
         expected_final_outputs.append(torch_expected_final)
         logger.info(
@@ -1141,8 +1142,6 @@ def test_moe_fused_with_reduce(
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
 
-    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
-    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     reduce_output_root = reduce_output_torch[root_device_idx]
 
     # Extract valid portion (remove per-core padding)
@@ -1184,10 +1183,11 @@ def test_moe_fused_with_reduce(
         with torch.no_grad():
             ref_moe_output = reference_moe(normed_input.unsqueeze(0)).squeeze(0)
 
+        # Residual is added once (on ROOT1 only), so reduce output directly
+        # matches: residual + moe_output
         ref_block_output = r.torch_input.float() + ref_moe_output.float()
-        adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
 
-        passing_ref, pcc_ref = comp_pcc(ref_block_output, adjusted_reduce, 0.95)
+        passing_ref, pcc_ref = comp_pcc(ref_block_output, reduce_output_valid.float(), 0.95)
         logger.info(f"Reference MoE comparison PCC: {pcc_ref}")
         assert passing_ref, f"Reference MoE comparison PCC failed: {pcc_ref}"
 
@@ -1544,9 +1544,10 @@ def test_mlp_with_reduce(
     logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
-    # Compute per-device golden with per-device TP shards of shared expert weights
-    # For dense (use_mlp_weights): each device uses routed expert d; pass single-expert dict for that device.
+    # Compute per-device golden with per-device TP shards of shared expert weights.
+    # Residual is only added on ROOT1 device; non-root devices skip it.
     K_down = s.K_down
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     expected_final_outputs = []
     for device_idx in range(num_devices):
         shared_gate_shard = s.torch_gate_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
@@ -1573,6 +1574,7 @@ def test_mlp_with_reduce(
             rmsnorm_gamma=r.torch_rmsnorm_gamma,
             rmsnorm_epsilon=1e-6,
             enable_routing=False,
+            include_residual=(device_idx == root_device_idx),
         )
         expected_final_outputs.append(device_expected)
 
@@ -1585,8 +1587,6 @@ def test_mlp_with_reduce(
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
 
-    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
-    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     reduce_output_root = reduce_output_torch[root_device_idx]
 
     # Extract valid portion (remove per-core padding)
@@ -1612,13 +1612,13 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             shared_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
             routed_outputs = [routed_refs[d](normed_input.unsqueeze(0)).squeeze(0) for d in range(8)]
-        ref_reduce = sum(routed_outputs).float() + shared_output.float() + num_devices * r.torch_input.float()
-        # Also compare against single full MLP (reference block): reduce_output - 7*residual = block_output
+        # Residual is added once (on ROOT1 only)
+        ref_reduce = sum(routed_outputs).float() + shared_output.float() + r.torch_input.float()
+        # Also compare against single full MLP (reference block): reduce_output directly matches
         full_mlp_ref = create_reference_dense_full_mlp(state_dict, layer_idx)
         with torch.no_grad():
             ref_block_output = r.torch_input.float() + full_mlp_ref(normed_input.unsqueeze(0)).squeeze(0).float()
-        adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
-        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), adjusted_reduce.flatten(), 0.975)
+        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), reduce_output_valid.float().flatten(), 0.975)
         logger.info(f"Reference full MLP (block) comparison PCC: {pcc_full}")
         assert passing_full, f"Reference full MLP block comparison PCC failed: {pcc_full}"
     else:
@@ -1626,9 +1626,8 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             expert_0_output = expert_ref(normed_input.unsqueeze(0)).squeeze(0)
             shared_full_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
-        ref_reduce = (
-            num_devices * expert_0_output.float() + shared_full_output.float() + num_devices * r.torch_input.float()
-        )
+        # Residual is added once (on ROOT1 only)
+        ref_reduce = num_devices * expert_0_output.float() + shared_full_output.float() + r.torch_input.float()
 
     passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.975)
     logger.info(f"Reference MLP comparison PCC: {pcc_ref}")

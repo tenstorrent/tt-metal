@@ -1124,10 +1124,21 @@ void kernel_main() {
         }
 
         // 11d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
+        //      When multi-device reduce is enabled, only the ROOT1 device performs
+        //      the actual add so the residual is counted exactly once after the
+        //      cross-device sum.  Non-root devices pass matmul output through.
         {
             DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
+#ifdef ENABLE_REDUCE_TO_ONE
+            constexpr bool skip_residual_add =
+                get_named_compile_time_arg_val("reduce_device_role") != deepseek_b1_ops::MESH_ROOT1;
+            deepseek_b1_ops::ResidualAdd::
+                Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core, skip_residual_add>
+                    shared_residual_add;
+#else
             deepseek_b1_ops::ResidualAdd::Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
                 shared_residual_add;
+#endif
             shared_residual_add(moe.shared.residual_add_args);
         }
 

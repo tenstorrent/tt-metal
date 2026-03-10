@@ -3004,6 +3004,7 @@ class MoeOp:
         use_hardcoded_expert_index=False,
         hardcoded_expert_index=0,
         explicit_expert_scale=None,
+        include_residual=True,
     ):
         """
         PyTorch reference for the full fused MoE (routed + shared expert + eltwise add).
@@ -3026,6 +3027,8 @@ class MoeOp:
             bias_tensor: [1, 8, 32] gate bias (routing only)
             eps, scaling_factor, use_hardcoded_expert_index, hardcoded_expert_index,
             explicit_expert_scale: routed expert gate params (routing only)
+            include_residual: If True, add residual (raw input) in shared expert.
+                Set to False for non-root devices in multi-device reduce.
 
         Returns:
             (top8_scores, top8_indices, final_output) — scores/indices are None when enable_routing=False
@@ -3039,13 +3042,14 @@ class MoeOp:
         variance = x.pow(2).mean(-1, keepdim=True)
         normalized_input = ((x * torch.rsqrt(variance + rmsnorm_epsilon)) * rmsnorm_gamma.float()).bfloat16().float()
 
-        # Shared expert: normalized input for compute, raw input for residual
+        # Shared expert: normalized input for compute, residual (raw input) added when include_residual=True
+        residual = input_tensor.float() if include_residual else torch.zeros_like(input_tensor.float())
         shared_output = SharedExpertOp.golden(
             normalized_input.float(),
             shared_gate_weights.float(),
             shared_up_weights.float(),
             shared_down_weights.float(),
-            input_tensor.float(),  # residual is the raw (pre-norm) input
+            residual,
         ).bfloat16()
 
         # Reshape to match routed golden's fused_add_tensor expectation [1,1,1,N]
