@@ -374,7 +374,7 @@ def create_program_descriptor(
             start_stick,  # 1: start_stick_id
             nblocks,  # 2: number of tile-row blocks
         ]
-        compute_rt_args[x][y] = []
+        compute_rt_args[x][y] = [nblocks]  # 0: nblocks_per_core
         start_stick += num_sticks
 
     # Set empty args for all idle cores in the grid
