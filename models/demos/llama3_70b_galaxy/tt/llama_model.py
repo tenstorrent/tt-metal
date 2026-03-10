@@ -717,28 +717,17 @@ class TtTransformer(LightweightModule):
         )
 
     def unpack_bitmask(self, bitmask):
-        mesh_device = getattr(self, "mesh_device", None)
-        prefetcher_setup = getattr(self, "prefetcher_setup", None)
-        worker_sub_device_id = getattr(prefetcher_setup, "worker_sub_device_id", None)
-
-        if mesh_device is not None and worker_sub_device_id is not None:
-            mesh_device.set_sub_device_stall_group([worker_sub_device_id])
-        try:
-            op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
-            batch_dim, vocab_dim = bitmask.shape
-            bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
-            broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
-            broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
-            unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
-            converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-            mask_blocked = ttnn.lez(converted_bitmask, **op_kwargs)
-            # Use a finite large negative penalty to avoid scalar -inf multiply edge cases.
-            result = ttnn.multiply(mask_blocked, -1e9, dtype=ttnn.float32, **op_kwargs)
-            mask_blocked.deallocate(True)
-            return result
-        finally:
-            if mesh_device is not None and worker_sub_device_id is not None:
-                mesh_device.reset_sub_device_stall_group()
+        op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
+        batch_dim, vocab_dim = bitmask.shape
+        bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
+        broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+        broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+        unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
+        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
+        # converted_bitmask is 0/1. Compute (x - 1) * 1e9 -> {-1e9, 0}.
+        result = ttnn.add(converted_bitmask, -1.0, dtype=ttnn.float32, **op_kwargs)
+        ttnn.multiply_(result, 1e9, **op_kwargs)
+        return result
 
     def start_bitmask_to_device(self, bitmask):
         target = self._bitmask
