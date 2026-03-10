@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-CSV="generated/profiler/reports/2026_03_10_10_28_44/ops_perf_results_2026_03_10_10_28_44.csv"
+CSV="generated/profiler/reports/2026_03_10_10_58_16/ops_perf_results_2026_03_10_10_58_16.csv"
 PERF="/home/bklockiewicz/tt-metal/python_env/bin/tt-perf-report"
-OUTDIR="sweep_perf_reports_tg"
+OUTDIR="sweep_perf_reports_tg_2"
 
 mkdir -p "$OUTDIR"
 
