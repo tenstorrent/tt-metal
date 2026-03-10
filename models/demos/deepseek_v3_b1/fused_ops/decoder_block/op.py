@@ -227,7 +227,7 @@ class DecoderBlock:
             reconfig_moe_cbs=True,
             semaphores=moe_semaphores,
             noc_mode=noc_mode,
-            cb_id_context=moe_cb_id_context,
+            # cb_id_context=moe_cb_id_context,
         )
 
         moe._build_descriptors()

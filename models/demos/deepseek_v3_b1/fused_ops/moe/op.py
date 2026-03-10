@@ -2239,7 +2239,8 @@ class MoeSharedExpertOp:
 
         # 16x16, bfloat16
         shared_group1_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
-        shared_group2_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        # shared_group2_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        shared_group2_cb = shared_group1_cb
         shared_intermed_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
         shared_mcast_src_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
 
@@ -2613,7 +2614,7 @@ class MoeSharedExpertOp:
             # shared_ctx.gu_matmul_params["cb_weights_descriptor"],
             shared_ctx.gu_matmul_params["cb_out_descriptor"],
             shared_ctx.gated_reduce_params["cb_group1_descriptor"],
-            shared_ctx.gated_reduce_params["cb_group2_descriptor"],
+            # shared_ctx.gated_reduce_params["cb_group2_descriptor"],
             shared_ctx.gated_reduce_params["cb_intermed_descriptor"],
             shared_ctx.gated_reduce_params["cb_out_descriptor"],
             shared_ctx.down_mcast_params["dst_cb_descriptor"],
@@ -3618,7 +3619,7 @@ class MoeOp:
 
         # CB 30: shared_group1 (ag gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
         cb30_cb_id = shared_ctx.group1_cb
-        cb30_total_size = 4096
+        cb30_total_size = 4096 * 2
         cb30_desc = ttnn.cb_descriptor_from_sharded_tensor(
             cb30_cb_id,
             out_buf,
@@ -3637,24 +3638,24 @@ class MoeOp:
         out_offset += cb30_total_size
 
         # CB 31: shared_group2 (bg gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
-        cb31_cb_id = shared_ctx.group2_cb
-        cb31_total_size = 4096
-        cb31_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb31_cb_id,
-            out_buf,
-            address_offset=out_offset,
-            total_size=cb31_total_size,
-        )
-        cb31_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb31_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=512,
-            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
-        )
-        cb31_desc.format_descriptors = [cb31_fmt]
-        shared_ctx.gated_reduce_params["cb_group2_descriptor"] = cb31_desc
-        shared_ctx.bg_receiver_data_addr = out_addr + out_offset
-        out_offset += cb31_total_size
+        # cb31_cb_id = shared_ctx.group2_cb
+        # cb31_total_size = 4096
+        # cb31_desc = ttnn.cb_descriptor_from_sharded_tensor(
+        #     cb31_cb_id,
+        #     out_buf,
+        #     address_offset=out_offset,
+        #     total_size=cb31_total_size,
+        # )
+        # cb31_fmt = ttnn.CBFormatDescriptor(
+        #     buffer_index=cb31_cb_id,
+        #     data_format=ttnn.bfloat16,
+        #     page_size=512,
+        #     tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        # )
+        # cb31_desc.format_descriptors = [cb31_fmt]
+        # shared_ctx.gated_reduce_params["cb_group2_descriptor"] = cb31_desc
+        shared_ctx.bg_receiver_data_addr = shared_ctx.ag_receiver_data_addr + 4096
+        # out_offset += cb31_total_size
 
         # CB 38: shared_output_gather_dst (total_size=14336, page_size=64, tile=1x32, bfloat16)
         cb38_offset = out_offset
