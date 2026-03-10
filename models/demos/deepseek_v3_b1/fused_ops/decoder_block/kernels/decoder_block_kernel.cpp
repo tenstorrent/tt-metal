@@ -1943,10 +1943,6 @@ void kernel_main() {
         Core::is_matmul_core || Core::is_dkv_matmul_core,
         true>
         mcast;
-    {
-        DeviceZoneScopedN("MCAST_INIT");
-        mcast.init(mcast_args);
-    }
 
     deepseek_b1_ops::Mcast::Op<
         Moe::Routed::ResidualMcastCTArgs,
@@ -2661,6 +2657,14 @@ void kernel_main() {
 #endif
 #endif
     };
+
+    // ====================================================================
+    // Mcast: Initialize persistent mcast
+    // ====================================================================
+    {
+        DeviceZoneScopedN("MCAST_INIT");
+        mcast.init(mcast_args);
+    }
 
     for (uint32_t i = 0; i < num_iterations; i++) {
         unified_kernels::reconfig_cb_interfaces(mla_cb_config);

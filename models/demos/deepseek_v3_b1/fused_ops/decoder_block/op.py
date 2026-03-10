@@ -14,11 +14,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeSem
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
-    PerCoreCompileTimeDescriptor,
-    PerCoreRuntimeArgsDescriptor,
-    UnifiedKernelDescriptor,
-)
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 
 
 class DecoderBlock:
@@ -379,28 +375,31 @@ class DecoderBlock:
                 core_key = (core_coord.x, core_coord.y)
                 attn_brisc_prefix_len_by_core[core_key] = attn_brisc_prefix_len_by_core.get(core_key, 0) + len(args)
 
-            brisc_base_overrides = []
             moe_per_core_brisc = moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []
-            for core_coord, _ in moe_per_core_brisc:
-                base = attn_brisc_prefix_len_by_core.get((core_coord.x, core_coord.y), 0)
-                if base != 0:
-                    brisc_base_overrides.append((core_coord, base))
+
+            # Compute the correct bases and patch directly into moe_brisc_ct.
+            # Both worker and fabric cores start reading their moe per-core args immediately after
+            # the attn per-core args, so both bases equal attn_base. All reduce cores (worker and
+            # fabric) must have the same attn_base since attn assigns the same per-core args to
+            # every core on the device.
+            if moe_per_core_brisc:
+                attn_bases = {attn_brisc_prefix_len_by_core.get((c.x, c.y), 0) for c, _ in moe_per_core_brisc}
+                assert (
+                    len(attn_bases) == 1
+                ), f"All reduce cores must have the same attn per-core arg count, got: {attn_bases}"
+                reduce_rt_arg_base = next(iter(attn_bases))
+            else:
+                reduce_rt_arg_base = 0
+            moe_brisc_ct = _patch_named_compile_time_args(
+                moe_brisc_ct,
+                {
+                    "reduce_brisc_rt_arg_base": reduce_rt_arg_base,
+                    "reduce_brisc_fabric_rt_arg_base": reduce_rt_arg_base,
+                },
+            )
 
             merged_ucd = ctx["unified_compile_time_core_descriptors"] + moe.device_unified_core_descs
             merged_pcd = ctx["per_core_compile_time_descriptors"] + moe.device_per_core_descs
-            if brisc_base_overrides:
-                merged_pcd = merged_pcd + [
-                    PerCoreCompileTimeDescriptor(
-                        named_compile_time_arg="reduce_brisc_rt_arg_base",
-                        core_values=brisc_base_overrides,
-                        other_value=0,
-                    ),
-                    PerCoreCompileTimeDescriptor(
-                        named_compile_time_arg="reduce_brisc_fabric_rt_arg_base",
-                        core_values=brisc_base_overrides,
-                        other_value=0,
-                    ),
-                ]
 
             mesh_coord_args = [("mesh_row", row), ("mesh_col", col)]
 
