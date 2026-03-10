@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <vector>
+#include <map>
+#include <memory>
+#include <string>
 #include <gtest/gtest.h>
+#include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -16,7 +19,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/program/program_impl.hpp"
+#include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
 #include <tt-metalium/experimental/host_api.hpp>
 
@@ -119,7 +122,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
 
     // Skip shared_value_ptr slot; read only consumer result slots
     constexpr uint32_t l1_offset = 1;
-    const uint32_t read_addr = l1_unreserved_base + l1_offset * sizeof(uint32_t) * word_count_32b;
+    const uint32_t read_addr = l1_unreserved_base + (l1_offset * sizeof(uint32_t) * word_count_32b);
     // Read back words written by all DMs to verify atomic load/store went through properly
     const uint32_t read_size_bytes = sizeof(uint32_t) * (num_dms_ - 1) * word_count_32b;
 
