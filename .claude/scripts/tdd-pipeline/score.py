@@ -338,7 +338,6 @@ def _get_stage_durations_from_git(op_path: Path, op_name: str, stages: list) -> 
                 "git",
                 "log",
                 "--format=%H %aI %s",
-                "--all",
                 "--",
                 str(op_path),
                 f"tests/ttnn/unit_tests/operations/{op_name}/",
