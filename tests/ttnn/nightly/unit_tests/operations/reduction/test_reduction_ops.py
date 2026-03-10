@@ -87,6 +87,31 @@ def _run_moe_with_preallocated(input_tensor, expert_mask_tensor, topk_mask_tenso
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
+# Helper function that calls sampling with preallocated output tensor, whose shape is determined by
+# the ttnn_result obtained from a previous run of sampling without preallocated output.
+def _run_sampling_with_preallocated(
+    input_values, input_indices, k_tensor, p_tensor, temp_tensor, seed, device, ttnn_result
+):
+    """Re-runs sampling with preallocated output tensor and returns the result as a torch tensor."""
+    prealloc_output = ttnn.empty(
+        ttnn_result.shape,
+        dtype=ttnn_result.dtype,
+        layout=ttnn_result.layout,
+        device=device,
+        memory_config=ttnn_result.memory_config(),
+    )
+    ttnn.sampling(
+        input_values,
+        input_indices,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp_tensor,
+        seed=seed,
+        output_tensor=prealloc_output,
+    )
+    return ttnn.to_torch(ttnn.from_device(prealloc_output))
+
+
 # Test a 0D, 1D, 5D, and a 0-volume tensor
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0, -1])
@@ -521,8 +546,7 @@ def test_moe(device, tensor_shape, dtype, layout):
             dim=-1,
             keepdim=True,
         )
-    except (IndexError, TypeError, RuntimeError) as e:
-        logger.info(f"torch raised exception: {e}")
+    except (IndexError, TypeError, RuntimeError):
         torch_errored = True
 
     ttnn_errored = False
@@ -573,3 +597,169 @@ def test_moe(device, tensor_shape, dtype, layout):
     assert torch.allclose(
         prealloc_result.float(), ttnn_result_in_torch.float(), atol=atol, rtol=rtol
     ), f"Preallocated moe result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
+
+
+def _torch_sampling_reference(values, indices, k, p, temp, seed):
+    """
+    Torch reference for ttnn.sampling: softmax -> top-k -> top-p (nucleus) -> multinomial.
+    Returns tensor of shape (1, 1, 1, H) of sampled index values (one per user).
+    Raises if shape constraints are violated, to match ttnn error parity.
+    """
+    N, C, H, W = values.shape
+    num_users = N * C * H
+    # ttnn.sampling requires exactly 32 users (per API doc). Raise to get error parity.
+    if num_users != 32:
+        raise RuntimeError(f"sampling requires N*C*H=32, got {num_users}")
+
+    # k, p, temp are per-user tensors of length 32. Clamp k to valid range (0, 32].
+    k = k.to(values.device).float().clamp(min=1, max=32)
+    p = p.to(values.device).float()
+    temp = temp.to(values.device).float()
+    # Avoid division by zero; temperature is 1/T in the doc, so scale values by 1/temp.
+    temp = temp.clamp(min=1e-6)
+
+    # Work in float32 for stable softmax and multinomial; values may be bfloat16.
+    values_f = values.float()
+    # Flatten to (32, W) so each row is one user's logits; temp is (32,).
+    values_flat = values_f.reshape(32, W)
+    temp_flat = temp.view(32, 1).expand(32, W)
+    probs_flat = torch.softmax(values_flat / temp_flat, dim=-1)
+    indices_flat = indices.reshape(32, W)
+
+    torch.manual_seed(seed)
+    out_list = []
+    for u in range(32):
+        probs_u = probs_flat[u, :].clone()
+        k_u = int(k[u].item())
+        p_u = float(p[u].item())
+        # Top-k: zero out all but the top-k probabilities, then renormalize.
+        if k_u < W:
+            _, top_idx = torch.topk(probs_u, k_u, dim=-1)
+            mask = torch.zeros_like(probs_u, dtype=torch.bool)
+            mask[top_idx] = True
+            probs_u = torch.where(mask, probs_u, torch.zeros_like(probs_u))
+        probs_u_sum = probs_u.sum()
+        if probs_u_sum > 0:
+            probs_u = probs_u / probs_u_sum
+        # Top-p (nucleus): sort descending, cumsum, keep until cumsum <= p_u.
+        probs_sorted, _ = torch.sort(probs_u, descending=True)
+        cumsum = torch.cumsum(probs_sorted, dim=-1)
+        # Number of elements to keep: first position where cumsum > p_u (exclusive).
+        keep = (cumsum <= p_u).sum().item()
+        if keep < 1:
+            keep = 1
+        # Rebuild mask: keep only indices that are in the top-p set.
+        _, sort_idx = torch.sort(probs_u, descending=True)
+        mask = torch.zeros_like(probs_u, dtype=torch.bool)
+        mask[sort_idx[:keep]] = True
+        probs_u = torch.where(mask, probs_u, torch.zeros_like(probs_u))
+        probs_u_sum = probs_u.sum()
+        if probs_u_sum > 0:
+            probs_u = probs_u / probs_u_sum
+        # Multinomial: sample one index from the distribution.
+        sampled_idx = torch.multinomial(probs_u.unsqueeze(0), num_samples=1, replacement=True).squeeze(0).item()
+        # Output is the value of input_indices at that position (per API: returns input_indices_tensor[final_index]).
+        out_val = indices_flat[u, sampled_idx].item()
+        out_list.append(out_val)
+    # Output shape (1, 1, 1, 32) to match ttnn output spec (one sampled index value per user).
+    out_tensor = torch.tensor(out_list, dtype=indices.dtype, device=values.device).view(1, 1, 1, 32)
+    return out_tensor
+
+
+@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_sampling(device, tensor_shape, dtype, layout):
+    """
+    Test ttnn.sampling against a torch reference (softmax -> top-k -> top-p -> multinomial).
+    Structure mirrors test_moe: error parity (including scalar and non-4D), shape/validity checks, and prealloc path.
+    We do not compare output values numerically to the torch reference (different RNG backends);
+    we check that ttnn is deterministic (same seed -> same result) and that prealloc matches non-prealloc.
+    """
+    torch.manual_seed(0)
+    rank = len(tensor_shape)
+
+    # Build input values; for non-4D shapes use trivial tensors and let exception parity catch the errors.
+    torch_values = torch.randn(tensor_shape, dtype=dtype)
+    if rank == 0:
+        # Scalar case: indices same shape as values so from_torch works; sampling will reject.
+        torch_indices = torch.zeros(tensor_shape, dtype=torch.int32, device=torch_values.device)
+    else:
+        N, C, H, W = tensor_shape
+        # Indices tensor: per-position index value (e.g. 0..W-1); same shape as values. W must be divisible by 32 per API.
+        torch_indices = torch.arange(0, W, dtype=torch.int32, device=torch_values.device).expand(tensor_shape)
+
+    # Per-user params: k (top-k), p (top-p nucleus), temp (temperature). Must have 32 elements (per API).
+    # 10 = keep top-10 logits per user before top-p; 0.9 = nucleus cumulative mass threshold.
+    k_vals = torch.tensor([10] * 32, dtype=torch.uint32)
+    p_vals = torch.tensor([0.9] * 32, dtype=dtype)
+    temp_vals = torch.ones(32, dtype=dtype)
+
+    # Run torch reference and ttnn; flag exceptions for error parity.
+    # ValueError: torch reference unpacks values.shape to N,C,H,W; scalar gives no values to unpack.
+    torch_errored = False
+    try:
+        torch_result = _torch_sampling_reference(torch_values, torch_indices, k_vals, p_vals, temp_vals, seed=42)
+    except (ValueError, IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch sampling reference raised: {e}")
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        input_values = ttnn.from_torch(torch_values, layout=layout, device=device)
+        input_indices = ttnn.from_torch(
+            torch_indices,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        k_tensor = ttnn.from_torch(k_vals, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        p_tensor = ttnn.from_torch(p_vals, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        temp_tensor = ttnn.from_torch(temp_vals, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn_result = ttnn.sampling(
+            input_values,
+            input_indices,
+            k=k_tensor,
+            p=p_tensor,
+            temp=temp_tensor,
+            seed=42,
+        )
+    except (ValueError, IndexError, TypeError, RuntimeError) as e:
+        ttnn_errored = True
+        if not torch_errored:
+            logger.error(f"torch passed, but ttnn sampling raised: {e}")
+
+    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
+
+    if torch_errored:
+        return
+
+    ttnn_result_in_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    # Shape check: ttnn output is (1, 1, 1, input_shape[2]) i.e. one sampled index per user (32 users).
+    assert (
+        torch_result.shape == ttnn_result_in_torch.shape
+    ), f"Shape mismatch: torch: {torch_result.shape}, ttnn: {ttnn_result_in_torch.shape}"
+
+    # 0-volume path: if both returned empty output, only shape and prealloc (mirrors test_moe).
+    if torch_result.numel() == 0 and ttnn_result_in_torch.numel() == 0:
+        prealloc_result = _run_sampling_with_preallocated(
+            input_values, input_indices, k_tensor, p_tensor, temp_tensor, 42, device, ttnn_result
+        )
+        assert (
+            torch_result.shape == prealloc_result.shape
+        ), f"Preallocated shape mismatch: torch: {torch_result.shape}, ttnn: {prealloc_result.shape}"
+        return
+
+    # Determinism: two ttnn runs with same seed must match (we cannot compare to torch; RNG differs).
+    ttnn_result_2 = ttnn.sampling(input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, seed=42)
+    ttnn_result_2_torch = ttnn.to_torch(ttnn.from_device(ttnn_result_2))
+    assert torch.equal(ttnn_result_in_torch, ttnn_result_2_torch), "Sampling must be deterministic with the same seed"
+
+    # Preallocated output must match non-preallocated.
+    prealloc_result = _run_sampling_with_preallocated(
+        input_values, input_indices, k_tensor, p_tensor, temp_tensor, 42, device, ttnn_result
+    )
+    assert torch.equal(
+        prealloc_result, ttnn_result_in_torch
+    ), f"Preallocated sampling result does not match non-preallocated: {prealloc_result} vs {ttnn_result_in_torch}"
