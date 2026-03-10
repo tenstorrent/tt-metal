@@ -44,7 +44,6 @@ void kernel_main() {
     constexpr uint32_t CB_BIAS = tt::CBIndex::c_4;
     constexpr uint32_t CB_INDEX = tt::CBIndex::c_5;
     constexpr uint32_t CB_TOPK_VAL = tt::CBIndex::c_6;
-    constexpr uint32_t CB_TOPK_IND = tt::CBIndex::c_7;
     constexpr uint32_t CB_GATHERED_VAL = tt::CBIndex::c_8;
     constexpr uint32_t CB_GATHERED_IND = tt::CBIndex::c_9;
     constexpr uint32_t CB_INTERMED_VAL = tt::CBIndex::c_10;
@@ -60,6 +59,9 @@ void kernel_main() {
     // =====================================================================
     constexpr uint32_t BLOCK_SIZE = 2;
 
+    // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
+    // consistently throughout the kernel for correctness. acquire_dst/release_dst
+    // must NOT be mixed with tile_regs_* in half-sync mode.
     mm_block_init(
         CB_INPUT,
         CB_WEIGHT,
@@ -68,7 +70,7 @@ void kernel_main() {
         /*ct_dim=*/1,
         /*rt_dim=*/1,
         /*kt_dim=*/1);
-    acquire_dst();
+    tile_regs_acquire();
 
     uint32_t tiles_done = 0;
     while (tiles_done < num_k_tiles) {
@@ -103,10 +105,12 @@ void kernel_main() {
         // =================================================================
         // SENDER: pack partial and exit (DM1 sends it to worker)
         // =================================================================
+        tile_regs_commit();
         cb_reserve_back(CB_LOCAL_OUT, 1);
+        tile_regs_wait();
         pack_tile(0, CB_LOCAL_OUT);
+        tile_regs_release();
         cb_push_back(CB_LOCAL_OUT, 1);
-        release_dst();
         return;
     }
 
@@ -127,10 +131,12 @@ void kernel_main() {
     cb_pop_front(CB_BIAS, 1);
 
     // Pack complete logits to CB_TOPK_VAL
+    tile_regs_commit();
     cb_reserve_back(CB_TOPK_VAL, 1);
+    tile_regs_wait();
     pack_tile(0, CB_TOPK_VAL);
+    tile_regs_release();
     cb_push_back(CB_TOPK_VAL, 1);
-    release_dst();
 
     if (!is_collector) {
         return;
@@ -139,6 +145,10 @@ void kernel_main() {
     // =====================================================================
     // COLLECTOR: 4-tile insertion-sort TopK on gathered logits
     // =====================================================================
+    // NOTE: The topk hardware instruction always operates on 32-element vectors
+    // within a tile, so k=32 and logk=5 are intrinsic tile-level constants,
+    // NOT the user-facing topk_k. The actual user k is applied later during
+    // output extraction (softmax mask in dm1.cpp, output packing).
     cb_wait_front(CB_GATHERED_VAL, num_groups);
     cb_wait_front(CB_GATHERED_IND, num_groups);
 

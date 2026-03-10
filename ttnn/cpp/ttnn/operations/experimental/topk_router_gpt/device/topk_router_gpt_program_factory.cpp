@@ -7,7 +7,6 @@
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 #include <numeric>
 #include <vector>
@@ -93,7 +92,6 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         | CB_BIAS          | c_4      | Float16_b  | 1     | Workers          |
         | CB_INDEX         | c_5      | Float16_b  | 1     | Workers          |
         | CB_TOPK_VAL      | c_6      | Float16_b  | 1     | Workers          |
-        | CB_TOPK_IND      | c_7      | Float16_b  | 1     | Workers          |
         | CB_GATHERED_VAL  | c_8      | Float16_b  | 4     | Workers          |
         | CB_GATHERED_IND  | c_9      | Float16_b  | 4     | Workers          |
         | CB_INTERMED_VAL  | c_10     | Float16_b  | 2     | Collector        |
@@ -127,7 +125,11 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     auto worker_core_set = tt::tt_metal::CoreRangeSet(worker_cores);
     auto collector_core_set = tt::tt_metal::CoreRangeSet(collector_cores_vec);
 
-    // CB0-CB3: ALL cores (uniform sizes for consistent L1 layout)
+    // CB0-CB3: ALL cores (uniform sizes for consistent L1 layout).
+    // IMPORTANT: CB0-CB3 MUST have identical sizes on all cores because the DM1
+    // kernel reads its own CB2 (CB_PARTIAL_RECV) base address and uses it as the
+    // destination for NOC writes to other cores. If CB sizes differed between cores,
+    // the L1 offsets would diverge, causing silent data corruption.
     const std::vector<std::tuple<tt::CBIndex, uint32_t>> all_core_cbs = {
         {tt::CBIndex::c_0, max_k_tiles},  // weight
         {tt::CBIndex::c_1, max_k_tiles},  // input
@@ -147,7 +149,6 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         {tt::CBIndex::c_4, 1},           // bias
         {tt::CBIndex::c_5, 1},           // index template
         {tt::CBIndex::c_6, 1},           // topk values
-        {tt::CBIndex::c_7, 1},           // topk indices
         {tt::CBIndex::c_8, NUM_GROUPS},  // gathered values
         {tt::CBIndex::c_9, NUM_GROUPS},  // gathered indices
     };
@@ -161,8 +162,8 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
 
     // CB10-CB16: Collector only
     const std::vector<std::tuple<tt::CBIndex, uint32_t>> collector_cbs = {
-        {tt::CBIndex::c_10, 2},  // intermed values
-        {tt::CBIndex::c_11, 2},  // intermed indices
+        {tt::CBIndex::c_10, 2},  // intermed values (2: used as ping-pong in softmax)
+        {tt::CBIndex::c_11, 1},  // intermed indices
         {tt::CBIndex::c_12, 1},  // softmax mask
         {tt::CBIndex::c_13, 1},  // softmax tmp
         {tt::CBIndex::c_14, 1},  // reduce scalar
@@ -187,14 +188,8 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         tt::tt_metal::CreateCircularBuffer(program, collector_core_set, cb_config);
     }
 
-    // ----- Compile-time args (TensorAccessorArgs pattern) -----
-    const auto tensors =
-        std::vector<const Tensor*>{&tensor_args.input_tensor, &tensor_args.weight_tensor, &tensor_args.bias_tensor};
-
-    std::vector<uint32_t> compile_args;
-    for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
-    }
+    // ----- Compile-time args -----
+    std::vector<uint32_t> compile_args;  // no positional compile args needed
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"num_cores", num_cores},
@@ -340,11 +335,20 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, compute_args);
     }
 
+    // Cache only the cores that were actually configured with runtime args
+    // (first `required_cores` from the ring ordering). Using all dram_bank2core_coords
+    // would cause OOB access in override_runtime_arguments for unconfigured cores.
+    std::vector<CoreCoord> configured_cores;
+    configured_cores.reserve(required_cores);
+    for (uint32_t ring_pos = 0; ring_pos < required_cores; ring_pos++) {
+        configured_cores.push_back(dram_bank2core_coords[ring_pos2bank_id[ring_pos]]);
+    }
+
     return cached_program_t{
         std::move(program),
         TopkRouterGptSharedVariables{
             .kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
-            .worker_cores = dram_bank2core_coords}};
+            .worker_cores = std::move(configured_cores)}};
 }
 
 // ---------------------------------------------------------------------------

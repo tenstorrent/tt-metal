@@ -146,7 +146,8 @@ class TopKRouter:
 
         Note: Fused op only supports throughput experts (sparse [B,k] output).
         """
-        assert use_throughput_experts, "Fused topk_router_gpt requires use_throughput_experts=True"
+        if not use_throughput_experts:
+            raise ValueError("Fused topk_router_gpt requires use_throughput_experts=True")
 
         # Typecast to bf16 if needed (fused op requires bf16 input)
         needs_typecast = hidden_states.dtype != ttnn.bfloat16

@@ -87,7 +87,6 @@ void kernel_main() {
     constexpr uint32_t CB_LOCAL_OUT = tt::CBIndex::c_3;
     constexpr uint32_t CB_INDEX = tt::CBIndex::c_5;
     constexpr uint32_t CB_TOPK_VAL = tt::CBIndex::c_6;
-    constexpr uint32_t CB_TOPK_IND = tt::CBIndex::c_7;
     constexpr uint32_t CB_GATHERED_VAL = tt::CBIndex::c_8;
     constexpr uint32_t CB_GATHERED_IND = tt::CBIndex::c_9;
     constexpr uint32_t CB_SOFTMAX_MASK = tt::CBIndex::c_12;

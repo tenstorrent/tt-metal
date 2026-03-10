@@ -21,9 +21,14 @@ from models.common.utility_functions import comp_pcc
 
 PCC_THRESHOLD = 0.95
 
-SHAPE2TIME = {
-    (32, 2880, 128, 4): 27,
-}
+# (B, K=hidden_dim, N=num_experts, TOP_K)
+# B=32 and N=128 are hardcoded requirements of the fused op.
+# K must be divisible by 32 (tile size).
+TEST_SHAPES = [
+    (32, 2880, 128, 4),  # production shape
+    (32, 64, 128, 4),  # small hidden_dim edge case
+    (32, 4096, 128, 4),  # large hidden_dim
+]
 
 
 def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
@@ -60,7 +65,7 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
 )
 @pytest.mark.parametrize(
     "B, K, N, TOP_K",
-    SHAPE2TIME.keys(),
+    TEST_SHAPES,
 )
 def test_topk_router_gpt_deterministic(device, B, K, N, TOP_K):
     """Known logits → verify topk indices are correct.
@@ -104,7 +109,7 @@ def test_topk_router_gpt_deterministic(device, B, K, N, TOP_K):
 )
 @pytest.mark.parametrize(
     "B, K, N, TOP_K",
-    SHAPE2TIME.keys(),
+    TEST_SHAPES,
 )
 @pytest.mark.parametrize("seed", [42, 99], ids=["seed_42", "seed_99"])
 def test_topk_router_gpt_random_matmul(device, B, K, N, TOP_K, seed):
@@ -137,6 +142,9 @@ def test_topk_router_gpt_random_matmul(device, B, K, N, TOP_K, seed):
     logger.info(f"  Weight row sums - min: {row_sums.min():.4f}, max: {row_sums.max():.4f}")
     logger.info(f"  All weights positive: {all_positive}")
 
+    # Thresholds are intentionally loose because bf16 matmul accumulation
+    # produces slightly different logit values than float32 reference, causing
+    # topk tie-breaking to differ for tokens with near-equal expert scores.
     assert idx_match_pct >= 90.0, f"Index match {idx_match_pct:.1f}% below threshold 90%"
     assert pcc_val >= PCC_THRESHOLD, f"Weight PCC {pcc_val} below threshold {PCC_THRESHOLD}"
     assert all_positive, "Some weights are not positive"
@@ -156,7 +164,7 @@ def test_topk_router_gpt_random_matmul(device, B, K, N, TOP_K, seed):
 )
 @pytest.mark.parametrize(
     "B, K, N, TOP_K",
-    SHAPE2TIME.keys(),
+    TEST_SHAPES,
 )
 def test_topk_router_gpt_dtype_verification(device, B, K, N, TOP_K):
     """Verify output dtypes are uint16 for indices and bfloat16 for weights."""
