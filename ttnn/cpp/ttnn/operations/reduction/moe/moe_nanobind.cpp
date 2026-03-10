@@ -22,8 +22,11 @@ void bind_reduction_moe_operation(nb::module_& mod) {
 
             Note:
                 This is equivalent to the following PyTorch code:
-                val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
-                return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)
+
+                .. code-block:: python
+
+                    val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
+                    return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)
 
             Args:
                 input_tensor (ttnn.Tensor): Input Tensor for moe.

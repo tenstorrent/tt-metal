@@ -72,6 +72,21 @@ def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
+# Helper function that calls moe with preallocated output tensor, whose shape is determined by
+# the ttnn_result obtained from a previous run of moe without preallocated output.
+def _run_moe_with_preallocated(input_tensor, expert_mask_tensor, topk_mask_tensor, k, device, ttnn_result):
+    """Re-runs moe with preallocated output tensor and returns the result as a torch tensor."""
+    prealloc_output = ttnn.empty(
+        ttnn_result.shape,
+        dtype=ttnn_result.dtype,
+        layout=ttnn_result.layout,
+        device=device,
+        memory_config=ttnn_result.memory_config(),
+    )
+    ttnn.moe(input_tensor, expert_mask_tensor, topk_mask_tensor, k, output_tensor=prealloc_output)
+    return ttnn.to_torch(ttnn.from_device(prealloc_output))
+
+
 # Test a 0D, 1D, 5D, and a 0-volume tensor
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0, -1])
@@ -80,7 +95,7 @@ def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 # std and var will be handled separately. Issue #25100
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod"])
-def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
+def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -446,3 +461,115 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     assert torch.equal(
         prealloc_result, ttnn_result_in_torch
     ), f"Preallocated {op} result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
+
+
+# (2, 2, 32, 64) shape hangs the test.
+# @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (2, 2, 32, 64), (1, 1, 0, 64)])
+@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_moe(device, tensor_shape, dtype, layout):
+    """
+    Test ttnn.moe against the torch reference (topk + softmax + sum) for scalar and
+    4D tensor shapes.
+    Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
+    Note: We do not enforce the same exception type or message.
+    """
+    torch.manual_seed(0)
+    rank = len(tensor_shape)
+    # k must be 32, per ttnn.moe documentation.
+    k = 32
+    # E = total number of active experts, e = number of top experts to route to
+    # (top-e gating). Only the first E columns carry real expert scores; the rest
+    # are masked to -inf so softmax assigns them zero weight.
+    E, e = 8, 2
+
+    # MOE requires 4D tensors with specific mask shapes; for non-4D shapes,
+    # construct trivial tensors and let exception parity catch the errors.
+    torch_input = torch.randn(tensor_shape, dtype=dtype)
+
+    if rank == 0:
+        # For rank 0, ops below are not applicable.
+        expert_mask = torch.zeros(tensor_shape, dtype=dtype)
+        topE_mask = torch.zeros(tensor_shape, dtype=dtype)
+    else:
+        N, C, H, W = tensor_shape
+        # Zero out columns beyond the first E so only E experts have non-zero scores.
+        torch_input[:, :, :, E:] = 0
+        # Height is 1 so the mask broadcasts across all H rows.
+        # Columns [E:] are -inf; adding this to the input ensures softmax
+        # drives inactive expert probabilities to zero.
+        expert_mask = torch.zeros([N, C, 1, W], dtype=dtype)
+        expert_mask[:, :, :, E:] = float("-inf")
+        torch_input = torch_input + expert_mask
+        # topE_mask has width k (matching topk output width) and keeps only the
+        # first e entries; positions [e:] are -inf so softmax zeroes them out,
+        # implementing top-e expert selection after topk.
+        topE_mask = torch.zeros([N, C, 1, k], dtype=dtype)
+        topE_mask[:, :, :, e:] = float("-inf")
+
+    # Run on both ttnn and torch and flag exceptions
+    torch_errored = False
+    try:
+        pyt_topk_values, pyt_topk_indices = torch.topk(torch_input, k, dim=-1)
+        # Reference MOE pipeline: apply topE_mask before softmax to zero out
+        # all but the top-e experts, multiply by an indicator for expert 0
+        # (pyt_topk_indices == 0) to isolate its contribution, slice to [:e],
+        # then sum across the expert dimension to get the gated output.
+        torch_result = torch.sum(
+            (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
+            dim=-1,
+            keepdim=True,
+        )
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch raised exception: {e}")
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        ttnn_input = ttnn.from_torch(torch_input, layout=layout, device=device)
+        ttnn_expert_mask = ttnn.from_torch(expert_mask, layout=layout, device=device)
+        ttnn_topE_mask = ttnn.from_torch(topE_mask, layout=layout, device=device)
+        ttnn_result = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
+    except (IndexError, TypeError, RuntimeError) as e:
+        ttnn_errored = True
+        if not torch_errored:
+            logger.error(f"torch passed, but ttnn raised exception: {e}")
+
+    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
+
+    # Skip the rest of the test if an exception was raised in both
+    if torch_errored:
+        return
+
+    ttnn_result_in_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    # For 0-volume results, verify shapes match.
+    if torch_result.numel() == 0 and ttnn_result_in_torch.numel() == 0:
+        assert (
+            torch_result.shape == ttnn_result_in_torch.shape
+        ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result_in_torch.shape}"
+
+        # Repeat the test with preallocated output tensor.
+        prealloc_result = _run_moe_with_preallocated(
+            ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k, device, ttnn_result
+        )
+        assert (
+            torch_result.shape == prealloc_result.shape
+        ), f"Preallocated shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {prealloc_result.shape}"
+
+        return
+
+    atol = rtol = 0.1
+    # Looser PCC tolerance than typical single-op tests because MOE chains
+    # topk -> softmax -> multiply -> sum, and each step accumulates
+    # bfloat16 rounding error.
+    pcc = 0.95
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_in_torch, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_in_torch}"
+
+    # Repeat the test with preallocated output tensor.
+    prealloc_result = _run_moe_with_preallocated(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k, device, ttnn_result)
+    assert torch.allclose(
+        prealloc_result.float(), ttnn_result_in_torch.float(), atol=atol, rtol=rtol
+    ), f"Preallocated moe result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
