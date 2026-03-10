@@ -225,9 +225,15 @@ def run(
     # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
     output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
-    # Build program_config if parameters are provided (from arg11)
+    # Build program_config - prefer V2 format (single dict) over V1 split params
     program_config = None
-    if all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
+    pc_dict = kwargs.get("program_config")
+    if isinstance(pc_dict, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
+
+        program_config = dict_to_program_config(pc_dict)
+    elif all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
+        # Legacy V1 split params fallback
         if isinstance(program_config_compute_grid, (list, tuple)) and len(program_config_compute_grid) == 2:
             grid = tuple(program_config_compute_grid)
         else:
@@ -240,9 +246,15 @@ def run(
             exp_approx_mode=False,
         )
 
-    # Build compute_kernel_config if parameters are provided (from arg12)
+    # Build compute_kernel_config - prefer V2 format (single dict) over V1 split params
     compute_kernel_config = None
-    if compute_kernel_config_math_fidelity is not None:
+    ckc_dict = kwargs.get("compute_kernel_config")
+    if isinstance(ckc_dict, dict) and "math_fidelity" in ckc_dict:
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_compute_kernel_config
+
+        compute_kernel_config = dict_to_compute_kernel_config(ckc_dict)
+    elif compute_kernel_config_math_fidelity is not None:
+        # Legacy V1 split params fallback
         math_fidelity_map = {
             "HiFi4": ttnn.MathFidelity.HiFi4,
             "HiFi3": ttnn.MathFidelity.HiFi3,

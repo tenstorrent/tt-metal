@@ -18,7 +18,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
+from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -103,6 +104,13 @@ def run(
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
+
+    # Parse program_config if present
+    program_config = kwargs.get("program_config")
+    if isinstance(program_config, dict):
+        program_config = dict_to_program_config(program_config, input_b_memory_config, input_a_memory_config)
+    if program_config is not None and program_config != "__ABSENT__":
+        op_kwargs["program_config"] = program_config
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

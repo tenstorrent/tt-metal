@@ -226,11 +226,9 @@ def dict_to_compute_kernel_config(cfg):
 def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_config=None):
     """Convert a program_config dict from traced JSON to a proper ProgramConfig object.
 
-    Uses to_json-compatible keys to reconstruct the correct ProgramConfig type:
-    - 4 keys + DRAM-sharded input B + sharded input A -> DRAMSharded
-    - Has compute_with_storage_grid_size + transpose_mcast -> MultiCast
-    - Has compute_with_storage_grid_size + fuse_batch -> MultiCast1D
-    - Has compute_with_storage_grid_size only -> Reuse
+    Supports two modes:
+    1. Explicit type: dict has "type" field naming the config class → dispatch directly
+    2. Heuristic (legacy): infer type from keys present in the dict
     """
     if cfg is None:
         return None
@@ -238,6 +236,205 @@ def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_confi
     if not isinstance(cfg, dict):
         return cfg
 
+    # --- Explicit type dispatch (new traced format) ---
+    explicit_type = cfg.get("type", "")
+
+    # String-repr configs: {"type": "...", "value": "ClassName(...)"}
+    if "value" in cfg and isinstance(cfg.get("value"), str):
+        return _parse_string_repr_program_config(explicit_type, cfg["value"])
+
+    if explicit_type:
+        return _build_program_config_by_type(explicit_type, cfg)
+
+    # --- Heuristic fallback (legacy format without "type" field) ---
+    return _build_program_config_heuristic(cfg, input_b_memory_config, input_a_memory_config)
+
+
+def _parse_string_repr_program_config(type_name: str, value_str: str):
+    """Parse program configs stored as string repr: 'ClassName(param=val, ...)'."""
+    import re
+
+    if "SDPAProgramConfig" in type_name or "SDPAProgramConfig" in value_str:
+        grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        q_chunk_m = re.search(r"q_chunk_size=(\d+)", value_str)
+        k_chunk_m = re.search(r"k_chunk_size=(\d+)", value_str)
+        exp_m = re.search(r"exp_approx_mode=(\w+)", value_str)
+        if not grid_m or not q_chunk_m or not k_chunk_m:
+            return None
+        exp_val = False
+        if exp_m:
+            exp_val = exp_m.group(1).lower() not in ("false", "0")
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+            q_chunk_size=int(q_chunk_m.group(1)),
+            k_chunk_size=int(k_chunk_m.group(1)),
+            exp_approx_mode=exp_val,
+        )
+
+    if "LayerNormShardedMultiCoreProgramConfig" in value_str:
+        grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        sub_w = re.search(r"subblock_w=(\d+)", value_str)
+        blk_h = re.search(r"block_h=(\d+)", value_str)
+        blk_w = re.search(r"block_w=(\d+)", value_str)
+        inplace = re.search(r"inplace=(\d+)", value_str)
+        if not grid_m or not sub_w or not blk_h or not blk_w:
+            return None
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+            subblock_w=int(sub_w.group(1)),
+            block_h=int(blk_h.group(1)),
+            block_w=int(blk_w.group(1)),
+            inplace=bool(int(inplace.group(1))) if inplace else False,
+        )
+
+    if "LayerNormDefaultProgramConfig" in value_str:
+        return ttnn.LayerNormDefaultProgramConfig()
+
+    if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
+        grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        sub_w = re.search(r"subblock_w=(\d+)", value_str)
+        blk_h = re.search(r"block_h=(\d+)", value_str)
+        blk_w = re.search(r"block_w=(\d+)", value_str)
+        if not grid_m or not sub_w or not blk_h or not blk_w:
+            return None
+        return ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+            subblock_w=int(sub_w.group(1)),
+            block_h=int(blk_h.group(1)),
+            block_w=int(blk_w.group(1)),
+        )
+
+    if "SoftmaxDefaultProgramConfig" in value_str:
+        return ttnn.SoftmaxDefaultProgramConfig()
+
+    return None
+
+
+def _build_program_config_by_type(type_name: str, cfg: dict):
+    """Build a program config object using the explicit type name."""
+    fused_activation = cfg.get("fused_activation")
+    if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
+        fused_activation = None
+
+    grid = cfg.get("compute_with_storage_grid_size")
+    core_coord = None
+    if grid and isinstance(grid, dict):
+        core_coord = ttnn.CoreCoord(int(grid["x"]), int(grid["y"]))
+
+    try:
+        if type_name == "MatmulMultiCoreReuseMultiCastProgramConfig":
+            kwargs = dict(
+                compute_with_storage_grid_size=core_coord,
+                in0_block_w=int(cfg["in0_block_w"]),
+                out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+                out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                transpose_mcast=bool(cfg.get("transpose_mcast", False)),
+                fused_activation=fused_activation,
+            )
+            if cfg.get("out_block_h") is not None:
+                kwargs["out_block_h"] = int(cfg["out_block_h"])
+            if cfg.get("out_block_w") is not None:
+                kwargs["out_block_w"] = int(cfg["out_block_w"])
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+
+        if type_name == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
+            kwargs = dict(
+                compute_with_storage_grid_size=core_coord,
+                in0_block_w=int(cfg["in0_block_w"]),
+                out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+                out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                fuse_batch=bool(cfg.get("fuse_batch", True)),
+                mcast_in0=bool(cfg.get("mcast_in0", True)),
+                fused_activation=fused_activation,
+            )
+            if cfg.get("out_block_h") is not None:
+                kwargs["out_block_h"] = int(cfg["out_block_h"])
+            if cfg.get("out_block_w") is not None:
+                kwargs["out_block_w"] = int(cfg["out_block_w"])
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
+
+        if type_name == "MatmulMultiCoreReuseProgramConfig":
+            return ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=core_coord,
+                in0_block_w=int(cfg["in0_block_w"]),
+                out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+                out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+            )
+
+        if type_name == "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig":
+            return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=int(cfg["in0_block_w"]),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                fused_activation=fused_activation,
+            )
+
+        if type_name == "MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig":
+            return ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+                in0_block_w=int(cfg["in0_block_w"]),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                fused_activation=fused_activation,
+            )
+
+        if type_name == "SDPAProgramConfig":
+            # Structured format: {"compute_grid": [8, 8], "q_chunk_size": 64, ...}
+            grid_val = cfg.get("compute_grid") or cfg.get("compute_with_storage_grid_size")
+            if isinstance(grid_val, list) and len(grid_val) == 2:
+                grid_coord = ttnn.CoreCoord(int(grid_val[0]), int(grid_val[1]))
+            elif isinstance(grid_val, dict):
+                grid_coord = ttnn.CoreCoord(int(grid_val["x"]), int(grid_val["y"]))
+            else:
+                return None
+            exp_val = cfg.get("exp_approx_mode", False)
+            if isinstance(exp_val, str):
+                exp_val = exp_val.lower() not in ("false", "0")
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid_coord,
+                q_chunk_size=int(cfg["q_chunk_size"]),
+                k_chunk_size=int(cfg["k_chunk_size"]),
+                exp_approx_mode=bool(exp_val),
+            )
+
+        if type_name == "LayerNormShardedMultiCoreProgramConfig":
+            return ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=core_coord,
+                subblock_w=int(cfg["subblock_w"]),
+                block_h=int(cfg["block_h"]),
+                block_w=int(cfg["block_w"]),
+                inplace=bool(int(cfg.get("inplace", 0))),
+            )
+
+        if type_name == "LayerNormDefaultProgramConfig":
+            return ttnn.LayerNormDefaultProgramConfig()
+
+        if type_name == "SoftmaxShardedMultiCoreProgramConfig":
+            return ttnn.SoftmaxShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=core_coord,
+                subblock_w=int(cfg["subblock_w"]),
+                block_h=int(cfg["block_h"]),
+                block_w=int(cfg["block_w"]),
+            )
+
+        if type_name == "SoftmaxDefaultProgramConfig":
+            return ttnn.SoftmaxDefaultProgramConfig()
+
+    except Exception as e:
+        logger.warning(f"Failed to build {type_name}: {e}")
+        return None
+
+    # Unknown type — fall back to heuristic
+    return _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_memory_config=None)
+
+
+def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_memory_config=None):
+    """Legacy heuristic: infer matmul program config type from dict keys."""
     required_keys = {"in0_block_w", "per_core_M", "per_core_N"}
     if not required_keys.issubset(cfg.keys()):
         return None
@@ -1023,10 +1220,34 @@ class MasterConfigLoader:
             return parse_layout(repr_str)
 
         if enum_type == "Topology":
-            enum_value = value.get("value", "")
-            if "Ring" in str(enum_value):
+            repr_str = value.get("repr", value.get("value", ""))
+            if "Ring" in str(repr_str):
                 return ttnn.Topology.Ring
             return ttnn.Topology.Linear
+
+        if enum_type == "SigmoidMode":
+            repr_str = value.get("repr", "")
+            if "AccurateWithFastExp" in repr_str:
+                return ttnn.SigmoidMode.AccurateWithFastExp
+            if "Accurate" in repr_str:
+                return ttnn.SigmoidMode.Accurate
+            return ttnn.SigmoidMode.Fast
+
+        if enum_type == "TensorMemoryLayout":
+            repr_str = value.get("repr", "")
+            if "HEIGHT_SHARDED" in repr_str:
+                return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if "WIDTH_SHARDED" in repr_str:
+                return ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            if "BLOCK_SHARDED" in repr_str:
+                return ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            return ttnn.TensorMemoryLayout.INTERLEAVED
+
+        if enum_type == "ShardOrientation":
+            repr_str = value.get("repr", "")
+            if "COL_MAJOR" in repr_str:
+                return ttnn.ShardOrientation.COL_MAJOR
+            return ttnn.ShardOrientation.ROW_MAJOR
 
         # CoreGrid, compute_kernel_config, program_config, etc. stay as dicts
         # so they survive JSON serialization. The sweep test's run() converts them.
