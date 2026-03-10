@@ -635,7 +635,15 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_reader.cpp",
                 local_copy_cores,
                 local_reader_cfg);
-            SetCommonRuntimeArgs(program, local_reader_kernel_id, {input_buffer->address(), output_buffer->address()});
+            SetCommonRuntimeArgs(
+                program,
+                local_reader_kernel_id,
+                {input_buffer->address(),    // CRTA[0]
+                 output_buffer->address(),   // CRTA[1] (unused by reader, reserved for consistency)
+                 0u,                         // CRTA[2]: stick_start_id (always 0)
+                 input_halo_dim_size,        // CRTA[3]
+                 num_sticks_per_halo_dim,    // CRTA[4]: num_sticks_to_read
+                 num_sticks_per_halo_dim});  // CRTA[5]: num_sticks_per_halo_dim
 
             // Create consolidated local copy writer kernel (uniform compile args)
             auto local_writer_cfg = WriterDataMovementConfig{};
@@ -646,10 +654,30 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_writer.cpp",
                 local_copy_cores,
                 local_writer_cfg);
-            SetCommonRuntimeArgs(
-                program,
-                local_writer_kernel_id,
-                {input_buffer->address(), output_buffer->address(), operation_attributes.barrier_semaphore.address()});
+            // Local writer CRTAs: addresses (changing) + shape/config params + Phase 2 targets (static)
+            std::vector<uint32_t> local_writer_crta = {
+                input_buffer->address(),                           // CRTA[0] (unused by writer, reserved)
+                output_buffer->address(),                          // CRTA[1]
+                operation_attributes.barrier_semaphore.address(),  // CRTA[2]
+                writer_stick_start_id,                             // CRTA[3]
+                input_halo_dim_size,                               // CRTA[4]
+                output_halo_dim_size,                              // CRTA[5]
+                operation_attributes.padding_left,                 // CRTA[6]
+                writer_num_sticks_to_read,                         // CRTA[7]
+                output_num_sticks_per_halo_dim,                    // CRTA[8]
+                is_2d ? num_w_fabric_cores : 0u};                  // CRTA[9]: num_phase2_signal_targets
+            // Phase 2 signal targets (x,y) × 8 — CRTA[10..25]
+            constexpr uint32_t LOCAL_MAX_PHASE2_SIGNAL_TARGETS = 8;
+            for (uint32_t s = 0; s < LOCAL_MAX_PHASE2_SIGNAL_TARGETS; s++) {
+                if (is_2d && s < num_w_fabric_cores) {
+                    local_writer_crta.push_back(w_fabric_virtual_cores[s].x);
+                    local_writer_crta.push_back(w_fabric_virtual_cores[s].y);
+                } else {
+                    local_writer_crta.push_back(0);
+                    local_writer_crta.push_back(0);
+                }
+            }
+            SetCommonRuntimeArgs(program, local_writer_kernel_id, local_writer_crta);
 
             // Distribute work evenly across local-copy cores and set per-core runtime args
             std::vector<CoreCoord> local_cores = corerange_to_cores(local_copy_cores, std::nullopt, /*row_wise=*/true);
@@ -669,42 +697,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 const CoreCoord& logical_core = local_cores[i];
                 local_copy_core_coords.push_back(logical_core);
 
-                // Reader runtime args (addresses in CRTAs, not here)
-                std::vector<uint32_t> local_reader_rt_args = {
-                    unit_offset,  // total_rows_start
-                    0u,           // stick_start_id
-                    input_halo_dim_size,
-                    units_for_core,           // rows_count
-                    num_sticks_per_halo_dim,  // num_sticks_to_read
-                    num_sticks_per_halo_dim,
-                };
-                SetRuntimeArgs(program, local_reader_kernel_id, {logical_core}, local_reader_rt_args);
-
-                // Writer runtime args (addresses in CRTAs, not here)
-                std::vector<uint32_t> local_writer_rt_args = {
-                    unit_offset,            // total_rows_start
-                    writer_stick_start_id,  // pad2_left for 2D, 0 for 1D
-                    input_halo_dim_size,
-                    output_halo_dim_size,
-                    units_for_core,  // rows_count
-                    operation_attributes.padding_left,
-                    writer_num_sticks_to_read,        // original W sticks per row
-                    output_num_sticks_per_halo_dim};  // W+2pW for 2D, W for 1D
-                // Phase 2 signal targets (W fabric reader cores for 2D padding)
-                // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
-                // sem_addr omitted — kernel reads barrier_sem from CRTA[2]
-                constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
-                local_writer_rt_args.push_back(is_2d ? num_w_fabric_cores : 0);
-                for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS; s++) {
-                    if (is_2d && s < num_w_fabric_cores) {
-                        local_writer_rt_args.push_back(w_fabric_virtual_cores[s].x);
-                        local_writer_rt_args.push_back(w_fabric_virtual_cores[s].y);
-                    } else {
-                        local_writer_rt_args.push_back(0);
-                        local_writer_rt_args.push_back(0);
-                    }
-                }
-                SetRuntimeArgs(program, local_writer_kernel_id, {logical_core}, local_writer_rt_args);
+                // Per-core unique args: only work distribution (shape/config/targets all in CRTAs)
+                SetRuntimeArgs(program, local_reader_kernel_id, {logical_core}, {unit_offset, units_for_core});
+                SetRuntimeArgs(program, local_writer_kernel_id, {logical_core}, {unit_offset, units_for_core});
 
                 unit_offset += units_for_core;
             }
