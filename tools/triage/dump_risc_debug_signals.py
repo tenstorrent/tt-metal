@@ -8,8 +8,8 @@ Usage:
     dump_risc_debug_signals [--path=<path>]
 
 Description:
-    Collects debug bus signal groups for blocks that contain broken RISC cores (as identified by
-    run_checks). All collected data is written to a single JSON file.
+    Collects debug bus signal groups for blocks that contain broken RISC cores (as identified
+    during triage). Runs through run_checks. All collected data is written to a single JSON file.
 
 Owner:
     adjordjevic-TT
@@ -26,6 +26,7 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
+from ttexalens.device import Device
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 script_config = ScriptConfig(
@@ -93,11 +94,11 @@ def run(args, context: Context):
     elfs_cache = get_elfs_cache(args, context)
 
     all_debug_bus_data = defaultdict(dict)
-
     session = get_triage_session()
-    for device in run_checks.devices:
-        if session.is_device_broken(device) or not session.is_device_in_broken_cores(device):
-            continue
+
+    def check_device(device: Device) -> None:
+        if not session.is_device_in_broken_cores(device):
+            return None
 
         broken_cores = session.get_device_broken_cores(device)
 
@@ -114,6 +115,9 @@ def run(args, context: Context):
             if block_type not in all_debug_bus_data[f"Device {device.id}"]:
                 all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
             all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = result
+        return None
+
+    run_checks.run_per_device_check(check_device)
 
     if all_debug_bus_data:
         output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"

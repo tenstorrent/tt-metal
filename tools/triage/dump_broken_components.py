@@ -11,22 +11,23 @@ Options:
     --user-view      Draws broken cores instead of listing them. Broken cores are marked with an 'x' others are marked with a '-'.
 
 Description:
-    This script prints a summary of broken devices and cores detected during triage.
-    It relies on run_checks having already identified all broken components.
+    Verifies that cores halted by triage are still halted and prints a summary of
+    broken devices and cores. It relies on run_checks to identify all broken components.
 
 Owner:
     adjordjevic-TT
 """
 
+from collections import defaultdict
 from dataclasses import dataclass
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.device import Device
 
 from run_checks import run as get_run_checks, RunChecks
-from triage import ScriptConfig, run_script, triage_field, collection_serializer, ScriptPriority
+from triage import ScriptConfig, run_script, triage_field, collection_serializer, ScriptPriority, log_warning
 from triage_session import BrokenCore, get_triage_session
-import utils
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks"],
@@ -94,7 +95,7 @@ def collect_device_health_summary(run_checks: RunChecks) -> list[DeviceHealthSum
     return device_health_summaries if len(device_health_summaries) > 0 else None
 
 
-def verify_halted_cores() -> None:
+def verify_halted_cores(run_checks: RunChecks) -> None:
     """Verify that cores halted by triage are still halted.
 
     If a core was halted by us but is no longer halted, it was broken during
@@ -102,29 +103,40 @@ def verify_halted_cores() -> None:
     cannot have been continued intentionally).
     """
     session = get_triage_session()
+
+    halted_by_device: dict[Device, list[tuple[OnChipCoordinate, str]]] = defaultdict(list)
     for location, risc_name in session.halted_cores:
-        device = location.device
-        if session.is_device_broken(device):
-            continue
-        try:
-            risc_debug = location.noc_block.get_risc_debug(risc_name)
-            if not risc_debug.is_halted():
-                utils.WARN(
-                    f"Core {risc_name} at {location.to_user_str()} on device {device.id} "
-                    f"was halted by triage but is no longer halted — core was broken during triage."
+        halted_by_device[location.device].append((location, risc_name))
+
+    def check_device(device: Device) -> None:
+        if device not in halted_by_device:
+            return None
+        for location, risc_name in halted_by_device[device]:
+            try:
+                risc_debug = location.noc_block.get_risc_debug(risc_name)
+                if not risc_debug.is_halted():
+                    log_warning(
+                        f"Core {risc_name} at {location.to_user_str()} on device {device.id} "
+                        f"was halted by triage but is no longer halted — core was broken during triage."
+                    )
+                    session.add_broken_core(device, BrokenCore(location, risc_name))
+            except TimeoutDeviceRegisterError:
+                raise  # Let run_per_device_check handle this
+            except Exception as e:
+                log_warning(
+                    f"Failed to verify halted state of {risc_name} at {location.to_user_str()} on device {device.id}: {e}"
                 )
                 session.add_broken_core(device, BrokenCore(location, risc_name))
-        except Exception as e:
-            utils.WARN(
-                f"Failed to verify halted state of {risc_name} at {location.to_user_str()} on device {device.id}: {e}"
-            )
+        return None
+
+    run_checks.run_per_device_check(check_device)
 
 
 def run(args, context: Context):
     global _USER_VIEW
     _USER_VIEW = bool(args["--user-view"])
     run_checks = get_run_checks(args, context)
-    verify_halted_cores()
+    verify_halted_cores(run_checks)
     return collect_device_health_summary(run_checks)
 
 
