@@ -27,6 +27,7 @@ set -euo pipefail
 
 DEFAULT_RUNS=1
 DEFAULT_BASE_DIR="/localdev/${USER}"
+MONITOR_INTERVAL=30  # seconds between progress updates
 
 # --- Parse arguments ---
 PROMPT_PATH=""
@@ -41,10 +42,11 @@ show_usage() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --runs)      NUM_RUNS="$2"; shift 2 ;;
-        --base-dir)  BASE_DIR="$2"; shift 2 ;;
-        -h|--help)   show_usage ;;
-        -*)          echo "Unknown option: $1" >&2; show_usage ;;
+        --runs)              NUM_RUNS="$2"; shift 2 ;;
+        --base-dir)          BASE_DIR="$2"; shift 2 ;;
+        --monitor-interval)  MONITOR_INTERVAL="$2"; shift 2 ;;
+        -h|--help)           show_usage ;;
+        -*)                  echo "Unknown option: $1" >&2; show_usage ;;
         *)
             if [[ -z "$PROMPT_PATH" ]]; then
                 PROMPT_PATH="$1"; shift
@@ -106,6 +108,118 @@ echo "Session:   $SESSION_DIR"
 echo "Results:   $RESULTS_DIR"
 echo "=========================="
 echo ""
+
+# --- Progress monitor ---
+MONITOR_PID=""
+
+format_elapsed() {
+    local secs="$1"
+    printf "%dm%02ds" $((secs / 60)) $((secs % 60))
+}
+
+# Detect the pipeline phase from the latest git commit message in a clone
+detect_phase() {
+    local clone_dir="$1"
+    if [[ ! -d "$clone_dir/.git" ]]; then
+        echo "cloning"
+        return
+    fi
+
+    local last_msg
+    last_msg="$(git -C "$clone_dir" log --oneline -1 2>/dev/null | sed 's/^[a-f0-9]* //')"
+
+    # Check build/venv sentinels
+    local build_done=false venv_done=false
+    [[ -f "$clone_dir/.build_complete" ]] && build_done=true
+    [[ -f "$clone_dir/.venv_complete" ]] && venv_done=true
+
+    case "$last_msg" in
+        *"[ttnn-self-reflection]"*)    echo "self-reflection" ;;
+        *"[create-op] report:"*)       echo "reporting" ;;
+        *"[ttnn-kernel-writer-tdd]"*)
+            local stage
+            stage="$(echo "$last_msg" | grep -oP 'stage \K[^:]+' || echo "?")"
+            echo "tdd: $stage"
+            ;;
+        *"[ttnn-generic-op-builder]"*) echo "building stubs" ;;
+        *"[ttnn-operation-architect]"*) echo "designing" ;;
+        *"[ttnn-operation-analyzer]"*)  echo "analyzing" ;;
+        *)
+            if [[ "$build_done" == false ]]; then
+                echo "building metal"
+            else
+                echo "running claude"
+            fi
+            ;;
+    esac
+}
+
+# Runs in background. Polls all known runs every MONITOR_INTERVAL seconds.
+# Args: prompt_names_csv num_runs session_dir results_dir starting_commit
+monitor_progress() {
+    local prompt_names_csv="$1"
+    local num_runs="$2"
+    local session_dir="$3"
+    local results_dir="$4"
+    local starting_commit="$5"
+    local start_epoch
+    start_epoch="$(date +%s)"
+
+    IFS=',' read -ra prompt_names <<< "$prompt_names_csv"
+
+    while true; do
+        sleep "$MONITOR_INTERVAL"
+
+        local now
+        now="$(date +%s)"
+        local total_elapsed=$(( now - start_epoch ))
+
+        local active=0 done=0
+        local lines=()
+
+        for pname in "${prompt_names[@]}"; do
+            for run in $(seq 1 "$num_runs"); do
+                local label="${pname}:${run}"
+                local clone_dir="${session_dir}/clones/${pname}_run${run}/tt-metal"
+                local log_dir="${results_dir}/${pname}/run_${run}"
+
+                # Check if this run finished (result.txt exists)
+                if [[ -f "${log_dir}/result.txt" ]]; then
+                    local result
+                    result="$(cat "${log_dir}/result.txt")"
+                    lines+=("$(printf "  %-25s DONE  |  %s" "[$label]" "$result")")
+                    done=$((done + 1))
+                    continue
+                fi
+                active=$((active + 1))
+
+                local phase
+                phase="$(detect_phase "$clone_dir")"
+
+                # Count git commits beyond the starting branch
+                local commits=0
+                if [[ -d "$clone_dir/.git" ]]; then
+                    commits="$(git -C "$clone_dir" rev-list --count HEAD ^"$starting_commit" 2>/dev/null || echo 0)"
+                fi
+
+                lines+=("$(printf "  %-25s ....  |  phase: %-20s  |  commits: %d" "[$label]" "$phase" "$commits")")
+            done
+        done
+
+        echo ""
+        local total=$(( active + done ))
+        echo "--- Progress ($(format_elapsed $total_elapsed) elapsed) | active: ${active}, done: ${done}/${total} ---"
+        for line in "${lines[@]}"; do
+            echo "$line"
+        done
+        echo "---"
+
+        # Stop if no active runs remain
+        if [[ $active -eq 0 ]]; then
+            break
+        fi
+    done
+}
 
 run_golden_tests() {
     # Run golden tests for a prompt inside the clone's subshell.
@@ -345,6 +459,16 @@ WRAPPER
         echo "[${prompt_name}:${run_id}] WARNING: DB ingest failed" >&2
 }
 
+# --- Build prompt names CSV for monitor ---
+PROMPT_NAMES_CSV=""
+for pf in "${PROMPT_FILES[@]}"; do
+    pname="$(basename "$pf" .txt)"
+    if [[ -n "$PROMPT_NAMES_CSV" ]]; then
+        PROMPT_NAMES_CSV+=","
+    fi
+    PROMPT_NAMES_CSV+="$pname"
+done
+
 # --- Launch all runs in parallel ---
 PIDS=()
 for prompt_file in "${PROMPT_FILES[@]}"; do
@@ -355,12 +479,23 @@ for prompt_file in "${PROMPT_FILES[@]}"; do
 done
 
 echo "Launched ${#PIDS[@]} parallel runs. Waiting for all to complete..."
+echo "Progress updates every ${MONITOR_INTERVAL}s (--monitor-interval to change)"
 echo ""
+
+# Start background progress monitor
+monitor_progress "$PROMPT_NAMES_CSV" "$NUM_RUNS" "$SESSION_DIR" "$RESULTS_DIR" "$STARTING_COMMIT" &
+MONITOR_PID=$!
 
 # Wait for all background jobs
 for pid in "${PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
 done
+
+# Stop the progress monitor (it may have already exited on its own)
+if [[ -n "$MONITOR_PID" ]]; then
+    kill "$MONITOR_PID" 2>/dev/null || true
+    wait "$MONITOR_PID" 2>/dev/null || true
+fi
 
 # --- Collect results from files ---
 PASS_COUNT=0
