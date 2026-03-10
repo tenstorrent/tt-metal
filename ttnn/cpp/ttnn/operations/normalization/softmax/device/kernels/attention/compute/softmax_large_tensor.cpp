@@ -364,11 +364,9 @@ void kernel_main() {
     experimental::CircularBuffer cb_fused_attn_obj(cb_fused_attn);
     experimental::CircularBuffer cb_exps_obj(cb_exps);
     experimental::CircularBuffer cb_scale_mask_obj(cb_scale_mask);
-    experimental::CircularBuffer cb_sumexps_obj(cb_sumexps);
     experimental::CircularBuffer cb_prev_reduce_obj(cb_prev_reduce);
     experimental::CircularBuffer cb_in0_obj(cb_in0);
     experimental::CircularBuffer cb_out0_obj(cb_out0);
-    experimental::CircularBuffer cb_max_obj(cb_max);
     experimental::CircularBuffer cb_x_obj(cb_x);
     experimental::CircularBuffer cb_recip_obj(cb_recip);
     experimental::CircularBuffer cb_prev_max_obj(cb_prev_max);
@@ -432,7 +430,7 @@ void kernel_main() {
         cur_cb_length_t = cb_length_t;
 #endif
 #ifdef NUMERIC_STABLE
-        cb_max_obj.wait_front(1);
+        experimental::CircularBuffer(cb_max).wait_front(1);
 #endif
 
         /*
@@ -479,7 +477,7 @@ void kernel_main() {
          * --------------------------------------------------------
          * --------------------------------------------------------
          */
-        cb_sumexps_obj.wait_front(1);
+        experimental::CircularBuffer(cb_sumexps).wait_front(1);
 
         reconfig_data_format_srca(cb_sumexps);
         pack_reconfig_data_format(cb_sumexps, cb_recip);
@@ -487,7 +485,7 @@ void kernel_main() {
         copy_tile_init(cb_sumexps);
         copy_tile(cb_sumexps, 0, dst0);
 
-        cb_sumexps_obj.pop_front(1);
+        experimental::CircularBuffer(cb_sumexps).pop_front(1);
 
         recip_tile_init();
         recip_tile(dst0);
@@ -535,7 +533,7 @@ void kernel_main() {
         }
         cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
-        cb_max_obj.pop_front(1);
+        experimental::CircularBuffer(cb_max).pop_front(1);
 #endif
     }
     cb_mask_padded_obj.pop_front(1);
