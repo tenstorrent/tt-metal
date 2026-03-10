@@ -229,7 +229,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool clear_src = true>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -250,6 +250,12 @@ inline void _llk_unpack_AB_custom_mm_(
     // Wait for all contexts to be free
     wait_for_next_context(1);
     reset_config_context();
+
+    if constexpr (clear_src) {
+        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
+        // This particular instruction clears both banks after waiting for both of them to be free
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+    }
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);
 }
