@@ -121,7 +121,7 @@ void kernel_main() {
     noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
         neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
 
-    tt::data_movement::common::print_bf16_pages(get_read_ptr(cb_s2c_in), 1024, 90);
+    // tt::data_movement::common::print_bf16_pages(get_read_ptr(cb_s2c_in), 1024, 90);
 
     //-------------------------------------------------------------------------
     // Expert loop

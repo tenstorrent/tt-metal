@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
 
@@ -17,6 +18,16 @@
 #include "swiglu_sfpu.h"
 #endif
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -41,8 +52,7 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_debug = tt::CBIndex::c_5;
-    constexpr auto cb_debug2 = tt::CBIndex::c_6;
+    constexpr auto cb_c2c_ones_tile = tt::CBIndex::c_5;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
@@ -105,6 +115,18 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
+    tile_regs_acquire();
+
+    fill_tile_init();
+    constexpr uint32_t dst0 = 0;
+    fill_tile(dst0, 1.f);
+
+    tile_regs_commit();
+    tile_regs_wait();
+    cb_reserve_back(cb_c2c_ones_tile, 1);
+    pack_tile(dst0, cb_c2c_ones_tile);
+    tile_regs_release();
+    cb_push_back(cb_c2c_ones_tile, 1);
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
@@ -141,44 +163,43 @@ void kernel_main() {
             // clean up 13 later 91/7 = 13
             for (uint32_t block_id = 0; block_id < 13; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                cb_push_back(cb_debug, 1);
-                cb_reserve_back(cb_debug, 1);
-                cb_wait_front(cb_debug, 1);
-                cb_pop_front(cb_debug, 1);
-                // DPRINT << "new block "<< block_id << ENDL();
+                // if(block_id == 0){
+                //     UNPACK(DPRINT << "dram_bank_id: " << dram_bank_id << ENDL());
+                //     UNPACK(DPRINT << "tile_id: " << tile_id << ENDL());
+                //     UNPACK(print_full_tile(cb_r2c_w0_w1, 0, true));
+                //     UNPACK(print_full_tile(cb_r2c_w0_w1, 2, true));
+                // }
+                uint32_t last_k_index = 0;
                 for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                    // DPRINT <<"k dim: " << k_tracker <<ENDL();
-
-                    // UNPACK(tt::compute::common::print_full_tile(cb_s2c_in,in0_index , true));
-                    // in0_index++;
-                    // copy_tile_init(cb_s2c_in);
-                    // copy_tile(cb_r2c_w0_w1, k,0);
-                    // // copy_tile_init(cb_r2c_w0_w1);
-                    // copy_tile(cb_r2c_w0_w1, k +1,1);
-                    // copy_tile(cb_s2c_in, in0_index,2);
-                    // DPRINT << "W0: "<<ENDL();
-                    // dprint_tensix_dest_reg(0);
-                    // DPRINT << "W1: "<<ENDL();
-                    // dprint_tensix_dest_reg(1);
-                    // DPRINT << "in: "<<ENDL();
-                    // dprint_tensix_dest_reg(2);
                     if (k_tracker == num_w0_w1_tiles_h) {
+                        last_k_index = k;
                         break;
                     }
+                    matmul_block(
+                        cb_s2c_in,
+                        cb_r2c_w0_w1,
+                        in0_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                    k_tracker++;
+                }
+                if (k_tracker == num_w0_w1_tiles_h) {
+                    // add matmul bias logic here
+
                     // matmul_block(
-                    //     cb_s2c_in,
+                    //     cb_c2c_ones_tile,
                     //     cb_r2c_w0_w1,
-                    //     in0_index++,
-                    //     /*in1_index=*/k,
+                    //     0,
+                    //     /*in1_index=*/last_k_index,
                     //     /*idst=*/0,
                     //     /*transpose=*/false,
                     //     /*ct_dim=*/4,
                     //     /*rt_dim=*/1,
                     //     /*kt_dim=*/1);
-                    // k_tracker++;
-                }
-                if (k_tracker == num_w0_w1_tiles_h) {
-                    // add matmul bias logic here
                 }
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
@@ -235,37 +256,48 @@ void kernel_main() {
             // 90/13
             for (uint32_t block_id = 0; block_id < 13; ++block_id) {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-
+                uint32_t last_k_index = 0;
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    // UNPACK(DPRINT << k/4<< ENDL());
+                    // UNPACK(print_full_tile(cb_r2c_w2, k, true));
                     if (k_tracker == num_w0_w1_tiles_h) {
+                        last_k_index = k;
                         break;
                     }
                     if (dm1_tiles_remaining == 0) {
-                        // cb_pop_front(cb_w2c_rdy, 1);
-                        // cb_wait_front(cb_w2c_rdy, 1);
-                        // dm1_tiles_remaining =
-                        // moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step]; in2_buf = (in2_buf
-                        // >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5 in2_offset = in2_buf * tiles_per_step;
-                        // in2_index = in2_offset;
+                        cb_pop_front(cb_w2c_rdy, 1);
+                        cb_wait_front(cb_w2c_rdy, 1);
+                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                        in2_buf = (in2_buf >= 5)
+                                      ? 0
+                                      : in2_buf + 1;  // 6 buffers: cycle 0..5 in2_offset = in2_buf * tiles_per_step;
+                        in2_index = in2_offset;
                     }
-                    // dm1_tiles_remaining--;
-                    DPRINT << "k dim: " << k_tracker << ENDL();
-
-                    UNPACK(tt::compute::common::print_full_tile(cb_r2c_w2, k, true));
+                    dm1_tiles_remaining--;
+                    matmul_block(
+                        cb_s2c_in2,
+                        cb_r2c_w2,
+                        in2_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                    k_tracker++;
+                }
+                if (k_tracker == num_w0_w1_tiles_h) {
+                    // add matmul bias logic here
                     // matmul_block(
-                    //     cb_s2c_in2,
+                    //     cb_c2c_ones_tile,
                     //     cb_r2c_w2,
-                    //     in2_index++,
-                    //     /*in1_index=*/k,
+                    //     0,
+                    //     /*in1_index=*/last_k_index,
                     //     /*idst=*/0,
                     //     /*transpose=*/false,
                     //     /*ct_dim=*/4,
                     //     /*rt_dim=*/1,
                     //     /*kt_dim=*/1);
-                    k_tracker++;
-                }
-                if (k_tracker == num_w0_w1_tiles_h) {
-                    // add matmul bias logic here
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }

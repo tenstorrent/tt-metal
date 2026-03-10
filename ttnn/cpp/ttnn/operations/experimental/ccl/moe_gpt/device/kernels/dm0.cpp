@@ -23,6 +23,17 @@
             (t) = 1;         \
     } while (0)
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -154,17 +165,13 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
-        DPRINT << "w0_w1_blocks_per_expert" << w0_w1_blocks_per_expert << ENDL();
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
-            DPRINT << "READING 0: BLOCK: " << block_id << ENDL();
-            DPRINT << "ADDR 0: " << w0_w1_dram_read_offset << ENDL();
 
             noc_async_read_set_trid(trid_to_issue);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
             w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
-            DPRINT << "ADDR 1: " << w0_w1_dram_read_offset << ENDL();
 
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn, trid_to_issue);
@@ -193,7 +200,7 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         uint32_t w2_dram_read_offset = w2_expert_offset;
 
-        DPRINT << "w2_blocks_per_expert" << w2_blocks_per_expert << ENDL();
+        // DPRINT << "w2_blocks_per_expert" << w2_blocks_per_expert << ENDL();
         for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
             noc_async_read_set_trid(trid_to_issue);

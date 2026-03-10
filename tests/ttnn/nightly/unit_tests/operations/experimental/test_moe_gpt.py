@@ -53,58 +53,56 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, E, M, K)
     """
-    torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
-    indices = torch.arange(K, dtype=torch.bfloat16)
-    indices = indices.view(1, 1, 1, K).expand_as(torch_input)
-    # torch_input = indices.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
-    return torch_input
-
-
-def create_torch_w0(L, E, K, N):
-    """Create torch w0 weight tensor of shape (L, E, K, N)."""
-    temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    indices = torch.arange(K, dtype=torch.bfloat16)
-    # indices[-32:] = -1
-    return indices.view(1, 1, K, 1).expand_as(temp)
+    torch_input = torch.randn((L, E, M, K), dtype=torch.bfloat16) - 0.5
+    return torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
 
 
 def create_torch_b0(L, E, N):
     # Shape: (L, E, 1, 2880) -> (L, E, 32, 2880)
-    bias = torch.rand((L, E, 1, N), dtype=torch.bfloat16)
+    bias = torch.randn((L, E, 1, N), dtype=torch.bfloat16) - 0.5
     bias = torch.nn.functional.pad(bias, (0, 0, 0, 31))  # (L, E, 32, 2880)
     return bias
 
 
 def create_torch_b1(L, E, N):
     # Shape: (L, E, 1, 2880) -> (L, E, 32, 2880)
-    bias = torch.rand((L, E, 1, N), dtype=torch.bfloat16)
+    bias = torch.randn((L, E, 1, N), dtype=torch.bfloat16) - 0.5
     bias = torch.nn.functional.pad(bias, (0, 0, 0, 31))  # (L, E, 32, 2880)
     return bias
 
 
 def create_torch_b2(L, E, N):
     # Shape: (L, E, 1, 2880) -> (L, E, 32, 2880)
-    bias = torch.rand((L, E, 1, N), dtype=torch.bfloat16)
+    bias = -0.5 + torch.randn((L, E, 1, N), dtype=torch.bfloat16)
     bias = torch.nn.functional.pad(bias, (0, 0, 0, 31))  # (L, E, 32, 2880)
     return bias
 
 
+def create_torch_w0(L, E, K, N):
+    """Create torch w0 weight tensor of shape (L, E, K, N)."""
+    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    # indices = torch.arange(N, dtype=torch.bfloat16)
+    # # indices[-32:] = -1
+    # return (indices.view(1, 1, 1, N).expand_as(temp))/8192
+
+
 def create_torch_w1(L, E, K, N):
     """Create torch w1 weight tensor of shape (L, E, K, N)."""
-    # return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    indices = torch.arange(K, dtype=torch.bfloat16)
-    # indices[-32:] = -1
-    return -1 * (indices.view(1, 1, K, 1).expand_as(temp))
+    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    # indices = torch.arange(N, dtype=torch.bfloat16)
+    # # indices[-32:] = -1
+    # return -1 * (indices.view(1, 1, 1, N).expand_as(temp))
 
 
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
-    # return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-    temp = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-    indices = torch.arange(N, dtype=torch.bfloat16)
-    # indices[-32:] = -1
-    return indices.view(1, 1, N, 1).expand_as(temp)
+    return torch.randn((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    # temp = torch.randn((L, E, N, K), dtype=torch.bfloat16) -0.5
+    # indices = torch.arange(N, dtype=torch.bfloat16)
+    # # indices[-32:] = -1
+    # return  indices.view(1, 1, N, 1).expand_as(temp)
 
 
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):
@@ -326,7 +324,9 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
         )
 
         # Output is produced in-place on the input tensor
+        print("post_moe")
         tt_raw_output = ttnn.to_torch(tt_input)
+        print("post_to_torch")
         tt_to_torch_output = prepare_output_tensor(tt_raw_output, E, M, K, ring2cores)
         all_outputs.append(tt_to_torch_output)
 
@@ -356,6 +356,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
             all_accuracy_metrics[(layer_id, expert_id)] = layer_metrics
+            # breakpoint()
 
     if dump_outputs:
         torch.set_printoptions(profile="full")
@@ -364,6 +365,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             torch_w1_output_ref: "torch_w1_output_ref.txt",
             torch_intermediate_ref: "torch_intermediate_ref.txt",
             torch_output_ref: "torch_output_ref.txt",
+            tt_raw_output: "tt_raw_output.txt",
             tt_to_torch_outputs: "tt_output_act.txt",
         }
 
