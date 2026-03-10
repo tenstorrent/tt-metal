@@ -243,16 +243,70 @@ class TtMultiheadAttention:
         v = ttnn.reshape(v, (src_len, bs * self.num_heads, self.head_dim))
         v = ttnn.permute(v, (1, 0, 2))
 
-        # Scaled dot-product attention — all 3D
+        def _attn_matmul_config(m_t, k_t, n_t, grid_x=8, grid_y=8):
+            per_core_m = (m_t + grid_y - 1) // grid_y
+            per_core_n = (n_t + grid_x - 1) // grid_x
+            if per_core_n >= 8:
+                out_subblock_h, out_subblock_w = 1, 8
+            elif per_core_n >= 4:
+                out_subblock_h, out_subblock_w = 1, 4
+            elif per_core_n >= 2:
+                out_subblock_h, out_subblock_w = 1, 2
+            elif per_core_m >= 2:
+                out_subblock_h, out_subblock_w = min(2, per_core_m), 1
+            else:
+                out_subblock_h, out_subblock_w = 1, 1
+            in0_bw = 2 if (k_t >= 2 and k_t % 2 == 0) else 1
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(grid_x, grid_y),
+                in0_block_w=in0_bw,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=per_core_m,
+                per_core_N=per_core_n,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
+
+        tile = 32
+        grid_x, grid_y = 8, 8
+        m_t = (tgt_len + tile - 1) // tile
+        k_qk = (self.head_dim + tile - 1) // tile
+        n_qk = (src_len + tile - 1) // tile
+        k_av = (src_len + tile - 1) // tile
+        n_av = (self.head_dim + tile - 1) // tile
+        attn_qk_config = _attn_matmul_config(m_t, k_qk, n_qk, grid_x, grid_y)
+        attn_av_config = _attn_matmul_config(m_t, k_av, n_av, grid_x, grid_y)
+        hifi4_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
         q_scaled = q * math.sqrt(1.0 / float(self.head_dim))
+        q_scaled = ttnn.to_memory_config(q_scaled, ttnn.L1_MEMORY_CONFIG)
         k_t = ttnn.permute(k, (0, 2, 1))
-        attn_weights = ttnn.matmul(q_scaled, k_t)
+        attn_weights = ttnn.matmul(
+            q_scaled,
+            k_t,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=attn_qk_config,
+            compute_kernel_config=hifi4_cfg,
+        )
 
         if attn_mask is not None:
             attn_weights = attn_weights + attn_mask
 
         attn_weights = ttnn.softmax(attn_weights, dim=-1)
-        attn_out = ttnn.matmul(attn_weights, v)
+        attn_weights = ttnn.to_memory_config(attn_weights, ttnn.L1_MEMORY_CONFIG)
+        attn_out = ttnn.matmul(
+            attn_weights,
+            v,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=attn_av_config,
+            compute_kernel_config=hifi4_cfg,
+        )
 
         # Merge heads: [bs*heads, seq, head_dim] → [seq, bs*heads, head_dim] → [bs*seq, E] → [bs, seq, E]
         attn_out = ttnn.permute(attn_out, (1, 0, 2))
@@ -279,9 +333,9 @@ class TtRefPointHeadMLP:
 
     def __call__(self, x):
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.linear(x, self.w0, bias=self.b0)
+        x = ttnn.linear(x, self.w0, bias=self.b0, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.relu(x)
-        x = ttnn.linear(x, self.w1, bias=self.b1)
+        x = ttnn.linear(x, self.w1, bias=self.b1, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
 
 
@@ -298,7 +352,7 @@ class TtRegBranch:
     def __call__(self, x):
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         for i, layer_params in enumerate(self.layers):
-            x = ttnn.linear(x, layer_params["weight"], bias=layer_params["bias"])
+            x = ttnn.linear(x, layer_params["weight"], bias=layer_params["bias"], memory_config=ttnn.L1_MEMORY_CONFIG)
             if i < len(self.layers) - 1:
                 x = ttnn.relu(x)
         return x
