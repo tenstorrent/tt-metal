@@ -26,5 +26,6 @@ tt::tt_metal::Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<float> pad_value = std::nullopt,
     bool preserve_nan_values = false,
-    bool col_tilize = false);
+    bool col_tilize = false,
+    bool fast_approx = false);
 }  // namespace ttnn

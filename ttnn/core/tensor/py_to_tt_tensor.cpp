@@ -70,7 +70,8 @@ Tensor create_tt_tensor_from_host_data(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<ttnn::QueueId> cq_id,
     ttnn::distributed::MeshDevice* device,
-    bool preserve_nan_values) {
+    bool preserve_nan_values,
+    bool fast_approx) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
@@ -80,7 +81,7 @@ Tensor create_tt_tensor_from_host_data(
             // TensorSpec is built after chunking, so constructing a TensorSpec from the full
             // (pre-shard) shape + sharded memory config would trigger a validation error
             // (e.g. "Number of shards along height 32 must not exceed number of cores 16").
-            const bool must_construct_on_host = (device == nullptr);
+            const bool must_construct_on_host = device == nullptr || !fast_approx;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
@@ -199,7 +200,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<float> pad_value,
     bool preserve_nan_values,
-    bool col_tilize) {
+    bool col_tilize,
+    bool fast_approx) {
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
     }
@@ -273,7 +275,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper,
         cq_id,
         device.value_or(nullptr),
-        preserve_nan_values);
+        preserve_nan_values,
+        fast_approx);
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {

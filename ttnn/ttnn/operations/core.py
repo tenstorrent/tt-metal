@@ -253,6 +253,7 @@ def from_torch(
     cq_id: Optional[int] = None,
     preserve_nan_values: bool = False,
     col_tilize: bool = False,
+    fast_approx: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -283,6 +284,7 @@ def from_torch(
             host data and is unrelated to Tile-level transpose flags (transpose_within_face /
             transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
             Defaults to `False`.
+        fast_approx (bool, optional): If True, use a fast dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -346,6 +348,7 @@ def from_torch(
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
         preserve_nan_values=preserve_nan_values,
         col_tilize=col_tilize,
+        fast_approx=fast_approx,
     )
 
 
