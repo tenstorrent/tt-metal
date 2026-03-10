@@ -124,6 +124,17 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         grid_size.x,
         grid_size.y,
         H);
+    TT_FATAL(
+        Ht % num_virtual_rows == 0,
+        "Height in tiles (Ht={}) must be divisible by num_virtual_rows ({}). "
+        "Remainder tiles would be silently dropped, producing incorrect results. "
+        "core_grid=({},{}), num_virtual_cols={}, rows_per_y={}.",
+        Ht,
+        num_virtual_rows,
+        grid_size.x,
+        grid_size.y,
+        num_virtual_cols,
+        grid_size.x / num_virtual_cols);
 
     uint32_t per_core_Mt_group_1 = Ht / num_virtual_rows;
     uint32_t per_core_M_group_1 = per_core_Mt_group_1 * tile_height;

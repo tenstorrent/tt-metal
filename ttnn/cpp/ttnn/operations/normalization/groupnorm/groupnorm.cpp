@@ -23,12 +23,13 @@ uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t W) {
     return nvc;
 }
 
-// Validates that the requested core grid satisfies the DRAM group-norm constraint:
-//   num_virtual_rows = (grid_x / num_virtual_cols) * grid_y  <=  Ht
+// Validates that the requested core grid satisfies the DRAM group-norm constraints:
+//   1. num_virtual_rows = (grid_x / num_virtual_cols) * grid_y  <=  Ht
+//   2. Ht % num_virtual_rows == 0
 // where Ht is the input height in tiles (NHW / TILE_SIZE).
-// When this is violated the factories compute per_core_Mt == 0 and block_h == 0,
-// leading to division-by-zero in kernels.
-// If the requested grid is too large, this function fatals with an error message
+// Constraint (1) prevents per_core_Mt == 0 (division-by-zero in kernels).
+// Constraint (2) prevents remainder tile rows from being silently dropped.
+// If the requested grid is invalid, this function fatals with an error message
 // that suggests the largest valid grid that fits within the requested bounds.
 void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht, int num_groups) {
     uint32_t nvc = compute_num_virtual_cols(requested.x, num_groups, W);
@@ -36,13 +37,13 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
         uint32_t rows_per_y = requested.x / nvc;
         if (rows_per_y > 0) {
             uint32_t num_virtual_rows = rows_per_y * requested.y;
-            if (Ht >= num_virtual_rows) {
+            if (Ht >= num_virtual_rows && Ht % num_virtual_rows == 0) {
                 return;
             }
         }
     }
 
-    // Grid is too large -- find the largest valid sub-grid to suggest in the error.
+    // Grid is invalid -- find the largest valid sub-grid to suggest in the error.
     uint32_t suggested_x = 0, suggested_y = 0;
     for (uint32_t gx = requested.x; gx >= 1; --gx) {
         uint32_t nvc_inner = compute_num_virtual_cols(gx, num_groups, W);
@@ -53,21 +54,26 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
         if (rows_per_y_inner == 0) {
             continue;
         }
-        uint32_t max_y = Ht / rows_per_y_inner;
-        if (max_y == 0) {
-            continue;
+        uint32_t max_y = std::min<uint32_t>(Ht / rows_per_y_inner, requested.y);
+        for (uint32_t gy = max_y; gy >= 1; --gy) {
+            if (Ht % (rows_per_y_inner * gy) == 0) {
+                suggested_x = gx;
+                suggested_y = gy;
+                break;
+            }
         }
-        suggested_x = gx;
-        suggested_y = std::min<uint32_t>(max_y, requested.y);
-        break;
+        if (suggested_x > 0) {
+            break;
+        }
     }
 
     if (suggested_x > 0) {
         TT_FATAL(
             false,
-            "group_norm: Requested core_grid (x={}, y={}) is too large for the input dimensions "
+            "group_norm: Requested core_grid (x={}, y={}) is invalid for the input dimensions "
             "(Ht={}, W={}, num_groups={}). The grid must satisfy "
-            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht. "
+            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht, and "
+            "Ht must be divisible by num_virtual_rows (otherwise remainder tiles are dropped). "
             "The largest valid grid that fits is (x={}, y={}).",
             requested.x,
             requested.y,

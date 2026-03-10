@@ -284,11 +284,12 @@ def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_gr
                             (num_channels // nvc) % TILE_SIZE == 0  and  num_groups % nvc == 0
         num_virtual_rows  = (grid_x // num_virtual_cols) * grid_y
 
-    The constraint is  num_virtual_rows <= Ht  where Ht = ceil(input_nhw / TILE_SIZE).
-    Violating it causes per_core_Mt == 0 and division-by-zero in the kernels.
+    Constraints:
+        1. num_virtual_rows <= Ht  (otherwise per_core_Mt == 0)
+        2. Ht % num_virtual_rows == 0  (otherwise remainder tile rows are never processed)
 
     This function finds the largest grid (x then y) within the device compute grid
-    that satisfies this constraint.
+    that satisfies these constraints.
 
     Returns: CoreGrid
     """
@@ -307,10 +308,10 @@ def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_gr
         rows_per_y = gx // nvc
         if rows_per_y == 0:
             continue
-        gy = min(Ht // rows_per_y, max_y)
-        if gy == 0:
-            continue
-        return ttnn.CoreGrid(y=gy, x=gx)
+        for gy in range(min(Ht // rows_per_y, max_y), 0, -1):
+            num_virtual_rows = rows_per_y * gy
+            if Ht % num_virtual_rows == 0:
+                return ttnn.CoreGrid(y=gy, x=gx)
 
     raise ValueError(
         f"determine_expected_group_norm_dram_grid_size: Cannot find a valid grid for "
