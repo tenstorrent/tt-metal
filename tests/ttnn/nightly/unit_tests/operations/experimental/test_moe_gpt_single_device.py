@@ -268,9 +268,18 @@ def verify_device_output(
     K,
     total_tokens,
     tokens_per_chunk,
+    height_shard_dim=4,
 ):
     """
     Verify a single device's combine output against the torch reference.
+
+    The combine kernel distributes tokens across height_shard_dim height shards
+    using div_up(active_tokens, height_shard_dim) tokens per shard. This function
+    gathers tokens from all shards before comparing with the reference.
+
+    tt_output_result must be the FULL output tensor {E * total_tokens, K},
+    not just the first height shard.
+
     Returns (passing, per_expert_counts).
     """
     ref_tilized, per_expert_counts = tilize_reference(
@@ -281,6 +290,9 @@ def verify_device_output(
         E,
         tokens_per_chunk,
     )
+
+    shard_rows = E * total_tokens // height_shard_dim
+    expert_rows_per_shard = total_tokens // height_shard_dim  # rows reserved per expert per shard
 
     all_passing = True
     for e in range(E):
@@ -310,15 +322,24 @@ def verify_device_output(
             swiglu_out = swiglu_reference(gate, up)  # [M, N]
             reference = swiglu_out @ torch_w2[0, e]  # [M, K]
 
-        # Extract device result for this expert from output
-        # Each expert occupies M rows: [e*M : (e+1)*M, :]
-        tt_expert_result = tt_output_result[e * M : (e + 1) * M, :]  # [M, K]
+        # Gather tokens from all height shards. The combine kernel distributes
+        # tokens for expert e across height_shard_dim shards:
+        #   max_tph = div_up(active_tokens, height_shard_dim)
+        #   shard k gets tokens [k*max_tph, min((k+1)*max_tph, active_tokens))
+        # Within each shard, expert e's data starts at row e * expert_rows_per_shard.
+        max_tph = (last_chunk_tokens + height_shard_dim - 1) // height_shard_dim
+        expert_base_row = e * expert_rows_per_shard
+        gathered_rows = []
+        for hs in range(height_shard_dim):
+            tok_start = hs * max_tph
+            tok_end = min(tok_start + max_tph, last_chunk_tokens)
+            if tok_start >= last_chunk_tokens:
+                break
+            n_toks = tok_end - tok_start
+            global_row = hs * shard_rows + expert_base_row + (tok_start - hs * max_tph)
+            gathered_rows.append(tt_output_result[global_row : global_row + n_toks, :])
+        tt_expert_result = torch.cat(gathered_rows, dim=0)  # [last_chunk_tokens, K]
 
-        # Compare only the last_chunk_tokens valid rows.  The combine shard may contain
-        # uninitialized L1 data beyond last_chunk_tokens; the reference pads with zeros
-        # for those rows, but the hardware does not guarantee they are zero.
-        # For the single-device test, last_chunk_tokens == M always (full chunks), so
-        # this slice is a no-op there.
         metrics = get_accuracy_metrics(reference[:last_chunk_tokens, :], tt_expert_result[:last_chunk_tokens, :])
         pcc = metrics["pcc"]
         rmse = metrics["relative_rmse"]

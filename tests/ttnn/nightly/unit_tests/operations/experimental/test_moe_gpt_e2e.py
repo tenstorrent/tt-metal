@@ -556,7 +556,7 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     output_per_device = ttnn.get_device_tensors(tt_output)
     all_passing = True
     for dev_idx in range(total_mesh_devices):
-        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)[: E * M, :]
+        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)
         dispatch_sparse_torch = ttnn.to_torch(sparse_per_device[dev_idx]).reshape(-1, hidden_size)
         dispatch_indices_torch = ttnn.to_torch(indices_per_device[dev_idx]).reshape(-1, selected_experts_k)
 
@@ -919,7 +919,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     output_per_device = ttnn.get_device_tensors(tt_output)
     all_passing = True
     for dev_idx in range(total_mesh_devices):
-        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)[: E * M, :]
+        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)
         dispatch_sparse_torch = ttnn.to_torch(sparse_per_device[dev_idx]).reshape(-1, hidden_size)
         dispatch_indices_torch = ttnn.to_torch(indices_per_device[dev_idx]).reshape(-1, selected_experts_k)
 
