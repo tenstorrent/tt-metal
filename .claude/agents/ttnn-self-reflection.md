@@ -60,13 +60,13 @@ Stage progression, pass/fail counts, retry counts.
 ### 1f. Git History (with timestamps)
 Run:
 ```bash
-git log --format="%h %ai [%an] %s" --all -- "{op_path}" "tests/ttnn/unit_tests/operations/{op_name}/"
+git log --format="%h %ai [%an] %s" -- "{op_path}" "tests/ttnn/unit_tests/operations/{op_name}/"
 ```
 This shows the commit progression with timestamps — who did what, when. The `%ai` format gives ISO timestamps for duration calculation.
 
 For detailed changes:
 ```bash
-git log --stat --all -- "{op_path}"
+git log --stat -- "{op_path}"
 ```
 
 ### 1g. Known Pipeline Issues
@@ -98,7 +98,7 @@ If `complete` is missing, use the last breadcrumb entry's timestamp as end time.
 ### Source B: Git Commit Timestamps
 Run:
 ```bash
-git log --format="%h %ai %s" --all -- "{op_path}" "tests/ttnn/unit_tests/operations/{op_name}/"
+git log --format="%h %ai %s" -- "{op_path}" "tests/ttnn/unit_tests/operations/{op_name}/"
 ```
 Each commit has a timestamp and agent name in brackets (e.g., `[ttnn-kernel-writer]`). Use these as a fallback or cross-check.
 
