@@ -39,7 +39,8 @@ using namespace tt::tt_metal::experimental::tt_fabric;
 using namespace tt::tt_fabric;
 
 struct RankBindingConfig {
-    int rank;                // MPI rank (0 to N-1, unique and contiguous)
+    int rank;               // Sequential MPI rank (0 to N-1, unique and contiguous) for rankfile and rank_bindings.yaml
+    int psd_mpi_rank = -1;  // PSD MPI rank from discovery (used for phase2_mock_mapping.yaml lookup)
     int mesh_id;             // Mesh ID this rank belongs to
     int mesh_host_rank = 0;  // Host rank within the mesh (from MeshGraph), defaults to 0
     std::string hostname;    // Physical host for rankfile
@@ -316,9 +317,10 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         std::get<2>(mesh_host_asics[mesh_id_int][hostname]) = mesh_host_rank;
     }
 
-    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank) and sort for canonical ordering
-    // Order: mesh_id, mesh_host_rank, hostname - groups by mesh, then host rank within mesh
-    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int>;
+    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering
+    // Order: PSD rank first (so output rank i matches topology mapper's mpi_rank_to_host[i]),
+    // then mesh_id, mesh_host_rank, hostname - ensures alignment with physical discovery
+    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int, int>;
     std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
         for (const auto& [hostname, asic_data] : hostname_map) {
@@ -326,10 +328,23 @@ std::vector<RankBindingConfig> extract_rank_bindings(
             if (!mesh_host_rank.has_value()) {
                 continue;
             }
-            entries.emplace_back(mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()));
+            uint32_t psd_rank = 0;
+            if (psd.get_host_to_rank_map().contains(hostname)) {
+                psd_rank = psd.get_rank_for_hostname(hostname);
+            } else {
+                log_warning(
+                    tt::LogFabric, "Hostname {} not in PSD host_to_rank map, using 0 for rank ordering", hostname);
+            }
+            entries.emplace_back(
+                mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()), static_cast<int>(psd_rank));
         }
     }
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        // Primary: PSD rank - output rank must match topology mapper's mpi_rank_to_host expectation
+        if (std::get<4>(a) != std::get<4>(b)) {
+            return std::get<4>(a) < std::get<4>(b);
+        }
+        // Secondary: mesh_id, mesh_host_rank, hostname for deterministic ordering
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) < std::get<0>(b);
         }
@@ -344,10 +359,21 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     std::map<std::string, int> host_slot_counters;
 
     for (size_t i = 0; i < entries.size(); ++i) {
-        const auto& [mesh_id, hostname, chip_ids, mesh_host_rank] = entries[i];
+        const auto& [mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank] = entries[i];
 
         RankBindingConfig binding;
-        binding.rank = static_cast<int>(i);
+        // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous.
+        // It must match: (1) the rank in rank_bindings.yaml, and (2) the rank in rankfile.
+        // binding.psd_mpi_rank stores the PSD MPI rank from discovery, used for phase2_mock_mapping.yaml lookup.
+        binding.rank = static_cast<int>(i);  // Sequential rank for rankfile and rank_bindings.yaml
+
+        // Store PSD MPI rank separately for phase2_mock_mapping.yaml lookup
+        if (psd.get_host_to_rank_map().contains(hostname)) {
+            binding.psd_mpi_rank = static_cast<int>(psd.get_rank_for_hostname(hostname));
+        } else {
+            log_warning(
+                tt::LogFabric, "Hostname {} not found in PSD host_to_rank_map, psd_mpi_rank will be -1", hostname);
+        }
         binding.mesh_id = mesh_id;
         binding.mesh_host_rank = mesh_host_rank;
         binding.hostname = hostname;
@@ -389,7 +415,6 @@ void write_rank_bindings_yaml(
         YAML::Node binding_node;
         binding_node["rank"] = binding.rank;
         binding_node["mesh_id"] = binding.mesh_id;
-
         binding_node["mesh_host_rank"] = binding.mesh_host_rank;
 
         if (!binding.env_overrides.empty()) {
@@ -485,8 +510,12 @@ void gather_mock_cluster_desc_paths(
 /**
  * @brief Write phase2_mock_mapping.yaml for Phase 2 mock cluster descriptor binding.
  *
- * Maps each output rank (from rank_bindings) to the cluster descriptor path used during
- * allocation. The mapping is derived from PSD host_to_rank and the gathered mpi_rank paths.
+ * Maps each sequential rank (binding.rank, matches rank_bindings.yaml) to the cluster descriptor
+ * path used during allocation. The cluster descriptor path is looked up using binding.psd_mpi_rank
+ * (the PSD MPI rank from discovery) from the mpi_rank_to_path map.
+ *
+ * Key: sequential rank (matches rank_bindings.yaml and rankfile)
+ * Value: cluster descriptor path (looked up using PSD MPI rank from discovery)
  */
 void write_phase2_mock_mapping_yaml(
     const std::vector<RankBindingConfig>& rank_bindings,
@@ -501,24 +530,26 @@ void write_phase2_mock_mapping_yaml(
     YAML::Node rank_to_desc_node;
 
     for (const auto& binding : rank_bindings) {
-        if (!psd.get_host_to_rank_map().contains(binding.hostname)) {
+        // Use binding.rank (sequential rank) as the key to match rank_bindings.yaml
+        // Use binding.psd_mpi_rank to look up the cluster descriptor path from discovery
+        if (binding.psd_mpi_rank < 0) {
             log_warning(
                 tt::LogFabric,
-                "Hostname {} for output rank {} not in host_to_rank_map, skipping phase2 mock mapping",
-                binding.hostname,
+                "Rank {} has invalid psd_mpi_rank ({}), skipping phase2 mock mapping",
+                binding.rank,
+                binding.psd_mpi_rank);
+            continue;
+        }
+        if (!mpi_rank_to_path.contains(binding.psd_mpi_rank)) {
+            log_warning(
+                tt::LogFabric,
+                "PSD MPI rank {} (for sequential rank {}) has no cluster descriptor path, skipping",
+                binding.psd_mpi_rank,
                 binding.rank);
             continue;
         }
-        uint32_t mpi_rank = psd.get_rank_for_hostname(binding.hostname);
-        if (!mpi_rank_to_path.contains(static_cast<int>(mpi_rank))) {
-            log_warning(
-                tt::LogFabric,
-                "MPI rank {} for output rank {} has no cluster descriptor path, skipping",
-                mpi_rank,
-                binding.rank);
-            continue;
-        }
-        rank_to_desc_node[std::to_string(binding.rank)] = mpi_rank_to_path.at(static_cast<int>(mpi_rank));
+        // Key is sequential rank (matches rank_bindings.yaml), value comes from PSD MPI rank lookup
+        rank_to_desc_node[std::to_string(binding.rank)] = mpi_rank_to_path.at(binding.psd_mpi_rank);
     }
 
     if (rank_to_desc_node.size() == 0) {
@@ -539,7 +570,11 @@ void write_phase2_mock_mapping_yaml(
  * @brief Write MPI rankfile (OpenMPI format)
  *
  * Format: rank N=hostname slot=X
- * Replaces "localhost" with actual hostname. MPI ranks match rank_bindings.
+ * Replaces "localhost" with actual hostname.
+ *
+ * The rank N in the rankfile is binding.rank, which is a sequential MPI rank (0, 1, 2, ...).
+ * It must match: (1) the rank in rank_bindings.yaml, and (2) the rank key in phase2_mock_mapping.yaml.
+ * Entries are sorted by rank to ensure correct MPI rank assignment.
  */
 void write_rankfile(const std::vector<RankBindingConfig>& rank_bindings, const std::string& output_file) {
     std::ofstream out_file(output_file);
@@ -547,7 +582,14 @@ void write_rankfile(const std::vector<RankBindingConfig>& rank_bindings, const s
         throw std::runtime_error("Failed to open rankfile for writing: " + output_file);
     }
 
-    for (const auto& binding : rank_bindings) {
+    // Sort by rank to ensure rankfile entries are in order (MPI expects sequential or ordered ranks)
+    std::vector<RankBindingConfig> sorted_bindings = rank_bindings;
+    std::sort(
+        sorted_bindings.begin(), sorted_bindings.end(), [](const RankBindingConfig& a, const RankBindingConfig& b) {
+            return a.rank < b.rank;
+        });
+
+    for (const auto& binding : sorted_bindings) {
         std::string hostname = get_actual_hostname(binding.hostname);
         out_file << "rank " << binding.rank << "=" << hostname << " slot=" << binding.slot << "\n";
     }
