@@ -123,7 +123,7 @@ def create_torch_expert_mapping_tensor(
     return torch_expert_mapping_tensor
 
 
-def create_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
+def create_torch_dispatch_input_tensor(batch, seq, hidden_size, dtype):
     tokens = []
     for _ in range(batch):
         for _ in range(seq):
@@ -320,7 +320,7 @@ def create_torch_dispatch_input_expert_indices_tensor(
     return expert_indices
 
 
-def create_torch_dispatch_input_export_scores_tensor(batch, seq, selected_experts_k, dtype):
+def create_torch_dispatch_input_expert_scores_tensor(batch, seq, selected_experts_k, dtype):
     # Generate expert scores (same shape as expert_indices)
     # Normalize scores so they sum to 1 per token (softmax-like)
     torch_dispatch_input_expert_scores_tensor = torch.rand(
@@ -776,9 +776,7 @@ def test_optimized_moe_decode_block(
         dispatch_input_expert_indices_dtype = ttnn.uint16
         dispatch_input_expert_scores_dtype = ttnn.bfloat16
 
-        torch_dispatch_input_tensor = create_torch_dispatch_input_tensor(
-            scheme, batch, seq, hidden_size, dispatch_input_dtype
-        )
+        torch_dispatch_input_tensor = create_torch_dispatch_input_tensor(batch, seq, hidden_size, dispatch_input_dtype)
         torch_dispatch_input_expert_indices_tensor = create_torch_dispatch_input_expert_indices_tensor(
             scheme,
             num_devices,
@@ -791,7 +789,7 @@ def test_optimized_moe_decode_block(
             select_experts_k,
             dispatch_input_expert_indices_dtype,
         )
-        torch_dispatch_input_expert_scores_tensor = create_torch_dispatch_input_export_scores_tensor(
+        torch_dispatch_input_expert_scores_tensor = create_torch_dispatch_input_expert_scores_tensor(
             batch, seq, select_experts_k, dispatch_input_expert_scores_dtype
         )
 
@@ -893,10 +891,10 @@ def test_optimized_moe_decode_block(
         dispatch_output_shard_spec,
     )
     dispatch_output_expert_indices_dtype = ttnn.uint16
-    disptach_output_expert_indices_shape = [num_dispatch_devices, total_tokens, select_experts_k]
+    dispatch_output_expert_indices_shape = [num_dispatch_devices, total_tokens, select_experts_k]
     tt_preallocated_dispatch_output_expert_indices = ttnn.from_torch(
         torch.zeros(
-            disptach_output_expert_indices_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_indices_dtype)
+            dispatch_output_expert_indices_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_indices_dtype)
         ),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -912,9 +910,9 @@ def test_optimized_moe_decode_block(
         dispatch_output_shard_spec,
     )
     dispatch_output_expert_scores_dtype = ttnn.bfloat16
-    disptach_output_expert_scores_shape = [num_dispatch_devices, total_tokens, select_experts_k]
+    dispatch_output_expert_scores_shape = [num_dispatch_devices, total_tokens, select_experts_k]
     tt_preallocated_dispatch_output_expert_scores = ttnn.from_torch(
-        torch.zeros(disptach_output_expert_scores_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_scores_dtype)),
+        torch.zeros(dispatch_output_expert_scores_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_scores_dtype)),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=dispatch_output_expert_scores_dtype,
@@ -1032,7 +1030,7 @@ def test_optimized_moe_decode_block(
         (
             tt_compute_output_token_counts,
             tt_compute_output_dense_expert_activation,
-            tt_compute_ouput_dense_e_t,
+            tt_compute_output_dense_e_t,
             _,  # tile layout output of selective tilize (same buffer as output)
             tt_compute_output,
         ) = ttnn.experimental.moe_compute(
@@ -1051,7 +1049,7 @@ def test_optimized_moe_decode_block(
         tt_combine_output = ttnn.experimental.selective_reduce_combine(
             tt_compute_output,
             tt_compute_output_dense_expert_activation,
-            tt_compute_ouput_dense_e_t,
+            tt_compute_output_dense_e_t,
             tt_compute_output_token_counts,
             hidden_size,
             batch,
