@@ -179,11 +179,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Single reduce_scatter on combined output using MoE's config for consistency
             ccl_moe = cfg["moe"]["ccl"]
 
-            if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING:
+            if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,
-                    split_size=int(combined_out.shape[-1] // tp_size),
+                    split_size=combined_out.shape[-1] // tp_size,
                     output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
                 )
                 ttnn.deallocate(combined_out)

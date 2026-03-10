@@ -76,7 +76,7 @@ def run_decode_reduce_scatter_deepseek_impl(
         tt_pre_rs_reduction_output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
             tt_input_tensor_mesh_list[i],
             dim=pre_rs_reduction_dim,
-            split_size=int(pre_rs_reduction_input_shape[-1] / num_devices),
+            split_size=pre_rs_reduction_input_shape[-1] // num_devices,
             output_memory_config=rs_input_memory_config,
         )
 

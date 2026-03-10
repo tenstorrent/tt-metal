@@ -212,10 +212,22 @@ class DeepseekMoEReduceScatterConfig(OpConfigBase):
     ) -> ttnn.MemoryConfig:
         NUM_DECODE_RS_SHARD_CORES = 7
 
+        if hidden_size % tp_size != 0:
+            raise ValueError(
+                f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: hidden_size ({hidden_size}) must be divisible by tp_size ({tp_size})"
+            )
+        slice_size = hidden_size // tp_size
+
+        if slice_size % NUM_DECODE_RS_SHARD_CORES != 0:
+            raise ValueError(
+                f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: slice_size ({slice_size}) must be divisible by number of op worker cores ({NUM_DECODE_RS_SHARD_CORES})"
+            )
+        per_core_shard_width = slice_size // NUM_DECODE_RS_SHARD_CORES
+
         return ttnn.MemoryConfig(
             ttnn.BufferType.L1,
             ttnn.NdShardSpec(
-                ttnn.Shape([1, 1, users_per_row, hidden_size // tp_size // NUM_DECODE_RS_SHARD_CORES]),
+                ttnn.Shape([1, 1, users_per_row, per_core_shard_width]),
                 ttnn.CoreRangeSet(
                     [
                         ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),

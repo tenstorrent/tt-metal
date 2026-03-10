@@ -122,7 +122,6 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
                             ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
                             ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
                             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                            # ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)), # hypothetical final core
                         ]
                     ),
                     ttnn.ShardOrientation.ROW_MAJOR,
