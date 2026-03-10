@@ -17,7 +17,7 @@ def test_hubert_transformer_encoder(device, layer_norm_first):
     torch.manual_seed(0)
 
     args = {
-        "encoder_embed_dim": 64,
+        "encoder_embed_dim": 128,
         "required_seq_len_multiple": 2,
         "conv_pos": 8,
         "conv_pos_groups": 8,
