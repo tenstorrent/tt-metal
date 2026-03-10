@@ -120,7 +120,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
-    num_gate_proj_cores = len(gate_proj_worker_cores)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     # Aggregator is the first worker core (shard_idx == 0)
@@ -173,9 +172,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         logger.info(f"[rank={my_mesh_id}] downstream socket wired to pipeline exit")
 
     # ── MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) ──
-    result_scores = None
-    result_indices = None
-    result_output = None
     r = None
     s = None
 
@@ -361,7 +357,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     if my_mesh_id >= 1:
         logger.info(f"[rank={my_mesh_id}] launching MoE bcast + reduce (num_iterations=1)")
         stage_downstream_socket = downstream_socket
-        result_scores, result_indices, result_output = MoeOp.op(
+        MoeOp.op(
             r.ttnn_residual_mcast_src,
             gate_mm_weights_tensor=r.ttnn_gate_mm_weights,
             gate_bias_tensor=r.ttnn_gate_bias,
