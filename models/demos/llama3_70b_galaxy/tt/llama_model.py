@@ -48,7 +48,9 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
-        self._bitmask_packed_width = (self.vocab_size + 31) // 32
+        self._bitmask_packed_width = self.args.padded_vocab_size // 32
+        if self.args.padded_vocab_size % 32 != 0:
+            raise ValueError("Bitmask application requires padded vocab size to be a multiple of 32")
         self._bitmask_shape = (self.args.max_batch_size, self._bitmask_packed_width)
         self._compute_cq_id = 0
         try:
@@ -722,16 +724,23 @@ class TtTransformer(LightweightModule):
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-        converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32, **op_kwargs)
-        padded_vocab_dim = 131072
-        unpadded_vocab_dim = self.vocab_size
-        padding_size = padded_vocab_dim - unpadded_vocab_dim
-        full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0, **op_kwargs)
-        result = ttnn.where(full_mask, 0, float("-inf"), **op_kwargs)
+        result = ttnn.where(converted_bitmask, 0, float("-inf"))
         return result
 
     def start_bitmask_to_device(self, bitmask):
         target = self._bitmask
+        packed_target = (self.args.padded_vocab_size + 31) // 32
+        packed_in = bitmask.shape[-1]
+        if packed_in < packed_target:
+            pad = torch.full(
+                (bitmask.shape[0], packed_target - packed_in),
+                fill_value=-1,
+                dtype=bitmask.dtype,
+                device=bitmask.device,
+            )
+            bitmask = torch.cat([bitmask, pad], dim=-1)
+        elif packed_in > packed_target:
+            raise ValueError(f"Bitmask has too many packed bits: {packed_in} > {packed_target}")
         bitmask_tt = ttnn.from_torch(
             bitmask,
             device=None,
