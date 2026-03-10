@@ -80,7 +80,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
