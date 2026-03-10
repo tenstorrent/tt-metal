@@ -62,10 +62,10 @@ RingSDPABwKVDeviceOperation::tensor_return_value_t RingSDPABwKVDeviceOperation::
     return {grad_key, grad_value};
 }
 
-tt::stl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         1,  // KV marker (different from Q)
         attrs.ring_size,
         attrs.ring_axis,
