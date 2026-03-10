@@ -6,3 +6,4 @@
 {"ts":"2026-03-10T12:01:32+00:00","event":"start","agent":"ttnn-operation-analyzer","operation":"softmax","input_files":["tt-train/sources/ttml/metal/ops/softmax/device/softmax_program_factory.cpp"]}
 {"event":"files_read","details":"Read program factory, compute kernel, reader kernel, writer kernel, dataflow_utils.hpp, program_utils.hpp, table-templates.md, operation types","ts":"2026-03-10T12:01:37+00:00"}
 {"event":"deepwiki_research","details":"Queried DeepWiki for: tile_regs lifecycle, reduce_tile/reduce_init, broadcast APIs, binary tile ops, mask_tile, exp_tile, recip_tile, fp32_dest_acc_en, mm_init/matmul_tiles, init_sfpu/binary_op_init_common","ts":"2026-03-10T12:02:21+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["analysis"],"final_commit":"9128348cab","ts":"2026-03-10T12:03:02+00:00"}
