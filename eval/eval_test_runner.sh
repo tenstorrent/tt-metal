@@ -20,6 +20,9 @@ set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCK_FILE="/tmp/tt-device.lock"
+DIRTY_FLAG="/tmp/tt-device.dirty"
+TRIAGE_LOG="/tmp/tt-eval-triage-$$.log"
+TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 DISPATCH_TIMEOUT=5
 
 if [[ $# -lt 2 ]]; then
@@ -42,6 +45,14 @@ if [[ -f python_env/bin/activate ]]; then
 fi
 
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
+
+# Triage-on-hang: dispatch layer runs tt-triage when timeout fires.
+# A non-empty triage log is the definitive hang signal (same as tt-test.sh).
+if ! python3 -c "import ttexalens" 2>/dev/null; then
+    echo "EVAL_RUNNER: WARNING: tt-exalens not installed — hang detection via triage unavailable" >&2
+fi
+rm -f "$TRIAGE_LOG"
+export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
 
 # --- Pre-flight: validate API contract (no device needed) ---
 CONTRACT_FILE="${TEST_DIR}/api_contract.md"
@@ -67,27 +78,39 @@ echo "EVAL_RUNNER: Waiting for device lock..." >&2
 flock 9
 echo "EVAL_RUNNER: Device lock acquired" >&2
 
+# --- Check if device needs reset from previous run ---
+if [[ -f "$DIRTY_FLAG" ]]; then
+    echo "EVAL_RUNNER: Device marked dirty from previous run, resetting..." >&2
+    tt-smi -r || echo "EVAL_RUNNER: WARNING - device reset failed" >&2
+    rm -f "$DIRTY_FLAG"
+    sleep 2
+    echo "EVAL_RUNNER: Device reset complete" >&2
+fi
+
+# --- Mark device dirty before running tests ---
+# Pessimistic: assume tests will corrupt the device. If this process is
+# killed (SIGKILL, OOM, etc.), the flag persists and the next runner resets.
+touch "$DIRTY_FLAG"
+
 # --- Run pytest with JUnit XML and hang plugin ---
 echo "EVAL_RUNNER: Running tests in ${TEST_DIR}..." >&2
+PYTEST_EXIT=0
 pytest "${TEST_DIR}" \
     --junitxml="${JUNIT_XML}" \
     -p eval.hang_plugin \
     --tb=short \
     -q \
-    > "${OUTPUT_DIR}/pytest_stdout.log" 2>&1 || true
-
-# Release device lock early (classification doesn't need device)
-exec 9>&-
+    > "${OUTPUT_DIR}/pytest_stdout.log" 2>&1 || PYTEST_EXIT=$?
 
 if [[ ! -f "$JUNIT_XML" ]]; then
-    echo "EVAL_RUNNER: ERROR - No JUnit XML produced" >&2
+    echo "EVAL_RUNNER: ERROR - No JUnit XML produced (pytest exit=$PYTEST_EXIT)" >&2
     echo "PASSED=0 FAILED=0 ERRORS=0 SKIPPED=0 HANGS=0 TOTAL=0" > "$GOLDEN_RESULTS"
     echo "[]" > "$TEST_RESULTS_JSON"
-    exit 1
 fi
 
-# --- Classify failures and produce summary ---
-python3 -c "
+# --- Classify failures and produce summary (if XML exists) ---
+if [[ -f "$JUNIT_XML" ]]; then
+    python3 -c "
 import json, sys
 sys.path.insert(0, '${REPO_DIR}')
 from eval.classify_failures import parse_junit_xml
@@ -108,12 +131,38 @@ with open('${GOLDEN_RESULTS}', 'w') as f:
 
 print(f'EVAL_RUNNER: {passed}/{total} passed ({failed} failed, {errors} errors, {skipped} skipped, {hangs} hangs)', file=sys.stderr)
 "
-
-# --- Reset device if any hang occurred ---
-HANGS="$(grep -oP 'HANGS=\K\d+' "${GOLDEN_RESULTS}" || echo 0)"
-if [[ "$HANGS" -gt 0 ]]; then
-    echo "EVAL_RUNNER: Hang detected, resetting device..." >&2
-    tt-smi -r || echo "EVAL_RUNNER: WARNING - device reset failed" >&2
-    sleep 2
-    echo "EVAL_RUNNER: Device reset complete" >&2
 fi
+
+# --- Hang detection: triage log is the definitive signal ---
+# The dispatch timeout handler runs tt-triage on hang. A non-empty triage
+# log means a hang actually happened (same mechanism as tt-test.sh).
+IS_HANG=false
+if [[ -s "$TRIAGE_LOG" ]]; then
+    IS_HANG=true
+fi
+
+# Kill any orphan child processes (pytest may leave them after a hang).
+# Critical: children inherit fd 9 (flock fd). If orphans survive, exec 9>&-
+# won't release the lock and all subsequent runners deadlock.
+pkill -9 -P $$ 2>/dev/null || true
+
+if [[ "$IS_HANG" == true ]]; then
+    echo "EVAL_RUNNER: Hang detected (triage log produced), resetting device..." >&2
+    if tt-smi -r; then
+        sleep 2
+        rm -f "$DIRTY_FLAG"
+        echo "EVAL_RUNNER: Device reset complete" >&2
+    else
+        echo "EVAL_RUNNER: WARNING - device reset failed, leaving dirty flag" >&2
+    fi
+elif [[ -f "$JUNIT_XML" ]]; then
+    # pytest ran to completion (even if tests failed). Normal test failures
+    # (numerical, signature, import, etc.) don't corrupt the device.
+    rm -f "$DIRTY_FLAG"
+fi
+# else: no XML + no triage = unknown crash. Leave dirty flag for next runner.
+
+rm -f "$TRIAGE_LOG"
+
+# Release device lock AFTER any reset
+exec 9>&-
