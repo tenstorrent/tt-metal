@@ -6,7 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/core.hpp"
@@ -418,7 +417,17 @@ std::vector<CoreCoord> Tensor::get_cores_with_shards() const {
             // If the tensor has an nd_shard_spec, then it has a bufferdistributionspec. Use it.
             return this->buffer()->buffer_distribution_spec().value().cores_with_data();
         }
-        return shard_builder::get_shard_cores(*this);
+
+        const auto& buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
+            this->padded_shape(),
+            Shape({this->shard_spec()->shape[0], this->shard_spec()->shape[1]}),
+            this->tensor_spec().tensor_layout().compute_page_shape(this->tensor_spec().physical_shape()),
+            this->shard_spec()->grid,
+            this->shard_spec()->orientation,
+            this->memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                ? ShardDistributionStrategy::GRID_2D
+                : ShardDistributionStrategy::ROUND_ROBIN_1D);
+        return buffer_dist_spec.cores_with_data();
     }
     log_warning(
         tt::LogTTNN, "Tensor::get_cores_with_shards returning an empty vector because the tensor is not sharded");

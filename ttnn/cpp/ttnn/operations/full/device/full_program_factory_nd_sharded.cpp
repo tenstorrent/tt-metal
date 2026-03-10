@@ -40,7 +40,7 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
             output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
         ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
     } else {
-        ordered_cores_with_data = distribution_spec.cores_with_data();
+        ordered_cores_with_data = output.get_cores_with_shards();
     }
     const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
