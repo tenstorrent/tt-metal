@@ -233,6 +233,9 @@ class SamplingGenerator:
             )
         if isinstance(slot["output"], tuple):
             if tt_out_tok is not None and tt_out_tok is not slot["output"][0]:
+                logger.info(
+                    f"validate trace inputs... tt_out_tok: {tt_out_tok.shape}, slot['output'][0]: {slot['output'][0].shape}"
+                )
                 raise ValueError(
                     "The provided output tensor does not match the tensor used during trace capture. "
                     "Call `reset_trace()` before tracing with new tensors."

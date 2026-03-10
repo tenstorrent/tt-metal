@@ -141,7 +141,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
             logger.info(f"enable_trace for sampling: {enable_trace}")
             self.sampling_generator = SamplingGenerator(
-                args=self.sampling_args, mesh_device=self.mesh_device, tt_ccl=self.ccl, enable_internal_trace=False
+                args=self.sampling_args, mesh_device=self.mesh_device, tt_ccl=self.ccl, enable_internal_trace=True
             )
             # Use default sampling params (top-k=1, top-p=0.0, temperature=1.0) i.e. argmax sampling for device sampling
             self.sampling_params = SamplingParams(
@@ -465,15 +465,17 @@ class DeepseekGenerator(WarmupForwardMixin):
         self, logits: ttnn.Tensor, enable_trace: bool = True, user_slots: list[int] | None = None
     ) -> ttnn.Tensor:
         # Keep sampling trace behavior aligned with the caller's request (reference generator behavior).
-        if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-            self.sampling_generator.enable_internal_trace = bool(enable_trace)
+        # if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+        #     self.sampling_generator.enable_internal_trace = bool(enable_trace)
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         logger.info(f"sampling with enable_trace: {enable_trace}")
         tt_out = self.sampling_generator.sample(logits, enable_trace=enable_trace)
 
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
-            if tt_log_probs is not None:
+            # In internal trace mode, returned tensors may be trace-cached outputs.
+            # Do not deallocate them per call.
+            if tt_log_probs is not None and not enable_trace:
                 ttnn.deallocate(tt_log_probs)
             tt_out = tt_tokens
 
@@ -760,7 +762,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     assert prefill_logits is not None
 
                     if self.sample_on_device:
-                        # Device sampling
+                        # Device sampling for prefill
                         prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
                         # Tracing not supported for prefill (in both case of sampling on device and on host)
                         prefill_logits_sampled_device = self._sample_tokens_device(
@@ -852,8 +854,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                             pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                         )
                         pred_tokens = self._normalize_tokens_1d(pred_tokens, num_of_users)
-                        ttnn.deallocate(decode_logits)
-                        ttnn.deallocate(pred_tokens_device)
+                        # Trace mode reuses decode/sampling output tensors across iterations.
+                        # Keep them alive until generator cleanup.
+                        if not self.enable_trace:
+                            ttnn.deallocate(decode_logits)
+                            ttnn.deallocate(pred_tokens_device)
 
                     else:
                         assert isinstance(decode_logits, torch.Tensor), "decode_logits should be a torch.Tensor on host"
@@ -1088,6 +1093,10 @@ class DeepseekGenerator(WarmupForwardMixin):
     ) -> None:
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
         assert self._trace_id is None, "Trace already captured"
+        if sample_on_device:
+            # Sampling traces cache output tensor identity. When we recapture decode trace,
+            # we also allocate a fresh output buffer, so clear sampling trace metadata first.
+            self.sampling_generator.reset_trace()
 
         # 1) Warm-up compile run (no trace) to keep compilation out of capture
         logger.info("Running warm-up decode step (no trace)...")
@@ -1096,7 +1105,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         decode_logits = self._decode_step(
             init_tokens, positions, page_tables=page_tables, sample_on_device=sample_on_device
         )
-        pred_tokens_device = self._sample_tokens_device(decode_logits, enable_trace=False)
+        if sample_on_device:
+            # No need to save device logits for warm-up.
+            ttnn.deallocate(decode_logits)
+        # pred_tokens_device = self._sample_tokens_device(decode_logits, enable_trace=False)
 
         ttnn.synchronize_device(self.mesh_device)
         if self.signpost:
@@ -1148,12 +1160,25 @@ class DeepseekGenerator(WarmupForwardMixin):
             profile_decode=self.profile_decode,
         )
 
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("model decode trace capture complete.")
         if sample_on_device:
-            _ = self.sampling_generator.sample(self._trace_output, enable_trace=False, tt_out_tok=self.tt_out_tok_buf)
+            logger.info("sampling on device...capture trace")
+            logger.info(f"sampling on device...before capture trace... tt_out_tok_buf: {self.tt_out_tok_buf.shape}")
+            logger.info(f"sampling on device...before capture trace... _trace_output: {self._trace_output.shape}")
+            self.tt_out_tok_buf, self.tt_log_probs = self.sampling_generator.sample(
+                self._trace_output, enable_trace=True
+            )  # , tt_out_tok=self.tt_out_tok_buf)
+            logger.info(f"sampling on device...after capture trace... tt_out_tok_buf: {self.tt_out_tok_buf.shape}")
+            # if self.tt_log_probs is not None:
+            #     logger.info(f"sampling on device...after capture trace... tt_log_probs: {self.tt_log_probs.shape}")
+            # else:
+            #     logger.info("sampling on device...after capture trace... tt_log_probs: None")
             # TODO: increment decode positions device, stop copying to device each iteration
             # self._increment_decode_positions_device()
-
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            logger.info("sampling on device...capture trace complete.")
+        else:
+            logger.info("sampling on host...capture trace not needed.")
         if self.signpost:
             signpost(header="decode_trace_capture")
         logger.info("Decode trace capture complete.")
@@ -1198,6 +1223,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 )
                 return logits.squeeze(0).squeeze(0)
 
+            logger.info("decode_forward... execute trace")
             # Update persistent inputs and execute
             assert (
                 self._trace_tokens is not None
@@ -1242,7 +1268,26 @@ class DeepseekGenerator(WarmupForwardMixin):
             self.ccl.reset_sem_counters()
             if profiler is not None:
                 profiler.start(f"trace_execution_{gen_idx}")
+            logger.info("execute trace... for model decode")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
+            logger.info("execute trace... for model decode complete.")
+
+            if sample_on_device:
+                logger.info("sampling on device...execute trace")
+                logger.info(f"sampling on device...before execute trace... tt_out_tok_buf: {self.tt_out_tok_buf.shape}")
+                logger.info(f"sampling on device...before execute trace... _trace_output: {self._trace_output.shape}")
+                _ = self.sampling_generator.sample(
+                    self._trace_output, enable_trace=True, tt_out_tok=self.tt_out_tok_buf
+                )
+                self._increment_decode_positions_device()
+                logger.info(f"sampling on device...after execute trace... tt_out_tok_buf: {self.tt_out_tok_buf.shape}")
+                # if self.tt_log_probs is not None:
+                #     logger.info(f"sampling on device...after execute trace... tt_log_probs: {self.tt_log_probs.shape}")
+                # else:
+                #     logger.info("sampling on device...after execute trace... tt_log_probs: None")
+                logger.info("sampling on device...execute trace complete.")
+            else:
+                logger.info("sampling on host...execute trace not needed.")
             if profiler is not None:
                 profiler.end(f"trace_execution_{gen_idx}")
                 logger.info(
