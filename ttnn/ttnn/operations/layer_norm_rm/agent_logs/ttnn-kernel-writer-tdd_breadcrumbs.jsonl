@@ -8,3 +8,9 @@
 {"event":"cb_sync_check","stage":"data_pipeline","balanced":true,"cb_summary":"c0:Wt/Wt(reader->tilize) c16:Wt/Wt(tilize->untilize) c17:Wt/Wt(untilize->writer) c8:unused_but_allocated","ts":"2026-03-10T12:34:21+00:00"}
 {"event":"test_run","status":"pass","stage":"data_pipeline","test_file":"test_stage_data_pipeline.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-10T12:34:54+00:00"}
 {"event":"stage_complete","stage":"data_pipeline","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-10T12:35:00+00:00"}
+{"event":"stage_start","stage":"subtract_mean","description":"Add reduce_mean and sub_mean phases. Reader fills scaler CB. Compute: tilize -> reduce_mean -> sub_mean -> untilize centered values from c_25.","ts":"2026-03-10T12:35:38+00:00"}
+{"event":"kernel_implemented","stage":"subtract_mean","kernel":"reader","approach":"Added prepare_reduce_scaler<c_8>(1.0f/W) before main loop for mean reduction scaler","ts":"2026-03-10T12:36:04+00:00"}
+{"event":"kernel_implemented","stage":"subtract_mean","kernel":"compute","approach":"Added Phase 2 reduce_mean (WaitUpfrontNoPop on c_16, SUM REDUCE_ROW) and Phase 3 sub_mean (COL bcast, NoWaitPopAtEnd/WaitUpfrontPopAtEnd). Untilize source changed from c_16 to c_25.","ts":"2026-03-10T12:36:28+00:00"}
+{"event":"cb_sync_check","stage":"subtract_mean","balanced":true,"cb_summary":"c0:Wt/Wt c8:1/persist c16:Wt_push/Wt_pop(NoPop+PopAtEnd) c24:1/1 c25:Wt/Wt c17:Wt/Wt","ts":"2026-03-10T12:36:38+00:00"}
+{"event":"test_run","status":"pass","stage":"subtract_mean","test_file":"test_stage_subtract_mean.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-10T12:37:10+00:00"}
+{"event":"stage_complete","stage":"subtract_mean","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-10T12:37:16+00:00"}

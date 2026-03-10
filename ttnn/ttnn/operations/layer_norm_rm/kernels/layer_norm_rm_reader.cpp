@@ -9,6 +9,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     // Compile-time args
@@ -22,10 +23,15 @@ void kernel_main() {
 
     // Derived constants
     constexpr uint32_t cb_input_rm = 0;             // c_0
+    constexpr uint32_t cb_scaler = 8;               // c_8: reduce scaler (1/W)
     constexpr uint32_t Wt = stick_size / (32 * 2);  // tiles per row = W / 32, element_size=2 for bf16
+    constexpr uint32_t W = stick_size / 2;          // width in elements
 
     // Set up TensorAccessor for input
     const auto input_accessor = TensorAccessor(input_tensor_args, src_addr, stick_size);
+
+    // Fill scaler CB with 1/W for reduce_mean (program lifetime, filled once)
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(1.0f / W);
 
     // Main loop: read blocks of 32 sticks
     uint32_t stick_id = start_stick_id;
