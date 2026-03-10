@@ -9,7 +9,12 @@ import ttnn
 
 import math
 
-from ttnn._ttnn.operations.normalization import create_group_norm_input_mask, create_group_norm_input_negative_mask
+from ttnn._ttnn.operations.normalization import (
+    create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
+    _compute_num_virtual_cols,
+    _find_expected_dram_grid,
+)
 
 
 def find_closest_largest_divisor(num: int, start_divisor: int):
@@ -281,45 +286,15 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
 def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw):
     """Determine a valid core grid for DRAM interleaved (non-sharded) group norm.
 
-    In the DRAM path the core grid defines a virtual grid where:
-        num_virtual_cols  = largest nvc <= min(grid_x, num_groups) such that
-                            (num_channels // nvc) % TILE_SIZE == 0  and  num_groups % nvc == 0
-        num_virtual_rows  = (grid_x // num_virtual_cols) * grid_y
-
-    Constraints:
-        1. num_virtual_rows <= Ht  (otherwise per_core_Mt == 0)
-        2. Ht % num_virtual_rows == 0  (otherwise remainder tile rows are never processed)
-
-    This function finds the largest grid (x then y) within the device compute grid
-    that satisfies these constraints.
+    Delegates to the C++ implementation which finds the largest grid (x then y)
+    within the device compute grid that satisfies the DRAM group-norm constraints.
 
     Returns: CoreGrid
     """
     assert num_channels % num_groups == 0
     assert num_channels % ttnn.TILE_SIZE == 0
     compute_grid = device.compute_with_storage_grid_size()
-    max_x, max_y = compute_grid.x, compute_grid.y
-    Ht = math.ceil(input_nhw / ttnn.TILE_SIZE)
-
-    for gx in range(max_x, 0, -1):
-        nvc = min(gx, num_groups)
-        while nvc > 0 and ((num_channels // nvc) % ttnn.TILE_SIZE != 0 or num_groups % nvc != 0):
-            nvc -= 1
-        if nvc == 0:
-            continue
-        rows_per_y = gx // nvc
-        if rows_per_y == 0:
-            continue
-        for gy in range(min(Ht // rows_per_y, max_y), 0, -1):
-            num_virtual_rows = rows_per_y * gy
-            if Ht % num_virtual_rows == 0:
-                return ttnn.CoreGrid(y=gy, x=gx)
-
-    raise ValueError(
-        f"determine_expected_group_norm_dram_grid_size: Cannot find a valid grid for "
-        f"num_channels={num_channels}, num_groups={num_groups}, input_nhw={input_nhw}, "
-        f"device grid=({max_x}, {max_y})"
-    )
+    return _find_expected_dram_grid(compute_grid.x, compute_grid.y, num_channels, num_groups, input_nhw)
 
 
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
@@ -346,20 +321,14 @@ def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
 def dram_group_norm_virtual_columns(core_grid, num_channels, num_groups):
     """Choose number of virtual columns for DRAM params/mask generation.
 
-    Finds the largest num_virtual_cols (<= min(grid_x, num_groups)) such that
-    channels divide evenly into tiles and groups divide evenly across cores:
-        (num_channels / nvc) % TILE_SIZE == 0  and  num_groups % nvc == 0
+    Delegates to the C++ implementation of compute_num_virtual_cols.
     """
-    num_virtual_cols = min(core_grid.x, num_groups)
-    while num_virtual_cols > 0 and (
-        (num_channels // num_virtual_cols) % ttnn.TILE_SIZE != 0 or num_groups % num_virtual_cols != 0
-    ):
-        num_virtual_cols -= 1
-    assert num_virtual_cols > 0, (
+    result = _compute_num_virtual_cols(core_grid.x, num_groups, num_channels)
+    assert result > 0, (
         f"dram_group_norm_virtual_columns: could not find a valid num_virtual_cols for "
         f"grid_x={core_grid.x}, num_channels={num_channels}, num_groups={num_groups}"
     )
-    return num_virtual_cols
+    return result
 
 
 def dram_group_norm_params_from_torch(

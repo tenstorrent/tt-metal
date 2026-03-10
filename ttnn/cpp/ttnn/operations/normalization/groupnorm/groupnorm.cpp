@@ -4,6 +4,7 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -11,26 +12,11 @@
 
 namespace {
 
-// Computes the number of virtual columns for a given grid width, replicating the
-// same logic used by the mcast and no-mcast program factories. The result satisfies:
-//   (W / nvc) % TILE_SIZE == 0  &&  num_groups % nvc == 0
-// Returns 0 if no valid value exists for the given grid_x.
-uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t W) {
-    uint32_t nvc = std::min<uint32_t>(grid_x, num_groups);
-    while (nvc > 0 && ((W / nvc) % ttnn::types::TILE_SIZE != 0 || (num_groups % nvc) != 0)) {
-        nvc -= 1;
-    }
-    return nvc;
-}
+using ttnn::operations::normalization::compute_num_virtual_cols;
+using ttnn::operations::normalization::find_expected_dram_grid;
 
-// Validates that the requested core grid satisfies the DRAM group-norm constraints:
-//   1. num_virtual_rows = (grid_x / num_virtual_cols) * grid_y  <=  Ht
-//   2. Ht % num_virtual_rows == 0
-// where Ht is the input height in tiles (NHW / TILE_SIZE).
-// Constraint (1) prevents per_core_Mt == 0 (division-by-zero in kernels).
-// Constraint (2) prevents remainder tile rows from being silently dropped.
-// If the requested grid is invalid, this function fatals with an error message
-// that suggests the largest valid grid that fits within the requested bounds.
+// Validates that the requested core grid satisfies the DRAM group-norm constraints.
+// If the requested grid is invalid, fatals with an error suggesting the largest valid sub-grid.
 void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht, int num_groups) {
     uint32_t nvc = compute_num_virtual_cols(requested.x, num_groups, W);
     if (nvc > 0) {
@@ -38,38 +24,17 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
         if (rows_per_y > 0) {
             uint32_t num_virtual_rows = rows_per_y * requested.y;
             if (Ht >= num_virtual_rows && Ht % num_virtual_rows == 0) {
+                // Valid grid found
                 return;
             }
         }
     }
 
-    // Grid is invalid -- find the largest valid sub-grid to suggest in the error.
-    uint32_t suggested_x = 0, suggested_y = 0;
-    for (uint32_t gx = requested.x; gx >= 1; --gx) {
-        uint32_t nvc_inner = compute_num_virtual_cols(gx, num_groups, W);
-        if (nvc_inner == 0) {
-            continue;
-        }
-        uint32_t rows_per_y_inner = gx / nvc_inner;
-        if (rows_per_y_inner == 0) {
-            continue;
-        }
-        uint32_t max_y = std::min<uint32_t>(Ht / rows_per_y_inner, requested.y);
-        for (uint32_t gy = max_y; gy >= 1; --gy) {
-            if (Ht % (rows_per_y_inner * gy) == 0) {
-                suggested_x = gx;
-                suggested_y = gy;
-                break;
-            }
-        }
-        if (suggested_x > 0) {
-            break;
-        }
-    }
+    auto suggested = find_expected_dram_grid(requested.x, requested.y, W, num_groups, Ht * ttnn::types::TILE_SIZE);
 
-    if (suggested_x > 0) {
-        TT_FATAL(
-            false,
+    // User supplied invalid grid, but suggested a valid grid
+    if (suggested.has_value()) {
+        TT_THROW(
             "group_norm: Requested core_grid (x={}, y={}) is invalid for the input dimensions "
             "(Ht={}, W={}, num_groups={}). The grid must satisfy "
             "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht, and "
@@ -80,11 +45,10 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
             Ht,
             W,
             num_groups,
-            suggested_x,
-            suggested_y);
+            suggested->x,
+            suggested->y);
     } else {
-        TT_FATAL(
-            false,
+        TT_THROW(
             "group_norm: Cannot find any valid core grid for the given configuration. "
             "Input height in tiles (Ht={}) is too small for any grid with W={}, num_groups={}. "
             "Requested grid was (x={}, y={}).",
@@ -112,7 +76,16 @@ ttnn::Tensor get_mask_tensor(
         int64_t num_channel = input_tensor.padded_shape()[-1];
         int64_t num_cores_across_channel;
         if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
-            num_cores_across_channel = core_grid.has_value() ? core_grid.value().y : 1;
+            auto mem_layout = input_tensor.memory_config().memory_layout();
+            if (mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                num_cores_across_channel = 1;
+            } else if (mem_layout == TensorMemoryLayout::BLOCK_SHARDED && core_grid.has_value()) {
+                auto shard_spec = input_tensor.memory_config().shard_spec();
+                bool is_row_major = shard_spec.has_value() && shard_spec->orientation == ShardOrientation::ROW_MAJOR;
+                num_cores_across_channel = is_row_major ? core_grid.value().x : core_grid.value().y;
+            } else {
+                num_cores_across_channel = core_grid.has_value() ? core_grid.value().y : 1;
+            }
         } else {
             uint32_t num_virtual_cols =
                 compute_num_virtual_cols(core_grid.value().x, num_groups, static_cast<uint32_t>(num_channel));

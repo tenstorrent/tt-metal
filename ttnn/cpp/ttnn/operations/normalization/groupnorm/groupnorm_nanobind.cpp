@@ -11,6 +11,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "groupnorm.hpp"
+#include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
 namespace ttnn::operations::normalization::detail {
@@ -173,6 +174,42 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         R"doc(
             C++ implementation of create_group_norm_input_negative_mask.
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
+        )doc");
+    mod.def(
+        "_compute_num_virtual_cols",
+        [](uint32_t grid_x, int num_groups, uint32_t num_channels) -> uint32_t {
+            return compute_num_virtual_cols(grid_x, num_groups, num_channels);
+        },
+        nb::arg("grid_x"),
+        nb::arg("num_groups"),
+        nb::arg("num_channels"),
+        R"doc(
+            Compute the number of virtual columns for DRAM group-norm.
+            Finds the largest nvc <= min(grid_x, num_groups) such that
+            (num_channels / nvc) % TILE_SIZE == 0 and num_groups % nvc == 0.
+            Returns 0 if no valid value exists.
+        )doc");
+    mod.def(
+        "_find_expected_dram_grid",
+        [](uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw)
+            -> ttnn::CoreGrid {
+            auto result = find_expected_dram_grid(max_x, max_y, num_channels, num_groups, input_nhw);
+            if (!result.has_value()) {
+                throw std::runtime_error(
+                    "Cannot find a valid DRAM group-norm grid for num_channels=" + std::to_string(num_channels) +
+                    ", num_groups=" + std::to_string(num_groups) + ", input_nhw=" + std::to_string(input_nhw) +
+                    ", max_grid=(" + std::to_string(max_x) + ", " + std::to_string(max_y) + ")");
+            }
+            return result.value();
+        },
+        nb::arg("max_x"),
+        nb::arg("max_y"),
+        nb::arg("num_channels"),
+        nb::arg("num_groups"),
+        nb::arg("input_nhw"),
+        R"doc(
+            Find the largest valid CoreGrid within (max_x, max_y) bounds
+            for DRAM interleaved group-norm. Raises if no valid grid exists.
         )doc");
 }
 }  // namespace
