@@ -20,6 +20,25 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     uint offset_in1 = dst_index_in1 * dst_tile_size;
     uint offset_out = dst_index_out * dst_tile_size;
 
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, offset_in0);
+        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] >> 23
+        TT_SFPLOAD(p_sfpu::LREG2, INT32, ADDR_MOD_7, offset_in1);
+        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5); // lreg[3] = lreg[2] >> 23
+        TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0); // lreg[4] = lreg[0] * lreg[2] (low 23 bits)
+        TTI_SFPMUL24(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG5, 1); // lreg[5] = lreg[0] * lreg[2] (high 23 bits)
+        TTI_SFPMUL24(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG6, 0); // lreg[6] = lreg[1] * lreg[2] (low 23 bits)
+        TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0); // lreg[7] = lreg[0] * lreg[3] (low 23 bits)
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[6]
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[7]
+        TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5); // lreg[5] <<= 23
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[4] += lreg[5]
+        TT_SFPSTORE(p_sfpu::LREG4, INT32, ADDR_MOD_6, offset_out);
+    }
+#else
     // This uses SFPLOADMACRO to achieve a throughput of 8 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.  Variables a0,
@@ -85,10 +104,12 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
+#ifndef DISABLE_SFPLOADMACRO
     constexpr uint b1 = p_sfpu::LREG2;
     constexpr uint c = p_sfpu::LREG4;
 
@@ -177,6 +198,7 @@ inline void mul_int32_init() {
     //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0xff0, 8, 1);
+#endif
 }
 
 }  // namespace ckernel::sfpu
