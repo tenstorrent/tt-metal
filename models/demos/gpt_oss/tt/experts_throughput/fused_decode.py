@@ -29,8 +29,6 @@ path that the ThroughputExperts class can route to when fused_config is provided
 from math import prod
 from typing import Optional
 
-from loguru import logger
-
 import ttnn
 
 from .config import FusedMoeGptConfig, ThroughputExpertConfig
@@ -123,40 +121,10 @@ def fused_decode_forward(
     )
     ttnn.deallocate(hidden_states)
 
-    ttnn.synchronize_device(mesh_device)
-    logger.info("dispatch complete: sparse=" + str(tt_sparse.shape))
-    # Check sparse buffer for nonzero values
-    _sp_devs = ttnn.get_device_tensors(tt_sparse)
-    for _di in [0, 1]:
-        _sp = ttnn.to_torch(_sp_devs[_di]).squeeze()
-        _nz = (_sp.abs().sum(dim=-1) > 0).sum().item()
-        logger.info("  sparse dev" + str(_di) + ": nonzero_rows=" + str(_nz) + "/" + str(_sp.shape[0]))
-    # Check dispatch output indices
-    _idx_devs = ttnn.get_device_tensors(tt_indices)
-    _idx0 = ttnn.to_torch(_idx_devs[0]).squeeze()
-    logger.info(
-        "  dispatch indices dev0 shape="
-        + str(_idx0.shape)
-        + " row0="
-        + str(_idx0[0].tolist())
-        + " row32="
-        + str(_idx0[32].tolist() if _idx0.shape[0] > 32 else "N/A")
-    )
-    del _sp_devs, _sp, _nz, _idx_devs, _idx0
-
     # Move sparse buffer from DRAM to L1; reshape from [1, total_tokens, H] to [total_tokens, H]
     # (moe_gpt reads total_tokens from sparse_shape[0])
     tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [total_tokens, config.hidden_size])
-
-    # Check sparse buffer in L1 after reshape
-    _sp_l1_devs = ttnn.get_device_tensors(tt_sparse_l1)
-    _sp_l1 = ttnn.to_torch(_sp_l1_devs[0]).squeeze()
-    _nz_l1 = (_sp_l1.abs().sum(dim=-1) > 0).sum().item()
-    logger.info(
-        "  sparse_l1 dev0: shape=" + str(_sp_l1.shape) + " nonzero_rows=" + str(_nz_l1) + "/" + str(_sp_l1.shape[0])
-    )
-    del _sp_l1_devs, _sp_l1, _nz_l1
 
     # ------------------------------------------------------------------
     # Step 2: moe_gpt (fused sparse compute)
@@ -175,47 +143,6 @@ def fused_decode_forward(
         cluster_axis=cluster_axis,
     )
     ttnn.deallocate(tt_sparse_l1)
-
-    ttnn.synchronize_device(mesh_device)
-    logger.info("moe_gpt outputs:")
-    for _oi in range(5):
-        _o = moe_gpt_outputs[_oi]
-        logger.info(
-            "  output["
-            + str(_oi)
-            + "] shape="
-            + str(_o.shape)
-            + " dtype="
-            + str(_o.dtype)
-            + " mem="
-            + str(_o.memory_config().buffer_type)
-        )
-    # Read token counts with proper dtype handling
-    _dev_t = ttnn.get_device_tensors(moe_gpt_outputs[0])
-    for _di in range(min(4, len(_dev_t))):
-        _raw = ttnn.to_torch(_dev_t[_di])
-        logger.info(
-            "  tc dev"
-            + str(_di)
-            + " raw_shape="
-            + str(_raw.shape)
-            + " dtype="
-            + str(_raw.dtype)
-            + " values="
-            + str(_raw.flatten().tolist()[:16])
-        )
-    del _dev_t, _raw
-    # Also check weight tensor info
-    _w_devs = ttnn.get_device_tensors(fused_config.tt_w0_w1)
-    logger.info(
-        "  w0_w1: shape="
-        + str(fused_config.tt_w0_w1.shape)
-        + " dtype="
-        + str(fused_config.tt_w0_w1.dtype)
-        + " ndevs="
-        + str(len(_w_devs))
-    )
-    del _w_devs
 
     # moe_gpt outputs (matching moe_compute output convention):
     #   [0] token_counts:   [1, padded_E] uint32, interleaved L1
@@ -241,7 +168,7 @@ def fused_decode_forward(
         moe_gpt_outputs[2],  # dense_token_maps_tensor: token indices per expert
         moe_gpt_outputs[0],  # dense_token_counts_tensor: per-expert token counts
         hidden_size=config.hidden_size,
-        batch_size=tokens_per_device,  # per-device token count (M), NOT total_tokens
+        batch_size=total_tokens,  # total ring tokens (e.g., 128 = M * ring_devices)
         seq_size=1,
         select_experts_k=config.num_experts_per_tok,
         experts=global_experts,  # total global experts: 128 for GPT-OSS
