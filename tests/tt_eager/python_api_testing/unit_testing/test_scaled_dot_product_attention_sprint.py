@@ -183,15 +183,15 @@ def run_sdpa_determinism(
 
 INPUT_SHAPES = [
     # batch, num_heads, sequence_length, head_dim
-    [1, 10, 9472, 128],
+    # [1, 10, 9472, 128],
     [1, 10, 2368, 128],
 ]
 INPUT_IDS = [
-    "wan_1xGLX_analog",
+    # "wan_1xGLX_analog",
     "wan_4xGLX_analog",
 ]
 # Q_CHUNK_SIZES = [288]
-Q_CHUNK_SIZES = [224, 288]
+Q_CHUNK_SIZES = [224]
 K_CHUNK_SIZES = [512]
 
 

@@ -69,7 +69,8 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
     uint32_t SUBBLOCK_W,
     uint32_t SUBBLOCK_H,
     uint32_t INNER_DIM,
-    uint32_t KT_DIM_MATMUL = 0) {
+    uint32_t KT_DIM_MATMUL = 0,
+    bool trigger_reduce = false) {
     if (KT_DIM_MATMUL == 0) {
         KT_DIM_MATMUL = INNER_DIM;
     }
@@ -98,6 +99,9 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
             dst_idx += SUBBLOCK_W;
         }
+        if (trigger_reduce) {
+            PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+        }
     } else
 #endif
     {
@@ -124,16 +128,14 @@ void reduce_c_row_group(
     uint32_t row_group_index,
     bool do_eltwise_max,
     uint32_t SBH,
-    uint32_t reduce_cols = cols) {
+    uint32_t reduce_cols = cols,
+    bool respect_trigger = false) {
     const uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
     // ROW_STRIDE: physical row width in the CB (may exceed cols on the reduced path).
     const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * ROW_STRIDE;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
-
-    // scale_cb assumed ready (waited once at kernel init)
-    // cb_wait_front(scale_cb, 1);
 
     tile_regs_acquire();
 
@@ -145,17 +147,19 @@ void reduce_c_row_group(
         }
     }
 
-    // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
-    // When do_eltwise_max=true, the prev_cb wait + copy_tile work above can overlap
-    // with in0_cb data arrival.
-    cb_wait_front(in0_cb, cumulative_input_tiles);
+    // When respect_trigger=true, the unpack MOP is split into two halves with a
+    // HW semaphore wait in between, so we don't need cb_wait_front here —
+    // the unpacker will stall on the semaphore until packer signals data is ready.
+    if (!respect_trigger) {
+        cb_wait_front(in0_cb, cumulative_input_tiles);
+    }
 
-    reduce_block_max_row_init_runtime(reduce_cols);
+    reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
     }
-    reduce_block_max_row_uninit_runtime(in0_cb);
+    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -645,6 +649,11 @@ static void sdpa_inner_loop_step(
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     const uint32_t kt_remainder = active_Sk % actual_sbw;
     const bool has_partial_subblock = (kt_remainder > 0);
+    // reduce_trigger: overlap max-reduce with last matmul subblock via HW semaphore.
+    // The unpack MOP is split into active_Sk/2 + active_Sk/2. The packer posts the
+    // semaphore after the last full subblock, letting reduce start before all tiles are ready.
+    // Requires: even active_Sk (MOP halves), >=2 subblocks, no partial tail subblock.
+    const bool reduce_trigger = !has_partial_subblock && (kt_num_full_subblocks > 1) && (active_Sk % 2 == 0);
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
     constexpr uint32_t row_tiles = sbh * KT_stride;  // Use KT_stride for cb_qkt_im row width
 
@@ -713,6 +722,8 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
+                bool kt_trigger_reduce =
+                    reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1) && !has_partial_subblock;
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
@@ -723,7 +734,9 @@ static void sdpa_inner_loop_step(
                     kt_subblock * actual_sbw,
                     actual_sbw,
                     sbh,
-                    in0_block_w);
+                    in0_block_w,
+                    0,
+                    kt_trigger_reduce);
                 kt_index_offset += actual_sbw;
             }
         }
@@ -813,7 +826,14 @@ static void sdpa_inner_loop_step(
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
 #endif
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, KT_stride>(
-                cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/, sbh, active_Sk);
+                cb_qkt_im,
+                cur_max,
+                prev_max,
+                q_subblock,
+                !is_first_iter /*do_eltwise_max*/,
+                sbh,
+                active_Sk,
+                reduce_trigger);
             cb_push_back(cur_max, sbh);
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, actual_sbw)));
@@ -1195,7 +1215,7 @@ void sdpa_standard_v2(
         };
 
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
-            // MaybeDeviceZoneScopedN(true, "K chunk");
+            MaybeDeviceZoneScopedN(true, "K chunk");
             bool is_first = (k_chunk == 0);
             bool is_last = (k_chunk == k_num_chunks - 1);
 
