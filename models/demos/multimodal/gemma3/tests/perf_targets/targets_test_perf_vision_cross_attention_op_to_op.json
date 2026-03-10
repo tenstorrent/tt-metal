@@ -499,9 +499,9 @@
   "UnaryDeviceOperation_28": 3110.7,
   "TransposeDeviceOperation_0": 110744.7,
   "TransposeDeviceOperation_1": 8032.0,
-  "ReshapeViewDeviceOperation_0": 2009098.8,
-  "ReshapeViewDeviceOperation_1": 133153.2,
-  "ReshapeViewDeviceOperation_2": 5359.7,
+  "ReshapeViewDeviceOperation_0": 308924.0,
+  "ReshapeViewDeviceOperation_1": 100998.0,
+  "ReshapeViewDeviceOperation_2": 15972.0,
   "PermuteDeviceOperation_0": 274924.9,
   "PermuteDeviceOperation_1": 23608.3,
   "InterleavedToShardedDeviceOperation_0": 57793.2,
@@ -509,8 +509,8 @@
   "MoveDeviceOperation_0": 5604.0,
   "Pool2D_0": 15199.0,
   "ShardedToInterleavedDeviceOperation_0": 4666.4,
-  "TilizeWithValPaddingDeviceOperation_0": 141300.6,
+  "TilizeWithValPaddingDeviceOperation_0": 4702.0,
   "ReduceDeviceOperation_0": 22177.6,
-  "TilizeDeviceOperation_0": 141300.6,
-  "UntilizeWithUnpaddingDeviceOperation_0": 113554.4
+  "TilizeDeviceOperation_0": 10629.0,
+  "UntilizeWithUnpaddingDeviceOperation_0": 13114.0
 }
