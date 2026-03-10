@@ -245,6 +245,7 @@ def create_program_descriptor(
         input_tensor,
         gamma,
         beta,
+        epsilon,
         all_cores,
         compute_grid,
         core_group_1,
@@ -360,6 +361,7 @@ def _build_reader_runtime_args(
     input_tensor,
     gamma,
     beta,
+    epsilon,
     all_cores,
     compute_grid,
     core_group_1,
@@ -368,11 +370,15 @@ def _build_reader_runtime_args(
     blocks_per_core_g2,
 ):
     """Build per-core runtime args for the reader kernel."""
+    import struct
+
     rt_args = ttnn.RuntimeArgs()
 
     src_addr = input_tensor.buffer_address()
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
     beta_addr = beta.buffer_address() if beta is not None else 0
+    # Bit-cast epsilon float to uint32_t for passing as runtime arg
+    eps_bits = struct.unpack("I", struct.pack("f", epsilon))[0]
 
     # Iterate over all cores in grid, assign work
     start_stick_id = 0
@@ -402,6 +408,7 @@ def _build_reader_runtime_args(
                 num_sticks,
                 gamma_addr,
                 beta_addr,
+                eps_bits,
             ]
             start_stick_id += num_sticks
 
