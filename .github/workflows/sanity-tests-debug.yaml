@@ -3,6 +3,9 @@ name: "Sanity tests nightly debug run"
 run-name: "Sanity tests nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
 
 on:
+  push:
+    branches:
+      - roseli/0-rename-apc-to-sanity
   schedule:
     # Runs nightly at 12:00 AM UTC
     - cron: "0 0 * * *"
