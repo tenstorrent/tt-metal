@@ -73,13 +73,11 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
     ],
 )
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
-    ([1, 20, 20, 1024, 64, (8, 4), True, True],),  # Whisper-large (nh not multiple of 32)
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
+    ([1, 20, 20, 1024, 64, (8, 4), True],),  # Whisper-large (nh not multiple of 32)
 )
 @pytest.mark.timeout(120)
-def test_sdpa_decode_non_tile_aligned_heads(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor
-):
+def test_sdpa_decode_non_tile_aligned_heads(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor):
     """Regression test for models with num_heads not a multiple of 32 (e.g. Whisper-large with 20 heads).
 
     The output logical shape must preserve the unpadded head count so that downstream

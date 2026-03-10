@@ -387,7 +387,11 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     ttnn::Shape output_shape = input.logical_shape();
     output_shape[1] = B;
     output_shape[2] = num_q_heads;
-    output_shape[3] = use_mla ? operation_attributes.head_dim_v.value() : q_shape[3];
+
+    // Preserve logical head_dim by default; only override in MLA mode.
+    if (use_mla) {
+        output_shape[3] = operation_attributes.head_dim_v.value();
+    }
     return TensorSpec(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }

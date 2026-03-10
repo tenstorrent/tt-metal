@@ -510,7 +510,7 @@ def run_test_sdpa_decode_single_iter(
     tt_back_shape = list(tt_back.shape)
     assert tt_back_shape[2] == nh, (
         f"SDPA decode output logical head dim should be {nh} (unpadded), got {tt_back_shape[2]}. "
-        f"TILE layout should not round up the logical shape."
+        f"SDPA decode should preserve the logical head dimension regardless of tensor layout."
     )
 
     tt_back = ttnn.to_torch(tt_back)
