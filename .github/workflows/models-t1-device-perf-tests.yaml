@@ -1,7 +1,6 @@
 name: "[Tier 1] Models Device Perf Tests"
 
 on:
-  push:
   workflow_dispatch:
     inputs:
       model:
@@ -60,7 +59,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150_perf,bh_p150_perf,bh_p300_perf"
+          ALL_SKUS="wh_n150,bh_p150,bh_p300"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
