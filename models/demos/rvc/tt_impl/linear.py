@@ -22,7 +22,7 @@ class Linear:
         dtype: ttnn.DataType | None = None,
         memory_config: ttnn.MemoryConfig | None = None,
         compute_config: ttnn.DeviceComputeKernelConfig | None = None,
-        activation: str | ttnn.UnaryWithParam | None = None,
+        activation: str | None = None,
     ) -> None:
         self.device = device
         self.in_features = in_features

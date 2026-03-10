@@ -195,6 +195,7 @@ class ResBlock1:
                     stride=1,
                     dilation=d_value,
                     padding="same",
+                    activation=("leaky_relu", {"negative_slope": self.lrelu_slope}),
                 )
             )
             self.convs2.append(
@@ -220,9 +221,7 @@ class ResBlock1:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt0 = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
             xt1 = _conv_output_to_nlc(c1(xt0))
-            xt1 = ttnn.to_layout(xt1, ttnn.TILE_LAYOUT)
-            xt2 = ttnn.leaky_relu(xt1, negative_slope=self.lrelu_slope)
-            xt3 = _conv_output_to_nlc(c2(xt2))
+            xt3 = _conv_output_to_nlc(c2(xt1))
             x = xt3 + x
         return x
 
