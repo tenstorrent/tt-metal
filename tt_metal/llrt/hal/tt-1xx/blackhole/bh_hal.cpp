@@ -129,7 +129,7 @@ public:
                 includes.push_back("tt_metal/hw/inc/ethernet");
                 break;
             }
-            case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::IDLE_ETH:
             case HalProgrammableCoreType::DRAM: break;
             default:
                 TT_THROW(
@@ -332,6 +332,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
 
+    // NOLINTBEGIN(misc-redundant-expression)
     this->valid_reg_addr_func_ = [](uint32_t addr) {
         return (
             ((addr >= NOC_OVERLAY_START_ADDR) &&
@@ -343,6 +344,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
              addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
             (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
     };
+    // NOLINTEND(misc-redundant-expression)
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
     this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) {
