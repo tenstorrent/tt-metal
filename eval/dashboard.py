@@ -242,7 +242,7 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
 <table class="runs">
 <thead>
 <tr>
-  <th>ID</th><th>Date</th><th>Prompt</th><th>Branch</th>
+  <th>ID</th><th>Date</th><th>Prompt</th><th>Base Branch</th><th>Run Branch</th>
   <th>Score</th><th>Golden</th><th>Rating</th>
 </tr>
 </thead>
@@ -254,7 +254,9 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
         rid = run["id"]
         ts = run["timestamp"][:16].replace("T", " ") if run["timestamp"] else ""
         prompt = html.escape(run["prompt_name"])
-        branch = html.escape(run["starting_branch"])
+        base_branch = html.escape(run["starting_branch"])
+        commit_short = html.escape(run["starting_commit"][:7]) if run["starting_commit"] else ""
+        created_branch = html.escape(run["created_branch"])
 
         # Score + grade
         if run["score_total"] is not None and run["score_grade"]:
@@ -288,7 +290,9 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
 
         rows.append(
             f'<tr class="run-row" onclick="toggleDetail({rid})">'
-            f"  <td>{rid}</td><td>{ts}</td><td>{prompt}</td><td>{branch}</td>"
+            f"  <td>{rid}</td><td>{ts}</td><td>{prompt}</td>"
+            f'  <td>{base_branch} <span style="color:#9ca3af;font-size:0.8em">({commit_short})</span></td>'
+            f"  <td>{created_branch}</td>"
             f"  <td>{score_html}</td><td>{golden_html}</td><td>{ann_html}</td>"
             f"</tr>"
         )
@@ -296,7 +300,7 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
         # Detail row
         detail = _html_run_detail(rid, run_details.get(rid, {}))
         rows.append(
-            f'<tr class="detail-row" id="detail-{rid}">' f'  <td class="detail-cell" colspan="7">{detail}</td>' f"</tr>"
+            f'<tr class="detail-row" id="detail-{rid}">' f'  <td class="detail-cell" colspan="8">{detail}</td>' f"</tr>"
         )
 
     return header + "\n".join(rows) + "\n</tbody>\n</table>"
