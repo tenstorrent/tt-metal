@@ -2584,7 +2584,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
-        intermesh_connections = this->convert_port_desciptors_to_intermesh_connections(exit_node_port_descriptors);
+        intermesh_connections = this->convert_port_descriptors_to_intermesh_connections(exit_node_port_descriptors);
     } else {
         // Intermesh Connectivity generation for the single-host case
         intermesh_connections = this->generate_intermesh_connections_on_local_host();
@@ -2964,7 +2964,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     return intermesh_connections;
 }
 
-AnnotatedIntermeshConnections ControlPlane::convert_port_desciptors_to_intermesh_connections(
+AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);

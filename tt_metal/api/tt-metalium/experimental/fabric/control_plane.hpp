@@ -463,7 +463,7 @@ private:
     // Multi-Host Intermesh Connectivity Helper Function:
     // Runs on all hosts: Given the local port descriptors, this function will return the full list of intermesh
     // connections.
-    AnnotatedIntermeshConnections convert_port_desciptors_to_intermesh_connections(
+    AnnotatedIntermeshConnections convert_port_descriptors_to_intermesh_connections(
         PortDescriptorTable& port_descriptors);
 
     // Single-Host Intermesh Connectivity Helper Function:
