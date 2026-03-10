@@ -127,7 +127,7 @@ class MoEComputeStage(StageKind):
         weights: DeepSeekV3MoELayerWeights,
         *,
         persistent_mode: bool = True,
-        use_hardcoded_expert_index: bool = True,
+        use_hardcoded_expert_index: bool = False,
         is_torus: bool = True,
     ) -> None:
         self._weights = weights
