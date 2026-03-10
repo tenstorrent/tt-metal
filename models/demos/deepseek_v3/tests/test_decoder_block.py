@@ -204,10 +204,6 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     include_decode_random_pos_ids=True,  # include decode random position_ids case
 )
 
-optimal_topology = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-)
-
 
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
