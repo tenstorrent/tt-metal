@@ -74,7 +74,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
-    ([1, 20, 20, 1024, 64, (8, 4), True],),  # Whisper-large (nh not multiple of 32)
+    ([2, 20, 20, 512, 64, (8, 8), True],),  # Whisper-large (nh not multiple of 32; grid must give num_cores/b <= nkv)
 )
 @pytest.mark.timeout(120)
 def test_sdpa_decode_non_tile_aligned_heads(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor):
