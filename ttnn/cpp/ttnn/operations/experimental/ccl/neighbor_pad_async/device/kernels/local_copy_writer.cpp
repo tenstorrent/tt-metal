@@ -14,10 +14,12 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 constexpr auto dst_args = TensorAccessorArgs<2>();
 
 void kernel_main() {
-    // Args
+    // Common runtime args (uniform across all cores, updated between dispatches)
+    const address_t output_tensor_address = get_common_arg_val<address_t>(1);
+    const uint32_t phase2_barrier_sem = get_common_arg_val<uint32_t>(2);
+
+    // Per-core runtime args
     uint32_t arg_idx = 0;
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);  // not used in writer
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
@@ -32,11 +34,9 @@ void kernel_main() {
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
     uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
     uint8_t signal_noc_y[MAX_PHASE2_SIGNAL_TARGETS];
-    uint32_t barrier_sem_addr[MAX_PHASE2_SIGNAL_TARGETS];
     for (uint32_t t = 0; t < MAX_PHASE2_SIGNAL_TARGETS; t++) {
         signal_noc_x[t] = get_arg_val<uint32_t>(arg_idx++);
         signal_noc_y[t] = get_arg_val<uint32_t>(arg_idx++);
-        barrier_sem_addr[t] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
@@ -62,7 +62,7 @@ void kernel_main() {
 
     // Signal Phase 2 W fabric reader cores that Phase 1 writes are complete
     for (uint32_t t = 0; t < num_phase2_signal_targets; t++) {
-        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], barrier_sem_addr[t]);
+        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], phase2_barrier_sem);
         noc_semaphore_inc(sem_noc_addr, 1);
     }
     // Ensure sem inc signals are delivered before kernel exits.
