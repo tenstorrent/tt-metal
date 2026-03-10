@@ -41,7 +41,10 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const auto& output_nd_shard_spec = output.nd_shard_spec();  // can be nullopt if no nd sharding
     const bool nd_sharded = output_nd_shard_spec.has_value();
 
-    uint32_t num_pages_in_row = 1;  // interleaved - always 1
+    const uint32_t num_dims = output.padded_shape().rank();
+    const uint32_t num_input_tensors = static_cast<uint32_t>(input_tensors.size());
+
+    uint32_t num_pages_in_row = 1;                                              // pages in a row in input tensors
     uint32_t size_of_valid_data_in_last_page_in_row = dst_buffer->page_size();  // just page size
     uint32_t num_output_pages;
     uint32_t single_page_size;
@@ -52,6 +55,9 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             single_page_size = dst_buffer->aligned_page_size();
             const uint32_t shard_width = output_nd_shard_spec.value().shard_shape[-1];
             num_pages_in_row = tt::div_up(output.logical_shape()[-1], shard_width);
+            if (dim == num_dims - 1) {
+                num_pages_in_row /= num_input_tensors;
+            }
         } else {
             num_output_pages = output.physical_volume() / output.padded_shape()[-1];
             single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
@@ -129,16 +135,12 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         num_tiles_per_core_group_2 = num_tiles_per_core_group_2_result;
     }
 
-    const uint32_t num_input_tensors = input_tensors.size();
-
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_pages = 2;
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_pages * single_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_page_size);
     CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    const uint32_t num_dims = output.padded_shape().rank();
 
     std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
@@ -181,8 +183,13 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             src_addr[i] = buffer->address();
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
-                num_pages_per_block[i] = num_accum_pages;
-                std::cout << "tensor " << i << "  page size" << page_size_per_tensor[i] << "  num_accum_pages "
+                if (nd_sharded) {
+                    num_pages_per_block[i] = num_pages_in_row;
+                    num_output_pages_per_block = num_pages_in_row * num_input_tensors;
+                } else {
+                    num_pages_per_block[i] = num_accum_pages;
+                }
+                std::cout << "tensor " << i << "  page size " << page_size_per_tensor[i] << "  num_accum_pages "
                           << num_pages_per_block[i] << "\n";
             } else {
                 const uint32_t dim_pages = input_tensors[i].padded_shape()[dim];
@@ -192,7 +199,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
                           << num_output_pages_per_block << "\n";
             }
         }
-        if (dim == num_dims - 1) {
+        if (!nd_sharded && dim == num_dims - 1) {
             num_output_pages_per_block = 1;
         }
         std::cout << "result pages per block " << num_output_pages_per_block << "\n";
@@ -229,7 +236,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     std::map<std::string, std::string> concat_defines;
 
-    if (rm_layout && dim == num_dims - 1) {
+    if (rm_layout && dim == num_dims - 1 && !nd_sharded) {
         concat_defines["WIDTH_CONCAT"] = "1";
         std::cout << "WIDTH_CONCAT is in\n";
     }
@@ -297,6 +304,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         reader_kernel_args[0] = num_pages_per_core;
         reader_kernel_args[1] = curr_tensor;
         reader_kernel_args[2] = curr_tensor_id;
+
         reader_kernel_args.insert(reader_kernel_args.end(), page_id_per_tensor.begin(), page_id_per_tensor.end());
 
         std::vector<uint32_t> writer_kernel_args;

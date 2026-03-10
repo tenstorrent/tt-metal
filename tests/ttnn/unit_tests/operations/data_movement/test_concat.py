@@ -421,31 +421,32 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
         # simplest
-        # (2, [1, 64, 96], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
         (2, [1, 64, 96], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        # (2, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        # # 2 tensors - basic ND sharding concat
+        (2, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        # 2 tensors - basic ND sharding concat
         (2, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on 1 dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on 2 dim         # +
+        (2, [3, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on 1 dim         # +
+        (2, [7, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on 2 dim         # +
         (2, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        # (2, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        # # 3 tensors - ND sharding concat
+        (2, [3, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [7, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        # 3 tensors - ND sharding concat
         (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
         (3, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
         (3, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
         (3, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
         (3, [5, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        # (3, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        # # 4 tensors - ND sharding concat
+        (3, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        # 4 tensors - ND sharding concat
         (4, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 4 tensors on batch  # -
         (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
         (4, [1, 64, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 4 tensors on width
         (4, [1, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
         (4, [1, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
-        # (4, [1, 64, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
-        # # 5 tensors - ND sharding concat
+        (4, [1, 64, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
+        # 5 tensors - ND sharding concat
         (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 5 tensors on batch  # -
         (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 5 tensors on height
         (5, [3, 64, 128, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 5 tensors on width
@@ -453,7 +454,7 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
         (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on batch  # -
         (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on height
         (5, [3, 64, 128, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on width
-        # (5, [2, 32, 64, 96], [1, 32, 32], 3, ttnn.TILE_LAYOUT),  # concat 5 tensors on ...
+        (5, [2, 32, 64, 96], [1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on ...
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
