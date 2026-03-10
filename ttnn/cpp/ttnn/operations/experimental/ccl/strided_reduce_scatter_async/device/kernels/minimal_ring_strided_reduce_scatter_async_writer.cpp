@@ -170,16 +170,12 @@ void kernel_main() {
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
-        auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
-        auto pkt_scatter_hdr_3 = PacketHeaderPool::allocate_header();
         auto pkt_scatter_hdr_4 = PacketHeaderPool::allocate_header();
         auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
         auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
         auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr_3, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr_4, unicast_route_info);
 
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
@@ -217,19 +213,6 @@ void kernel_main() {
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
 
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-            page_size * 2);
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr_3,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader(
-                {0, 0, 0}, {static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)}),
-            page_size * 3);
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr_4,
@@ -394,38 +377,29 @@ void kernel_main() {
                                                 const auto noc_address2 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                                         intermediate_addrgen, global_tile_idxs[2], 0);
-                                                if (valid_l1_addrs[2] == valid_l1_addrs[0] + 2 * page_size) {
-                                                    // Valid tiles are contiguous in L1: scatter from first.
-                                                    fabric_unicast_noc_scatter_write_with_state<
-                                                        UnicastScatterWriteUpdateMask::DstAddrs>(
-                                                        &mux_connection_handle,
-                                                        pkt_scatter_hdr_3,
-                                                        valid_l1_addrs[0],
-                                                        NocUnicastScatterCommandHeader(
-                                                            {noc_address0, noc_address1, noc_address2}));
-                                                } else {
-                                                    // Valid tiles are non-contiguous in L1 (ghost tile(s)
-                                                    // between them in the CB batch); write each valid tile
-                                                    // individually from its own L1 address.
-                                                    fabric_unicast_noc_unicast_write_with_state<
-                                                        UnicastWriteUpdateMask::DstAddr>(
-                                                        &mux_connection_handle,
-                                                        pkt_unicast_hdr,
-                                                        valid_l1_addrs[0],
-                                                        NocUnicastCommandHeader{noc_address0});
-                                                    fabric_unicast_noc_unicast_write_with_state<
-                                                        UnicastWriteUpdateMask::DstAddr>(
-                                                        &mux_connection_handle,
-                                                        pkt_unicast_hdr,
-                                                        valid_l1_addrs[1],
-                                                        NocUnicastCommandHeader{noc_address1});
-                                                    fabric_unicast_noc_unicast_write_with_state<
-                                                        UnicastWriteUpdateMask::DstAddr>(
-                                                        &mux_connection_handle,
-                                                        pkt_unicast_hdr,
-                                                        valid_l1_addrs[2],
-                                                        NocUnicastCommandHeader{noc_address2});
-                                                }
+                                                // Always send as individual unicasts: the relay extension
+                                                // iterates NOC_SCATTER_WRITE_MAX_CHUNKS (4) unconditionally,
+                                                // so a chunk_count=3 scatter write misroutes the last tile
+                                                // to noc_address[3]=0. Use unicasts until the relay
+                                                // extension is fixed to respect chunk_count.
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_connection_handle,
+                                                    pkt_unicast_hdr,
+                                                    valid_l1_addrs[0],
+                                                    NocUnicastCommandHeader{noc_address0});
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_connection_handle,
+                                                    pkt_unicast_hdr,
+                                                    valid_l1_addrs[1],
+                                                    NocUnicastCommandHeader{noc_address1});
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_connection_handle,
+                                                    pkt_unicast_hdr,
+                                                    valid_l1_addrs[2],
+                                                    NocUnicastCommandHeader{noc_address2});
                                                 break;
                                             }
                                             case 2: {
@@ -435,29 +409,23 @@ void kernel_main() {
                                                 const auto noc_address1 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                                         intermediate_addrgen, global_tile_idxs[1], 0);
-                                                if (valid_l1_addrs[1] == valid_l1_addrs[0] + page_size) {
-                                                    // Valid tiles are contiguous in L1: scatter from first.
-                                                    fabric_unicast_noc_scatter_write_with_state<
-                                                        UnicastScatterWriteUpdateMask::DstAddrs>(
-                                                        &mux_connection_handle,
-                                                        pkt_scatter_hdr,
-                                                        valid_l1_addrs[0],
-                                                        NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
-                                                } else {
-                                                    // Valid tiles are non-contiguous in L1; write each individually.
-                                                    fabric_unicast_noc_unicast_write_with_state<
-                                                        UnicastWriteUpdateMask::DstAddr>(
-                                                        &mux_connection_handle,
-                                                        pkt_unicast_hdr,
-                                                        valid_l1_addrs[0],
-                                                        NocUnicastCommandHeader{noc_address0});
-                                                    fabric_unicast_noc_unicast_write_with_state<
-                                                        UnicastWriteUpdateMask::DstAddr>(
-                                                        &mux_connection_handle,
-                                                        pkt_unicast_hdr,
-                                                        valid_l1_addrs[1],
-                                                        NocUnicastCommandHeader{noc_address1});
-                                                }
+                                                // Always send as individual unicasts: the relay extension
+                                                // iterates NOC_SCATTER_WRITE_MAX_CHUNKS (4) unconditionally,
+                                                // so a chunk_count=2 scatter write misroutes tiles 3 and 4
+                                                // to noc_address[2/3]=0. Use unicasts until the relay
+                                                // extension is fixed to respect chunk_count.
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_connection_handle,
+                                                    pkt_unicast_hdr,
+                                                    valid_l1_addrs[0],
+                                                    NocUnicastCommandHeader{noc_address0});
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_connection_handle,
+                                                    pkt_unicast_hdr,
+                                                    valid_l1_addrs[1],
+                                                    NocUnicastCommandHeader{noc_address1});
                                                 break;
                                             }
                                             case 1: {
