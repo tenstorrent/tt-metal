@@ -228,6 +228,7 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
             return "LinearFusedAtomicIncWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
             return "LinearFusedAtomicIncWriteSetState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteConnMgr: return "LinearUnicastWriteConnMgr";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite: return "LinearMulticastWrite";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState:
             return "LinearMulticastWriteWithState";
@@ -319,6 +320,7 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWrite,
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteConnMgr,
             tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite,
             tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState,
