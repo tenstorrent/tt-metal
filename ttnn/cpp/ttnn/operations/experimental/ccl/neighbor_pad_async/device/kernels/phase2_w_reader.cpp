@@ -41,14 +41,17 @@ inline void zeroPad(uint32_t cb_id) {
 }
 
 void kernel_main() {
+    // Common runtime args (uniform across all cores, updated between dispatches)
+    const address_t output_tensor_address = get_common_arg_val<address_t>(0);
+    const uint32_t barrier_sem_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t w_neighbor_sem_addr = get_common_arg_val<uint32_t>(2);
+
+    // Per-core runtime args
     uint32_t arg_idx = 0;
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t w_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);

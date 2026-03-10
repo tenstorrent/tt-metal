@@ -39,10 +39,13 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    // Common runtime args (uniform across all cores, updated between dispatches)
+    const address_t input_tensor_address = get_common_arg_val<address_t>(0);
+    const address_t output_tensor_address = get_common_arg_val<address_t>(1);
+    const size_t h_neighbor_sem = get_common_arg_val<uint32_t>(2);
+
+    // Per-core runtime args
     uint32_t arg_idx = 0;
-    // Load the input tensor spec
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
@@ -50,7 +53,6 @@ void kernel_main() {
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
-    size_t h_neighbor_sem = get_arg_val<uint32_t>(arg_idx++);
     // Per-core direction args (moved from compile-time for kernel consolidation)
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);

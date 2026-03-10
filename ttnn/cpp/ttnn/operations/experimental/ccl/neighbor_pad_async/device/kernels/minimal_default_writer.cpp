@@ -37,10 +37,14 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    // Common runtime args (uniform across all cores, updated between dispatches)
+    const address_t input_tensor_address = get_common_arg_val<address_t>(0);
+    const address_t output_tensor_address = get_common_arg_val<address_t>(1);
+    const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
+    const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
+
+    // Per-core runtime args
     uint32_t arg_idx = 0;
-    // Load the input tensor spec
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
@@ -52,11 +56,9 @@ void kernel_main() {
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t neighbor_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t neighbor_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t neighbor_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
 
     // Phase 2 barrier signal targets (0 for 1D, >0 for 2D)
     // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
@@ -64,11 +66,9 @@ void kernel_main() {
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
     uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
     uint8_t signal_noc_y[MAX_PHASE2_SIGNAL_TARGETS];
-    uint32_t signal_sem_addr[MAX_PHASE2_SIGNAL_TARGETS];
     for (uint32_t st = 0; st < MAX_PHASE2_SIGNAL_TARGETS; st++) {
         signal_noc_x[st] = get_arg_val<uint32_t>(arg_idx++);
         signal_noc_y[st] = get_arg_val<uint32_t>(arg_idx++);
-        signal_sem_addr[st] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     // Per-core direction and routing args (moved from compile-time for kernel consolidation)
@@ -342,9 +342,10 @@ void kernel_main() {
     }
 
     // Signal Phase 2 AFTER fabric close and all work is complete.
+    // Uses barrier_sem from CRTA[3] — same for all targets.
     noc_async_write_barrier();
     for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
-        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], signal_sem_addr[st]);
+        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
         noc_semaphore_inc(sem_noc_addr, 1);
     }
     noc_async_write_barrier();

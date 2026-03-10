@@ -14,21 +14,15 @@ struct NeighborPadAsyncSharedVariables {
     // H fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
     tt::tt_metal::KernelHandle h_reader_kernel_id;
     tt::tt_metal::KernelHandle h_writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> h_fabric_core_coords;
 
     // Local copy (1 consolidated reader kernel, 1 consolidated writer kernel)
     tt::tt_metal::KernelHandle local_reader_kernel_id;
     tt::tt_metal::KernelHandle local_writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> local_copy_core_coords;
 
     // W fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
     tt::tt_metal::KernelHandle w_reader_kernel_id;
     tt::tt_metal::KernelHandle w_writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> w_fabric_core_coords;
 
-    uint32_t num_links = 0;
-    uint32_t num_directions = 0;
-    uint32_t num_w_links = 0;
     bool has_local_copy = false;
     bool has_w_fabric = false;
 };
