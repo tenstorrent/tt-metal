@@ -1,0 +1,139 @@
+{
+  "op_name": "group_norm",
+  "op_path": "ttnn/ttnn/operations/group_norm",
+  "spec_path": "ttnn/ttnn/operations/group_norm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Tilize-then-untilize passthrough. Tests reader/writer/compute infrastructure with identity transform.",
+      "kernel_files": [
+        "reader_group_norm.cpp",
+        "compute_group_norm.cpp",
+        "writer_group_norm.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "return input_tensor.clone()",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", num_groups=1",
+      "extra_setup": "N, _, HW, C = shape\n    gamma = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)\n    beta = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "group_mean_subtract",
+      "description": "Compute per-group mean and broadcast-subtract from input. Output = input - group_mean.",
+      "kernel_files": [
+        "compute_group_norm.cpp",
+        "reader_group_norm.cpp"
+      ],
+      "test_file": "test_stage_group_mean_subtract.py",
+      "reference_body": "return input_tensor - input_tensor.reshape(N, num_groups, C // num_groups, HW).mean(dim=[2, 3], keepdim=True).expand(N, num_groups, C // num_groups, HW).reshape(N, 1, HW, C)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", num_groups=G",
+      "extra_setup": "G = 2\n    N, _, HW, C = shape\n    gamma = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)\n    beta = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "normalize",
+      "description": "Add variance computation and full normalization without affine transform.",
+      "kernel_files": [
+        "compute_group_norm.cpp",
+        "reader_group_norm.cpp"
+      ],
+      "test_file": "test_stage_normalize.py",
+      "reference_body": "x_r = input_tensor.reshape(N, num_groups, C // num_groups, HW)\n    m = x_r.mean(dim=[2, 3], keepdim=True)\n    v = x_r.var(dim=[2, 3], unbiased=False, keepdim=True)\n    return ((input_tensor - m.expand_as(x_r).reshape(N, 1, HW, C)) / torch.sqrt(v.expand_as(x_r).reshape(N, 1, HW, C) + eps))",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", num_groups=G, eps=1e-5",
+      "extra_setup": "G = 2\n    N, _, HW, C = shape\n    eps = 1e-5\n    gamma = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)\n    beta = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "affine",
+      "description": "Apply per-channel gamma and beta. Full group_norm output.",
+      "kernel_files": [
+        "compute_group_norm.cpp",
+        "reader_group_norm.cpp"
+      ],
+      "test_file": "test_stage_affine.py",
+      "reference_body": "x_r = input_tensor.reshape(N, num_groups, C // num_groups, HW)\n    m = x_r.mean(dim=[2, 3], keepdim=True)\n    v = x_r.var(dim=[2, 3], unbiased=False, keepdim=True)\n    normed = (input_tensor - m.expand_as(x_r).reshape(N, 1, HW, C)) / torch.sqrt(v.expand_as(x_r).reshape(N, 1, HW, C) + eps)\n    return gamma * normed + beta",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", num_groups=G, eps=1e-5",
+      "extra_setup": "G = 2\n    N, _, HW, C = shape\n    eps = 1e-5\n    gamma = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)\n    beta = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
