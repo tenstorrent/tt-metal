@@ -12,3 +12,5 @@
 {"event":"deepwiki_research_2","details":"Queried output CB layout after pack_untilize and noc_async_write mechanics","ts":"2026-03-10T12:01:08+00:00"}
 {"event":"analysis_phase","details":"All research complete, writing analysis document","ts":"2026-03-10T12:02:02+00:00"}
 {"event":"analysis_written","details":"Wrote batch_norm_analysis.md with compute-focused analysis: FPU vs SFPU kernel variants, CB layout, multi-pass reuse patterns, binary_dest_reuse optimization, scalar/constant CB setup, affine transform routing","ts":"2026-03-10T12:02:42+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"d769784cf5","ts":"2026-03-10T12:03:16+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["tilize_analysis"],"final_commit":"d769784cf5","ts":"2026-03-10T12:03:21+00:00"}
