@@ -34,6 +34,33 @@ def load_state_dict(model_path: Path, module_path: str):
     return lazy
 
 
+def normalize_state_dict_to_bfloat16(
+    state_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """
+    Normalize a state dict for the dequantized-weight test pipeline.
+
+    Args:
+        state_dict: original model weights
+
+    Returns:
+        copy of the state dict with floating-point weights kept in bf16
+        and without any synthesized ``*_scale_inv`` entries
+    """
+    output_state_dict: dict[str, torch.Tensor] = {}
+    for name, tensor in state_dict.items():
+        if name.endswith("_scale_inv"):
+            continue
+        if tensor.dtype == torch.float8_e4m3fn:
+            raise TypeError(
+                f"Expected dequantized tensor for '{name}', but got float8 input. "
+                "This test helper only accepts already-dequantized weights."
+            )
+        output_state_dict[name] = tensor.to(torch.bfloat16) if tensor.is_floating_point() else tensor
+
+    return output_state_dict
+
+
 def torch_cache_from_paged(
     paged_cache: torch.Tensor,
     mapping: torch.Tensor,

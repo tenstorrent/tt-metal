@@ -81,23 +81,9 @@ def test_embedding_forward_pass(
 
     else:
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        try:
-            torch_input, reference_output = load_reference_io_tensors_for_module(
-                mode, module_path, batch_size_or_seq_len, 1
-            )
-        except FileNotFoundError:
-            logger.warning(
-                f"Reference IO cache missing for {module_path} ({mode}, size={batch_size_or_seq_len}). "
-                "Falling back to on-the-fly reference generation for test_embedding."
-            )
-            reference_model = EmbeddingReference(
-                hf_config.vocab_size,
-                hf_config.hidden_size,
-                hf_config.pad_token_id,
-            ).eval()
-            reference_model.load_state_dict(state_dict)
-            torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, batch_size_or_seq_len))
-            reference_output = reference_model(torch_input)
+        torch_input, reference_output = load_reference_io_tensors_for_module(
+            mode, module_path, batch_size_or_seq_len, 1
+        )
 
     # Generate module configs and state
     logger.info("Setting up TTNN configs")

@@ -166,7 +166,6 @@ def test_forward_pass(
     state_dict,
 ):
     num_module_layers, _ = mesh_device.shape
-    used_reference_fallback = False
 
     # Get the reference IO
     if not issubclass(MLPClass, MLPDequant):
@@ -178,23 +177,9 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
     else:
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        try:
-            torch_input, reference_output = load_reference_io_tensors_for_module(
-                mode, module_path, seq_len, num_module_layers
-            )
-        except FileNotFoundError:
-            used_reference_fallback = True
-            logger.warning(
-                f"Reference IO cache missing for {module_path} ({mode}, seq_len={seq_len}). "
-                "Falling back to on-the-fly reference generation for test_mlp."
-            )
-            if module_path.endswith("shared_experts"):
-                reference_model = DeepseekV3MLP(hf_config, intermediate_size=hf_config.moe_intermediate_size).eval()
-            else:
-                reference_model = DeepseekV3MLP(hf_config).eval()
-            reference_model.load_state_dict(state_dict)
-            torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
-            reference_output = reference_model.to(torch.float32)(torch_input)
+        torch_input, reference_output = load_reference_io_tensors_for_module(
+            mode, module_path, seq_len, num_module_layers
+        )
 
     # Generate module configs and state
     weight_config = get_test_weight_config(
@@ -246,10 +231,7 @@ def test_forward_pass(
     ttnn.deallocate(tt_output)
 
     # Check PCC
-    # Fallback reference generation uses random synthetic inputs and is slightly noisier for
-    # decode-mode dequantized MLP tests; relax threshold narrowly for that path only.
-    pcc_required = 0.97 if used_reference_fallback and mode == "decode" else 0.975
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=pcc_required)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
 
 
 if __name__ == "__main__":

@@ -92,10 +92,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         remap_topk_mask = ttnn.from_torch(
-            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.float32),
+            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -141,7 +141,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         mode: str,
         topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
@@ -181,13 +180,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(
-                    hf_config,
-                    mesh_device,
-                    mode,
-                    topk_fallback=topk_fallback,
-                    use_bitonic_sort=use_bitonic_sort,
-                ),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -226,13 +219,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(
-                    hf_config,
-                    mesh_device,
-                    mode,
-                    topk_fallback=topk_fallback,
-                    use_bitonic_sort=use_bitonic_sort,
-                ),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -259,35 +246,15 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def decode_model_config(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.Device,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
     ) -> ModelDecodeConfig:
-        return cls.model_config(
-            hf_config,
-            mesh_device,
-            "decode",
-            topk_fallback=topk_fallback,
-            use_bitonic_sort=use_bitonic_sort,
-        )
+        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
 
     @classmethod
     def prefill_model_config(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.Device,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
     ) -> ModelPrefillConfig:
-        return cls.model_config(
-            hf_config,
-            mesh_device,
-            "prefill",
-            topk_fallback=topk_fallback,
-            use_bitonic_sort=use_bitonic_sort,
-        )
+        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
@@ -479,20 +446,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
             )
             post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
-            post_combine_output_tensor = ttnn.typecast(post_combine_output_tensor, dtype=ttnn.float32)
 
             topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
-            topk_weights_chunk = ttnn.typecast(topk_weights_chunk, dtype=ttnn.float32)
             post_combine_output_tensor = ttnn.mul(
-                post_combine_output_tensor,
-                topk_weights_chunk,
-                dtype=ttnn.float32,
-                **cfg["mul_experts_output_with_weights"],
+                post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
             )
             ttnn.deallocate(topk_weights_chunk)
 
             post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-            post_combine_output_tensor = ttnn.typecast(post_combine_output_tensor, dtype=ttnn.bfloat16)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:

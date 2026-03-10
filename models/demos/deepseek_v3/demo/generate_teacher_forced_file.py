@@ -23,7 +23,6 @@ try:
 except ImportError:
     tqdm = None
 
-from models.demos.deepseek_v3.utils.config_helpers import dequantize
 from models.demos.deepseek_v3.utils.hf_model_utils import (
     apply_with_names,
     load_model_uninitialized,
@@ -108,13 +107,11 @@ def generate_reference(
 
         loaded_weight = weights_dict[name]
 
-        # DeepSeek checkpoints may store float8 + scale_inv.
         if loaded_weight.dtype == torch.float8_e4m3fn:
-            scale_inv = weights_dict.get(f"{name}_scale_inv", None)
-            if scale_inv is None:
-                raise KeyError(f"Missing scale_inv tensor for float8 weight: {name}_scale_inv")
-            loaded_weight = dequantize(loaded_weight, scale_inv, (128, 128))
-            del scale_inv
+            raise RuntimeError(
+                f"Expected already-dequantized bf16 weights for '{name}', but found float8 tensor. "
+                "Pass a dequantized HF checkpoint."
+            )
 
         target_dtype = torch.bfloat16
         target_device = tensor.device

@@ -24,9 +24,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
-    COMPUTE_KERNEL_CONFIG_HIFI4,
     TOPK_MIN_WIDTH,
     even_int_div,
+    get_dequantized_tensor,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -54,14 +54,17 @@ class MoEGate(AbstractModule):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None
+        gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight")
+        score_correction_bias = get_dequantized_tensor(
+            state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
+        )
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
+                    gate_weight.T.unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
-                    # Dequantized checkpoints already store gate weights in bf16.
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
@@ -70,12 +73,10 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
-                    # Reference test path casts module parameters to bf16 before forward.
-                    # Store bias in bf16 to match that oracle, then compute the add in fp32.
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.float32,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
@@ -140,24 +141,22 @@ class MoEGate(AbstractModule):
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
-            gate_kernel = COMPUTE_KERNEL_CONFIG_HIFI4 if topk_fallback else COMPUTE_KERNEL_CONFIG_HIFI2
-            routing_dtype = ttnn.float32 if topk_fallback else ttnn.bfloat16
 
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
-                    compute_kernel_config=gate_kernel,
+                    compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                 ),
                 "multiply_expert_scale": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                 ),
                 "reshape_scores": ReshapeConfig(
                     shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
@@ -191,15 +190,14 @@ class MoEGate(AbstractModule):
                 "topk_fallback": topk_fallback,
                 "topk_fallback_config": TopKFallbackConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                     memory_config=memory_config,
                     use_bitonic_sort=use_bitonic_sort,
                 ),
-                # Keep gate projection on TT by default; topk fallback is only for selection.
                 "linear_fallback": False,
                 "linear_fallback_config": LinearFallbackConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 # "input_memory_config": ttnn.create_sharded_memory_config(  # Bad PCC
@@ -212,24 +210,22 @@ class MoEGate(AbstractModule):
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
-            gate_kernel = COMPUTE_KERNEL_CONFIG_HIFI4 if topk_fallback else COMPUTE_KERNEL_CONFIG_HIFI2
-            routing_dtype = ttnn.float32 if topk_fallback else ttnn.bfloat16
 
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
-                    compute_kernel_config=gate_kernel,
+                    compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                 ),
                 "multiply_expert_scale": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                 ),
                 "reshape_scores": ReshapeConfig(
                     shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
@@ -263,15 +259,14 @@ class MoEGate(AbstractModule):
                 "topk_fallback": topk_fallback,
                 "topk_fallback_config": TopKFallbackConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                     memory_config=memory_config,
                     use_bitonic_sort=use_bitonic_sort,
                 ),
-                # Keep gate projection on TT by default; topk fallback is only for selection.
                 "linear_fallback": False,
                 "linear_fallback_config": LinearFallbackConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=routing_dtype,
+                    dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
@@ -302,44 +297,11 @@ class MoEGate(AbstractModule):
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         assert x.memory_config() == cfg["input_memory_config"]
 
-        def _cast_for_device_topk(tensor: ttnn.Tensor) -> ttnn.Tensor:
-            # Current TT topk kernel only supports BF16/BF8_B inputs.
-            if tensor.dtype in (ttnn.bfloat16, ttnn.bfloat8_b):
-                return tensor
-            casted = ttnn.typecast(tensor, dtype=ttnn.bfloat16)
-            ttnn.deallocate(tensor)
-            return casted
-
         # Gate projections
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
-            if cfg["topk_fallback"]:
-                linear_input = x
-                if linear_input.dtype != ttnn.float32:
-                    linear_input = ttnn.typecast(linear_input, dtype=ttnn.float32)
-                # Keep logits in fp32 only for routing-fallback mode.
-                logits = ttnn.linear(linear_input, dtype=ttnn.float32, **cfg["gate_proj"])
-                if linear_input is not x:
-                    ttnn.deallocate(linear_input)
-            else:
-                logits = ttnn.linear(x, **cfg["gate_proj"])
-
-        if cfg["topk_fallback"]:
-            topk_weights, topk_indices = cls.routing_fallback_from_logits(
-                logits=logits,
-                score_correction_bias=cfg["add_score_correction_bias"]["input_tensor_b"],
-                expert_scale=cfg["multiply_expert_scale"]["input_tensor_b"],
-                mesh_device=cfg["topk_fallback_config"]["mesh_device"],
-                dtype=cfg["topk_fallback_config"]["dtype"],
-                memory_config=cfg["output_memory_config"],
-                use_bitonic_sort=cfg["topk_fallback_config"]["use_bitonic_sort"],
-                n_group=cfg["reshape_scores"]["shape"][2],
-                topk_group=cfg["topk_expert_groups"]["k"],
-                num_experts_per_tok=cfg["topk_experts"]["k"],
-            )
-            ttnn.deallocate(logits)
-            return topk_weights, topk_indices
+            logits = ttnn.linear(x, **cfg["gate_proj"])
         # Sigmoid activation
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
@@ -354,8 +316,6 @@ class MoEGate(AbstractModule):
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
-        ttnn.deallocate(scores_correction_bias)
-
         # Reshape scores to expert groups
         expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
         num_experts_per_group = expert_scores_grouped.shape[3]
@@ -373,7 +333,6 @@ class MoEGate(AbstractModule):
                     [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_scores_grouped.shape[3])],
                     value=-float("inf"),
                 )
-            expert_scores_grouped = _cast_for_device_topk(expert_scores_grouped)
             topk_scores_within_expert_groups, topk_indices_within_expert_groups = ttnn.topk(
                 expert_scores_grouped, **cfg["topk_within_expert_groups"]
             )
@@ -397,7 +356,6 @@ class MoEGate(AbstractModule):
                     [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_group_scores.shape[3])],
                     value=-float("inf"),
                 )
-            expert_group_scores = _cast_for_device_topk(expert_group_scores)
             topk_expert_groups_scores, topk_expert_groups_indices = ttnn.topk(
                 expert_group_scores, **cfg["topk_expert_groups"]
             )
@@ -419,8 +377,6 @@ class MoEGate(AbstractModule):
             src=src_tensor,
             dim=cfg["scatter_top_expert_groups"]["dim"],
         )
-        ttnn.deallocate(input_mask)
-        ttnn.deallocate(src_tensor)
         ttnn.deallocate(topk_expert_groups_indices)
         active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
         active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
@@ -439,7 +395,6 @@ class MoEGate(AbstractModule):
                 active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
             )
         else:
-            active_experts_scores = _cast_for_device_topk(active_experts_scores)
             topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
                 active_experts_scores, **cfg["topk_experts"]
             )
@@ -470,78 +425,6 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(expert_scale)
 
         return topk_experts_scores_normalized, topk_experts_indices
-
-    @classmethod
-    def routing_fallback_from_logits(
-        cls,
-        logits: ttnn.Tensor,
-        score_correction_bias: ttnn.Tensor,
-        expert_scale: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        use_bitonic_sort: bool,
-        n_group: int,
-        topk_group: int,
-        num_experts_per_tok: int,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Keep gate projection on TT; run routing selection in torch for parity.
-        torch_logits = ttnn.to_torch(
-            logits,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        # Bias is replicated across mesh; use one replica.
-        torch_bias = ttnn.to_torch(ttnn.get_device_tensors(score_correction_bias)[0]).reshape(-1)
-        torch_bias = torch_bias.to(torch.bfloat16).to(torch.float32)
-
-        torch_scale = ttnn.to_torch(ttnn.get_device_tensors(expert_scale)[0]).reshape(-1)
-        routed_scaling_factor = torch_scale.to(torch.float32)[0]
-
-        torch_logits_2d = torch_logits.squeeze(0).squeeze(0).to(torch.float32).reshape(-1, torch_logits.shape[-1])
-        torch_scores_2d = torch.sigmoid(torch_logits_2d)
-        torch_scores_for_choice = torch_scores_2d + torch_bias.unsqueeze(0)
-
-        topk_fn = topk_bitonic if use_bitonic_sort else torch.topk
-        num_tokens = torch_scores_for_choice.shape[0]
-
-        grouped_scores = torch_scores_for_choice.view(num_tokens, n_group, -1)
-        group_scores = topk_fn(grouped_scores, k=2, dim=-1, largest=True, sorted=True)[0].sum(dim=-1)
-
-        group_idx = topk_fn(group_scores, k=topk_group, dim=-1, largest=True, sorted=True)[1]
-        group_mask = torch.zeros_like(group_scores)
-        group_mask.scatter_(1, group_idx, 1)
-        score_mask = group_mask.unsqueeze(-1).expand(num_tokens, n_group, torch_scores_for_choice.shape[-1] // n_group)
-        score_mask = score_mask.reshape(num_tokens, -1)
-
-        tmp_scores = torch_scores_for_choice.masked_fill(~score_mask.bool(), float("-inf"))
-        topk_idx = topk_fn(tmp_scores, k=num_experts_per_tok, dim=-1, largest=True, sorted=True)[1]
-        topk_weight = torch_scores_2d.gather(1, topk_idx)
-        topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + 1e-20)
-        topk_weight = topk_weight * routed_scaling_factor
-
-        torch_topk_scores = topk_weight.unsqueeze(0).unsqueeze(0)
-        torch_topk_indices = topk_idx.unsqueeze(0).unsqueeze(0)
-
-        ttnn_topk_scores = ttnn.from_torch(
-            torch_topk_scores,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        ttnn_topk_indices = ttnn.from_torch(
-            torch_topk_indices,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.uint16,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_topk_scores, ttnn_topk_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -622,8 +505,8 @@ class MoEGate(AbstractModule):
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
         )[0][0]
 
-        torch_input_2d = torch_input.squeeze(0).squeeze(0).to(torch.float32)  # [seq_len, hidden_dim]
-        torch_weight_2d = torch_weight.T.to(torch.float32)  # [output_dim, hidden_dim]
+        torch_input_2d = torch_input.squeeze(0).squeeze(0)  # [seq_len, hidden_dim]
+        torch_weight_2d = torch_weight.T  # [output_dim, hidden_dim]
 
         # use torch linear: input @ weight.T
         torch_output = torch.nn.functional.linear(torch_input_2d, torch_weight_2d)
