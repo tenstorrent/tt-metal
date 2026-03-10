@@ -323,9 +323,7 @@ class TestBarkThroughput:
         print(f"Semantic throughput: {throughput:.1f} tok/s ({num_tokens} tokens in {elapsed:.2f}s)")
 
         # Hard target: >= 20 tok/s for bounty
-        assert throughput >= 20.0, (
-            f"Semantic throughput {throughput:.1f} tok/s below target 20 tok/s"
-        )
+        assert throughput >= 20.0, f"Semantic throughput {throughput:.1f} tok/s below target 20 tok/s"
 
     def test_rtf(self, device, hf_model, tt_bark_model):
         """Full pipeline Real-Time Factor must be < 0.8."""
