@@ -298,30 +298,8 @@ using PerfTelemetryRecorder = std::conditional_t<
     LowResolutionBandwidthTelemetry,
     std::conditional_t<PERF_TELEMETRY_DISABLED, bool, std::nullptr_t>>;
 
-// Currently, we enable elastic channels in an all-or-nothing manner for router -> router
-// connections.
-
-constexpr bool ANY_SENDER_CHANNELS_ARE_ELASTIC() {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        if (IS_ELASTIC_SENDER_CHANNEL[i]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-constexpr bool PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC = ANY_SENDER_CHANNELS_ARE_ELASTIC();
-
-// Stubbed out the elastic channel writer adapter until elastic channels implemented
-// Issue: https://github.com/tenstorrent/tt-metal/issues/26311
-template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
-struct RouterElasticChannelWriterAdapter {};
-
 template <uint8_t SENDER_NUM_BUFFERS>
-using RouterToRouterSender = std::conditional_t<
-    PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC,
-    tt::tt_fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
-    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
+using RouterToRouterSender = tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>;
 
 constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
@@ -2215,9 +2193,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
-    size_t persistent_sender_amort_counter = 0;
-    auto execute_main_loop = [&](size_t& persistent_sender_amort_counter) {
-        uint32_t sender_amort_counter = persistent_sender_amort_counter;
+    static ActualSpeedySenderState persistent_speedy_sender_state;
+    static ActualSpeedyReceiverState persistent_speedy_receiver_state;
+    auto execute_main_loop = [&]() {
+        ActualSpeedySenderState local_speedy_sender_state;
+        ActualSpeedyReceiverState local_speedy_receiver_state;
+        speedy_state_copy_in(
+            local_speedy_sender_state,
+            local_speedy_receiver_state,
+            persistent_speedy_sender_state,
+            persistent_speedy_receiver_state);
         // while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/()) {
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
             did_something = false;
@@ -2262,7 +2247,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             sender_channel_from_receiver_credits[0],
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
-                            sender_amort_counter);
+                            local_speedy_sender_state);
                     }
 
                     if constexpr (is_receiver_channel_serviced[0]) {
@@ -2281,7 +2266,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
-                            local_fabric_telemetry);
+                            local_fabric_telemetry,
+                            local_speedy_receiver_state);
 #else
                         rx_progress |= run_receiver_channel_step_speedy<
                             0,
@@ -2297,7 +2283,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
-                            local_fabric_telemetry);
+                            local_fabric_telemetry,
+                            local_speedy_receiver_state);
 #endif
                     }
                 } else {  // non-speedy mode
@@ -2520,7 +2507,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
 
-        persistent_sender_amort_counter = sender_amort_counter;
+        speedy_state_copy_out(
+            persistent_speedy_sender_state,
+            persistent_speedy_receiver_state,
+            local_speedy_sender_state,
+            local_speedy_receiver_state);
     };
 
     uint64_t loop_start_cycles;
@@ -2530,7 +2521,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             switch (reinterpret_cast<volatile tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
                     state_manager_l1->state = RouterState::RUNNING;
-                    execute_main_loop(persistent_sender_amort_counter);
+                    execute_main_loop();
                     break;
                 case RouterCommand::PAUSE:
                     // Signal erisc1 to pause before entering pause command handling
@@ -2554,7 +2545,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it
         // is paused, draining, retraining, etc.), we will enter a busy wait loop in the main run loop
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-            execute_main_loop(persistent_sender_amort_counter);
+            execute_main_loop();
         }
     }
 }
@@ -3065,26 +3056,16 @@ void kernel_main() {
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
 
-    // create the remote receiver channel buffers using multi-pool system
-    auto remote_receiver_channels = tt::tt_fabric::MultiPoolEthChannelBuffers<
+    auto remote_receiver_channels = tt::tt_fabric::ReceiverChannelBuffersFromAllocs<
         PACKET_HEADER_TYPE,
-        eth_remote_channel_pools_args,
-        REMOTE_RECEIVER_TO_POOL_TYPE,
-        REMOTE_RECEIVER_TO_POOL_IDX>::make();
+        eth_remote_channel_allocs,
+        REMOTE_RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_receiver_channels =
-        tt::tt_fabric::MultiPoolEthChannelBuffers<
-            PACKET_HEADER_TYPE,
-            channel_pools_args,
-            RECEIVER_TO_POOL_TYPE,
-            RECEIVER_TO_POOL_IDX
-        >::make();
+    auto local_receiver_channels = tt::tt_fabric::
+        ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_sender_channels = tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
-        PACKET_HEADER_TYPE,
-        channel_pools_args,
-        SENDER_TO_POOL_TYPE,
-        SENDER_TO_POOL_IDX>::make();
+    auto local_sender_channels =
+        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -3305,19 +3286,13 @@ void kernel_main() {
 #endif
 
     // initialize the local receiver channel buffers
-    local_receiver_channels.init<channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    local_receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
     // initialize the remote receiver channel buffers
-    remote_receiver_channels.init<eth_remote_channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    remote_receiver_channels.init<eth_remote_channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the local sender channel worker interfaces
-    local_sender_channels.init<channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    // initialize the local sender channel buffers
+    local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
     // initialize the local sender channel worker interfaces
     // Sender channel 0 is always for local worker in the new design

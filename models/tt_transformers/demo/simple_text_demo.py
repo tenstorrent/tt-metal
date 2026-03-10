@@ -1078,7 +1078,7 @@ def test_demo_text(
                 sampling_params=prefill_sampling_params,
                 warmup_prefill=not is_device_perf_test,
             )
-            if prefill_sampling_params is not None:
+            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:
                 logits = prefill_out

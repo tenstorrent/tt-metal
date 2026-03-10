@@ -1191,9 +1191,6 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
         if (iteration_test.parametrized_name.empty()) {
             iteration_test.parametrized_name = iteration_test.name;
         }
-        if (max_iterations > 1) {
-            parametrize_core_sweep_test_name(iteration_test, sender_core_sweep_iterations, dest_core_sweep_iterations, sender_core_idx, dest_core_idx, all_cores, i);
-        }
 
         iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
 
@@ -1264,28 +1261,6 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
     return expanded_tests;
 }
 
-void TestConfigBuilder::parametrize_core_sweep_test_name(ParsedTestConfig& iteration_test, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t sender_core_idx, uint32_t dest_core_idx, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t iteration_num){
-    // Build descriptive name with core coordinates for core sweep iteration logging
-    if (sender_core_sweep_iterations > 0 || dest_core_sweep_iterations > 0) {
-        if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
-            const auto& src = all_cores[sender_core_idx];
-            const auto& dst = all_cores[dest_core_idx];
-            iteration_test.parametrized_name += "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) +
-                                                "]_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) +
-                                                "]";
-        } else if (sender_core_sweep_iterations > 0) {
-            const auto& src = all_cores[sender_core_idx];
-            iteration_test.parametrized_name +=
-                "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) + "]";
-        } else {
-            const auto& dst = all_cores[dest_core_idx];
-            iteration_test.parametrized_name +=
-                "_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) + "]";
-        }
-    } else {
-        detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", iteration_num);
-    }
-}
 std::vector<ParsedSenderConfig> TestConfigBuilder::expand_sender_core_sweep(
     const ParsedSenderConfig& input_sender,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
@@ -1877,8 +1852,6 @@ void TestConfigBuilder::expand_sequential_neighbor_exchange(
     // Select only the pair for this iteration
     if (iteration_idx < neighbor_pairs.size()) {
         const auto& pair = neighbor_pairs[iteration_idx];
-        // Append sender→receiver device IDs to test name for clarity
-        detail::append_with_separator(test.parametrized_name, "_", pair.first.chip_id, "to", pair.second.chip_id);
 
         std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {pair};
         add_senders_from_pairs(test, single_pair, base_pattern);
