@@ -10,7 +10,6 @@
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "api/debug/assert.h"
-#include "api/debug/dprint.h"
 
 #if defined(COMPILE_FOR_AERISC)
 #include "eth_fw_api.h"
