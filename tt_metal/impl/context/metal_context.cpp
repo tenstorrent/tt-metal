@@ -17,6 +17,9 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
+#include "metal_env_impl.hpp"
+#include "context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -42,7 +45,6 @@
 #include "llrt/llrt.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
-#include "context/context_descriptor.hpp"
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -62,7 +64,7 @@ namespace tt::tt_metal {
 
 namespace {
 // Helper function to validate worker_l1_size, also updates it if it's 0.
-void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
+void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
@@ -156,12 +158,12 @@ void MetalContext::initialize(
     ZoneScoped;
 
     // Workaround for galaxy, need to always re-init
-    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
+    if (rtoptions().get_force_context_reinit() or get_cluster().is_galaxy_cluster()) {
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
-    const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
-    validate_worker_l1_size(worker_l1_size, *hal_);
+    const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
+    validate_worker_l1_size(worker_l1_size, hal());
     if (initialized_) {
         if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
@@ -188,10 +190,10 @@ void MetalContext::initialize(
     worker_l1_size_ = worker_l1_size;
     l1_bank_remap_ = l1_bank_remap;
     fw_compile_hash_ = fw_compile_hash;
-    std::uint32_t max_alignment = std::max(hal_->get_alignment(HalMemType::DRAM), hal_->get_alignment(HalMemType::L1));
+    std::uint32_t max_alignment = std::max(hal().get_alignment(HalMemType::DRAM), hal().get_alignment(HalMemType::L1));
     worker_l1_unreserved_start_ = tt::align(
-        hal_->get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-            hal_->get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size_,
+        hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+            hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size_,
         max_alignment);
 
     // Initialize inspector
@@ -203,7 +205,7 @@ void MetalContext::initialize(
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
-    bool is_galaxy_cluster = cluster_->is_galaxy_cluster();
+    bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
@@ -211,26 +213,26 @@ void MetalContext::initialize(
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster);
     // Initialize debug servers. Attaching individual devices done below
-    rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
-    if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        TT_FATAL(!rtoptions_.get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
-        rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
-        dprint_server_ = std::make_unique<DPrintServer>(rtoptions_);
+    rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
+    if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
+        rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
+        dprint_server_ = std::make_unique<DPrintServer>(rtoptions());
     }
     watcher_server_ =
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
-    if (rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+    if (rtoptions().get_experimental_noc_debug_dump_enabled()) {
         TT_FATAL(
-            !rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
+            !rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
             "Both DPRINT and NOC debug dump cannot be enabled at the same time.");
         TT_FATAL(
-            !rtoptions_.get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
+            !rtoptions().get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
     }
 
-    if (rtoptions_.get_profiler_enabled()) {
-        TT_FATAL(cluster_->arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
+    if (rtoptions().get_profiler_enabled()) {
+        TT_FATAL(hal().get_arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
@@ -242,7 +244,7 @@ void MetalContext::initialize(
     }
 
     // Clear state, build FW
-    auto all_devices = cluster_->all_chip_ids();
+    auto all_devices = get_cluster().all_chip_ids();
     std::set<ChipId> device_ids(all_devices.begin(), all_devices.end());
 
     auto get_dispatch_ignore_cores = [this](ChipId device_id) {
@@ -266,8 +268,8 @@ void MetalContext::initialize(
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
-        cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), true);
+        get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
     // Initialize debug tools, reset cores, init FW
@@ -311,14 +313,14 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
-        rtoptions_.set_disable_dma_ops(false);
+        rtoptions().set_disable_dma_ops(false);
     }
 
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+    if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();
@@ -403,8 +405,11 @@ void MetalContext::teardown_base_objects() {
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
-    cluster_.reset();
-    hal_.reset();
+    if (env_owned_) {
+        delete env_;
+    }
+    env_ = nullptr;
+    env_owned_ = false;
 }
 
 void MetalContext::teardown_dispatch_state() {
@@ -419,46 +424,30 @@ void MetalContext::teardown_dispatch_state() {
 }
 
 void MetalContext::initialize_base_objects() {
-    const bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
-    const auto platform_arch = get_platform_architecture(rtoptions_);
+    // TODO. This function is called automatically whenever MetalContext is invoked and not initialized.
+    // Ideally, this would be done by the user via an explicit context creation API.
+    // For now, just pull out the mock device descriptor from get_mock_cluster_desc() global state
 
-    cluster_ = std::make_unique<Cluster>(rtoptions_);
-
-    FirmwareCapabilityRequest req;
-    req.enable_2_erisc_mode = rtoptions_.get_enable_2_erisc_mode();
-
-    FirmwareCapabilityResult res;
-
-    if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
-        rtoptions_.set_enable_2_erisc_mode(res.enable_2_erisc_mode);
+    // Check if mock mode was configured via API (before env vars take effect)
+    MetalEnvDescriptor settings;
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+        settings = MetalEnvDescriptor(*mock_cluster_desc);
     }
+    env_ = new tt::tt_metal::MetalEnv(std::move(settings));
+    env_owned_ = true;
 
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
-    hal_ = std::make_unique<Hal>(
-        platform_arch,
-        is_base_routing_fw_enabled,
-        rtoptions_.get_enable_2_erisc_mode(),
-        get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
-
-    rtoptions_.ParseAllFeatureEnv(*hal_);
-    cluster_->set_hal(hal_.get());
 }
 
 MetalContext::MetalContext() {
-    // Check if mock mode was configured via API (before env vars take effect)
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-    }
+    initialize_base_objects();
 
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
-    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    if (rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions().get_custom_fabric_mesh_graph_desc_path();
     }
-
-    initialize_base_objects();
 
     device_manager_ = std::make_unique<DeviceManager>();
 }
@@ -491,23 +480,29 @@ MetalContext::~MetalContext() {
     teardown_base_objects();
 }
 
-llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
-
-Cluster& MetalContext::get_cluster() {
-    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
-    return *cluster_;
+llrt::RunTimeOptions& MetalContext::rtoptions() {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_rtoptions();
 }
 
-const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
+Cluster& MetalContext::get_cluster() {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_cluster();
+}
+
+const llrt::RunTimeOptions& MetalContext::rtoptions() const {
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_rtoptions();
+}
 
 const Cluster& MetalContext::get_cluster() const {
-    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
-    return *cluster_;
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_cluster();
 }
 
 const Hal& MetalContext::hal() const {
-    TT_FATAL(hal_, "Trying to get hal before initializing it.");
-    return *hal_;
+    TT_ASSERT(env_ != nullptr, "MetalEnv is not initialized");
+    return MetalEnvAccessor(*env_).get_hal();
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
@@ -573,8 +568,8 @@ void MetalContext::set_default_fabric_topology() {
     // mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
 
-    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    if (rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions().get_custom_fabric_mesh_graph_desc_path();
     } else {
         custom_mesh_graph_desc_path_ = std::nullopt;
     }
@@ -583,7 +578,7 @@ void MetalContext::set_default_fabric_topology() {
 
 void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
+    this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
@@ -616,6 +611,12 @@ void MetalContext::set_fabric_config(
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
+        // Update the risc firmware context descriptor with the new fabric settings
+        // as well due to transient state between the descriptor creation and the fabric config update
+        if (risc_fw_context_descriptor_) {
+            risc_fw_context_descriptor_->fabric_config_ = fabric_config;
+            risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
+        }
     } else {
         TT_FATAL(
             this->fabric_config_ == fabric_config,
@@ -636,8 +637,8 @@ void MetalContext::set_fabric_config(
     }
 
     bool enable_erisc_iram =
-        !rtoptions_.get_erisc_iram_env_var_enabled() || !rtoptions_.get_erisc_iram_env_var_disabled();
-    rtoptions_.set_erisc_iram_enabled(enable_erisc_iram);
+        !rtoptions().get_erisc_iram_env_var_enabled() || !rtoptions().get_erisc_iram_env_var_disabled();
+    rtoptions().set_erisc_iram_enabled(enable_erisc_iram);
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         log_warning(
@@ -667,6 +668,17 @@ void MetalContext::set_fabric_config(
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;
 
+    // Update the risc firmware context descriptor with the new fabric settings
+    // as well due to transient state between the descriptor creation and the fabric config update
+    if (risc_fw_context_descriptor_) {
+        risc_fw_context_descriptor_->fabric_config_ = fabric_config;
+        risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
+        risc_fw_context_descriptor_->num_routing_planes_ = num_routing_planes;
+        risc_fw_context_descriptor_->fabric_tensix_config_ = fabric_tensix_config;
+        risc_fw_context_descriptor_->fabric_udm_mode_ = fabric_udm_mode;
+        risc_fw_context_descriptor_->fabric_manager_ = fabric_manager;
+    }
+
     // Reinitialize control plane with updated fabric settings
     if (control_plane_ != nullptr) {
         log_info(
@@ -684,7 +696,7 @@ void MetalContext::initialize_fabric_config() {
         return;
     }
 
-    this->cluster_->configure_ethernet_cores_for_fabric_routers(
+    this->get_cluster().configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
     control_plane.configure_routing_tables_for_fabric_ethernet_channels();
@@ -695,7 +707,7 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
         return;
     }
 
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -724,10 +736,13 @@ tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return f
 
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-    context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
-        *hal_,
-        *cluster_,
-        rtoptions_,
+    TT_FATAL(env_ != nullptr, "MetalEnv is not initialized");
+    std::string mock_cluster_desc_path =
+        env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
+    context_descriptor_ = std::make_shared<ContextDescriptor>(
+        hal(),
+        get_cluster(),
+        rtoptions(),
         fabric_config_,
         fabric_reliability_mode_,
         fabric_tensix_config_,
@@ -740,37 +755,38 @@ void MetalContext::init_context_descriptor(
         worker_l1_size,
         dispatch_core_config_,
         l1_bank_remap_,
-        rtoptions_.get_mock_cluster_desc_path()));
+        mock_cluster_desc_path);
 }
 
 void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size) {
-    // Various settings are not known and not relevant for risc firmware
-    risc_fw_context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
-        *hal_,
-        *cluster_,
-        rtoptions_,
-        tt::tt_fabric::FabricConfig::DISABLED,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricTensixConfig::DISABLED,
-        tt::tt_fabric::FabricUDMMode::DISABLED,
-        tt::tt_fabric::FabricManagerMode::DEFAULT,
-        tt::tt_fabric::FabricRouterConfig{},
+    // Fabric settings are used during risc init. In some cases, fabric is already running
+    // and we don't want to reset the cores
+    risc_fw_context_descriptor_ = std::make_shared<ContextDescriptor>(
+        hal(),
+        get_cluster(),
+        rtoptions(),
+        fabric_config_,
+        fabric_reliability_mode_,
+        fabric_tensix_config_,
+        fabric_udm_mode_,
+        fabric_manager_,
+        fabric_router_config_,
         num_hw_cqs,
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,
         worker_l1_size,
-        {},
-        {},
-        rtoptions_.get_mock_cluster_desc_path()));
+        DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t>{},
+        rtoptions().get_mock_cluster_desc_path());
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            *this->cluster_,
-            this->rtoptions_,
-            *hal_,
+            get_cluster(),
+            rtoptions(),
+            hal(),
             *distributed_context_,
             mesh_graph_desc_path.string(),
             logical_mesh_chip_id_to_physical_chip_id_mapping_,
@@ -782,9 +798,9 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
             this->fabric_manager_);
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            *this->cluster_,
-            this->rtoptions_,
-            *hal_,
+            get_cluster(),
+            rtoptions(),
+            hal(),
             *distributed_context_,
             mesh_graph_desc_path.string(),
             this->fabric_config_,
@@ -809,9 +825,9 @@ void MetalContext::construct_control_plane() {
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        *this->cluster_,
-        this->rtoptions_,
-        *hal_,
+        get_cluster(),
+        rtoptions(),
+        hal(),
         *distributed_context_,
         this->fabric_config_,
         this->fabric_reliability_mode_,
@@ -845,11 +861,11 @@ void MetalContext::initialize_control_plane_impl() {
     if (*distributed_context_->size() == 1) {
         this->construct_control_plane();
     } else {
-        auto cluster_type = cluster_->get_cluster_type();
-        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
+        const auto cluster_type = get_cluster().get_cluster_type();
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, get_cluster().is_ubb_galaxy());
         std::filesystem::path mesh_graph_desc_path =
             tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-                cluster_type, rtoptions_.get_root_dir(), fabric_type);
+                cluster_type, rtoptions().get_root_dir(), fabric_type);
 
         log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
@@ -873,13 +889,13 @@ const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stac
 }
 
 bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
-    ChipId id = *cluster_->all_chip_ids().begin();
+    ChipId id = *get_cluster().all_chip_ids().begin();
     if (core_type == CoreType::ACTIVE_ETH || core_type == CoreType::IDLE_ETH) {
         core_type = CoreType::ETH;
     }
 
-    CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
-    return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+    CoreCoord virtual_coord = get_cluster().get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
+    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id);
 }
 
 void MetalContext::on_dispatch_timeout_detected() {
@@ -889,13 +905,13 @@ void MetalContext::on_dispatch_timeout_detected() {
         dispatch_timeout_detection_processed_ = true;
         log_error(tt::LogMetal, "Timeout detected");
         // Serialize Inspector RPC data if enabled
-        if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
+        if (rtoptions().get_serialize_inspector_on_dispatch_timeout()) {
             log_info(tt::LogMetal, "Serializing Inspector RPC data");
             Inspector::serialize_rpc();
         }
 
         // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
-        std::string command = rtoptions_.get_dispatch_timeout_command_to_execute();
+        std::string command = rtoptions().get_dispatch_timeout_command_to_execute();
         if (!command.empty()) {
             log_info(tt::LogMetal, "Executing command: {}", command);
 

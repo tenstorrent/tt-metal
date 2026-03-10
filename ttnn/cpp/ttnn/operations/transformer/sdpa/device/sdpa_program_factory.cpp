@@ -585,7 +585,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         B,
         NQH,
         NKH,
-        Skt,
+        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
         DHt,
         vDHt,
         Sq_chunk_t,
