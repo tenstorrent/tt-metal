@@ -74,16 +74,16 @@ All storage and mount paths are centralized in `config/site.sh` — the single f
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `CI_STORAGE_BASE` | Root of CI shared storage | `/weka/ci` |
-| `MLPERF_BASE` | MLPerf data / models path | `/weka/mlperf` |
-| `CONTAINER_WORKDIR` | Working directory inside containers | `/opt/tt-metal` |
+| `CI_STORAGE_BASE` | Root of CI shared storage | `$(pwd)/.slurm-ci` |
+| `MLPERF_BASE` | MLPerf data / models path | `/mnt/MLPerf` |
+| `CONTAINER_WORKDIR` | Working directory inside containers | `/work` |
 | `TT_DEVICE_PATH` | Host path to Tenstorrent device nodes | `/dev/tenstorrent` |
 | `HUGEPAGES_PATH` | Host hugepages mount path | `/dev/hugepages-1G` |
 
 All variables can be overridden via the environment before sourcing the config:
 
 ```bash
-# Example: deploy on a cluster using /mnt/nfs instead of /weka
+# Example: deploy on a cluster with dedicated CI storage
 export CI_STORAGE_BASE="/mnt/nfs/ci"
 export MLPERF_BASE="/mnt/nfs/mlperf"
 ./slurm/submit.sh all-post-commit-workflows
@@ -138,7 +138,7 @@ sacct --format=JobID,JobName%50,State,ExitCode,Elapsed | grep <PIPELINE_ID>
 
 ## Viewing Logs
 
-Logs are written to shared storage at `${LOG_BASE}` (default: `/weka/ci/logs/`, configured in `config/site.sh`):
+Logs are written to shared storage at `${LOG_BASE}` (default: `$(pwd)/.slurm-ci/logs/`, configured in `config/site.sh`):
 
 ```
 ${LOG_BASE}/<job-name>/<job-id>/<array-task-id>.log   # stdout
@@ -224,7 +224,7 @@ get_arch_name bh_p100           # -> blackhole
 | `ARCH_NAME` | Target architecture | `wormhole_b0` |
 | `GIT_SHA` / `GIT_REF` | Git context | Auto-detected |
 | `SLACK_WEBHOOK_URL` | Slack notification webhook | (none) |
-| `CI_STORAGE_BASE` | Root of CI shared storage (from `site.sh`) | `/weka/ci` |
+| `CI_STORAGE_BASE` | Root of CI shared storage (from `site.sh`) | `$(pwd)/.slurm-ci` |
 | `LOG_BASE` | Log output directory (derived) | `${CI_STORAGE_BASE}/logs` |
 | `ARTIFACT_BASE` | Artifact storage root (derived) | `${CI_STORAGE_BASE}/artifacts` |
 | `ARTIFACT_DIR` | Pipeline artifact directory | `${CI_STORAGE_BASE}/artifacts/<PIPELINE_ID>` |
@@ -356,8 +356,8 @@ echo $PIPELINE_ID
 ls ${ARTIFACT_BASE}/$PIPELINE_ID/
 
 # Check if storage is mounted (path depends on config/site.sh)
-df -h ${CI_STORAGE_BASE:-/weka/ci}
-mount | grep weka
+df -h ${CI_STORAGE_BASE:-.slurm-ci}
+mount | grep -E 'nfs|weka'
 
 # Check artifact staging from build job logs
 grep "Staging" ${LOG_BASE}/build-artifact/<BUILD_JOBID>/0.log

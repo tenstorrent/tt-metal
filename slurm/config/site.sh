@@ -4,7 +4,10 @@
 # All other scripts derive their paths from these variables.
 
 # Root of CI shared storage (Weka, Pure Storage, NFS, etc.)
-export CI_STORAGE_BASE="${CI_STORAGE_BASE:-/weka/ci}"
+# Defaults to .slurm-ci/ under the launch directory so it works on any NFS
+# mount without assumptions about vendor-specific paths.  Override with:
+#   export CI_STORAGE_BASE=/weka/ci  (or any shared-storage path)
+export CI_STORAGE_BASE="${CI_STORAGE_BASE:-$(pwd)/.slurm-ci}"
 
 # MLPerf / model data mount point
 export MLPERF_BASE="${MLPERF_BASE:-/mnt/MLPerf}"

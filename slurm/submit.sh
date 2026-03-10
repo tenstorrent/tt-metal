@@ -26,22 +26,93 @@ source_lib artifacts
 # ---------------------------------------------------------------------------
 
 usage() {
-    cat <<'USAGE'
-Usage:
+    cat <<'HELP'
+submit.sh - Universal launcher for Slurm CI workflows
+
+USAGE
   ./slurm/submit.sh <workflow-name> [options] [-- extra-sbatch-args...]
   ./slurm/submit.sh --list
   ./slurm/submit.sh --status <pipeline-id>
+  ./slurm/submit.sh --help
 
-Options:
-  --docker-image IMAGE    Docker image override
-  --arch ARCH             Architecture (wormhole_b0, blackhole, etc.)
-  --ref REF               Git ref to build/test
-  --pipeline-id ID        Override auto-generated pipeline ID
-  --dry-run               Print what would be submitted without executing
-  --list                  List available workflows
-  --status PIPELINE_ID    Show status of all jobs in a pipeline
-  --                      Pass remaining args directly to sbatch
-USAGE
+COMMANDS
+  <workflow-name>           Submit the named workflow as a Slurm job.
+                            Workflows live in slurm/workflows/<name>.sh.
+  --list                    List all available workflow names and exit.
+  --status <pipeline-id>    Show sacct status for every job in a pipeline.
+
+OPTIONS
+  --docker-image IMAGE      Override the Docker image used by the workflow.
+                            Bypasses image resolution and Harbor mirror logic.
+  --arch ARCH               Target architecture passed to the job as ARCH_NAME.
+                            Common values: wormhole_b0, blackhole.
+  --ref REF                 Git ref (branch, tag, or SHA) to build/test.
+                            Overrides the auto-detected GIT_REF.
+  --pipeline-id ID          Set an explicit pipeline ID instead of the default
+                            auto-generated <timestamp>-<short-sha> format.
+  --dry-run                 Print the sbatch command that would be executed
+                            without actually submitting the job.
+  -h, --help                Show this help message and exit.
+  --                        Stop option parsing. Everything after '--' is
+                            forwarded verbatim as extra sbatch arguments
+                            (e.g. --partition=build --time=01:00:00).
+
+ENVIRONMENT VARIABLES
+  The following variables can be exported before invocation to customise
+  behaviour. CLI flags take precedence over environment variables.
+
+  CI_STORAGE_BASE           Root of shared CI storage. Artifacts and logs are
+                            stored beneath this path.
+                            Default: $(pwd)/.slurm-ci
+  PIPELINE_ID               Override the auto-generated pipeline identifier.
+  DOCKER_IMAGE              Docker image for the workflow (same as --docker-image).
+  ARCH_NAME                 Target architecture (same as --arch).
+  GIT_REF                   Git ref to build/test (same as --ref).
+  MLPERF_BASE               Mount point for MLPerf / model data.
+                            Default: /mnt/MLPerf
+  CONTAINER_WORKDIR         Working directory inside Docker containers.
+                            Default: /work
+  SLACK_WEBHOOK_URL         Slack webhook for failure notifications (optional).
+
+STORAGE LAYOUT
+  All derived paths are rooted at CI_STORAGE_BASE (see config/site.sh):
+
+    ${CI_STORAGE_BASE}/
+    ├── artifacts/<pipeline-id>/       Build tarballs, wheels, reports
+    │   ├── build/ttm_any.tar.zst
+    │   ├── docker/image_tags.env
+    │   ├── reports/<job-name>/
+    │   └── pipeline.json
+    └── logs/<pipeline-id>/            Job stdout/stderr logs
+        └── <job-name>-<job-id>.out
+
+EXAMPLES
+  # Run the full post-commit pipeline
+  ./slurm/submit.sh all-post-commit-workflows
+
+  # Run a specific test suite on Blackhole hardware
+  ./slurm/submit.sh fast-dispatch-build-and-unit-tests --arch blackhole
+
+  # Use a specific Docker image
+  ./slurm/submit.sh galaxy-unit-tests \
+      --docker-image ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+
+  # Build only, targeting the main branch, on the build partition
+  ./slurm/submit.sh build-artifact --ref main -- --partition=build
+
+  # Dry-run to see what would be submitted
+  ./slurm/submit.sh multi-host-physical --dry-run
+
+  # Point CI storage at a dedicated NFS path
+  export CI_STORAGE_BASE=/data/ci
+  ./slurm/submit.sh smoke
+
+  # Check pipeline status
+  ./slurm/submit.sh --status 20260310-143022-a1b2c3d
+
+  # List all available workflows
+  ./slurm/submit.sh --list
+HELP
 }
 
 # ---------------------------------------------------------------------------
