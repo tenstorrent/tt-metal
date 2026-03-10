@@ -611,6 +611,12 @@ void MetalContext::set_fabric_config(
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
+        // Update the risc firmware context descriptor with the new fabric settings
+        // as well due to transient state between the descriptor creation and the fabric config update
+        if (risc_fw_context_descriptor_) {
+            risc_fw_context_descriptor_->fabric_config_ = fabric_config;
+            risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
+        }
     } else {
         TT_FATAL(
             this->fabric_config_ == fabric_config,
@@ -661,6 +667,17 @@ void MetalContext::set_fabric_config(
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;
+
+    // Update the risc firmware context descriptor with the new fabric settings
+    // as well due to transient state between the descriptor creation and the fabric config update
+    if (risc_fw_context_descriptor_) {
+        risc_fw_context_descriptor_->fabric_config_ = fabric_config;
+        risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
+        risc_fw_context_descriptor_->num_routing_planes_ = num_routing_planes;
+        risc_fw_context_descriptor_->fabric_tensix_config_ = fabric_tensix_config;
+        risc_fw_context_descriptor_->fabric_udm_mode_ = fabric_udm_mode;
+        risc_fw_context_descriptor_->fabric_manager_ = fabric_manager;
+    }
 
     // Reinitialize control plane with updated fabric settings
     if (control_plane_ != nullptr) {
