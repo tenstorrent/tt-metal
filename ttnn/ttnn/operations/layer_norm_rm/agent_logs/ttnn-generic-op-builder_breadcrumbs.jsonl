@@ -1,0 +1,17 @@
+{"ts":"2026-03-10T10:34:16+00:00","event":"start","agent":"ttnn-generic-op-builder","operation":"layer_norm_rm","input_files":["ttnn/ttnn/operations/layer_norm_rm/op_design.md"],"predecessor_agent":"ttnn-operation-architect"}
+{"event":"input_parse","field":"operation_name","value":"layer_norm_rm","confidence":"HIGH","ts":"2026-03-10T10:42:25+00:00"}
+{"event":"file_created","file":"ttnn/ttnn/operations/layer_norm_rm/__init__.py","type":"entry_point","ts":"2026-03-10T10:42:31+00:00"}
+{"event":"file_created","file":"ttnn/ttnn/operations/layer_norm_rm/layer_norm_rm.py","type":"entry_point","ts":"2026-03-10T10:42:31+00:00"}
+{"event":"file_created","file":"ttnn/ttnn/operations/layer_norm_rm/layer_norm_rm_program_descriptor.py","type":"program_descriptor","ts":"2026-03-10T10:42:31+00:00"}
+{"event":"file_created","file":"ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_reader.cpp","type":"kernel_stub","ts":"2026-03-10T10:42:31+00:00"}
+{"event":"file_created","file":"ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_compute.cpp","type":"kernel_stub","ts":"2026-03-10T10:42:31+00:00"}
+{"event":"file_created","file":"ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_writer.cpp","type":"kernel_stub","ts":"2026-03-10T10:42:31+00:00"}
+{"event":"file_created","file":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py","type":"integration_test","ts":"2026-03-10T10:42:32+00:00"}
+{"event":"work_distribution","grid":"8x8","total_blocks":"num_rows/32","tiles_per_core":"split_work_to_cores","ts":"2026-03-10T10:42:33+00:00"}
+{"event":"cb_config","cb_id":0,"page_size":2048,"num_pages":"Wt","purpose":"cb_rm_in (RM sticks for tilize)","ts":"2026-03-10T10:42:40+00:00"}
+{"event":"cb_config","cb_id":1,"page_size":2048,"num_pages":"Wt","purpose":"cb_tilized (tilized tiles)","ts":"2026-03-10T10:42:40+00:00"}
+{"event":"cb_config","cb_id":2,"page_size":2048,"num_pages":1,"purpose":"cb_reduce_scaler (1/W)","ts":"2026-03-10T10:42:41+00:00"}
+{"event":"cb_config","cb_id":3,"page_size":2048,"num_pages":1,"purpose":"cb_eps (epsilon constant)","ts":"2026-03-10T10:42:41+00:00"}
+{"event":"cb_config","cb_id":16,"page_size":2048,"num_pages":"Wt","purpose":"cb_out_pre_untilize","ts":"2026-03-10T10:42:41+00:00"}
+{"event":"cb_config","cb_id":17,"page_size":2048,"num_pages":"Wt","purpose":"cb_rm_out (RM sticks for writer)","ts":"2026-03-10T10:42:41+00:00"}
+{"event":"test_run","test":"test_layer_norm_rm.py","result":"PASS","details":"6/6 tests passed (4 shapes + gamma/beta + validation)","ts":"2026-03-10T10:42:42+00:00"}
