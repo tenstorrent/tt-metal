@@ -11,6 +11,7 @@ namespace tt::tt_fabric::test {
 void run_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
 void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
 void run_linear_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
+void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p);
 }
 
 // Fixture for 2D mesh device setup (used for mesh/unicast/multicast tests)
@@ -121,6 +122,9 @@ TEST_P(AddrgenComprehensiveTest, Write) {
 TEST_P(AddrgenLinear1DTest, LinearUnicastWrite) {
     auto [api_variant, page_size, use_dram_dst] = GetParam();
 
+    // Check if this is a multicast variant
+    bool is_linear_multicast = (api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite);
+
     // Calculate tensor_bytes based on page_size (8 pages total)
     uint32_t num_pages = 8;
     uint32_t tensor_bytes = num_pages * page_size;
@@ -135,10 +139,15 @@ TEST_P(AddrgenLinear1DTest, LinearUnicastWrite) {
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
         .api_variant = api_variant,
-        .mesh_rows = 0,
+        .mesh_rows = is_linear_multicast ? 2 : 0,  // Use mesh_rows to indicate number of receivers
         .mesh_cols = 0};
 
-    tt::tt_fabric::test::run_linear_unicast_write_test(fixture, p);
+    // Run appropriate test
+    if (is_linear_multicast) {
+        tt::tt_fabric::test::run_linear_multicast_write_test(fixture, p);
+    } else {
+        tt::tt_fabric::test::run_linear_unicast_write_test(fixture, p);
+    }
 }
 
 // Helper function to get variant name as string
@@ -210,6 +219,7 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
             return "LinearFusedAtomicIncWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
             return "LinearFusedAtomicIncWriteSetState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite: return "LinearMulticastWrite";
         default: return "UnknownVariant";
     }
 }
@@ -284,7 +294,8 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::LinearScatterWriteSetState,
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWrite,
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteWithState,
-            tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState),
+            tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),
