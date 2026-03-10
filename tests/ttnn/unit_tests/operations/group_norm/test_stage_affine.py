@@ -13,8 +13,9 @@ import ttnn
 from .group_norm import group_norm
 
 
-def pytorch_reference(input_tensor, num_groups=G, eps=1e-5):
+def pytorch_reference(input_tensor, num_groups=2, eps=1e-5, gamma=None, beta=None):
     """PyTorch reference for this stage."""
+    N, _, HW, C = input_tensor.shape
     x_r = input_tensor.reshape(N, num_groups, C // num_groups, HW)
     m = x_r.mean(dim=[2, 3], keepdim=True)
     v = x_r.var(dim=[2, 3], unbiased=False, keepdim=True)
@@ -43,7 +44,7 @@ def test_affine(device, shape):
     gamma = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)
     beta = torch.randn(1, 1, 1, C, dtype=torch.bfloat16)
 
-    expected = pytorch_reference(torch_input, num_groups=G, eps=1e-5)
+    expected = pytorch_reference(torch_input, num_groups=G, eps=1e-5, gamma=gamma, beta=beta)
 
     ttnn_input = ttnn.from_torch(
         torch_input,

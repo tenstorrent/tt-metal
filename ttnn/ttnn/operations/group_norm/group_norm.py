@@ -7,9 +7,10 @@ Group Norm - Main Entry Point
 This file provides the user-facing function that:
 1. Validates input tensor and parameters
 2. Prepares gamma/beta tensors (host-side replication + tilize)
-3. Allocates output tensor on device
-4. Creates the program descriptor
-5. Launches via ttnn.generic_op
+3. Creates per-group scaler mask tiles
+4. Allocates output tensor on device
+5. Creates the program descriptor
+6. Launches via ttnn.generic_op
 
 Usage:
     from ttnn.operations.group_norm import group_norm
@@ -36,7 +37,7 @@ def group_norm(
 
     Args:
         input_tensor: Input tensor of shape (N, 1, H*W, C) in ROW_MAJOR_LAYOUT on device.
-        num_groups: Number of groups G. Must divide C, and C/G must be divisible by 32.
+        num_groups: Number of groups G. Must divide C; C must be divisible by 32.
         gamma: Per-channel scale tensor of shape (1, 1, 1, C) in bfloat16.
                 If None, a tensor of ones is created on the host.
         beta: Per-channel bias tensor of shape (1, 1, 1, C) in bfloat16.
@@ -62,6 +63,10 @@ def group_norm(
     # Prepare gamma/beta on host if not provided, then move to device as TILE_LAYOUT
     gamma_device, beta_device = _prepare_gamma_beta(gamma, beta, C, device)
 
+    # Create per-group scaler mask tiles: (1, 1, 32, G*C) TILE_LAYOUT
+    # Each group g has Ct tiles. Tile (g, ct) has 1/K at columns belonging to group g, 0 elsewhere.
+    group_scaler_device = _prepare_group_scaler(N, HW, C, num_groups, device)
+
     # Allocate output tensor: same shape, same layout (ROW_MAJOR), same dtype
     output_shape = [shape[i] for i in range(len(shape))]
     output_tensor = ttnn.allocate_tensor_on_device(
@@ -80,6 +85,7 @@ def group_norm(
         input_tensor,
         gamma_device,
         beta_device,
+        group_scaler_device,
         output_tensor,
         num_groups=num_groups,
         eps_packed=eps_packed,
@@ -87,7 +93,7 @@ def group_norm(
 
     # Execute - output tensor MUST be last in the list
     return ttnn.generic_op(
-        [input_tensor, gamma_device, beta_device, output_tensor],
+        [input_tensor, gamma_device, beta_device, group_scaler_device, output_tensor],
         program_descriptor,
     )
 
@@ -105,10 +111,6 @@ def _validate_input(input_tensor: ttnn.Tensor, num_groups: int) -> None:
 
     if C % num_groups != 0:
         raise ValueError(f"group_norm: C={C} must be divisible by num_groups={num_groups}")
-
-    channels_per_group = C // num_groups
-    if channels_per_group % 32 != 0:
-        raise ValueError(f"group_norm: C/G={channels_per_group} must be divisible by 32 " f"(C={C}, G={num_groups})")
 
     if HW % 32 != 0:
         raise ValueError(f"group_norm: H*W={HW} must be divisible by 32")
@@ -170,6 +172,74 @@ def _prepare_gamma_beta(gamma, beta, C, device):
     )
 
     return gamma_device, beta_device
+
+
+def _prepare_group_scaler(N, HW, C, num_groups, device):
+    """
+    Create per-group scaler mask tiles for the mean computation.
+
+    For each group g and tile column ct, creates a 32x32 tile where:
+    - Element (r, j) = 1.0 if global column (ct*32 + j) belongs to group g
+    - Element (r, j) = 0 otherwise
+    This is a binary membership mask (1/0). The 1/K scaling is applied
+    by the reduce scaler CB on the device side.
+
+    The tensor shape is (1, 1, 32, G*C) which tilizes to G*Ct tiles.
+    Tile index for group g, tile column ct = g * Ct + ct.
+
+    Args:
+        N: batch size
+        HW: spatial dimension (H*W)
+        C: channels
+        num_groups: G
+        device: target device
+
+    Returns:
+        TILE_LAYOUT tensor on device with G*Ct tiles
+    """
+    import torch  # Local import
+
+    G = num_groups
+    Ct = C // 32
+    channels_per_group = C // G
+
+    # Create (1, 1, 32, G*C) tensor - binary mask (1.0 / 0.0)
+    scaler = torch.zeros(1, 1, 32, G * C, dtype=torch.bfloat16)
+
+    for g in range(G):
+        group_start = g * channels_per_group  # global channel start for group g
+        group_end = (g + 1) * channels_per_group  # global channel end
+
+        # In the tensor, group g's tiles start at column offset g * C
+        # Tile column ct corresponds to global columns [ct*32, (ct+1)*32)
+        for ct in range(Ct):
+            col_start_global = ct * 32
+            col_end_global = (ct + 1) * 32
+
+            # Determine overlap of this tile column with group g
+            overlap_start = max(col_start_global, group_start)
+            overlap_end = min(col_end_global, group_end)
+
+            if overlap_start < overlap_end:
+                # Local column indices within this tile
+                local_start = overlap_start - col_start_global
+                local_end = overlap_end - col_start_global
+
+                # Position in the flattened tensor: group g starts at column g*C, tile ct at col ct*32
+                tensor_col_start = g * C + ct * 32 + local_start
+                tensor_col_end = g * C + ct * 32 + local_end
+
+                scaler[:, :, :, tensor_col_start:tensor_col_end] = 1.0
+
+    group_scaler_device = ttnn.from_torch(
+        scaler,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    return group_scaler_device
 
 
 def _float_to_uint32(value: float) -> int:

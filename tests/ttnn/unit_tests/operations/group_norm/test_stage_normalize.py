@@ -13,8 +13,9 @@ import ttnn
 from .group_norm import group_norm
 
 
-def pytorch_reference(input_tensor, num_groups=G, eps=1e-5):
+def pytorch_reference(input_tensor, num_groups=2, eps=1e-5):
     """PyTorch reference for this stage."""
+    N, _, HW, C = input_tensor.shape
     x_r = input_tensor.reshape(N, num_groups, C // num_groups, HW)
     m = x_r.mean(dim=[2, 3], keepdim=True)
     v = x_r.var(dim=[2, 3], unbiased=False, keepdim=True)
