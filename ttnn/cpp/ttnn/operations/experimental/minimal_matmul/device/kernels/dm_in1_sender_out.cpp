@@ -138,7 +138,9 @@ void kernel_main() {
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
     }
-    constexpr uint32_t chunk_width_in_mm_blocks = N_tiles_per_chunk / N_block_tiles;
+    // When SRS-fused, CTA 20 is repurposed to carry chunk_width_in_mm_blocks directly
+    // (the factory passes it instead of N_tiles_per_chunk, which is unused when N_chunks == 1).
+    constexpr uint32_t chunk_width_in_mm_blocks = N_tiles_per_chunk;
     uint32_t chunk_block_counter = 0;
 #endif
 

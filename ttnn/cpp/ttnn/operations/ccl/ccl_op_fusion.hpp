@@ -286,6 +286,11 @@ struct StridedReduceScatterFusedOpSignaler {
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     uint32_t fused_op_receiver_signal_semaphore = 0;
 
+    // Number of matmul N-blocks that make up one SRS chunk.
+    // The matmul output writer signals once per chunk (i.e. every chunk_width_in_mm_blocks
+    // N-blocks), and the SRS reader waits for exactly 1 semaphore increment per chunk.
+    uint32_t chunk_width_in_mm_blocks = 1;
+
     bool initialized = false;
 
     StridedReduceScatterFusedOpSignaler() = default;

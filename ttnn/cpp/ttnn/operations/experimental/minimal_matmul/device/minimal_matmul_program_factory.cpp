@@ -193,8 +193,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
 
-    // Compute N_tiles_per_chunk for splitting
+    // Compute N_tiles_per_chunk for splitting.
+    // When fusing with SRS (N_chunks == 1 always), the write_block_sync_split path is never
+    // taken, so N_tiles_per_chunk is unused for tensor-splitting. We repurpose CTA 20 to carry
+    // chunk_width_in_mm_blocks for the SRS signal batching logic in the kernel.
     const uint32_t N_tiles_per_chunk = N_tiles / N_chunks;
+    const uint32_t cta20_value =
+        srs_fused_op_signaler.has_value() ? srs_fused_op_signaler->chunk_width_in_mm_blocks : N_tiles_per_chunk;
 
     auto [default_M_block_tiles, default_K_block_tiles, default_N_block_tiles, default_subblock_h, default_subblock_w] =
         determine_default_block_sizes(M, K, N, fp32_dest_acc_en);
@@ -462,9 +467,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true,               // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        true,         // is_injector_core
+        N_chunks,     // N_chunks
+        cta20_value,  // N_tiles_per_chunk (or chunk_width_in_mm_blocks when SRS-fused)
         in3_tile_size,
     };
     append_accessors(
@@ -504,9 +509,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        false,              // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        false,        // is_injector_core
+        N_chunks,     // N_chunks
+        cta20_value,  // N_tiles_per_chunk (or chunk_width_in_mm_blocks when SRS-fused)
         in3_tile_size,
     };
     append_accessors(
@@ -544,9 +549,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,               // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        true,         // is_injector_core
+        N_chunks,     // N_chunks
+        cta20_value,  // N_tiles_per_chunk (or chunk_width_in_mm_blocks when SRS-fused)
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -583,9 +588,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false,              // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        false,        // is_injector_core
+        N_chunks,     // N_chunks
+        cta20_value,  // N_tiles_per_chunk (or chunk_width_in_mm_blocks when SRS-fused)
     };
     append_accessors(
         in1_receiver_compile_time_args,

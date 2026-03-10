@@ -170,6 +170,10 @@ void kernel_main() {
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
     }
+    // When SRS-fused, CTA 20 is repurposed to carry chunk_width_in_mm_blocks (the factory
+    // passes it directly instead of N_tiles_per_chunk, which is unused when N_chunks == 1).
+    constexpr uint32_t chunk_width_in_mm_blocks = N_tiles_per_chunk;
+    uint32_t chunk_block_counter = 0;
 #endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
@@ -316,8 +320,14 @@ void kernel_main() {
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
-                        noc_async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        // Signal once per completed SRS chunk (every chunk_width_in_mm_blocks
+                        // N-blocks), or unconditionally at any m-block boundary (n_block_iter == 0
+                        // with m_block_iter > 0) to flush any partial last chunk of that m-row.
+                        if (++chunk_block_counter == chunk_width_in_mm_blocks || n_block_iter == 0) {
+                            noc_async_write_barrier();
+                            srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            chunk_block_counter = 0;
+                        }
                     }
                 }
 #endif

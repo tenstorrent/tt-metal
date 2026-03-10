@@ -8,6 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -251,6 +252,14 @@ minimal_matmul_strided_reduce_scatter_async_program(
         fused_ternary_scalar,
         addcmul_input_tensor1,
         addcmul_input_tensor2);
+
+    // Propagate the resolved chunk_width_in_mm_blocks into the signaler so the
+    // matmul factory can pass it to the kernel as CTA 20 (repurposing
+    // N_tiles_per_chunk, which is unused when N_chunks=1).
+    {
+        const uint32_t cw = chunk_width_in_mm_blocks.value_or(tt::div_up(mm_N_full_block_wt_val, mm_block_wt_val));
+        srs_fused_op_signaler->chunk_width_in_mm_blocks = cw;
+    }
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
