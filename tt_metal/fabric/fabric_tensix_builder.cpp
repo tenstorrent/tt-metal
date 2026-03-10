@@ -482,7 +482,8 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
         bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
         // Router channel count: 1 for 1D topologies, 3 for 2D topologies
-        channel_counts[ChannelTypes::ROUTER_CHANNEL] = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
+        channel_counts[ChannelTypes::ROUTER_CHANNEL] =
+            builder_config::get_downstream_edm_count_for_vc(0, is_2D_routing);
         channel_counts[ChannelTypes::WORKER_CHANNEL] = 1;  // Always 1 worker channel in legacy mode
     }
 

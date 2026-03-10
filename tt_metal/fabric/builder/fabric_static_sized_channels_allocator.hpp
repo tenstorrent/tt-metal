@@ -11,6 +11,7 @@
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
+#include <numeric>
 #include <ostream>
 
 namespace tt::tt_fabric {
@@ -107,11 +108,10 @@ public:
     }
     // For total counts: return sum across all VCs
     size_t get_num_sender_channels() const {
-        return num_used_sender_channels_per_vc[0] + num_used_sender_channels_per_vc[1];
+        return std::accumulate(
+            num_used_sender_channels_per_vc.begin(), num_used_sender_channels_per_vc.end(), size_t{0});
     }
-    size_t get_num_receiver_channels() const {
-        return num_used_receiver_channels_per_vc[0] + num_used_receiver_channels_per_vc[1];
-    }
+    size_t get_num_receiver_channels() const { return builder_config::MAX_NUM_VCS; }
 
     // Override virtual print method from base class
     void print(std::ostream& os) const override;
@@ -138,8 +138,8 @@ private:
             builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
 
     // Configuration parameters
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {};
     size_t channel_buffer_size_bytes = 0;
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
@@ -188,10 +188,22 @@ inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
 
     // Configuration parameters
     os << "  Configuration:\n";
-    os << "    num_used_sender_channels_per_vc: [" << num_used_sender_channels_per_vc[0] << ", "
-       << num_used_sender_channels_per_vc[1] << "]\n";
-    os << "    num_used_receiver_channels_per_vc: [" << num_used_receiver_channels_per_vc[0] << ", "
-       << num_used_receiver_channels_per_vc[1] << "]\n";
+    os << "    num_used_sender_channels_per_vc: [";
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (vc > 0) {
+            os << ", ";
+        }
+        os << num_used_sender_channels_per_vc[vc];
+    }
+    os << "]\n";
+    os << "    num_used_receiver_channels_per_vc: [";
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (vc > 0) {
+            os << ", ";
+        }
+        os << num_used_receiver_channels_per_vc[vc];
+    }
+    os << "]\n";
     os << "    channel_buffer_size_bytes: " << channel_buffer_size_bytes << " B\n";
     os << "    available_channel_buffering_space: " << available_channel_buffering_space << " B\n";
     os << "    buffer_region_start: 0x" << std::hex << buffer_region_start << std::dec << "\n";

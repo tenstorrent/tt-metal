@@ -129,8 +129,7 @@ private:
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
 
     void initialize_mappings();
-    void initialize_vc0_mappings();
-    void initialize_vc1_mappings();
+    void initialize_vc_mappings(uint32_t vc);
 };
 
 }  // namespace tt::tt_fabric

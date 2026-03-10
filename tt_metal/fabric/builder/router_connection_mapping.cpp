@@ -120,7 +120,9 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         //    continue to use VC0, while inter-mesh connections use VC1
         // 5. The VC assignment is determined by the connection type, not the router capabilities
         //
-        TT_FATAL(outbound_directions.size() <= builder_config::num_downstream_edms_2d_vc0, "Outbound directions size must be less than or equal to num_downstream_edms_2d_vc0");
+        TT_FATAL(
+            outbound_directions.size() <= builder_config::num_downstream_edms_2d_per_vc[0],
+            "Outbound directions size must be less than or equal to num_downstream_edms_2d_per_vc[0]");
 
         // Add VC0 targets for intra-mesh traffic
         for (size_t i = 0; i < outbound_directions.size(); ++i) {

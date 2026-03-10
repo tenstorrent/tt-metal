@@ -107,7 +107,9 @@ Receiver channel side registers are defined here to receive free-slot credits fr
                                    South Router
 */
 struct StreamRegAssignments {
-    // Packet send/ack/complete stream IDs
+    // Packet send/ack/complete stream IDs (per-VC receiver)
+    static constexpr std::array<uint32_t, builder_config::MAX_NUM_VCS> to_receiver_pkts_sent_id = {0, 1};
+    // Legacy aliases
     static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;      // VC0 Ethernet Rx
     static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;      // VC1 Ethernet Rx
     static constexpr uint32_t to_sender_0_pkts_acked_id = 2;       // VC0 Ethernet Sender Channel 0
@@ -122,23 +124,19 @@ struct StreamRegAssignments {
     static constexpr uint32_t to_sender_5_pkts_completed_id = 11;  // VC1 Passthrough from upstream device X/Y edge
     static constexpr uint32_t to_sender_6_pkts_completed_id = 12;  // VC1 Passthrough from upstream device X/Y edge
     static constexpr uint32_t to_sender_7_pkts_completed_id = 13;  // VC1 Passthrough from upstream device X/Y edge
-    // Receiver channel free slots stream IDs
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 =
-        14;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 =
-        15;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 =
-        16;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_4 =
-        17;  // for downstream Z edge on: 2D+Z X/Y Router->VC0, S edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 =
-        18;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 =
-        19;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 =
-        20;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_4 =
-        21;  // for downstream Z edge on: 2D+Z X/Y Router->VC1, S edge on: 2D Z Router->VC1
+    // Receiver channel free slots stream IDs (per-VC, 4 edges each)
+    static constexpr std::array<std::array<uint32_t, 4>, builder_config::MAX_NUM_VCS>
+        vc_free_slots_from_downstream_edge = {{{14, 15, 16, 17}, {18, 19, 20, 21}}};
+    // Legacy aliases
+    // TODO - SNIJJAR - REVIEW. PREVIOUSLY WAS HARDCODED TO BE THE VALUES ABOVE!
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = vc_free_slots_from_downstream_edge[0][0];
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = vc_free_slots_from_downstream_edge[0][1];
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = vc_free_slots_from_downstream_edge[0][2];
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_4 = vc_free_slots_from_downstream_edge[0][3];
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = vc_free_slots_from_downstream_edge[1][0];
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 = vc_free_slots_from_downstream_edge[1][1];
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 = vc_free_slots_from_downstream_edge[1][2];
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_4 = vc_free_slots_from_downstream_edge[1][3];
     // Sender channel free slots stream IDs.
     // Decremented by respective upstream senders.
     static constexpr uint32_t sender_channel_0_free_slots_stream_id = 22;  // for upstream tensix worker
@@ -318,8 +316,10 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc =
+        {};  // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc =
+        {};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
