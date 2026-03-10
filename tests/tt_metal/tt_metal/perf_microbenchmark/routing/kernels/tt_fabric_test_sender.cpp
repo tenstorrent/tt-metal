@@ -72,7 +72,7 @@ void kernel_main() {
         const uint32_t num_packets = traffic_config->metadata.num_packets;
         const uint32_t num_warmup = conn->num_buffers_per_channel;
 
-        traffic_config->template send_packets_stateful<BENCHMARK_MODE>(traffic_config, conn, num_packets, num_warmup);
+        traffic_config->template send_packets_stateful<BENCHMARK_MODE>(num_packets, num_warmup);
 
     } else {
         while (packets_left_to_send) {
