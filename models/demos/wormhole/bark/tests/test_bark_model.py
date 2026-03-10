@@ -28,7 +28,6 @@ from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_
 from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
 from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
-
 # Device fixture is provided by the conftest.py in the repo root.
 # It handles --device-id, TG gateway, and device lifecycle automatically.
 
@@ -274,44 +273,73 @@ class TestBarkPipeline:
         print(f"Generated audio: {len(audio)} samples, {len(audio)/24000:.2f}s")
 
     def test_multilingual(self, device, hf_model, tt_bark_model):
-        """Test with non-English text."""
+        """Produce non-empty non-silent audio for non-English text."""
         model = tt_bark_model
-
-        # Bark supports multilingual via special tokens
-        text = "Bonjour, comment allez-vous?"
-        audio = model.generate(text, verbose=False)
-
-        assert isinstance(audio, np.ndarray)
-        assert len(audio) > 0
+        test_cases = [
+            ("Bonjour, comment allez-vous?", "French"),
+            ("Hola, ¿cómo estás?", "Spanish"),
+        ]
+        for text, lang in test_cases:
+            audio = model.generate(text, verbose=False)
+            assert isinstance(audio, np.ndarray), f"[{lang}] No audio returned"
+            assert audio.ndim == 1, f"[{lang}] Audio not 1D"
+            assert len(audio) >= 2400, f"[{lang}] Audio too short (<0.1s)"
+            assert np.abs(audio).max() > 0.001, f"[{lang}] Silent audio"
+            duration = len(audio) / 24_000
+            print(f"[{lang}] {duration:.2f}s of audio  ✓")
 
     def test_emotion_annotations(self, device, hf_model, tt_bark_model):
-        """Test with emotion annotations."""
+        """Emotion annotations must produce valid non-silent audio."""
         model = tt_bark_model
-
-        text = "I can't believe it! [laughs] That's amazing!"
-        audio = model.generate(text, verbose=False)
-
-        assert isinstance(audio, np.ndarray)
-        assert len(audio) > 0
+        test_cases = [
+            "I can't believe it! [laughs] That's amazing!",
+            "I am so tired [sighs] today.",
+        ]
+        for text in test_cases:
+            audio = model.generate(text, verbose=False)
+            assert isinstance(audio, np.ndarray), f"No audio for: {text}"
+            assert len(audio) >= 2400, f"Audio too short for: {text}"
+            assert np.abs(audio).max() > 0.001, f"Silent output for: {text}"
+            duration = len(audio) / 24_000
+            print(f"Emotion: {duration:.2f}s for '{text[:30]}...'  ✓")
 
 
 class TestBarkThroughput:
     """Benchmark tests for throughput validation."""
 
     def test_semantic_throughput(self, device, hf_model, tt_bark_model):
-        """Check semantic token generation throughput (target >= 20 tok/s)."""
+        """Semantic token generation throughput (target >= 20 tok/s)."""
         import time
 
         model = tt_bark_model
 
-        text = "Hello, this is a throughput test."
+        text = "Hello, this is a throughput test for semantic generation."
         t0 = time.time()
         semantic_tokens = model.generate_semantic_tokens(text)
         elapsed = time.time() - t0
 
-        num_tokens = semantic_tokens.shape[1]
+        num_tokens = semantic_tokens.shape[-1]
         throughput = num_tokens / elapsed
         print(f"Semantic throughput: {throughput:.1f} tok/s ({num_tokens} tokens in {elapsed:.2f}s)")
 
-        # Note: Target is 20 tok/s but initial bring-up may be slower
-        assert throughput > 0, "Throughput should be positive"
+        # Hard target: >= 20 tok/s for bounty
+        assert throughput >= 20.0, (
+            f"Semantic throughput {throughput:.1f} tok/s below target 20 tok/s"
+        )
+
+    def test_rtf(self, device, hf_model, tt_bark_model):
+        """Full pipeline Real-Time Factor must be < 0.8."""
+        import time
+
+        model = tt_bark_model
+
+        text = "Hello, my name is Suno. And, uh, I like pizza."
+        t0 = time.time()
+        audio = model.generate(text, verbose=False)
+        total = time.time() - t0
+
+        duration = len(audio) / 24_000
+        rtf = total / duration if duration > 0 else float("inf")
+        print(f"RTF: {rtf:.3f} (total={total:.2f}s, audio={duration:.2f}s)")
+
+        assert rtf < 0.8, f"RTF {rtf:.3f} exceeds target 0.8"
