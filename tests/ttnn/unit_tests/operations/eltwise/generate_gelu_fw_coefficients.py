@@ -42,12 +42,6 @@ except ImportError:
 # =============================================================================
 
 
-def float_to_bf16_bits_truncate(f):
-    """Truncation-based BF16 conversion (for enumeration only)."""
-    f32_bytes = struct.pack(">f", f)
-    return struct.unpack(">H", f32_bytes[:2])[0]
-
-
 def float_to_bf16_bits(f):
     """Round-to-nearest-even BF16 conversion (matches hardware).
 
@@ -174,14 +168,6 @@ def eval_poly_horner(coeffs, x):
     for i in range(len(coeffs) - 2, -1, -1):
         result = result * x + coeffs[i]
     return result
-
-
-def eval_poly_horner_f32(coeffs, x):
-    """Evaluate polynomial in float32 (simulating hardware)."""
-    result = np.float32(coeffs[-1])
-    for i in range(len(coeffs) - 2, -1, -1):
-        result = np.float32(np.float32(result) * np.float32(x) + np.float32(coeffs[i]))
-    return float(result)
 
 
 # =============================================================================
