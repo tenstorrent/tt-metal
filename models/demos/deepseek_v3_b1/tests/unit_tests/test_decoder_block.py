@@ -568,6 +568,29 @@ def create_decoder_block_tensors(
     golden_total_qnope_heads = total_kv_heads
     golden_total_qrope_heads = total_kv_heads
 
+    # ── Golden model PyTorch tensors (MoE) ──
+    golden_moe_rmsnorm_gamma = (
+        state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
+    )
+    golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
+    golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
+    golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
+    golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
+    golden_moe_bias = (
+        state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+    )
+
+    golden_moe_gate_proj_dict = {}
+    golden_moe_up_proj_dict = {}
+    golden_moe_down_proj_dict = {}
+    for e in range(num_routed_experts):
+        w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
+        golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+        w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
+        golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+        w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
+        golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+
     return {
         # Attention weights (from prepare_moe_layer_weights via BDW)
         "gamma_overlapped": layer.attn_norm,
@@ -644,6 +667,16 @@ def create_decoder_block_tensors(
         "golden_total_qrope_heads": golden_total_qrope_heads,
         "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
         "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
+        # Golden model PyTorch tensors (MoE)
+        "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
+        "golden_moe_shared_gate": golden_moe_shared_gate,
+        "golden_moe_shared_up": golden_moe_shared_up,
+        "golden_moe_shared_down": golden_moe_shared_down,
+        "golden_moe_routing_weights": golden_moe_routing_weights,
+        "golden_moe_bias": golden_moe_bias,
+        "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
+        "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
+        "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
     }
 
 
@@ -873,6 +906,20 @@ def test_decoder(
         heads_per_row=HEADS_PER_ROW,
         nope_dim=KNOPE_DIM,
         rope_dim=KROPE_DIM,
+        # MoE golden parameters
+        moe_shared_gate_weights=d["golden_moe_shared_gate"],
+        moe_shared_up_weights=d["golden_moe_shared_up"],
+        moe_shared_down_weights=d["golden_moe_shared_down"],
+        moe_gate_proj_weights_dict=d["golden_moe_gate_proj_dict"],
+        moe_up_proj_weights_dict=d["golden_moe_up_proj_dict"],
+        moe_down_proj_weights_dict=d["golden_moe_down_proj_dict"],
+        moe_rmsnorm_gamma=d["golden_moe_rmsnorm_gamma"],
+        moe_rmsnorm_epsilon=epsilon,
+        moe_routing_weights=d["golden_moe_routing_weights"],
+        moe_bias=d["golden_moe_bias"],
+        moe_gate_eps=RoutedExpert.GATE_EPS,
+        moe_gate_scaling_factor=RoutedExpert.GATE_SCALING_FACTOR,
+        moe_enable_routing=True,
     )
 
     logger.info(f"Golden computed (owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})")

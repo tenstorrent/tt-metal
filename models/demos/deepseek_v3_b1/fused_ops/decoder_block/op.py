@@ -47,8 +47,31 @@ class DecoderBlock:
         heads_per_row=8,
         nope_dim=512,
         rope_dim=64,
+        # MoE parameters (when None, only attention golden is computed)
+        moe_shared_gate_weights=None,
+        moe_shared_up_weights=None,
+        moe_shared_down_weights=None,
+        moe_gate_proj_weights_dict=None,
+        moe_up_proj_weights_dict=None,
+        moe_down_proj_weights_dict=None,
+        moe_rmsnorm_gamma=None,
+        moe_rmsnorm_epsilon=None,
+        moe_routing_weights=None,
+        moe_bias=None,
+        moe_gate_eps=1e-20,
+        moe_gate_scaling_factor=2.5,
+        moe_enable_routing=True,
     ):
-        return AttentionBlock.golden(
+        """
+        PyTorch reference for the full decoder layer: h1 = x + MLA(RMSNorm(x)), h2 = MoE(h1).
+
+        When MoE weights are None, returns only the attention output (h1).
+        When MoE weights are provided, chains AttentionBlock.golden -> MoeOp.golden.
+
+        Returns:
+            (full_q, new_kv, output)
+        """
+        full_q, new_kv, attn_output = AttentionBlock.golden(
             input_tensor,
             gamma_tensor,
             matmul_weights_tensor,
@@ -73,6 +96,31 @@ class DecoderBlock:
             nope_dim=nope_dim,
             rope_dim=rope_dim,
         )
+
+        if moe_shared_gate_weights is None:
+            return full_q, new_kv, attn_output
+
+        if moe_rmsnorm_epsilon is None:
+            moe_rmsnorm_epsilon = epsilon
+
+        _, _, moe_output = MoeOp.golden(
+            attn_output,
+            shared_gate_weights=moe_shared_gate_weights,
+            shared_up_weights=moe_shared_up_weights,
+            shared_down_weights=moe_shared_down_weights,
+            gate_proj_weights_dict=moe_gate_proj_weights_dict,
+            up_proj_weights_dict=moe_up_proj_weights_dict,
+            down_proj_weights_dict=moe_down_proj_weights_dict,
+            rmsnorm_gamma=moe_rmsnorm_gamma,
+            rmsnorm_epsilon=moe_rmsnorm_epsilon,
+            enable_routing=moe_enable_routing,
+            routing_weights_tensor=moe_routing_weights,
+            bias_tensor=moe_bias,
+            eps=moe_gate_eps,
+            scaling_factor=moe_gate_scaling_factor,
+        )
+
+        return full_q, new_kv, attn_output, moe_output
 
     @staticmethod
     def get_num_semaphores():
