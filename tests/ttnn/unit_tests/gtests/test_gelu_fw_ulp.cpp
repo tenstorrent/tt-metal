@@ -37,9 +37,9 @@
 #include <numbers>
 #include <vector>
 #include <limits>
-#include <iomanip>
 #include <map>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -224,7 +224,7 @@ TEST_F(GeluFwUlpTest, GeluAtZero) {
 
     int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
 
-    std::cout << "x=0: expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << std::endl;
+    log_debug(tt::LogTest, "x=0: expected={}, actual={}, ULP={}", expected, actual, ulp);
 
     EXPECT_EQ(actual, 0.0f) << "GELU(0) must be exactly 0";
     EXPECT_LE(ulp, 0) << "GELU(0) should have ULP=0";
@@ -247,8 +247,7 @@ TEST_F(GeluFwUlpTest, PositiveValues) {
         float expected = bf16_ulp_fw::gelu_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        log_debug(tt::LogTest, "x={}: expected={}, actual={}, ULP={}", input_val, expected, actual, ulp);
 
         EXPECT_LE(ulp, max_expected_ulp) << "GELU(" << input_val << ") ULP too high";
     }
@@ -274,8 +273,7 @@ TEST_F(GeluFwUlpTest, NegativeValues) {
         float expected = bf16_ulp_fw::gelu_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        log_debug(tt::LogTest, "x={}: expected={}, actual={}, ULP={}", input_val, expected, actual, ulp);
 
         EXPECT_LE(ulp, max_expected_ulp) << "GELU(" << input_val << ") ULP too high";
     }
@@ -290,8 +288,7 @@ TEST_F(GeluFwUlpTest, NearZeroRegion) {
         float expected = bf16_ulp_fw::gelu_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        log_debug(tt::LogTest, "x={}: expected={}, actual={}, ULP={}", input_val, expected, actual, ulp);
 
         EXPECT_LE(ulp, 2) << "GELU(" << input_val << ") near-zero ULP too high";
     }
@@ -328,7 +325,7 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     }
 
     const size_t valid_count = input_values.size();
-    std::cout << "\nCollected " << valid_count << " valid BF16 values\n";
+    log_debug(tt::LogTest, "Collected {} valid BF16 values", valid_count);
 
     // Pad to tile boundary
     const size_t tile_size = tt::constants::TILE_HW;
@@ -416,27 +413,28 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
         }
     }
 
-    // Print results
-    std::cout << "\n============================================================\n";
-    std::cout << "GELU FORWARD ULP ANALYSIS BY REGION (DAZ+FTZ MODEL)\n";
-    std::cout << "============================================================\n";
-    std::cout << std::setw(35) << "Region" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
-              << "Max ULP" << std::setw(15) << "Worst x\n";
-    std::cout << std::string(84, '-') << "\n";
-
+    // Log results
+    log_debug(tt::LogTest, "GELU FORWARD ULP ANALYSIS BY REGION (DAZ+FTZ MODEL)");
     for (const auto& r : regions) {
         if (r.count > 0) {
-            std::cout << std::setw(35) << r.name << std::setw(10) << r.count << std::setw(12) << std::fixed
-                      << std::setprecision(2) << (r.ulp_sum / r.count) << std::setw(12) << r.max_ulp << std::setw(15)
-                      << std::scientific << std::setprecision(3) << r.worst_x << "\n";
+            log_info(
+                tt::LogTest,
+                "  {:35s}  count={:5d}  mean_ulp={:.2f}  max_ulp={:5d}  worst_x={:.4e}",
+                r.name,
+                r.count,
+                r.ulp_sum / r.count,
+                r.max_ulp,
+                r.worst_x);
         }
     }
-
-    std::cout << std::string(84, '-') << "\n";
-    std::cout << std::setw(35) << "OVERALL" << std::setw(10) << valid_count << std::setw(12) << std::fixed
-              << std::setprecision(2) << (overall_ulp_sum / valid_count) << std::setw(12) << overall_max_ulp
-              << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x << "\n";
-    std::cout << "============================================================\n";
+    log_info(
+        tt::LogTest,
+        "  {:35s}  count={:5d}  mean_ulp={:.2f}  max_ulp={:5d}  worst_x={:.4e}",
+        std::string("OVERALL"),
+        static_cast<int>(valid_count),
+        overall_ulp_sum / valid_count,
+        overall_max_ulp,
+        overall_worst_x);
 
     // Per-region regression guards
     // With RNE rounding model matching hardware:
@@ -523,15 +521,9 @@ TEST_F(GeluFwUlpTest, CumulativeULPDistribution) {
         }
     }
 
-    std::cout << "\n============================================================\n";
-    std::cout << "GELU FORWARD CUMULATIVE ULP DISTRIBUTION (DAZ+FTZ MODEL)\n";
-    std::cout << "============================================================\n";
+    log_debug(tt::LogTest, "GELU FORWARD CUMULATIVE ULP DISTRIBUTION (DAZ+FTZ MODEL)");
 
     std::vector<int> thresholds = {0, 1, 2, 3, 5, 10, 20, 50, 100, 500, 1000};
-
-    std::cout << std::setw(10) << "ULP <=" << std::setw(12) << "Count" << std::setw(12) << "Percent" << std::setw(12)
-              << "Cumul %\n";
-    std::cout << std::string(46, '-') << "\n";
 
     for (int threshold : thresholds) {
         int total_le_threshold = 0;
@@ -541,13 +533,10 @@ TEST_F(GeluFwUlpTest, CumulativeULPDistribution) {
             }
         }
         double percent = 100.0 * total_le_threshold / valid_count;
-        std::cout << std::setw(10) << threshold << std::setw(12) << total_le_threshold << std::setw(11) << std::fixed
-                  << std::setprecision(2) << percent << "%" << std::setw(11) << percent << "%\n";
+        log_debug(tt::LogTest, "  ULP <= {:4d}: {:5d} ({:.2f}%)", threshold, total_le_threshold, percent);
     }
 
-    std::cout << std::string(46, '-') << "\n";
-    std::cout << "\nMax ULP: " << max_ulp << " at x = " << worst_x << "\n";
-    std::cout << "============================================================\n";
+    log_debug(tt::LogTest, "Max ULP: {} at x = {}", max_ulp, worst_x);
 
     EXPECT_LE(max_ulp, 2) << "Max ULP " << max_ulp << " at x=" << worst_x << " exceeds threshold 2";
 
@@ -584,12 +573,12 @@ TEST_F(GeluFwUlpTest, ReferenceImplementationVerification) {
     double gelu_1 = bf16_ulp_fw::gelu_exact(1.0);
     EXPECT_NEAR(gelu_1, 0.8413, 0.001) << "GELU(1) should be ~0.8413";
 
-    std::cout << "\nReference implementation verification:\n";
-    std::cout << "GELU(0) = " << gelu_0 << " (expected: 0)\n";
-    std::cout << "GELU(1) = " << gelu_1 << " (expected: ~0.8413)\n";
-    std::cout << "GELU(100) = " << gelu_100 << " (expected: ~100)\n";
-    std::cout << "GELU(-100) = " << gelu_neg100 << " (expected: ~0)\n";
-    std::cout << "GELU(-0.751) = " << gelu_min << " (expected: local minimum ~-0.177)\n";
+    log_debug(tt::LogTest, "Reference implementation verification:");
+    log_debug(tt::LogTest, "  GELU(0) = {} (expected: 0)", gelu_0);
+    log_debug(tt::LogTest, "  GELU(1) = {} (expected: ~0.8413)", gelu_1);
+    log_debug(tt::LogTest, "  GELU(100) = {} (expected: ~100)", gelu_100);
+    log_debug(tt::LogTest, "  GELU(-100) = {} (expected: ~0)", gelu_neg100);
+    log_debug(tt::LogTest, "  GELU(-0.751) = {} (expected: local minimum ~-0.177)", gelu_min);
 }
 
 // Saturation boundary verification: finds the golden reference's natural
@@ -665,22 +654,22 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
         }
     }
 
-    std::cout << "\n============================================================\n";
-    std::cout << "GELU FORWARD SATURATION BOUNDARY VERIFICATION\n";
-    std::cout << "============================================================\n";
-    std::cout << "\nGolden reference saturation boundaries (BF16 RNE model):\n";
-    std::cout << "  Negative zero tail (deep saturation):\n";
-    std::cout << "    Last x in zero region:     " << std::fixed << std::setprecision(4) << neg_sat_boundary_zero
-              << " (0x" << std::hex << bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_zero) << std::dec << ")\n";
-    std::cout << "    First x past boundary:     " << std::fixed << std::setprecision(4) << neg_sat_boundary_nonzero
-              << " (0x" << std::hex << bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_nonzero) << std::dec << ")\n";
-    std::cout << "    Kernel threshold:           -13.1875\n";
-    std::cout << "  Positive identity tail:\n";
-    std::cout << "    First x with GELU(x) == x: " << std::fixed << std::setprecision(4) << pos_first_identity << " (0x"
-              << std::hex << bf16_ulp_fw::float_to_bf16_bits(pos_first_identity) << std::dec << ")\n";
-    std::cout << "    Last x with GELU(x) != x:  " << std::fixed << std::setprecision(4) << pos_last_non_identity
-              << " (0x" << std::hex << bf16_ulp_fw::float_to_bf16_bits(pos_last_non_identity) << std::dec << ")\n";
-    std::cout << "    Kernel threshold:           2.78125\n";
+    log_debug(tt::LogTest, "GELU FORWARD SATURATION BOUNDARY VERIFICATION");
+    log_debug(tt::LogTest, "Golden reference saturation boundaries (BF16 RNE model):");
+    log_info(
+        tt::LogTest,
+        "  Neg zero tail: last_zero={:.4f} (0x{:04x}), first_nonzero={:.4f} (0x{:04x}), kernel=-13.1875",
+        neg_sat_boundary_zero,
+        bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_zero),
+        neg_sat_boundary_nonzero,
+        bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_nonzero));
+    log_info(
+        tt::LogTest,
+        "  Pos identity tail: first_identity={:.4f} (0x{:04x}), last_non_identity={:.4f} (0x{:04x}), kernel=2.78125",
+        pos_first_identity,
+        bf16_ulp_fw::float_to_bf16_bits(pos_first_identity),
+        pos_last_non_identity,
+        bf16_ulp_fw::float_to_bf16_bits(pos_last_non_identity));
 
     // --- Collect tail values for hardware verification ---
     // Negative tail: only deep saturation region (x <= neg_sat_boundary_zero)
@@ -698,8 +687,8 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
         }
     }
 
-    std::cout << "\n  Negative zero tail: " << neg_tail_values.size() << " BF16 values\n";
-    std::cout << "  Positive identity tail: " << pos_tail_values.size() << " BF16 values\n";
+    log_debug(tt::LogTest, "  Negative zero tail: {} BF16 values", neg_tail_values.size());
+    log_debug(tt::LogTest, "  Positive identity tail: {} BF16 values", pos_tail_values.size());
 
     // Combine both tails for a single device run
     std::vector<float> tail_values;
@@ -765,12 +754,18 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
         }
     }
 
-    std::cout << "\nHardware verification:\n";
-    std::cout << "  Negative zero tail:     " << neg_tail_values.size() << " values, " << neg_tail_nonzero_count
-              << " non-zero, max ULP=" << neg_tail_max_ulp << "\n";
-    std::cout << "  Positive identity tail: " << pos_tail_values.size() << " values, " << pos_tail_non_identity_count
-              << " non-identity, max ULP=" << pos_tail_max_ulp << "\n";
-    std::cout << "============================================================\n";
+    log_info(
+        tt::LogTest,
+        "HW verification: neg_tail={} values, {} non-zero, max_ulp={}",
+        neg_tail_values.size(),
+        neg_tail_nonzero_count,
+        neg_tail_max_ulp);
+    log_info(
+        tt::LogTest,
+        "HW verification: pos_tail={} values, {} non-identity, max_ulp={}",
+        pos_tail_values.size(),
+        pos_tail_non_identity_count,
+        pos_tail_max_ulp);
 
     EXPECT_EQ(neg_tail_max_ulp, 0) << "Negative saturation tail should have ULP=0 (worst at x=" << neg_tail_worst_x
                                    << ")";
@@ -897,95 +892,47 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
         }
     }
 
-    // Print all ULP > 1 values
-    std::cout << "\n============================================================\n";
-    std::cout << "ALL BF16 VALUES WITH ULP > 1\n";
-    std::cout << "============================================================\n";
-    std::cout << std::setw(12) << "x" << std::setw(10) << "x_bits" << std::setw(15) << "expected" << std::setw(10)
-              << "exp_bits" << std::setw(15) << "actual" << std::setw(10) << "act_bits" << std::setw(6) << "ULP"
-              << std::setw(12) << "region\n";
-    std::cout << std::string(90, '-') << "\n";
-
+    // Log all ULP > 1 values
+    log_debug(tt::LogTest, "ALL BF16 VALUES WITH ULP > 1 (total: {})", ulp2_entries.size());
     for (const auto& e : ulp2_entries) {
-        std::cout << std::setw(12) << std::scientific << std::setprecision(4) << e.x << "  0x" << std::hex
-                  << std::setfill('0') << std::setw(4) << e.x_bits << std::dec << std::setfill(' ') << std::setw(15)
-                  << std::scientific << std::setprecision(4) << e.expected << "  0x" << std::hex << std::setfill('0')
-                  << std::setw(4) << e.expected_bits << std::dec << std::setfill(' ') << std::setw(15)
-                  << std::scientific << std::setprecision(4) << e.actual << "  0x" << std::hex << std::setfill('0')
-                  << std::setw(4) << e.actual_bits << std::dec << std::setfill(' ') << std::setw(6) << e.ulp
-                  << std::setw(12) << e.region << "\n";
+        log_info(
+            tt::LogTest,
+            "  x={:.4e} (0x{:04x}) expected={:.4e} (0x{:04x}) actual={:.4e} (0x{:04x}) ULP={} region={}",
+            e.x,
+            e.x_bits,
+            e.expected,
+            e.expected_bits,
+            e.actual,
+            e.actual_bits,
+            e.ulp,
+            e.region);
     }
-    std::cout << "\nTotal ULP > 1 values: " << ulp2_entries.size() << "\n";
 
-    // Print boundary neighborhood
-    std::cout << "\n============================================================\n";
-    std::cout << "BOUNDARY NEIGHBORHOOD: x in [-7, -3]\n";
-    std::cout << "(exp/left-CDF boundary research zone)\n";
-    std::cout << "============================================================\n";
-    std::cout << std::setw(12) << "x" << std::setw(10) << "x_bits" << std::setw(15) << "expected" << std::setw(15)
-              << "actual" << std::setw(6) << "ULP" << std::setw(12) << "region\n";
-    std::cout << std::string(70, '-') << "\n";
-
-    // Sort by x value for readability
+    // Log boundary neighborhood
     std::sort(boundary_entries.begin(), boundary_entries.end(), [](const BoundaryEntry& a, const BoundaryEntry& b) {
         return a.x < b.x;
     });
 
+    int boundary_ulp_gt1 = 0;
     for (const auto& e : boundary_entries) {
-        std::string marker = (e.ulp > 1) ? " <<< ULP>1" : "";
-        std::cout << std::setw(12) << std::fixed << std::setprecision(4) << e.x << "  0x" << std::hex
-                  << std::setfill('0') << std::setw(4) << e.x_bits << std::dec << std::setfill(' ') << std::setw(15)
-                  << std::scientific << std::setprecision(4) << e.expected << std::setw(15) << e.actual << std::setw(6)
-                  << e.ulp << std::setw(12) << e.region << marker << "\n";
+        if (e.ulp > 1) {
+            boundary_ulp_gt1++;
+            log_info(
+                tt::LogTest,
+                "  BOUNDARY ULP>1: x={:.4f} (0x{:04x}) expected={:.4e} actual={:.4e} ULP={} region={}",
+                e.x,
+                e.x_bits,
+                e.expected,
+                e.actual,
+                e.ulp,
+                e.region);
+        }
     }
-
-    // Analyze: for each ULP>1 value, check what ULP it would get from the OTHER region's formula
-    std::cout << "\n============================================================\n";
-    std::cout << "BOUNDARY SHIFT ANALYSIS\n";
-    std::cout << "Can shifting the x=-5 boundary eliminate ULP=2 values?\n";
-    std::cout << "============================================================\n";
-
-    // Find the range of ULP>1 values
-    if (!ulp2_entries.empty()) {
-        float min_x = ulp2_entries[0].x;
-        float max_x = ulp2_entries[0].x;
-        for (const auto& e : ulp2_entries) {
-            min_x = std::min(min_x, e.x);
-            max_x = std::max(max_x, e.x);
-        }
-        std::cout << "ULP>1 value range: [" << std::fixed << std::setprecision(4) << min_x << ", " << max_x << "]\n";
-
-        // Count how many are on each side of x=-5
-        int exp_side = 0, cdf_side = 0;
-        for (const auto& e : ulp2_entries) {
-            if (e.x <= -5.0f) {
-                exp_side++;
-            } else {
-                cdf_side++;
-            }
-        }
-        std::cout << "  In exp-based region (x <= -5): " << exp_side << " values\n";
-        std::cout << "  In left-CDF region (x > -5):   " << cdf_side << " values\n";
-
-        // Suggest: if all ULP>1 values are near x=-5, shifting might help
-        if (min_x >= -5.5f && max_x <= -4.5f) {
-            std::cout << "\nAll ULP>1 values cluster near x=-5 boundary.\n";
-            std::cout << "Shifting the boundary might eliminate them.\n";
-            std::cout << "Candidate boundaries to try:\n";
-
-            // List BF16 values between min_x and max_x as potential boundaries
-            for (const auto& e : boundary_entries) {
-                if (e.x >= min_x - 0.25f && e.x <= max_x + 0.25f) {
-                    std::cout << "  x=" << std::fixed << std::setprecision(4) << e.x << " (0x" << std::hex
-                              << std::setfill('0') << std::setw(4) << e.x_bits << std::dec << std::setfill(' ')
-                              << ") ULP=" << e.ulp << " [" << e.region << "]\n";
-                }
-            }
-        }
-    } else {
-        std::cout << "No ULP>1 values found!\n";
-    }
-    std::cout << "============================================================\n";
+    log_info(
+        tt::LogTest,
+        "Boundary neighborhood [-7, -3]: {} values, {} with ULP>1",
+        boundary_entries.size(),
+        boundary_ulp_gt1);
 
     // Regression guard: ensure ULP never exceeds 2 for any BF16 value
     EXPECT_LE(ulp2_entries.size(), 2u) << "Expected at most 2 values with ULP > 1; got " << ulp2_entries.size();
@@ -1020,9 +967,7 @@ TEST_F(GeluFwUlpTest, SpecialValues) {
 
 // Correctness guard: key points spanning all 6 kernel code paths.
 TEST_F(GeluFwUlpTest, SummaryStatistics) {
-    std::cout << "\n========================================\n";
-    std::cout << "GELU FORWARD ULP SUMMARY (DAZ+FTZ MODEL)\n";
-    std::cout << "========================================\n";
+    log_debug(tt::LogTest, "GELU FORWARD ULP SUMMARY (DAZ+FTZ MODEL)");
 
     struct KeyPoint {
         std::string name;
@@ -1046,15 +991,18 @@ TEST_F(GeluFwUlpTest, SummaryStatistics) {
         float expected = bf16_ulp_fw::gelu_expected_bf16_daz(kp.x);
         int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << std::setw(30) << kp.name << ": x=" << std::setw(10) << std::fixed << std::setprecision(4) << kp.x
-                  << ", expected=" << std::setw(12) << std::scientific << std::setprecision(3) << expected
-                  << ", actual=" << std::setw(12) << actual << ", ULP=" << std::setw(5) << ulp << "\n";
+        log_info(
+            tt::LogTest,
+            "  {:30s}: x={:.4f}, expected={:.3e}, actual={:.3e}, ULP={}",
+            kp.name,
+            kp.x,
+            expected,
+            actual,
+            ulp);
 
         EXPECT_LE(ulp, kp.max_ulp_threshold)
             << kp.name << " (x=" << kp.x << ") ULP " << ulp << " exceeds threshold " << kp.max_ulp_threshold;
     }
-
-    std::cout << "========================================\n";
 }
 
 }  // namespace ttnn::test
