@@ -21,4 +21,4 @@ trap 'cleanup_job --exit-code $?' EXIT
 
 TEST_CMD="pytest tests/tt_fabric/cpu_only -x --timeout=300"
 
-docker_run --no-device -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

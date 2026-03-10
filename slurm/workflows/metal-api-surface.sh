@@ -22,7 +22,7 @@ resolve_workflow_docker_image ci-build
 setup_job
 trap 'cleanup_job --exit-code $?' EXIT
 
-docker_run --no-device -- "\
+docker_run "$DOCKER_IMAGE" "\
     python scripts/check_api_surface.py \
         --golden golden/api_surface.json \
         --output generated/test_reports/api_surface_diff.json

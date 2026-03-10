@@ -22,7 +22,7 @@ resolve_workflow_docker_image ci-build
 setup_job
 trap 'cleanup_job --exit-code $?' EXIT
 
-docker_run --no-device -- "\
+docker_run "$DOCKER_IMAGE" "\
     python scripts/check_ops_docs.py \
         --ops-dir ttnn/ttnn/operations \
         --docs-dir docs/source/ttnn/operations \
