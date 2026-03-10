@@ -15,7 +15,15 @@ from .module import Module, Parameter
 
 
 class RMSNorm(Module):
-    def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
+    def __init__(
+        self,
+        embedding_dim,
+        norm_eps=1e-5,
+        norm_elementwise_affine=True,
+        bias=True,
+        mesh_device=None,
+        dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         # https://github.com/tenstorrent/tt-metal/issues/31216
@@ -28,8 +36,8 @@ class RMSNorm(Module):
         self.use_bias = norm_elementwise_affine and bias
 
         if norm_elementwise_affine:
-            self.weight = Parameter(total_shape=[1, embedding_dim], device=mesh_device)
-            self.bias = Parameter(total_shape=[1, embedding_dim], device=mesh_device) if bias else None
+            self.weight = Parameter(total_shape=[1, embedding_dim], device=mesh_device, dtype=dtype)
+            self.bias = Parameter(total_shape=[1, embedding_dim], device=mesh_device, dtype=dtype) if bias else None
         else:
             self.weight = None
             self.bias = None
@@ -362,7 +370,7 @@ Set mesh_axis to None to disable data parallelism.
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
-    }  # used to overrride the num_out_blocks computed based on the input shape.
+    }  # used to override the num_out_blocks computed based on the input shape.
 
     def __init__(
         self,

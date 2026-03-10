@@ -2,15 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import struct
-from typing import TYPE_CHECKING
-
-import ttnn
-
-if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 
 
 def float_to_bfloat16_packed(value):
@@ -29,34 +21,15 @@ def float_to_uint32(value):
     return int.from_bytes(struct.pack("f", value), byteorder="little")
 
 
-def cb_descriptor_from_overlapped_tensor(
-    cb_index: int,
-    overlapped: OverlappedTensor,
-    fused_tensor_device: ttnn.Tensor,
-) -> ttnn.CBDescriptor:
-    """Create a CBDescriptor from an OverlappedTensor view backed by a fused device tensor.
+def generate_mm_weights(shape, dtype):
+    import torch
 
-    Uses ``cb_descriptor_from_sharded_tensor`` for buffer/address plumbing,
-    then replaces the format descriptor so that tile shape, page size, and
-    data format all reflect the *sub-tensor's* properties (which may differ
-    from the fused container).  The ``CBFormatDescriptor`` constructor
-    accepting ``ttnn.DataType`` is used so the DataType→DataFormat
-    conversion happens automatically in C++.
-    """
-    cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
-        cb_index,
-        fused_tensor_device,
-        address_offset=overlapped.byte_offset,
-        total_size=overlapped.total_size,
-        core_ranges=overlapped.core_range_set,
-    )
-    tile = ttnn.Tile(overlapped.tile_shape)
-    cb_desc.format_descriptors = [
-        ttnn.CBFormatDescriptor(
-            buffer_index=cb_index,
-            data_format=overlapped.dtype,
-            page_size=tile.get_tile_size(overlapped.dtype),
-            tile=ttnn.TileDescriptor(tile),
-        )
-    ]
-    return cb_desc
+    torch_mm_weights = (torch.randn(shape, dtype=torch.float32) / (shape[-2] ** 0.5)).to(dtype)
+    return torch_mm_weights
+    # TODO: Review the below, which should provide a similar result
+    # torch_mm_weights = torch.empty(shape, dtype=dtype)
+    # # This assumes that weights are already pre-transposed, so inner dimension is the first dimension
+    # # fan_in assumes the inner dimension is the second dimension, which is why we pass a transposed view
+    # # Alternatively, we could pass the original shape and use fan_out
+    # torch.nn.init.kaiming_normal_(torch_mm_weights.T, mode="fan_in", nonlinearity="linear")
+    # return torch_mm_weights

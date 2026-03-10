@@ -23,7 +23,8 @@ void kernel_main() {
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(1);
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
@@ -61,6 +62,12 @@ void kernel_main() {
                     if (kt == Kt - 1) {
                         constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                    }
+                }
+                if constexpr (in0_last_ktile_h > 0) {
+                    if (kt == Kt - 1) {
+                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(l1_write_addr_in0);
                     }
                 }
                 cb_push_back(cb_id_in0, onetile);

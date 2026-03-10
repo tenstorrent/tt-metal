@@ -208,7 +208,10 @@ def test_forward_pass(
     )
 
     # TTNN forward pass
-    tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
+    if MLPClass.__name__ == "SharedExpert":
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
+    else:
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

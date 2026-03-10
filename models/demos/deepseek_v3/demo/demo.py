@@ -143,6 +143,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
+    p.add_argument(
+        "--sample-on-device",
+        action="store_true",
+        default=False,
+        help="Enable on-device sampling (default: host-side sampling).",
+    )
     return p
 
 
@@ -260,6 +266,7 @@ def run_demo(
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
+    sample_on_device: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -322,6 +329,7 @@ def run_demo(
             )
             raise
 
+    gen = None
     try:
         # If random single-layer requested with 'moe', fail fast (Model1D demo is MLP-only)
         if random_weights and single_layer and single_layer.lower() == "moe":
@@ -359,6 +367,7 @@ def run_demo(
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
                 profile_decode=profile_decode,
+                sample_on_device=sample_on_device,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -409,13 +418,11 @@ def run_demo(
             results.append(result)
 
         return {"generations": results, "statistics": statistics}
-    except Exception:
-        logger.exception("run_demo failed with exception")
-        raise
     finally:
         # Clean up generator resources
         try:
-            gen.cleanup_all()
+            if gen is not None:
+                gen.cleanup_all()
         except Exception as e:
             logger.warning(f"Failed to cleanup generator: {e}")
         # Synchronize device before closing to flush pending ops (e.g. profiler data)
@@ -464,6 +471,7 @@ def main() -> None:
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
+        sample_on_device=args.sample_on_device,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

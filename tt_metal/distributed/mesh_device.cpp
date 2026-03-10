@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <initializer_list>
 #include <tt-logger/tt-logger.hpp>
 #include <mesh_command_queue.hpp>
@@ -191,6 +192,9 @@ const std::map<ChipId, IDevice*>& MeshDeviceImpl::ScopedDevices::opened_local_de
 const std::vector<MaybeRemote<IDevice*>>& MeshDeviceImpl::ScopedDevices::root_devices() const { return devices_; }
 
 uint8_t MeshDeviceImpl::num_hw_cqs() const {
+    if (view_->get_devices().empty()) {
+        return 0;
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->num_hw_cqs(); });
 }
@@ -203,6 +207,10 @@ bool MeshDeviceImpl::is_initialized() const {
     }
     if (!scoped_devices_) {
         return false;
+    }
+    // Has to report as initialized so that teardown runs for inactive mesh devices.
+    if (view_->get_devices().empty()) {
+        return true;
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->is_initialized(); });
@@ -238,9 +246,10 @@ MeshDeviceImpl::MeshDeviceImpl(
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
-    const auto& mpi_context = MetalContext::instance().global_distributed_context();
+    const auto& mpi_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
-        mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
+        mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
@@ -1162,7 +1171,9 @@ bool MeshDeviceImpl::initialize_impl(
             distributed::multihost::Color(1), distributed::multihost::Key(*distributed_context_->rank()));
         mesh_command_queues_.push_back(
             std::make_unique<DummyMeshCommandQueue>(pimpl_wrapper, 0, std::bind(&MeshDeviceImpl::lock_api, this)));
-        return false;
+        Inspector::mesh_device_initialized(this);
+        is_internal_state_initialized = true;
+        return true;
     }
 
     active_distributed_context_ = distributed_context_->split(
@@ -1544,6 +1555,7 @@ bool MeshDevice::is_local(const MeshCoordinate& coord) const { return pimpl_->is
 const MeshShape& MeshDevice::shape() const { return pimpl_->shape(); }
 void MeshDevice::reshape(const MeshShape& new_shape) { pimpl_->reshape(new_shape); }
 const MeshDeviceView& MeshDevice::get_view() const { return pimpl_->get_view(); }
+uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().mesh_id(); }
 std::string MeshDevice::to_string() const { return pimpl_->to_string(); }
 bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }

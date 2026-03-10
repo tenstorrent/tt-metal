@@ -56,6 +56,131 @@ struct CoreChainInfo {
     uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
 };
 
+namespace {
+
+// Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
+// or Bfp4_b for legacy path.
+tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bool use_streaming_compute) {
+    if (attn_mask.has_value()) {
+        return tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype());
+    }
+    return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
+}
+
+// Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
+// Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
+// fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
+// Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
+// Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
+bool can_use_streaming_compute(
+    bool is_causal,
+    bool use_provided_mask,
+    bool use_attention_sink,
+    const std::optional<uint32_t>& sliding_window_size,
+    bool is_chunked,
+    bool fp32_dest_acc_en,
+    uint32_t qk_out_subblock_h,
+    uint32_t Sk_chunk_t,
+    uint32_t padded_Sk,
+    uint32_t Sk,
+    uint32_t Sq_chunk_t) {
+    if (is_causal || use_provided_mask || use_attention_sink) {
+        return false;
+    }
+    if (sliding_window_size.value_or(0) != 0 || is_chunked || fp32_dest_acc_en) {
+        return false;
+    }
+    if (qk_out_subblock_h > 2 || Sk_chunk_t % (8 / qk_out_subblock_h) != 0) {
+        return false;
+    }
+    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
+    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
+    if (Sq_chunk_t / qk_out_subblock_h <= 1) {
+        return false;
+    }
+    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
+    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
+    return !streaming_mask_unsupported;
+}
+
+// Check whether all data formats used by the compute kernel are uniform (allows skipping reconfigs).
+bool check_uniform_dataformat(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const Tensor& out,
+    const std::optional<Tensor>& attn_mask,
+    bool use_streaming_compute) {
+    const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
+    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
+    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(v.dtype());
+    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(out.dtype());
+    const tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
+    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
+    return (q_df == k_df && q_df == v_df && q_df == out_df && q_df == mask_df && q_df == im_df);
+}
+
+// Compute the largest granularity that evenly divides both DHt and vDHt (up to dst_size).
+uint32_t compute_dht_granularity(uint32_t DHt, uint32_t vDHt, uint32_t dst_size) {
+    uint32_t g = std::min({DHt, vDHt, dst_size});
+    while (g > 1 && (DHt % g != 0 || vDHt % g != 0)) {
+        g--;
+    }
+    return g;
+}
+
+// Resolve exp_approx_mode from program config, defaulting to true.
+bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
+    if (program_config.has_value() && program_config->exp_approx_mode.has_value()) {
+        return program_config->exp_approx_mode.value();
+    }
+    return true;
+}
+
+// Chunked prefill parameters collected from page table layout.
+struct ChunkedParams {
+    uint32_t chunked_q_chunk_offset = 0;
+    uint32_t block_size = 0;
+    uint32_t block_size_t = 0;
+    uint32_t max_blocks_per_seq = 0;
+    uint32_t page_table_stick_size = 0;
+};
+
+// Compute chunked prefill parameters from the page table tensor.
+ChunkedParams compute_chunked_params(
+    bool is_chunked,
+    bool is_chunked_legacy,
+    bool flexible_chunked,
+    const std::optional<uint32_t>& chunk_start_idx,
+    const std::optional<Tensor>& page_table,
+    uint32_t k_seq_dim,
+    std::size_t q_chunk_size) {
+    ChunkedParams p;
+    if (!is_chunked) {
+        return p;
+    }
+    if (is_chunked_legacy) {
+        p.chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
+    }
+    const auto& page_table_tensor = page_table.value();
+    p.block_size = k_seq_dim;
+    p.block_size_t = p.block_size / TILE_HEIGHT;
+    if (flexible_chunked) {
+        p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+        p.page_table_stick_size = p.max_blocks_per_seq * sizeof(int32_t);
+        TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
+    } else {
+        p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        TT_FATAL(
+            p.page_table_stick_size % 32 == 0,
+            "page table page size in bytes must be a multiple of 32 due to address alignment");
+    }
+    return p;
+}
+
+}  // namespace
+
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
@@ -102,7 +227,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // q - [B, NHQ, Sq, DH_qk]
     // k - [B, 1, Sk, DH_qk]
     // v - [B, NVH, Sk, DH_v]
-    // k head is in latent space, and is reused accross all q heads
+    // k head is in latent space, and is reused across all q heads
 
     // Paged cache parameters when in chunked mode
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
@@ -179,35 +304,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "NKH: {}", NKH);
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
-    // In chunked prefill mode, the offset of Q in terms of Q chunks
-    uint32_t chunked_q_chunk_offset = 0;
-    uint32_t block_size = 0;
-    uint32_t block_size_t = 0;
-    [[maybe_unused]] uint32_t max_blocks_per_seq = 0;
-    uint32_t page_table_stick_size = 0;
+    const auto chunked = compute_chunked_params(
+        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
+    uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
+    const uint32_t block_size = chunked.block_size;
+    const uint32_t block_size_t = chunked.block_size_t;
+    [[maybe_unused]] const uint32_t max_blocks_per_seq = chunked.max_blocks_per_seq;
+    const uint32_t page_table_stick_size = chunked.page_table_stick_size;
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
-
-    if (is_chunked) {
-        if (is_chunked_legacy) {
-            // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
-            chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
-        }
-        // else: flexible_chunked - chunked_q_chunk_offset set inside of the op
-        const auto& page_table_tensor = page_table.value();
-        block_size = k_shape[2];  // K's sequence dimension represents block size
-        block_size_t = block_size / TILE_HEIGHT;
-        if (flexible_chunked) {
-            max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-            page_table_stick_size = max_blocks_per_seq * sizeof(int32_t);
-            TT_FATAL(page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
-        } else {
-            max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-            page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
-            TT_FATAL(
-                page_table_stick_size % 32 == 0,
-                "page table page size in bytes must be a multiple of 32 due to address alignment");
-        }
-    }
     // Log page table info
     log_debug(tt::LogOp, "is_chunked: {}", is_chunked);
     if (is_chunked) {
@@ -237,10 +341,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
-    bool exp_approx_mode =
-        program_config.has_value()
-            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
-            : true;
+    const bool exp_approx_mode = get_exp_approx_mode(program_config);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -277,11 +378,32 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
+    // Host code is responsible for determining matmul configuration
+    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    const uint32_t qk_in0_block_w = DHt;
+
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+
+    const bool use_streaming_compute = can_use_streaming_compute(
+        is_causal,
+        use_provided_mask,
+        use_attention_sink,
+        sliding_window_size,
+        is_chunked,
+        fp32_dest_acc_en,
+        qk_out_subblock_h,
+        Sk_chunk_t,
+        padded_Sk,
+        Sk,
+        Sq_chunk_t);
+
+    const bool lightweight_mask = use_streaming_compute && use_padded_mask;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t mask_tiles = lightweight_mask ? 1 : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -300,13 +422,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
     log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
 
-    // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    const uint32_t qk_in0_block_w = DHt;
-
-    auto [qk_out_subblock_h, qk_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
-
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
@@ -319,6 +434,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+
+    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -342,10 +459,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
     // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
     // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
+    const uint32_t dht_granularity = compute_dht_granularity(DHt, vDHt, dst_size);
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
@@ -458,16 +572,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
+        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+
+    const bool uniform_dataformat = check_uniform_dataformat(
+        input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
         B,
         NQH,
         NKH,
-        Skt,
+        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
         DHt,
         vDHt,
         Sq_chunk_t,
@@ -494,6 +612,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         scale_union.u,
         sliding_window_size.value_or(0),
         (std::uint32_t)use_attention_sink,
+        (std::uint32_t)use_streaming_compute,  // arg 30
+        valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
+        (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -521,9 +642,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df = attn_mask.has_value()
-                                 ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
-                                 : tt::DataFormat::Bfp4_b;
+    tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -564,9 +683,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
-                                .set_page_size(tt::CBIndex::c_3, mask_tile_size);
+        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+        // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
+        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
+        tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
+        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
+        auto c_in3_config =
+            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
+                .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
 
@@ -607,6 +731,15 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         auto c_in4_config = CircularBufferConfig(attention_sink_tiles * sink_tile_size, {{tt::CBIndex::c_4, sink_df}})
                                 .set_page_size(tt::CBIndex::c_4, sink_tile_size);
         CreateCircularBuffer(program, core_grid, c_in4_config);
+    }
+
+    // Streaming compute v2: 1-tile recip scratch CB (c_4) for normalize_row_streaming.
+    // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
+    // Safe: gating excludes use_attention_sink (which also uses c_4).
+    if (use_streaming_compute) {
+        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_4, im_df}})
+                                          .set_page_size(tt::CBIndex::c_4, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
     }
 
     // cb_qk_im
