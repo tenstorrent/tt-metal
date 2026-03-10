@@ -104,8 +104,6 @@
   skus:
     bh_llmbox:
       timeout: 10
-    bh_loudbox:
-      timeout: 10
     bh_quietbox_2:
       timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum
@@ -301,7 +299,7 @@
   model-name: wan2.2-t2v-a14b
 
 - name: Wan2.2-T2V-A14B BH LoudBox performance
-  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x8sp0tp1 and resolution_480p and t2v" --timeout=1200
+  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_2x4sp1tp0 and resolution_480p and t2v" --timeout=1200
   skus:
     bh_loudbox:
       timeout: 20
