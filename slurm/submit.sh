@@ -316,10 +316,32 @@ LOG_DIR="${LOG_BASE}/${PIPELINE_ID}"
 export ARTIFACT_DIR LOG_DIR
 
 # ---------------------------------------------------------------------------
-# Create artifact and log directories on Weka
+# Create artifact and log directories
 # ---------------------------------------------------------------------------
 
 mkdir -p "${ARTIFACT_DIR}" "${LOG_DIR}"
+
+# ---------------------------------------------------------------------------
+# Generate wrapper script for sbatch dispatch
+# ---------------------------------------------------------------------------
+# sbatch copies the submitted script to a staging area on the worker node
+# (e.g. /var/lib/slurm/slurmctld/job<id>/slurm_script).  The workflow scripts
+# use BASH_SOURCE[0] to locate the slurm/ library tree, which breaks when the
+# path resolves to the slurmctld copy instead of the NFS original.
+#
+# The wrapper preserves the workflow's #SBATCH directives (so sbatch honours
+# --time, --job-name, etc.) then exec's the real script from its NFS path,
+# giving BASH_SOURCE[0] the correct value.
+
+WRAPPER_SCRIPT="${LOG_DIR}/wrapper-${WORKFLOW_NAME}.sh"
+{
+    echo "#!/usr/bin/env bash"
+    # Preserve #SBATCH directives from the workflow so sbatch applies them
+    awk '/^#SBATCH/ { print }' "${WORKFLOW_SCRIPT}"
+    echo "export SLURM_SCRIPTS_DIR='${SLURM_SCRIPTS_DIR}'"
+    echo "exec bash '${WORKFLOW_SCRIPT}' \"\$@\""
+} > "${WRAPPER_SCRIPT}"
+chmod +x "${WRAPPER_SCRIPT}"
 
 # ---------------------------------------------------------------------------
 # Banner
@@ -344,7 +366,9 @@ log_info "=============================================="
 # ---------------------------------------------------------------------------
 
 if [[ $DRY_RUN -eq 1 ]]; then
-    log_info "[DRY RUN] Would submit:"
+    log_info "[DRY RUN] Would submit wrapper: ${WRAPPER_SCRIPT}"
+    log_info "  Wrapper exec's: ${WORKFLOW_SCRIPT}"
+    log_info ""
     log_info "  sbatch --parsable \\"
     log_info "    --job-name=ci-${WORKFLOW_NAME}-${PIPELINE_ID} \\"
     if [[ -n "${RESOLVED_PARTITION}" ]]; then
@@ -355,7 +379,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
     if [[ ${#EXTRA_SBATCH_ARGS[@]} -gt 0 ]]; then
         log_info "    ${EXTRA_SBATCH_ARGS[*]} \\"
     fi
-    log_info "    ${WORKFLOW_SCRIPT}"
+    log_info "    ${WRAPPER_SCRIPT}"
     exit 0
 fi
 
@@ -371,7 +395,7 @@ SBATCH_CMD=(
     "--job-name=ci-${WORKFLOW_NAME}-${PIPELINE_ID}"
     "--output=${LOG_DIR}/%x-%j.out"
     "--error=${LOG_DIR}/%x-%j.err"
-    "--export=ALL,PIPELINE_ID=${PIPELINE_ID},ARTIFACT_DIR=${ARTIFACT_DIR},LOG_DIR=${LOG_DIR}"
+    "--export=ALL,PIPELINE_ID=${PIPELINE_ID},ARTIFACT_DIR=${ARTIFACT_DIR},LOG_DIR=${LOG_DIR},SLURM_SCRIPTS_DIR=${SLURM_SCRIPTS_DIR}"
 )
 
 if [[ -n "${RESOLVED_PARTITION}" ]]; then
@@ -382,7 +406,7 @@ if [[ ${#EXTRA_SBATCH_ARGS[@]} -gt 0 ]]; then
     SBATCH_CMD+=("${EXTRA_SBATCH_ARGS[@]}")
 fi
 
-SBATCH_CMD+=("${WORKFLOW_SCRIPT}")
+SBATCH_CMD+=("${WRAPPER_SCRIPT}")
 
 SBATCH_OUTPUT="$("${SBATCH_CMD[@]}")"
 JOBID="${SBATCH_OUTPUT%%_*}"
