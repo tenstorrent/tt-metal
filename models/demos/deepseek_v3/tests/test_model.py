@@ -304,6 +304,7 @@ def run_test_forward_pass_dpmodel(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    config_name: str | None = None,
 ):
     if mode == "prefill":
         assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
@@ -447,6 +448,7 @@ def run_test_forward_pass_dpmodel(
         force_recalculate_weight_config,
         test_name="test_model",
         real_weights=True,
+        config_name=config_name,
     )
     model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
@@ -551,6 +553,7 @@ def test_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict,
+    config_name,
 ):
     hf_config_short.num_hidden_layers = num_hidden_layers
 
@@ -568,6 +571,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        config_name=config_name,
     )
 
 

@@ -66,6 +66,8 @@ def test_forward_pass(
     mesh_device,
     ccl,
     topk_fallback,
+    force_recalculate_weight_config,
+    config_name,
 ):
     """Test forward pass against reference model."""
 
@@ -90,9 +92,10 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate_weight_config,
         test_name="test_moe",
         real_weights=False,
+        config_name=config_name,
     )
 
     # Generate appropriate config using utility function

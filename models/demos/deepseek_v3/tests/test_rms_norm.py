@@ -10,6 +10,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -63,14 +64,17 @@ def test_forward_pass(
     mode,
     seq_len,
     reference_layernorm_path,
+    num_hidden_layers,
     model_path,
     hf_config,
+    hf_config_short,
     cache_path,
     mesh_device,
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    config_name,
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -83,6 +87,7 @@ def test_forward_pass(
         eps=hf_config.rms_norm_eps,
     ).eval()
 
+    state_dict_full = state_dict  # Preserve full state_dict for shared model cache
     if reference_layernorm_path is not None:
         # Use real weights from the model
         state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
@@ -96,17 +101,43 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     # Generate module configs and state
-    weight_config = get_test_weight_config(
-        RMSNormClass,
-        hf_config,
-        [state_dict] * num_module_layers,
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_rms_norm",
-        real_weights=reference_layernorm_path is not None,
-        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
-    )
+    if reference_layernorm_path is not None:
+        # Real weights: extract from the shared full-model cache
+        _NORM_PATH_MAP = {
+            "model.layers.0.input_layernorm": ("mlp_decoder_block", 0, "mla_norm"),
+            "model.layers.0.post_attention_layernorm": ("mlp_decoder_block", 0, "mlp_norm"),
+            "model.layers.0.self_attn.kv_a_layernorm": ("mlp_decoder_block", 0, "mla", "mla1d", "kv_norm"),
+            "model.layers.0.self_attn.q_a_layernorm": ("mlp_decoder_block", 0, "mla", "mla1d", "q_norm"),
+        }
+        hf_config_short.num_hidden_layers = num_hidden_layers
+        full_config = get_test_weight_config(
+            RowBatchedModel,
+            hf_config_short,
+            (state_dict_full,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_model",
+            real_weights=True,
+            config_name=config_name,
+        )
+        keys = _NORM_PATH_MAP[reference_layernorm_path]
+        weight_config = full_config
+        for key in keys:
+            weight_config = weight_config[key]
+    else:
+        # Random weights: use module-specific cache
+        weight_config = get_test_weight_config(
+            RMSNormClass,
+            hf_config,
+            [state_dict] * num_module_layers,
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_rms_norm",
+            real_weights=False,
+            layer_id=hf_config_size_attr,
+        )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     model_state = RMSNormClass.create_state(
         hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]

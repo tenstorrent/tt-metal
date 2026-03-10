@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import Deco
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -99,6 +100,7 @@ def run_test_forward_pass_decoder2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    config_name: str | None = None,
 ):
     # Check params
     if mode == "prefill":
@@ -108,6 +110,7 @@ def run_test_forward_pass_decoder2d(
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
         batch_size = batch_size_per_row * mesh_device.shape[0]
 
+    state_dict_full = state_dict  # Preserve full state_dict for shared model cache
     state_dict, position_ids, torch_input, reference_output, input_cache, _ = generate_reference_io(
         model_path,
         module_path,
@@ -129,17 +132,37 @@ def run_test_forward_pass_decoder2d(
     )
 
     # Set up model config
-    weight_config = get_test_weight_config(
-        DecoderBlockClass,
-        hf_config_short,
-        (state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_decoder_block",
-        real_weights=module_path is not None,
-        layer_id=module_path,
-    )
+    if module_path is not None:
+        # Real weights: extract from the shared full-model cache
+        full_config = get_test_weight_config(
+            RowBatchedModel,
+            hf_config_short,
+            (state_dict_full,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_model",
+            real_weights=True,
+            config_name=config_name,
+        )
+        k = hf_config_short.first_k_dense_replace
+        if reference_layer_idx < k:
+            weight_config = full_config["mlp_decoder_block"][reference_layer_idx]
+        else:
+            weight_config = full_config["moe_decoder_block"][reference_layer_idx - k]
+    else:
+        # Random weights: use module-specific cache
+        weight_config = get_test_weight_config(
+            DecoderBlockClass,
+            hf_config_short,
+            (state_dict,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_decoder_block",
+            real_weights=False,
+            layer_id=module_path,
+        )
     model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
@@ -264,6 +287,7 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     decode_position_ids,
+    num_hidden_layers,
     hf_config_short,
     cache_path,
     mesh_device,
@@ -273,7 +297,10 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    config_name,
 ):
+    hf_config_short.num_hidden_layers = num_hidden_layers
+
     if mode != "decode":
         decode_position_ids = None
 
@@ -292,6 +319,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        config_name=config_name,
     )
 
 

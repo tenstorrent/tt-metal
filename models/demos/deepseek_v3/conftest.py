@@ -33,6 +33,12 @@ def pytest_addoption(parser):
         default=None,
         help="Override the number of hidden layers to test (default: runs [5, 6])",
     )
+    parser.addoption(
+        "--config-name",
+        type=str,
+        default=None,
+        help="Custom config file name for weight cache (overrides the default layer-count + dtype_tag naming)",
+    )
 
 
 def pytest_generate_tests(metafunc):
@@ -261,6 +267,15 @@ def force_recalculate_weight_config(request):
     Fixture to control whether weight configuration files should be recalculated.
     """
     return request.config.getoption(RESET_WEIGHT_CACHE_OPTION)
+
+
+@pytest.fixture(scope="session")
+def config_name(request):
+    """
+    Fixture providing an optional custom config file name for weight cache.
+    When set, the config file becomes ``config.{config_name}.json``.
+    """
+    return request.config.getoption("--config-name", default=None)
 
 
 @pytest.fixture(scope="session")

@@ -61,7 +61,9 @@ def test_forward_pass(
     mesh_device: ttnn.Device,
     ccl: CCL,
     cache_path: Path,
+    force_recalculate_weight_config,
     set_deterministic_env: Any,
+    config_name,
 ):
     reference_model = DeepseekV3LMHead(hf_config).eval()
     state_dict = sub_state_dict(reference_model.state_dict(), "lm_head.")
@@ -75,9 +77,10 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate_weight_config,
         test_name="test_lm_head1d",
         real_weights=False,
+        config_name=config_name,
     )
     model_config = get_model_config(LMHead1D, mode, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, ccl)

@@ -15,6 +15,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -196,6 +197,7 @@ def run_test_forward_pass_mla2d(
     decode_position_ids: int | None = None,
     perf_mode=False,
     num_iters=20,
+    config_name: str | None = None,
 ):
     # Check params
     if mode == "prefill":
@@ -207,6 +209,7 @@ def run_test_forward_pass_mla2d(
 
     # Get reference IO
     logger.info("Setting up reference IO")
+    state_dict_full = state_dict  # Preserve full state_dict for shared model cache
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
         model_path,
         module_path,
@@ -228,17 +231,33 @@ def run_test_forward_pass_mla2d(
     )
 
     # Set up model config
-    weight_config = get_test_weight_config(
-        MLA2D,
-        hf_config_short,
-        (state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_mla",
-        real_weights=module_path is not None,
-        layer_id=module_path,
-    )
+    if module_path is not None:
+        # Real weights: extract from the shared full-model cache
+        full_config = get_test_weight_config(
+            RowBatchedModel,
+            hf_config_short,
+            (state_dict_full,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_model",
+            real_weights=True,
+            config_name=config_name,
+        )
+        weight_config = full_config["mlp_decoder_block"][layer_idx]["mla"]
+    else:
+        # Random weights: use module-specific cache
+        weight_config = get_test_weight_config(
+            MLA2D,
+            hf_config_short,
+            (state_dict,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_mla",
+            real_weights=False,
+            layer_id=module_path,
+        )
     model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -393,6 +412,7 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     decode_position_ids,
+    num_hidden_layers,
     hf_config_short,
     cache_path,
     mesh_device,
@@ -404,7 +424,10 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    config_name,
 ):
+    hf_config_short.num_hidden_layers = num_hidden_layers
+
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
 
@@ -427,6 +450,7 @@ def test_forward_pass(
         state_dict,
         decode_position_ids,
         perf_mode,
+        config_name=config_name,
     )
 
 

@@ -652,6 +652,7 @@ def get_test_weight_config(
     test_name: str | None = None,
     real_weights: bool = True,
     layer_id: str | int | None = None,
+    config_name: str | None = None,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating.
 
@@ -678,6 +679,10 @@ def get_test_weight_config(
             integer layer index, or a descriptive qualifier for random weights
             (``"kv_lora_rank"``).  ``None`` when no further distinction is
             needed.
+        config_name: Optional custom config file name.  When provided the
+            config file becomes ``config.{config_name}.json``, overriding
+            the default layer-count + dtype_tag naming.  Passed through to
+            :func:`get_weight_config`.
     """
     if test_name is not None:
         parts = [test_name, ModuleClass.__name__, "real" if real_weights else "random"]
@@ -696,6 +701,7 @@ def get_test_weight_config(
         mesh_device,
         force_recalculate,
         dtype_tag=dtype_tag,
+        config_name=config_name,
     )
 
 

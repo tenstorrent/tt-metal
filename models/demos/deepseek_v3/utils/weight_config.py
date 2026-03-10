@@ -137,17 +137,21 @@ def get_weight_config(
     model_path: str | None = None,
     single_layer: str | None = None,
     dtype_tag: str | None = None,
+    config_name: str | None = None,
 ):
     """
     Get weight configuration, either from cache or by converting weights.
 
     When ``dtype_tag`` is provided (non-None) an **accumulating** cache is used.
-    The cache lives at ``{weight_cache_path}/mesh_{R}x{C}/{dtype_tag}/`` — there is
-    no ``{N}_layers/`` component.  A single ``config.json`` grows over time: if a
-    previous run cached 5 layers and the caller now needs 10, the loader reuses the
-    existing 5 and converts only the missing 5, then saves a 10-layer config.
-    Conversely, if 10 layers are cached and only 5 are needed, the config is sliced
-    in-memory and no conversion happens.
+    The cache lives at ``{weight_cache_path}/mesh_{R}x{C}/`` — there is no
+    ``{N}_layers/`` or ``{dtype_tag}/`` subdirectory.  Tensor files encode their
+    dtype in the filename (e.g. ``wkv_b1.input_tensor_b.bf8b.tensorbin``) so that
+    different dtype configurations can share the same files.  The config file is
+    named ``config.{dtype_tag}.json`` and grows over time: if a previous run cached
+    5 layers and the caller now needs 10, the loader reuses the existing 5 and
+    converts only the missing 5, then saves a 10-layer config.  Conversely, if 10
+    layers are cached and only 5 are needed, the config is sliced in-memory and no
+    conversion happens.
 
     Args:
         ModuleClass: The module class to convert weights for
@@ -162,6 +166,10 @@ def get_weight_config(
         dtype_tag: String identifying the weight data formats used (auto-derived from
             ``ModuleClass.get_dtype_tag``).  When non-None the accumulating cache is used;
             when None the legacy ``{N}_layers/mesh_{R}x{C}/`` layout is used unchanged.
+        config_name: Optional custom name for the config file.  When provided the
+            config file becomes ``config.{config_name}.json``, overriding the
+            default ``config.{num_layers}layers.{dtype_tag}.json`` naming.
+            Only used when ``dtype_tag`` is not None.
 
     Returns:
         Weight configuration dictionary
@@ -175,15 +183,48 @@ def get_weight_config(
     n = hf_config.num_hidden_layers
 
     if dtype_tag is not None:
-        # Accumulating cache layout: no {N}_layers/ component.
+        # Accumulating cache layout: no {N}_layers/ or {dtype_tag}/ subdirectory.
+        # Tensor files encode their dtype in the filename (via shard_and_save).
         # mesh_cache_path is the root for resolving relative weight paths
         # (config_helpers.py anchors path stripping at "mesh_").
         mesh_cache_path = weight_cache_path / mesh_dir_name
-        dtype_cache_path = mesh_cache_path / dtype_tag
-        config_path = dtype_cache_path / "config.json"
+        dtype_cache_path = mesh_cache_path  # tensors live directly under mesh dir
+        if config_name is not None:
+            config_filename = f"config.{config_name}.json"
+        else:
+            config_filename = f"config.{n}layers.{dtype_tag}.json"
+        config_path = mesh_cache_path / config_filename
 
         # Load whatever is already on disk (raw, unvalidated).
         existing_config = None if force_recalculate else _load_raw_weight_config(config_path)
+
+        # If no exact-match config exists, look for any other config with the same
+        # dtype_tag that can serve as an augmentation base (e.g. a 5-layer cache when
+        # 10 layers are needed).  Pick the candidate with the most cached layers so we
+        # minimise the number of layers that need converting.
+        if existing_config is None and not force_recalculate and config_name is None:
+            best_num_cached = 0
+            best_candidate: WeightConfig | None = None
+            for candidate_path in mesh_cache_path.glob(f"config.*.{dtype_tag}.json"):
+                if candidate_path == config_path:
+                    continue
+                candidate = _load_raw_weight_config(candidate_path)
+                if candidate is None:
+                    continue
+                num_candidate = ModuleClass.get_num_cached_layers(candidate)
+                if num_candidate > best_num_cached:
+                    try:
+                        validate_weight_config_paths(mesh_cache_path, candidate)
+                        best_num_cached = num_candidate
+                        best_candidate = candidate
+                    except ValueError:
+                        pass
+            if best_candidate is not None:
+                existing_config = best_candidate
+                logger.info(
+                    f"No {n}-layer config found; using existing {best_num_cached}-layer cache "
+                    f"at {mesh_cache_path} as augmentation base (dtype_tag={dtype_tag})"
+                )
 
         if existing_config is not None:
             num_cached = ModuleClass.get_num_cached_layers(existing_config)
@@ -199,7 +240,7 @@ def get_weight_config(
                     if sliced is None:
                         sliced = existing_config
                     logger.info(
-                        f"Using {num_cached}-layer cache at {dtype_cache_path} "
+                        f"Using {num_cached}-layer cache at {config_path} "
                         f"(need {n} layers, dtype_tag={dtype_tag})"
                     )
                     return normalize_weight_config_paths(
@@ -237,12 +278,15 @@ def get_weight_config(
         validate_weight_config_paths(mesh_cache_path, weight_config)
 
         num_saved = ModuleClass.get_num_cached_layers(weight_config)
+        meta = {
+            "num_cached_layers": num_saved,
+            "dtype_tag": dtype_tag,
+            "mesh": mesh_dir_name,
+        }
+        if config_name is not None:
+            meta["config_name"] = config_name
         config_to_save = {
-            _META_KEY: {
-                "num_cached_layers": num_saved,
-                "dtype_tag": dtype_tag,
-                "mesh": mesh_dir_name,
-            },
+            _META_KEY: meta,
             **weight_config,
         }
         with locked_file(config_path, "w", exclusive=True) as f:

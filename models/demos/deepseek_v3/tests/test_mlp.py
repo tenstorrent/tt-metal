@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import dequantize, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -155,7 +156,9 @@ def test_forward_pass(
     module_path,
     mode,
     seq_len,
+    num_hidden_layers,
     hf_config,
+    hf_config_short,
     mesh_device,
     ccl,
     model_path,
@@ -164,10 +167,12 @@ def test_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict,
+    config_name,
 ):
     num_module_layers, _ = mesh_device.shape
 
     # Get the reference IO
+    state_dict_full = state_dict  # Preserve full state_dict for shared model cache
     if not issubclass(MLPClass, MLPDequant):
         reference_model = DeepseekV3MLP(hf_config).eval()
         state_dict = reference_model.to(torch.bfloat16).state_dict()
@@ -182,17 +187,39 @@ def test_forward_pass(
         )
 
     # Generate module configs and state
-    weight_config = get_test_weight_config(
-        MLPClass,
-        hf_config,
-        (state_dict,) * num_module_layers,
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_mlp",
-        real_weights=module_path is not None,
-        layer_id=module_path,
-    )
+    if module_path is not None:
+        # Real weights: extract from the shared full-model cache
+        hf_config_short.num_hidden_layers = num_hidden_layers
+        full_config = get_test_weight_config(
+            RowBatchedModel,
+            hf_config_short,
+            (state_dict_full,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_model",
+            real_weights=True,
+            config_name=config_name,
+        )
+        if module_path == "model.layers.0.mlp":
+            weight_config = full_config["mlp_decoder_block"][0]["mlp"]
+        elif module_path == "model.layers.3.mlp.shared_experts":
+            weight_config = full_config["moe_decoder_block"][0]["mlp"]["shared_expert"]
+        else:
+            raise ValueError(f"Unsupported module_path for shared cache extraction: {module_path}")
+    else:
+        # Random weights: use module-specific cache
+        weight_config = get_test_weight_config(
+            MLPClass,
+            hf_config,
+            (state_dict,) * num_module_layers,
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_mlp",
+            real_weights=False,
+            layer_id=module_path,
+        )
     model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

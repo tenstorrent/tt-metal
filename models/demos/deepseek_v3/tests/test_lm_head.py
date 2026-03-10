@@ -66,7 +66,9 @@ def test_forward_pass(
     mesh_device: ttnn.Device,
     ccl: CCL,
     cache_path: Path,
+    force_recalculate_weight_config,
     set_deterministic_env: Any,
+    config_name,
 ):
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
 
@@ -84,9 +86,10 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate_weight_config,
         test_name="test_lm_head",
         real_weights=False,
+        config_name=config_name,
     )
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)

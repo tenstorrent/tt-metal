@@ -596,6 +596,16 @@ def sub_state_dicts(
 
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
+# Maps ttnn dtype → short abbreviation used as a filename infix, e.g.
+# "wkv_b1.input_tensor_b.bf8b.tensorbin".  Any dtype not in this map falls
+# back to the old behaviour (no infix).
+_DTYPE_ABBREV: dict[ttnn.DataType, str] = {
+    ttnn.bfloat16: "bf16",
+    ttnn.bfloat8_b: "bf8b",
+    ttnn.bfloat4_b: "bf4b",
+    ttnn.float32: "fp32",
+}
+
 # Cache specs dumping for conversion optimization
 _CACHE_SPECS_DUMP_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
 _CACHE_SPECS_DUMP_ENV_VAR_LEGACY = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
@@ -782,7 +792,11 @@ def shard_and_save(
         )
 
     if not path.name.endswith(TENSOR_CACHE_EXTENSION):
-        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+        abbrev = _DTYPE_ABBREV.get(dtype) if dtype is not None else None
+        if abbrev is not None:
+            path = path.with_name(f"{path.name}.{abbrev}{TENSOR_CACHE_EXTENSION}")
+        else:
+            path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
 

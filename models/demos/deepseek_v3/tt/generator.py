@@ -87,6 +87,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         force_recalculate: bool = False,
         profile_decode: bool = False,
         sample_on_device: bool = False,
+        config_name: str | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -180,6 +181,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.prefill_max_tokens = prefill_max_tokens
         self.force_recalculate = force_recalculate
         self.profile_decode = profile_decode  # Profile decode: skip prefill, run only 1st dense + 1st MoE layer
+        self.config_name = config_name
         logger.info(f"Enable trace: {self.enable_trace}")
         if self.profile_decode:
             logger.info("profile_decode=True: Prefill skipped, decode runs only 1st dense layer + 1st MoE layer")
@@ -235,6 +237,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             model_path=self.model_path,
             single_layer=self.single_layer,
             dtype_tag=RowBatchedModel.get_dtype_tag(self.hf_config),
+            config_name=self.config_name,
         )
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:

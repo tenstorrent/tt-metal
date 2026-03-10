@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -92,7 +93,9 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 def test_forward_pass(
     mode: str,
     seq_len: int,
+    num_hidden_layers,
     hf_config: Any,
+    hf_config_short,
     cache_path: Path,
     mesh_device: Any,
     weight_type: str,
@@ -101,6 +104,7 @@ def test_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    config_name,
 ):
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
@@ -108,6 +112,7 @@ def test_forward_pass(
     reference_model = DeepseekV3MoEExperts(hf_config).eval()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
+    state_dict_full = state_dict  # Preserve full state_dict for shared model cache
     if weight_type == "random":
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
@@ -117,17 +122,34 @@ def test_forward_pass(
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
 
-    weight_config = get_test_weight_config(
-        TTExperts,
-        hf_config,
-        (state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_moe_experts",
-        real_weights=weight_type == "real",
-        layer_id=module_path,
-    )
+    if weight_type == "real":
+        # Real weights: extract from the shared full-model cache
+        hf_config_short.num_hidden_layers = num_hidden_layers
+        full_config = get_test_weight_config(
+            RowBatchedModel,
+            hf_config_short,
+            (state_dict_full,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_model",
+            real_weights=True,
+            config_name=config_name,
+        )
+        weight_config = full_config["moe_decoder_block"][0]["mlp"]["moe"]["moe_experts"]
+    else:
+        # Random weights: use module-specific cache
+        weight_config = get_test_weight_config(
+            TTExperts,
+            hf_config,
+            (state_dict,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_moe_experts",
+            real_weights=False,
+            layer_id=module_path,
+        )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)

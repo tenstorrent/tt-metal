@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -53,7 +54,9 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 )
 def test_embedding_forward_pass(
     EmbeddingClass,
+    num_hidden_layers,
     hf_config,
+    hf_config_short,
     mode,
     batch_size_or_seq_len,
     generate_reference_io,
@@ -64,10 +67,12 @@ def test_embedding_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict,
+    config_name,
 ):
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
 
+    state_dict_full = state_dict  # Preserve full state_dict for shared model cache
     if generate_reference_io:
         reference_model = EmbeddingReference(
             hf_config.vocab_size,
@@ -87,16 +92,33 @@ def test_embedding_forward_pass(
 
     # Generate module configs and state
     logger.info("Setting up TTNN configs")
-    weight_config = get_test_weight_config(
-        EmbeddingClass,
-        hf_config,
-        (state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_embedding",
-        real_weights=not generate_reference_io,
-    )
+    if not generate_reference_io:
+        # Real weights: extract from the shared full-model cache
+        hf_config_short.num_hidden_layers = num_hidden_layers
+        full_config = get_test_weight_config(
+            RowBatchedModel,
+            hf_config_short,
+            (state_dict_full,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_model",
+            real_weights=True,
+            config_name=config_name,
+        )
+        weight_config = full_config["embedding"]
+    else:
+        # Random weights: use module-specific cache
+        weight_config = get_test_weight_config(
+            EmbeddingClass,
+            hf_config,
+            (state_dict,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_embedding",
+            real_weights=False,
+        )
     model_config = get_model_config(EmbeddingClass, mode, hf_config, mesh_device)
     model_state = EmbeddingClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
