@@ -1289,7 +1289,11 @@ def run_test_moe_gpt_e2e(
     # For (1,6) mesh (6U test), device_id == ring_pos so both formats coincide,
     # but on (4,8) they differ: ring_pos=0..3 vs linearized_id=0,8,16,24 (col 0).
     expert_mapping_torch = create_expert_mapping_tensors(
-        num_devices=32, num_experts_per_device=4, mesh_device=mesh_device
+        num_devices=total_mesh_devices,
+        num_experts_global=experts_total,
+        mesh_device=mesh_device,
+        new_format=True,
+        return_torch=True,
     )
 
     # Dispatch mapping: replicated on all mesh devices (each device reads its own row by linearized ID)
@@ -1488,13 +1492,11 @@ def run_test_moe_gpt_e2e(
     # selective_reduce_combine uses: experts_per_device = global_experts / total_devices
     # GPT-OSS: 128 global experts / 32 devices = 4 per device (same as E=4 local experts).
     # DeepSeek:  256 global experts / 128 devices = 2 per device.
-    # global_experts = experts_total * mesh_cols treats each column-ring as having
-    # distinct expert sets (column c owns experts [16c..16(c+1)-1] globally).
-    # This gives experts_per_device = global_experts / total_devices = experts_total / ring_devices = E ✓
-    # Output shape: [experts_per_cluster, M, K]
-    # experts_per_cluster = global_experts / mesh_cols = experts_total (= 16 ring-local experts)
-    global_experts = experts_total * mesh_cols  # = 16 * 8 = 128
-    experts_per_cluster = experts_total  # = global_experts // mesh_cols = 16
+    # experts_total is the GLOBAL expert count across all devices (128 for GPT-OSS on 4x8).
+    # Each column-ring has experts_total / mesh_cols = 16 ring-local experts.
+    # experts_per_device = experts_total / total_mesh_devices = 128 / 32 = 4 = E ✓
+    global_experts = experts_total  # 128
+    experts_per_cluster = experts_total // mesh_cols  # 128 // 8 = 16 ring-local experts
     combine_output_torch = torch.zeros(experts_per_cluster, M, K, dtype=torch.bfloat16)
     tt_combine_preallocated = ttnn.from_torch(
         combine_output_torch,
@@ -1612,7 +1614,7 @@ def run_test_moe_gpt_e2e(
 
         # Read moe_gpt output for this device
         tt_output_result = ttnn.to_torch(moe_output_device_tensors[dev_idx])
-        tt_output_result = tt_output_result.reshape(-1, K)[: E * M, :]
+        tt_output_result = tt_output_result.reshape(-1, K)
 
         # Use dispatch output as reference input (no need to model dispatch ourselves)
         passing_dev, _ = verify_device_output(
@@ -1778,7 +1780,7 @@ def run_test_moe_gpt_e2e(
 )
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
-@pytest.mark.parametrize("E, experts_total", [(4, 16)])
+@pytest.mark.parametrize("E, experts_total", [(4, 128)])
 @pytest.mark.parametrize("selected_experts_k", [4])
 def test_moe_gpt_e2e(
     mesh_device,
@@ -1830,7 +1832,7 @@ def test_moe_gpt_e2e(
 )
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
-@pytest.mark.parametrize("E, experts_total", [(4, 16)])
+@pytest.mark.parametrize("E, experts_total", [(4, 128)])
 @pytest.mark.parametrize("selected_experts_k", [4])
 def test_moe_gpt_e2e_perf(
     mesh_device,
