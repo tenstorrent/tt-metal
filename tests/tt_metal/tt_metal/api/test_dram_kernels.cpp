@@ -35,12 +35,9 @@ TEST_F(BlackholeSingleCardFixture, DramKernelWriteToL1) {
     CoreCoord logical_dram_core{0, 0};
     auto virtual_dram_core = mesh_device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM_WORKER);
 
-    // Use a safe scratch address in DRAM core L1 (after the firmware/kernel config area).
     const auto& hal = MetalContext::instance().hal();
     uint64_t l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-    uint32_t kernel_config_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG);
-    uint32_t kernel_config_size = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG);
-    uint32_t result_l1_addr = kernel_config_base + kernel_config_size;
+    uint32_t result_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
     distributed::MeshWorkload workload;
     Program program = CreateProgram();
@@ -78,9 +75,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelOnMultipleCores) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
 
     const auto& hal = MetalContext::instance().hal();
-    uint32_t kernel_config_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG);
-    uint32_t kernel_config_size = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG);
-    uint32_t result_l1_addr = kernel_config_base + kernel_config_size;
+    uint32_t result_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     uint64_t l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     // Use internal SoC descriptor to get DRAM worker grid: (num_banks, num_subchannels).
