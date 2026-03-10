@@ -550,8 +550,8 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [False])
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("enable_trace", [True])
+@pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1063,7 +1063,7 @@ def test_optimized_moe_decode_block(
             num_links=4,
             token_parallel_core_dim=combine_token_parallel_core_dim,
             data_parallel_core_dim=combine_data_parallel_core_dim,
-            worker_cores=ttnn.get_moe_combine_cores(mesh_device),
+            worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
             mux_core_range_set=combine_mux_cores,
             output_tensor=tt_preallocated_combine_output,
             optional_cross_device_semaphore=combine_global_semaphore,
