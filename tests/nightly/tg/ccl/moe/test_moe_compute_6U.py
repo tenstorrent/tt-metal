@@ -19,6 +19,7 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_8X1_T3K = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_8x1_mesh_graph_descriptor.textproto"
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -979,10 +980,14 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
+# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16, 1x8 or 8x1 mesh descriptor before running
 @pytest.mark.skipif(
-    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
+    not (
+        is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16)
+        or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)
+        or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_8X1_T3K)
+    ),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16, 8x1 or 1x8 descriptor",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -999,6 +1004,15 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
+        pytest.param(
+            (8, 1),
+            (8, 1),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_8X1_T3K),
+                reason=f"8x1 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_8X1_T3K}",
+            ),
+            id="8x1",
+        ),
         pytest.param(
             (1, 8),
             (1, 8),
@@ -1020,7 +1034,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(

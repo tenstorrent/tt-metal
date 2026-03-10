@@ -1033,20 +1033,21 @@ MoEComputeMeshWorkloadFactory::create_at(
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
     for (auto core : matmul_cores) {
-        uint32_t vchannel = dram_bank & 0x3;
+        // uint32_t vchannel = dram_bank & 0x3;
+        uint32_t vchannel = 0;
 
-        // Check if there is any core with the same row
-        auto it = std::find_if(matmul_cores.begin(), matmul_cores.begin() + dram_bank, [&](const auto& core_prev) {
-            return core_prev.y == core.y;
-        });
+        // // Check if there is any core with the same row
+        // auto it = std::find_if(matmul_cores.begin(), matmul_cores.begin() + dram_bank, [&](const auto& core_prev) {
+        //     return core_prev.y == core.y;
+        // });
 
-        // If there is any core with the same row, make sure the VChannel is different
-        if (it != matmul_cores.begin() + dram_bank) {
-            size_t j = std::distance(matmul_cores.begin(), it);
-            if (vchannel == vchannels[j]) {
-                vchannel = (vchannel + 1) & 0x3;
-            }
-        }
+        // // If there is any core with the same row, make sure the VChannel is different
+        // if (it != matmul_cores.begin() + dram_bank) {
+        //     size_t j = std::distance(matmul_cores.begin(), it);
+        //     if (vchannel == vchannels[j]) {
+        //         vchannel = (vchannel + 1) & 0x3;
+        //     }
+        // }
         vchannels.push_back(vchannel);
 
         // Use the optimized ring neighbor mapping
