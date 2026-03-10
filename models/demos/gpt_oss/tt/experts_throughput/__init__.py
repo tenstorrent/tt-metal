@@ -147,19 +147,15 @@ class ThroughputExperts:
 
         # Create all_to_all configurations (used by dense flow)
         self.dispatch_config_decode = AllToAllDispatchConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=decode_memory_config,
         )
         self.dispatch_config_prefill = AllToAllDispatchConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=prefill_memory_config,
         )
         self.combine_config_decode = AllToAllCombineConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=decode_memory_config,
         )
         self.combine_config_prefill = AllToAllCombineConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=prefill_memory_config,
         )
 
@@ -177,10 +173,8 @@ class ThroughputExperts:
         # Create mapping tensors for all_to_all routing (dense flow)
         self.expert_mapping_tensors = create_expert_mapping_tensors(
             num_devices=config.num_devices,
-            num_experts_per_device=config.num_experts_per_device,
+            num_experts_global=config.num_experts,
             mesh_device=mesh_device,
-            cluster_axis=dispatch_cluster_axis,
-            mesh_shape=mesh_shape,
         )
 
         # Create remap mask (rows is dispatch dimension)

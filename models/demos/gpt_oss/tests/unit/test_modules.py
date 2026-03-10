@@ -948,6 +948,7 @@ def run_model_forward_test(
         max_local_batch_size=local_batch_size,
         users_row_sharded=is_row_sharded,
         use_throughput_experts=use_throughput_experts,
+        use_fused_experts=use_throughput_experts,
     )
 
     # Create random input tokens
