@@ -896,6 +896,55 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     }
 }
 
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted = false,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dests = 1) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
+        }
+    }
+    bool static_vc_alloc = true;
+    uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY |
+                             NOC_CMD_WR | NOC_CMD_WR_INLINE |
+                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
+                             (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+
+    uint32_t be32 = be;
+    uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES - 1));
+    // If we're given a misaligned address, don't write to the bytes in the word below the address
+    be32 = (be32 << be_shift);
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr & 0xFFFFFFFF);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
+        }
+    }
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
 inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     uint32_t noc,
