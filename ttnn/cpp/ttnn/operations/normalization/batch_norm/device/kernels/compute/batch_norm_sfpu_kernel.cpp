@@ -27,7 +27,6 @@ ALWI void batchnorm_bcast_tiles(
     uint32_t weight_has,
     uint32_t bias_has) {
     constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
     uint32_t weight_has_value = weight_has;
     uint32_t bias_has_value = bias_has;
     auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
@@ -36,7 +35,6 @@ ALWI void batchnorm_bcast_tiles(
     experimental::CircularBuffer cb_bcast_obj(cb_bcast);
     experimental::CircularBuffer cb_other_obj(cb_other);
     experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
     experimental::CircularBuffer cb_den_obj(cb_den);
     experimental::CircularBuffer cb_weight_obj(cb_weight);
     experimental::CircularBuffer cb_bias_obj(cb_bias);
