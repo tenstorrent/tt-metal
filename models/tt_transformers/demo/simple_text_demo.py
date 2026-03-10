@@ -829,7 +829,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 50000000, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
