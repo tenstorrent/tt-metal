@@ -58,7 +58,9 @@ _python_stack_traces_enabled: bool = True
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
 _STACK_TRACE_INTERNAL_PATTERNS = (
     "**/ttnn/**/decorators.py",
+    "**/ttnn/decorators.py",
     "**/ttnn/**/graph.py",
+    "**/ttnn/graph.py",
     "**/_pytest/**",
     "**/_pytest/config/__init__.py",
     "**/pluggy/**",
