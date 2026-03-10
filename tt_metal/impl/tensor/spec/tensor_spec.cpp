@@ -28,6 +28,14 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
     const auto& shard_spec = memory_config.shard_spec().value();
     uint32_t num_cores = shard_spec.num_cores();
 
+    uint32_t num_shards = div_up(physical_height, physical_shard_height) * div_up(physical_width, physical_shard_width);
+
+    TT_FATAL(
+        num_shards == num_cores,
+        "Number of shards {} must equal number of cores {} for 2D sharding",
+        num_shards,
+        num_cores);
+
     // TODO (issue #17060): Flip to TT_FATAL
     if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_FATAL(

@@ -211,6 +211,11 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
             nd_shard_spec->grid,
             nd_shard_spec->orientation,
             nd_shard_spec->shard_distribution_strategy);
+        TT_FATAL(
+            nd_shard_spec->grid.num_cores() <= distribution_spec->num_shards(),
+            "Number of cores in ND shard grid {} must not exceed number of shards {}",
+            nd_shard_spec->grid.num_cores(),
+            distribution_spec->num_shards());
     }
     return BufferShardingArgs(
         std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
