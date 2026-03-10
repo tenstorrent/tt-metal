@@ -239,9 +239,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mtp",
-        choices=["auto", "on", "off"],
-        default="auto",
-        help="Control MTP usage: auto (default), on (force enable), off (disable).",
+        choices=["on", "off"],
+        default="on",
+        help="Control MTP usage: on (default, requires MTP weights), off.",
     )
     p.add_argument(
         "--min-mtp-accept-rate",
@@ -386,24 +386,40 @@ def _trace_mtp_conflict_requested(
     profile_decode: bool,
     max_new_tokens: int,
     random_weights: bool,
-    model_path: Path,
-    override_num_layers: int | None,
     mtp: str,
 ) -> bool:
     if not enable_trace or token_accuracy or profile_decode or max_new_tokens <= 1 or random_weights:
         return False
+    return (mtp or "on").lower() == "on"
 
-    mtp_mode = (mtp or "auto").lower()
+
+def _assert_demo_mtp_available(
+    *,
+    model_path: Path,
+    random_weights: bool,
+    override_num_layers: int | None,
+    mtp: str,
+) -> None:
+    mtp_mode = (mtp or "on").lower()
     if mtp_mode == "off":
-        return False
+        return
+    if random_weights:
+        raise SystemExit("MTP cannot be enabled with --random-weights.")
 
     hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    num_hidden_layers = (
-        int(override_num_layers) if override_num_layers is not None else int(getattr(hf_config, "num_hidden_layers", 0))
-    )
-    requested_mtp_layers = int(getattr(hf_config, "num_nextn_predict_layers", 0))
-    has_mtp = requested_mtp_layers > 0 and num_hidden_layers >= 61
-    return mtp_mode == "on" or (mtp_mode == "auto" and has_mtp)
+    if override_num_layers is not None:
+        hf_config.num_hidden_layers = int(override_num_layers)
+
+    if not DeepseekGeneratorDP._config_supports_mtp(hf_config, random_weights=random_weights):
+        raise SystemExit(
+            "MTP was enabled, but the model config does not include a valid MTP layer "
+            "(num_nextn_predict_layers=0 or num_hidden_layers < 61)."
+        )
+    if not DeepseekGeneratorDP._model_path_has_mtp_weights(model_path, hf_config):
+        raise SystemExit(
+            "MTP was enabled, but the model artifacts do not contain the required MTP weights "
+            "(missing model.layers.<num_hidden_layers>.eh_proj.weight in model.safetensors.index.json)."
+        )
 
 
 def run_demo(
@@ -427,7 +443,7 @@ def run_demo(
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
     force_recalculate: bool = False,
-    mtp: str = "auto",
+    mtp: str = "on",
     min_mtp_accept_rate: float | None = None,
     mtp_skip_on_accept: str = "auto",
 ) -> dict:
@@ -451,6 +467,12 @@ def run_demo(
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
+    _assert_demo_mtp_available(
+        model_path=model_path,
+        random_weights=random_weights,
+        override_num_layers=override_num_layers,
+        mtp=mtp,
+    )
 
     if _trace_mtp_conflict_requested(
         enable_trace=enable_trace,
@@ -458,8 +480,6 @@ def run_demo(
         profile_decode=profile_decode,
         max_new_tokens=max_new_tokens,
         random_weights=random_weights,
-        model_path=model_path,
-        override_num_layers=override_num_layers,
         mtp=mtp,
     ):
         raise SystemExit(

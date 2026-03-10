@@ -227,7 +227,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         prefill_max_tokens: int | None = None,
         force_recalculate: bool = False,
         profile_decode: bool = False,
-        mtp_mode: str = "auto",
+        mtp_mode: str = "on",
         min_mtp_accept_rate: float | None = None,
         mtp_skip_on_accept: bool | None = None,
     ) -> None:
@@ -263,28 +263,21 @@ class DeepseekGenerator(WarmupForwardMixin):
                     f"to {self.hf_config.num_hidden_layers} (num_hidden_layers)"
                 )
                 self.hf_config.first_k_dense_replace = self.hf_config.num_hidden_layers
-        requested_mtp_layers = int(getattr(self.hf_config, "num_nextn_predict_layers", 0))
-        has_mtp = (
-            (not random_weights)
-            and requested_mtp_layers > 0
-            and int(getattr(self.hf_config, "num_hidden_layers", 0)) >= 61
-        )
-        mtp_mode = (mtp_mode or "auto").lower()
-        if mtp_mode not in {"auto", "on", "off"}:
-            raise ValueError(f"Invalid mtp_mode '{mtp_mode}'. Expected one of: auto, on, off.")
+        config_supports_mtp = self._config_supports_mtp(self.hf_config, random_weights=random_weights)
+        mtp_mode = (mtp_mode or "on").lower()
+        if mtp_mode not in {"on", "off"}:
+            raise ValueError(f"Invalid mtp_mode '{mtp_mode}'. Expected one of: on, off.")
         if mtp_mode == "on":
             if random_weights:
-                raise ValueError("MTP cannot be forced on with --random-weights.")
-            if not has_mtp:
+                raise ValueError("MTP cannot be enabled with --random-weights.")
+            if not config_supports_mtp:
                 raise ValueError(
-                    "MTP was forced on, but the model config does not include a valid MTP layer "
+                    "MTP was enabled, but the model config does not include a valid MTP layer "
                     "(num_nextn_predict_layers=0 or num_hidden_layers < 61)."
                 )
             self.enable_mtp = True
-        elif mtp_mode == "off":
-            self.enable_mtp = False
         else:
-            self.enable_mtp = has_mtp
+            self.enable_mtp = False
 
         if not self.enable_mtp and hasattr(self.hf_config, "num_nextn_predict_layers"):
             self.hf_config.num_nextn_predict_layers = 0
@@ -345,6 +338,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         self._prepare_weight_configs(cache_dir)
+        if self.enable_mtp and not self._has_cached_mtp_weights(self.model_weight_config):
+            raise RuntimeError(
+                "MTP was enabled, but the resolved weight config does not contain MTP tensors. "
+                "Ensure the model artifacts include MTP weights and refresh the cache if needed."
+            )
 
     def _dump_meminfo(self, header: str) -> None:
         if self.enable_mem_profile:
@@ -392,6 +390,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         if self.enable_mtp and self._mtp_cache_needs_refresh(weight_cache_root, self.model_weight_config):
+            if not self._has_cached_mtp_weights(self.model_weight_config) and not self._model_path_has_mtp_weights(
+                self.model_path, self.hf_config
+            ):
+                raise RuntimeError(
+                    "MTP was enabled, but neither the cached weights nor the source model artifacts contain "
+                    "the required MTP tensors."
+                )
             if not self._has_cached_mtp_weights(self.model_weight_config):
                 logger.warning(
                     "MTP is enabled but cached model weights do not include MTP tensors; augmenting cache with MTP tensors."
@@ -425,6 +430,30 @@ class DeepseekGenerator(WarmupForwardMixin):
                     model_path=self.model_path,
                     single_layer=self.single_layer,
                 )
+
+    @staticmethod
+    def _config_supports_mtp(hf_config: AutoConfig, random_weights: bool = False) -> bool:
+        requested_mtp_layers = int(getattr(hf_config, "num_nextn_predict_layers", 0))
+        return (
+            (not random_weights) and requested_mtp_layers > 0 and int(getattr(hf_config, "num_hidden_layers", 0)) >= 61
+        )
+
+    @staticmethod
+    def _model_path_has_mtp_weights(model_path: str | Path | None, hf_config: AutoConfig) -> bool:
+        if model_path is None:
+            return False
+        index_path = Path(model_path) / "model.safetensors.index.json"
+        if not index_path.exists():
+            return False
+        try:
+            with index_path.open("r") as f:
+                weight_map = json.load(f)["weight_map"]
+        except Exception:
+            return False
+
+        mtp_layer_idx = int(getattr(hf_config, "num_hidden_layers", 0))
+        required_key = f"model.layers.{mtp_layer_idx}.eh_proj.weight"
+        return required_key in weight_map
 
     @staticmethod
     def _has_cached_mtp_weights(weight_config: dict | None) -> bool:
@@ -571,6 +600,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            if self.enable_mtp and (
+                "mtp" not in self.model_run_config_prefill or self.model_run_config_prefill["mtp"] is None
+            ):
+                raise RuntimeError("MTP was enabled, but the prefill run config has no MTP block.")
             self._dump_meminfo("After creating model run config for prefill...")
         elif mode == "decode":
             logger.info("Creating model decode config...")
@@ -594,8 +627,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             if self.enable_mtp and (
                 "mtp" not in self.model_run_config_decode or self.model_run_config_decode["mtp"] is None
             ):
-                logger.warning("Requested MTP path but decode run config has no MTP block; disabling MTP for this run.")
-                self.enable_mtp = False
+                raise RuntimeError("MTP was enabled, but the decode run config has no MTP block.")
             self._dump_meminfo("After creating model run config for decode...")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")

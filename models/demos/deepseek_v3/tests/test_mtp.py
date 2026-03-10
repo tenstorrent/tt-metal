@@ -200,14 +200,14 @@ def test_mtp_reference_decode_replay_consistency(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
-    """Fresh base decode under mtp=auto should reproduce the stored greedy reference stream."""
+    """Fresh base decode under mtp=on should reproduce the stored greedy reference stream."""
     _run_reference_decode_replay_consistency(
         mesh_device,
         model_path,
         cache_path,
         force_recalculate_weight_config,
         set_deterministic_env,
-        mtp_mode="auto",
+        mtp_mode="on",
     )
 
 
@@ -907,7 +907,7 @@ def test_mtp_accept_rate_and_perf(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="auto",
+        mtp_mode="on",
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP module test.")
@@ -1048,7 +1048,7 @@ def test_mtp_prefill_priming(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="auto",
+        mtp_mode="on",
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP prefill priming test.")
@@ -1175,7 +1175,7 @@ def test_mtp_verify_batching_aliasing(
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        mtp_mode="auto",
+        mtp_mode="on",
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping verify-lane batching test.")
