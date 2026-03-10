@@ -61,9 +61,7 @@ def preprocess_linear_weight(weight_tensor, device):
     if weight.dim() == 2:
         weight = weight.t()  # (out, in) -> (in, out) for ttnn.linear
         weight = weight.unsqueeze(0).unsqueeze(0)  # [1, 1, in, out]
-    tt_weight = ttnn.from_torch(
-        weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_weight
 
 
@@ -72,9 +70,7 @@ def preprocess_layernorm_weight(weight_tensor, device):
     w = weight_tensor.detach().float()
     if w.dim() == 1:
         w = w.unsqueeze(0).unsqueeze(0).unsqueeze(0)  # [1, 1, 1, hidden]
-    tt_w = ttnn.from_torch(
-        w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    tt_w = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_w
 
 
@@ -434,9 +430,15 @@ class TtBarkGPT:
         self.config = config
         self.is_causal = is_causal
 
-        # Embedding layers in TTNN (Stage 2 optimization)
-        self.input_embeds_weight = preprocess_embedding_weight(parameters["input_embeds_layer"]["weight"], device)
-        self.position_embeds_weight = preprocess_embedding_weight(parameters["position_embeds_layer"]["weight"], device)
+        # Embedding layers — use CPU nn.Embedding to avoid NCRISC kernel
+        # compilation bug in ttnn 0.67.0rc5 (embedding NCRISC template fails).
+        # CPU→device transfer for embeddings is ~0.1ms, negligible vs transformer.
+        self.input_embeds = torch.nn.Embedding.from_pretrained(
+            parameters["input_embeds_layer"]["weight"].detach().float()
+        )
+        self.position_embeds = torch.nn.Embedding.from_pretrained(
+            parameters["position_embeds_layer"]["weight"].detach().float()
+        )
 
         # Transformer blocks
         self.blocks = []
@@ -489,63 +491,39 @@ class TtBarkGPT:
             layer_present: List of updated (key, value) tuples
         """
         if inputs_embeds is None and input_ids is not None:
-            # Handle both torch and ttnn input_ids — ensure uint32 for embedding
+            # CPU embedding lookup (avoids NCRISC kernel bug in ttnn 0.67.0rc5)
             if isinstance(input_ids, torch.Tensor):
-                tt_input_ids = ttnn.from_torch(
-                    input_ids.to(torch.int32), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
-                )
+                tok_ids = input_ids
             else:
-                # TTNN tensor (e.g. from argmax) — convert to uint32 via host roundtrip
-                # ttnn.argmax produces Long/int64 which embedding can't consume directly
-                input_torch = ttnn.to_torch(input_ids).to(torch.int32)
-                tt_input_ids = ttnn.from_torch(
-                    input_torch, dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
-                )
+                tok_ids = ttnn.to_torch(input_ids).to(torch.long)
 
-            inputs_embeds = ttnn.embedding(tt_input_ids, self.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # ttnn.embedding returns ROW_MAJOR; convert to TILE for downstream ops
-            inputs_embeds = ttnn.to_layout(inputs_embeds, ttnn.TILE_LAYOUT)
+            tok_emb = self.input_embeds(tok_ids.long())
+            seq_len = tok_ids.shape[-1]
 
-            if isinstance(input_ids, torch.Tensor):
-                ttnn.deallocate(tt_input_ids)
+            if layer_past is not None:
+                past_len = layer_past[0][0].shape[-2]
+                position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.long)
+            else:
+                position_ids = torch.arange(0, seq_len, dtype=torch.long)
+
+            pos_emb = self.position_embeds(position_ids)
+            hidden = (tok_emb + pos_emb).float()
+
+            # Transfer combined embeddings to device
+            inputs_embeds = ttnn.from_torch(
+                hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
         elif inputs_embeds is None:
             raise ValueError("Either input_ids or inputs_embeds must be provided")
-
-        # Determine sequence length from available input
-        if input_ids is not None:
-            if isinstance(input_ids, torch.Tensor):
-                seq_len = input_ids.shape[-1]
-            else:
-                seq_len = input_ids.shape[-1]  # ttnn tensor
         else:
-            # inputs_embeds path: [batch, seq, hidden] for torch, [-2] for TTNN
+            # inputs_embeds provided directly — determine seq_len
             if isinstance(inputs_embeds, torch.Tensor):
                 seq_len = inputs_embeds.shape[1]
             else:
                 seq_len = inputs_embeds.shape[-2]
 
-        if layer_past is not None:
-            past_len = layer_past[0][0].shape[-2]
-            position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.int32).unsqueeze(0)
-        else:
-            position_ids = torch.arange(0, seq_len, dtype=torch.int32).unsqueeze(0)
-
-        tt_position_ids = ttnn.from_torch(
-            position_ids, dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        position_embeds = ttnn.embedding(
-            tt_position_ids, self.position_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        ttnn.deallocate(tt_position_ids)
-        # Convert position embeddings to TILE layout for the add
-        position_embeds = ttnn.to_layout(position_embeds, ttnn.TILE_LAYOUT)
-
-        # Combine embeddings on device (both now TILE layout)
-        tt_hidden = ttnn.add(inputs_embeds, position_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(inputs_embeds)
-        ttnn.deallocate(position_embeds)
-
         # Transformer blocks
+        tt_hidden = inputs_embeds
         layer_present = [] if use_cache else None
         for i, block in enumerate(self.blocks):
             block_past = layer_past[i] if layer_past is not None else None
