@@ -114,8 +114,11 @@ class MoEGatePrefill:
             route_scale=1.0,
             epsilon=1e-20,
         )
-        global_onehot_experts = self.get_onehot_expert_selection(ttnn_top_k_experts_indices)
-        expert_histograms = ttnn.sum(global_onehot_experts, dim=0)
+        # global_onehot_experts = self.get_onehot_expert_selection(ttnn_top_k_experts_indices)
+        # expert_histograms = ttnn.sum(global_onehot_experts, dim=0)
+
+        ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        expert_histograms = ttnn.moe_dispatch_offsets(ttnn_top_k_experts_indices, self.n_routed_experts)
         dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
 
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
