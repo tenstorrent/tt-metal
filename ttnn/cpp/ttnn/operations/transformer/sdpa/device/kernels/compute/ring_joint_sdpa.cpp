@@ -51,7 +51,6 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(32);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(33);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(34) == 1;
-    constexpr uint32_t q_per_core = get_compile_time_arg_val(35);
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -70,6 +69,7 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_per_core = global_q_end - global_q_start;
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
