@@ -4,7 +4,7 @@
 // layer_norm_rm - Reader Kernel
 // Reads RM sticks from DRAM into c_0 using TensorAccessor.
 // Fills c_8 (1/W scaler via prepare_reduce_scaler) and c_9 (epsilon) at program start.
-// Optionally reads gamma/beta sticks into c_2/c_3.
+// Optionally reads gamma/beta single sticks into c_2/c_3 at program start.
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -22,6 +22,8 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(0);
 constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
 constexpr uint32_t has_beta = get_compile_time_arg_val(2);
 constexpr auto input_tensor_args = TensorAccessorArgs<3>();
+constexpr auto gamma_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+constexpr auto beta_tensor_args = TensorAccessorArgs<gamma_tensor_args.next_compile_time_args_offset()>();
 
 void kernel_main() {
     // Runtime args
@@ -58,7 +60,29 @@ void kernel_main() {
     // ===== 2. Fill c_9 with epsilon value =====
     dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_f);
 
-    // ===== 3. Main loop: read RM sticks into c_0 =====
+    // ===== 3. Read gamma stick into c_2 (program-lifetime, single stick) =====
+    if constexpr (has_gamma) {
+        const auto gamma_accessor = TensorAccessor(gamma_tensor_args, gamma_addr, stick_size);
+        cb_reserve_back(cb_gamma_rm, 1);
+        uint32_t gamma_l1_addr = get_write_ptr(cb_gamma_rm);
+        uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+        noc_async_read(gamma_noc_addr, gamma_l1_addr, stick_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_gamma_rm, 1);
+    }
+
+    // ===== 4. Read beta stick into c_3 (program-lifetime, single stick) =====
+    if constexpr (has_beta) {
+        const auto beta_accessor = TensorAccessor(beta_tensor_args, beta_addr, stick_size);
+        cb_reserve_back(cb_beta_rm, 1);
+        uint32_t beta_l1_addr = get_write_ptr(cb_beta_rm);
+        uint64_t beta_noc_addr = beta_accessor.get_noc_addr(0);
+        noc_async_read(beta_noc_addr, beta_l1_addr, stick_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_beta_rm, 1);
+    }
+
+    // ===== 5. Main loop: read RM sticks into c_0 =====
     // Process tile-rows: each tile-row = 32 sticks, Wt tile-pages
     uint32_t stick_id = start_stick_id;
 

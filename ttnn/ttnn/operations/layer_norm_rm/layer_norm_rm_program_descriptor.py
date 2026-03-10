@@ -183,6 +183,16 @@ def create_program_descriptor(
         1 if has_beta else 0,  # 2: has_beta
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # 4: gamma TensorAccessor (real or placeholder)
+    if has_gamma:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    else:
+        reader_ct_args.append(2)  # DRAM interleaved placeholder (ArgConfig::IsDram = 2)
+    # 5: beta TensorAccessor (real or placeholder)
+    if has_beta:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
+    else:
+        reader_ct_args.append(2)  # DRAM interleaved placeholder (ArgConfig::IsDram = 2)
 
     reader_rt_args = _build_reader_rt_args(
         input_tensor,
