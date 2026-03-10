@@ -97,6 +97,7 @@ def ingest_run(
     score_json_path: Path = None,
     clone_dir: Path = None,
     op_name: str = None,
+    golden_name: str = None,
 ) -> int:
     """Ingest a single run into the database. Returns run ID."""
     conn = db.connect(db_path)
@@ -134,6 +135,7 @@ def ingest_run(
         score_grade=score_grade,
         golden_passed=golden_passed,
         golden_total=golden_total,
+        golden_name=golden_name,
     )
 
     if test_results:
@@ -175,6 +177,7 @@ def main():
     parser.add_argument("--test-results", help="Path to test_results.json")
     parser.add_argument("--clone-dir", help="Path to the clone directory")
     parser.add_argument("--op-name", help="Operation name (for kernel/artifact collection)")
+    parser.add_argument("--golden-name", help="Golden test suite name (from prompt '# golden:' tag)")
     args = parser.parse_args()
 
     run_id = ingest_run(
@@ -188,6 +191,7 @@ def main():
         score_json_path=Path(args.score_json) if args.score_json else None,
         clone_dir=Path(args.clone_dir) if args.clone_dir else None,
         op_name=args.op_name,
+        golden_name=args.golden_name,
     )
 
     print(f"Ingested run {run_id}")

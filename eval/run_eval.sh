@@ -338,6 +338,7 @@ WRAPPER
     golden_op_for_ingest="$(grep -oP '^# golden: \K\S+' "$prompt_file" || true)"
     if [[ -n "$golden_op_for_ingest" ]]; then
         ingest_args+=(--op-name "$golden_op_for_ingest")
+        ingest_args+=(--golden-name "$golden_op_for_ingest")
     fi
     python3 -m eval.ingest "${ingest_args[@]}" \
         >> "${log_dir}/ingest.log" 2>&1 || \

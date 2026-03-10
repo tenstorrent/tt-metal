@@ -254,6 +254,7 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
         rid = run["id"]
         ts = run["timestamp"][:16].replace("T", " ") if run["timestamp"] else ""
         prompt = html.escape(run["prompt_name"])
+        golden_name = html.escape(run["golden_name"]) if run.get("golden_name") else None
         base_branch = html.escape(run["starting_branch"])
         commit_short = html.escape(run["starting_commit"][:7]) if run["starting_commit"] else ""
         created_branch = html.escape(run["created_branch"])
@@ -288,9 +289,16 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
         else:
             ann_html = '<span style="color:#9ca3af">--</span>'
 
+        golden_badge = (
+            f' <span style="background:#7c3aed;color:white;padding:1px 6px;border-radius:3px;'
+            f'font-size:0.75em;font-weight:600;margin-left:6px">golden: {golden_name}</span>'
+            if golden_name
+            else ""
+        )
+
         rows.append(
             f'<tr class="run-row" onclick="toggleDetail({rid})">'
-            f"  <td>{rid}</td><td>{ts}</td><td>{prompt}</td>"
+            f"  <td>{rid}</td><td>{ts}</td><td>{prompt}{golden_badge}</td>"
             f'  <td>{base_branch} <span style="color:#9ca3af;font-size:0.8em">({commit_short})</span></td>'
             f"  <td>{created_branch}</td>"
             f"  <td>{score_html}</td><td>{golden_html}</td><td>{ann_html}</td>"

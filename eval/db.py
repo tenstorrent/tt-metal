@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS runs (
     golden_passed INTEGER,
     golden_total INTEGER,
     annotation_score INTEGER,
-    annotation_notes TEXT
+    annotation_notes TEXT,
+    golden_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS test_results (
@@ -75,12 +76,27 @@ CREATE TABLE IF NOT EXISTS artifacts (
 """
 
 
+MIGRATIONS = [
+    "ALTER TABLE runs ADD COLUMN golden_name TEXT",
+]
+
+
+def _run_migrations(conn):
+    """Apply any missing column migrations to an existing DB."""
+    for stmt in MIGRATIONS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
 def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Connect to the eval DB, creating tables if needed."""
     path = str(db_path) if db_path else str(DEFAULT_DB_PATH)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _run_migrations(conn)
     return conn
 
 
@@ -97,13 +113,14 @@ def insert_run(
     score_grade=None,
     golden_passed=None,
     golden_total=None,
+    golden_name=None,
 ) -> int:
     """Insert a run and return its ID. Caller must commit."""
     cur = conn.execute(
         """INSERT INTO runs
            (timestamp, prompt_name, run_number, starting_branch, starting_commit,
-            created_branch, score_total, score_grade, golden_passed, golden_total)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            created_branch, score_total, score_grade, golden_passed, golden_total, golden_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             timestamp,
             prompt_name,
@@ -115,6 +132,7 @@ def insert_run(
             score_grade,
             golden_passed,
             golden_total,
+            golden_name,
         ),
     )
     return cur.lastrowid
