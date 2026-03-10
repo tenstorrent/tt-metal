@@ -6,6 +6,7 @@
 #include <gmock/gmock.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -70,6 +71,19 @@ protected:
     // -------------------------------------------------------------------------
     // Topology builders
     // -------------------------------------------------------------------------
+
+    // Build a ring: n0 -- n1 -- n2 -- ... -- n(count-1) -- n0 (wrap-around)
+    template <typename NodeType>
+    static auto build_ring_adjacency(const std::vector<NodeType>& nodes) {
+        std::map<NodeType, std::vector<NodeType>> adj;
+        const size_t n = nodes.size();
+        for (size_t i = 0; i < n; ++i) {
+            adj[nodes[i]] = {};
+            adj[nodes[i]].push_back(nodes[(i + n - 1) % n]);
+            adj[nodes[i]].push_back(nodes[(i + 1) % n]);
+        }
+        return adj;
+    }
 
     // Build a linear chain: n0 -- n1 -- n2 -- ... -- n(count-1)
     template <typename NodeType>
@@ -196,6 +210,30 @@ protected:
         for (const auto& [node, asic] : result.fabric_node_to_asic) {
             EXPECT_EQ(node_ranks.at(node), asic_ranks.at(asic))
                 << "Rank constraint violated: node mapped to ASIC on different rank";
+        }
+    }
+
+    // Verify same-host constraint: all fabric nodes mapped to ASICs on the same host
+    // must have the same mesh host rank (required for ControlPlane/TopologyMapper).
+    static void verify_same_host_same_rank(
+        const TopologyMappingResult& result,
+        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank,
+        const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
+        for (const auto& [hostname, host_asics] : hostname_to_asics) {
+            std::set<MeshHostRankId> ranks_on_host;
+            for (const auto& asic_id : host_asics) {
+                auto it = result.asic_to_fabric_node.find(asic_id);
+                if (it != result.asic_to_fabric_node.end()) {
+                    const auto& fabric_node = it->second;
+                    auto rank_it = fabric_node_id_to_mesh_rank.find(fabric_node);
+                    if (rank_it != fabric_node_id_to_mesh_rank.end()) {
+                        ranks_on_host.insert(rank_it->second);
+                    }
+                }
+            }
+            EXPECT_LE(ranks_on_host.size(), 1u)
+                << "Host " << hostname << " has ASICs mapped to fabric nodes with different ranks: "
+                << "all fabric nodes on the same host must have the same mesh host rank";
         }
     }
 
@@ -2709,6 +2747,151 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
 //
 // Uses map_multi_mesh_to_physical with build_hierarchical_from_flat_graph to
 // exercise add_rank_binding_constraints with hostname_to_asics and UNSET pooling.
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_PartialAsicRankBinding_Host0Rank1Only) {
+    // 4 nodes in a RING, 4 hosts. Run mapping 4 times, each with mesh_host_rank 1 on a
+    // different physical ASIC (0, 1, 2, 3). Others UNSET. fabric_node_id_to_mesh_rank: chip i -> rank i.
+    using namespace ::tt::tt_fabric;
+
+    const MeshId mesh0{0};
+
+    std::vector<FabricNodeId> logical_nodes = make_nodes(4);
+    auto logical_adj = build_ring_adjacency(logical_nodes);
+
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[mesh0] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+    logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<LogicalExitNode>();
+
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(4, 100);
+    auto physical_adj = build_ring_adjacency(physical_asics);
+
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[mesh0] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<PhysicalExitNode>();
+
+    // Fabric node ranks: chip i -> rank i
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[0]] = MeshHostRankId{0};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[1]] = MeshHostRankId{1};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[2]] = MeshHostRankId{2};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[3]] = MeshHostRankId{3};
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = false;
+    config.hostname_to_asics["host0"] = {physical_asics[0]};
+    config.hostname_to_asics["host1"] = {physical_asics[1]};
+    config.hostname_to_asics["host2"] = {physical_asics[2]};
+    config.hostname_to_asics["host3"] = {physical_asics[3]};
+
+    for (size_t bound_asic_idx = 0; bound_asic_idx < 4; ++bound_asic_idx) {
+        // PARTIAL: only physical asic bound_asic_idx -> mesh rank 1; others UNSET
+        std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+        for (size_t i = 0; i < 4; ++i) {
+            asic_id_to_mesh_rank[mesh0][physical_asics[i]] =
+                (i == bound_asic_idx) ? MeshHostRankId{1} : ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+        }
+
+        const auto result = map_multi_mesh_to_physical(
+            logical_multi_mesh_graph,
+            physical_multi_mesh_graph,
+            config,
+            asic_id_to_mesh_rank,
+            fabric_node_id_to_mesh_rank);
+
+        ASSERT_TRUE(result.success) << "Partial asic rank binding (asic " << bound_asic_idx
+                                    << "=rank 1) should succeed: " << result.error_message;
+        verify_bidirectional_consistency(result);
+        EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+
+        // Chip 1 (rank 1) must map to the bound ASIC which has rank 1
+        EXPECT_EQ(result.fabric_node_to_asic.at(logical_nodes[1]), physical_asics[bound_asic_idx])
+            << "Rank-1 fabric node (chip 1) must map to bound ASIC " << bound_asic_idx;
+        verify_connectivity_preserved(result, logical_adj, physical_adj);
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsTwoAsicsEach_RotatedSplit_SameHostSameRank) {
+    // 4 ASICs in 1x4 ring (100-101-102-103). Run 4 host-split rotations; each must satisfy
+    // same-host same-rank (device pool assigns multi-ASIC hosts to one rank).
+    using namespace ::tt::tt_fabric;
+
+    const MeshId mesh0{0};
+
+    std::vector<FabricNodeId> logical_nodes = make_nodes(4);
+    auto logical_adj = build_ring_adjacency(logical_nodes);
+
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[mesh0] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+    logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<LogicalExitNode>();
+
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(4, 100);
+    auto physical_adj = build_ring_adjacency(physical_asics);
+
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[mesh0] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<PhysicalExitNode>();
+
+    // Fabric nodes: chip 0,1 -> rank 0, chip 2,3 -> rank 1
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[0]] = MeshHostRankId{0};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[1]] = MeshHostRankId{0};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[2]] = MeshHostRankId{1};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[3]] = MeshHostRankId{1};
+
+    // 4 rotations of host0/host1 split (ring: 100-101-102-103)
+    const std::array<std::pair<std::set<size_t>, std::set<size_t>>, 4> rotations = {{
+        {{0, 1}, {2, 3}},  // host0={100,101}, host1={102,103}
+        {{1, 2}, {0, 3}},  // host0={101,102}, host1={100,103}
+        {{2, 3}, {0, 1}},  // host0={102,103}, host1={100,101}
+        {{0, 3}, {1, 2}},  // host0={100,103}, host1={101,102}
+    }};
+
+    for (size_t rot = 0; rot < 4; ++rot) {
+        std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+        for (size_t idx : rotations[rot].first) {
+            hostname_to_asics["host0"].insert(physical_asics[idx]);
+        }
+        for (size_t idx : rotations[rot].second) {
+            hostname_to_asics["host1"].insert(physical_asics[idx]);
+        }
+
+        std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+        for (size_t i = 0; i < 4; ++i) {
+            asic_id_to_mesh_rank[mesh0][physical_asics[i]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+        }
+
+        TopologyMappingConfig config;
+        config.strict_mode = true;
+        config.disable_rank_bindings = false;
+        config.hostname_to_asics = hostname_to_asics;
+
+        const auto result = map_multi_mesh_to_physical(
+            logical_multi_mesh_graph,
+            physical_multi_mesh_graph,
+            config,
+            asic_id_to_mesh_rank,
+            fabric_node_id_to_mesh_rank);
+
+        ASSERT_TRUE(result.success) << "Rotation " << rot << " mapping failed: " << result.error_message;
+        verify_bidirectional_consistency(result);
+        EXPECT_EQ(result.fabric_node_to_asic.size(), 4u) << "Rotation " << rot;
+        verify_connectivity_preserved(result, logical_adj, physical_adj);
+        verify_same_host_same_rank(result, fabric_node_id_to_mesh_rank[mesh0], hostname_to_asics);
+    }
+}
 
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset_Succeeds) {
     using namespace ::tt::tt_fabric;

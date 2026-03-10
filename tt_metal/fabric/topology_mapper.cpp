@@ -1467,74 +1467,23 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
 
 void TopologyMapper::print_logical_adjacency_map(
     const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const {
-    log_debug(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
+    log_info(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
 
-    // Print mesh-level connectivity
-    log_debug(tt::LogFabric, "  Mesh-Level Connectivity:");
-    for (const auto& mesh_id : multi_mesh_graph.mesh_level_graph_.get_nodes()) {
-        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
-        std::string neigh_str;
-        for (size_t i = 0; i < neighbors.size(); ++i) {
-            neigh_str += fmt::format("{}", neighbors[i].get());
-            if (i < neighbors.size() - 1) {
-                neigh_str += ", ";
-            }
-        }
-        log_debug(tt::LogFabric, "    Mesh {} connected to: [{}]", mesh_id.get(), neigh_str);
-    }
-
-    // Print internal mesh connectivity
-    log_debug(tt::LogFabric, "  Internal Mesh Connectivity:");
+    // Print adjacency maps using topology solver's print functions (includes degree histograms)
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
     for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        log_debug(tt::LogFabric, "  Mesh ID: {}", mesh_id.get());
-        for (const auto& node : graph.get_nodes()) {
-            const auto& neighbors = graph.get_neighbors(node);
-            std::string neigh_str;
-            for (size_t i = 0; i < neighbors.size(); ++i) {
-                neigh_str += fmt::format("{}", neighbors[i]);
-                if (i < neighbors.size() - 1) {
-                    neigh_str += ", ";
-                }
-            }
-            log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node, neigh_str);
-        }
+        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
     }
 }
 
 void TopologyMapper::print_physical_adjacency_map(
     const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const {
-    log_debug(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
+    log_info(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
 
-    // Print mesh-level connectivity
-    log_debug(tt::LogFabric, "  Mesh-Level Connectivity:");
-    for (const auto& mesh_id : multi_mesh_graph.mesh_level_graph_.get_nodes()) {
-        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
-        std::string neigh_str;
-        for (size_t i = 0; i < neighbors.size(); ++i) {
-            neigh_str += fmt::format("{}", neighbors[i].get());
-            if (i < neighbors.size() - 1) {
-                neigh_str += ", ";
-            }
-        }
-        log_debug(tt::LogFabric, "    Mesh {} connected to: [{}]", mesh_id.get(), neigh_str);
-    }
-
-    // Print internal mesh connectivity
-    log_debug(tt::LogFabric, "  Internal Mesh Connectivity:");
+    // Print adjacency maps using topology solver's print functions (includes degree histograms)
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
     for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        log_debug(tt::LogFabric, "  Mesh ID: {}", mesh_id.get());
-        for (const auto& node : graph.get_nodes()) {
-            const auto& neighbors = graph.get_neighbors(node);
-            std::string neigh_str;
-            for (size_t i = 0; i < neighbors.size(); ++i) {
-                neigh_str += fmt::format("{}", neighbors[i].get());
-                if (i < neighbors.size() - 1) {
-                    neigh_str += ", ";
-                }
-            }
-            log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node.get(), neigh_str);
-            log_debug(tt::LogFabric, "    Host_name = {}", physical_system_descriptor_.get_host_name_for_asic(node));
-        }
+        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
     }
 }
 
