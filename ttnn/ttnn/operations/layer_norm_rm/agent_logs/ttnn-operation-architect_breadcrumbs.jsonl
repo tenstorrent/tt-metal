@@ -12,3 +12,6 @@
 {"event":"design_decision","phase":"reduce","choice":"USE HELPER reduce<SUM, REDUCE_ROW, NoWaitNoPop>","helper":"reduce_helpers_compute.hpp","rationale":"Helper handles DEST management, reduce_init/uninit, tile packing; NoWaitNoPop allows input persistence for subsequent subtract phase","ts":"2026-03-10T12:14:54+00:00"}
 {"event":"design_decision","phase":"epsilon_rsqrt","choice":"add<SCALAR> with rsqrt post_op","helper":"binary_op_helpers.hpp","rationale":"Combines variance+epsilon addition with rsqrt in single DEST pass, avoids extra CB for intermediate","ts":"2026-03-10T12:14:57+00:00"}
 {"event":"design_decision","phase":"scaler_generation","choice":"prepare_reduce_scaler<cb_id>(1.0f/W)","helper":"reduce_helpers_dataflow.hpp","rationale":"Runtime float scaler is simpler than compile-time AVG template approach; supports variable W across shapes","ts":"2026-03-10T12:14:59+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: layer_norm_rm","ts":"2026-03-10T12:16:51+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"17554c0316","ts":"2026-03-10T12:16:52+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["data_pipeline","reduce_mean_sub","variance_normalize","affine_transform"],"final_commit":"17554c0316","ts":"2026-03-10T12:16:53+00:00"}
