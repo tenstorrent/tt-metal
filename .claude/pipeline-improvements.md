@@ -103,6 +103,46 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+## Design Quality Issues
+
+### 12. Architect does not validate host-side API constraints for sub-tile parameter tensors
+**Status**: Proposed
+**Discovered**: layer_norm_rm v2 run1 (2026-03-10), self-reflection
+
+When the architect recommends host-side API calls (e.g., `ttnn.tilize()`) for parameter tensors like gamma/beta with shape (1,1,1,W), the recommendation may be silently invalid. `ttnn.tilize()` requires H >= 32, W >= 32, and volume >= 1024 (TILE_HW). A gamma tensor with H=1 fails this constraint, causing a runtime `TT_FATAL`.
+
+In the layer_norm_rm run, the architect's design (Critical Notes item 4) recommended "host converts to TILE before kernel launch (simpler, recommended for initial impl)" without noting the volume constraint. The kernel writer discovered this at runtime, consuming 1 hard attempt and ~5 minutes.
+
+**Proposal**: Add validation to the architect agent: when recommending host-side tilize for parameter tensors, verify the tensor shape meets `ttnn.tilize()` constraints. If parameters have H=1 (common for gamma, beta, bias, scalers), the design must explicitly include the `ttnn.repeat` or `ttnn.pad` step before tilize.
+
+---
+
+### 13. Analyzer output volume disproportionate to architect consumption
+**Status**: Proposed
+**Discovered**: layer_norm_rm v2 run1 (2026-03-10), self-reflection
+
+Three analyzers produced 87KB of combined analysis (tilize: 20KB, untilize: 24KB, softmax: 43KB). The architect consumed the key findings from each in approximately 2 seconds per file (based on breadcrumb timestamps: 12:08:55 to 12:09:00 for all three reads). The vast majority of analysis content — line-by-line code commentary, full function transcriptions — was never referenced during design.
+
+Despite the volume, the tilize analysis missed the `ttnn.tilize()` minimum volume constraint (TILE_HW=1024), which directly caused a downstream failure. Depth without targeted coverage of API constraints is inefficient.
+
+**Proposal**: Cap analysis output at ~10KB per reference. Use a structured format with mandatory sections: (1) Data Flow Pattern, (2) CB Layout, (3) Helper Call Signatures with exact parameter types, (4) API Constraints and Edge Cases, (5) Key Code Patterns. Eliminate line-by-line code walkthroughs.
+
+---
+
+### 14. Builder confuses buffer_page_size() with tile_size() for hybrid RM/tile operations
+**Status**: Proposed
+**Discovered**: layer_norm_rm v2 run1 (2026-03-10), self-reflection
+
+When an operation has RM (row-major) input/output but tile-based internal computation (common for operations that tilize on-chip), the builder uses `input_tensor.buffer_page_size()` for CB page sizes. For RM tensors, `buffer_page_size()` returns the stick size (W * 2 bytes), not the tile size (2048 bytes for bf16). This produces incorrect CB page sizes for all tile-based intermediate CBs.
+
+In the layer_norm_rm run, the kernel writer caught and fixed this during stage 1 (data_pipeline), replacing `buffer_page_size()` with `ttnn.tile_size(ttnn.bfloat16)`. The fix is now documented in the program descriptor's comments, but the builder's instructions do not guard against this confusion.
+
+Related to #9 (no architect/builder cross-validation) — a static cross-check would catch this. However, this is worth tracking separately because it represents a specific builder instruction gap, not just a missing validation step.
+
+**Proposal**: Add explicit instruction to the builder: "For operations where input_tensor.layout == ROW_MAJOR_LAYOUT but CBs are tile-sized, ALWAYS use `ttnn.tile_size(dtype)` for tile CB page sizes. NEVER use `input_tensor.buffer_page_size()` for tile CBs — it returns stick_size for RM tensors."
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +155,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | Architect API constraint validation for sub-tile tensors | Medium | Small | Medium |
+| 13 | Analyzer output volume vs consumption | Low | Medium | Low |
+| 14 | Builder buffer_page_size vs tile_size confusion | Medium | Small | Medium |
