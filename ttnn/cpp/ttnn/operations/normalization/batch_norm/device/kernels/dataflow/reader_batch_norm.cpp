@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
@@ -34,14 +35,11 @@ void kernel_main() {
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
-    union {
-        float f;
-        uint32_t u;
-    } scalar;
-    scalar.u = eps;
     cb_reserve_back(cb_id_eps, onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
-    FILL_WITH_VALUE_FLOAT(cb_id_eps, scalar.f);
+    float eps_f = 0;
+    std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
+    FILL_WITH_VALUE_FLOAT(cb_id_eps, eps_f);
 #endif
 #ifdef FILL_WITH_VALUE
     FILL_WITH_VALUE(cb_id_eps, eps);
