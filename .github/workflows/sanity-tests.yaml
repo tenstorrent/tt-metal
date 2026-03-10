@@ -1,9 +1,6 @@
 name: "Sanity tests"
 
 on:
-  push:
-    branches:
-      - roseli/0-rename-apc-to-sanity
   workflow_call:
     inputs:
       build-type:
@@ -171,6 +168,8 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+  push:
+    branches: ["main"]
 
 permissions:
   actions: read
@@ -181,7 +180,7 @@ permissions:
   packages: write
   checks: write
 
-run-name:  Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
+run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
