@@ -1,4 +1,4 @@
-name: "PR - All post-commit tests"
+name: "PR - Sanity tests"
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   packages: write
   checks: write
 
-run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
+run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   trigger-post-commit:
     if: ${{ github.event.pull_request.head.repo.fork == true }}

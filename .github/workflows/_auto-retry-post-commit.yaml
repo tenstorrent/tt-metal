@@ -1,4 +1,4 @@
-name: "[internal] Auto-retry post-commit"
+name: "[internal] Auto-retry sanity tests"
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         type: number
   workflow_run:
     workflows:
-      - "All post-commit tests"
+      - "Sanity tests"
       - "(Single-card) Tests for new models"
       # We push to main, but not part of APC. TGs are flaky so we are going
       # to want to to

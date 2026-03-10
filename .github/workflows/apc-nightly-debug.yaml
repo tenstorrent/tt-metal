@@ -1,6 +1,6 @@
-name: "apc nightly debug run"
+name: "Sanity tests nightly debug run"
 
-run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+run-name: "Sanity tests nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
 
 on:
   schedule:
