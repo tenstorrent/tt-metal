@@ -494,7 +494,6 @@ def test_bcast_moe_reduce_pipeline(
 
         torch_input_row = torch_embedding[0, 0, token_id : token_id + 1, :]
 
-        device_gate_indices = ttnn.to_torch(result_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
         device_gate_scores = ttnn.to_torch(result_scores, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
 
         # Validate reduce output (sum of all per-device MoE outputs)
@@ -506,9 +505,6 @@ def test_bcast_moe_reduce_pipeline(
 
         expected_final_outputs = []
         for dev_idx in range(mesh_rows * mesh_cols):
-            dev_row = dev_idx // mesh_cols
-            dev_col = dev_idx % mesh_cols
-
             actual_expert_idx = dev_idx
             actual_expert_scale = device_gate_scores[0].flatten()[dev_idx].float()
 

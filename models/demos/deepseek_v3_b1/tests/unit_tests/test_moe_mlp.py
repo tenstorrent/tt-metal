@@ -700,6 +700,7 @@ def create_reference_mlp_models(state_dict, layer_idx):
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
@@ -877,6 +878,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
     bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
@@ -954,7 +956,6 @@ def test_moe_fused_with_reduce(
         ),
     )
 
-    device_grid_size = submesh.compute_with_storage_grid_size()
     sdpa_out_interm_shard_height = SDPA.OUT_INTERM_SHARD_HEIGHT
     sdpa_out_interm_shard_width = SDPA.OUT_INTERM_SHARD_WIDTH
     full_device_grid = ttnn.CoreRangeSet(
@@ -1196,6 +1197,7 @@ def test_moe_fused_with_reduce(
 
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.timeout(1200)
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
@@ -1342,6 +1344,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_mlp_with_reduce(
     bh_2d_mesh_device, use_mlp_weights, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
@@ -1421,7 +1424,6 @@ def test_mlp_with_reduce(
         ),
     )
 
-    device_grid_size = submesh.compute_with_storage_grid_size()
     sdpa_out_interm_shard_height = SDPA.OUT_INTERM_SHARD_HEIGHT
     sdpa_out_interm_shard_width = SDPA.OUT_INTERM_SHARD_WIDTH
     full_device_grid = ttnn.CoreRangeSet(
