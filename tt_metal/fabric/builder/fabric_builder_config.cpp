@@ -53,7 +53,7 @@ uint32_t get_downstream_edm_count_for_vc(uint32_t vc, bool is_2D_routing) {
         case 1:
             TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
             return builder_config::num_downstream_edms_2d_per_vc[1];
-        default: TT_THROW("VC {} out of bounds (max {})", vc, builder_config::MAX_NUM_VCS);
+        default: TT_THROW("VC {} out of bounds (size {})", vc, builder_config::MAX_NUM_VCS);
     }
 }
 

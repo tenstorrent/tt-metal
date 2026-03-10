@@ -331,6 +331,7 @@ static constexpr auto sender_channel_free_slots_stream_ids_vc1 =
     slice_sender_channels_for_vc<1>(sender_channel_free_slots_stream_ids);
 template <size_t vc>
 constexpr auto& get_sender_channel_free_slots_stream_ids() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
     if constexpr (vc == 0) {
         return sender_channel_free_slots_stream_ids_vc0;
     } else {
@@ -2609,6 +2610,11 @@ void
     wait_for_vc_static_connections<1>(worker_interfaces_vc1, free_slots_vc1);
 }
 
+template <size_t vc, size_t ch>
+constexpr bool is_worker_sender_channel() {
+    return (vc == 0 && ch == 0);
+}
+
 // Returns the number of starting credits for the specified sender channel `i`
 // Generally, we will always start with `SENDER_NUM_BUFFERS` of credits,
 // except for channels which service transient/worker connections. Those
@@ -2617,12 +2623,14 @@ void
 // Initialize a single sender channel worker interface using per-VC arrays
 template <size_t vc, size_t ch, typename EdmChannelWorkerIFs, size_t N>
 FORCE_INLINE void init_sender_channel_worker_interface_vc(
-    std::array<size_t, N>& semaphore_addrs,
-    std::array<size_t, N>& info_addrs,
+    const std::array<size_t, N>& semaphore_addrs,
+    const std::array<size_t, N>& info_addrs,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
+    constexpr size_t WORKER_SENDER_CHANNEL_CREDIT_INIT = 0;
     // Channel 0 of VC0 is always the worker channel — init credits to 0 (counter-based)
     // All other channels get full credit init
-    constexpr size_t credits_init = (vc == 0 && ch == 0) ? 0 : get_sender_num_buffers<vc>()[ch];
+    constexpr size_t credits_init =
+        is_worker_sender_channel<vc, ch>() ? WORKER_SENDER_CHANNEL_CREDIT_INIT : get_sender_num_buffers<vc>()[ch];
     auto connection_live_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(semaphore_addrs[ch]);
     auto connection_worker_info_ptr =
         reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(info_addrs[ch]);
@@ -2638,8 +2646,8 @@ FORCE_INLINE void init_sender_channel_worker_interface_vc(
 
 template <size_t vc, typename EdmChannelWorkerIFs, size_t N>
 void init_vc_sender_channel_worker_interfaces(
-    std::array<size_t, N>& semaphore_addrs,
-    std::array<size_t, N>& info_addrs,
+    const std::array<size_t, N>& semaphore_addrs,
+    const std::array<size_t, N>& info_addrs,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
     [&]<size_t... Chs>(std::index_sequence<Chs...>) {
         ((init_sender_channel_worker_interface_vc<vc, Chs>(
@@ -2654,10 +2662,10 @@ void
     __attribute__((noinline))
 #endif
     init_local_sender_channel_worker_interfaces(
-        std::array<size_t, N0>& semaphore_addrs_vc0,
-        std::array<size_t, N0>& info_addrs_vc0,
-        std::array<size_t, N1>& semaphore_addrs_vc1,
-        std::array<size_t, N1>& info_addrs_vc1,
+        const std::array<size_t, N0>& semaphore_addrs_vc0,
+        const std::array<size_t, N0>& info_addrs_vc0,
+        const std::array<size_t, N1>& semaphore_addrs_vc1,
+        const std::array<size_t, N1>& info_addrs_vc1,
         EdmChannelWorkerIFsVC0& worker_interfaces_vc0,
         EdmChannelWorkerIFsVC1& worker_interfaces_vc1) {
     init_vc_sender_channel_worker_interfaces<0>(semaphore_addrs_vc0, info_addrs_vc0, worker_interfaces_vc0);
@@ -3045,7 +3053,7 @@ void kernel_main() {
     //  initialize the statically allocated "semaphores" per VC
     auto init_vc_semaphores = [&]<size_t vc, size_t... Is>(std::index_sequence<Is...>) {
         (([&]<size_t ch>() {
-             if constexpr (get_is_sender_channel_serviced<vc>()[ch]) {
+             if constexpr (get_is_sender_channel_serviced<vc, ch>()) {
                  *reinterpret_cast<volatile uint32_t*>(
                      local_sender_channel_connection_semaphore_addrs_flat_[VC_SENDER_CHANNEL_START[vc] + ch]) = 0;
                  *reinterpret_cast<volatile uint32_t*>(
@@ -3346,13 +3354,13 @@ void kernel_main() {
 
     // initialize the local sender channel worker interfaces per VC
     if constexpr (is_vc_sender_channel_serviced<0, 0>()) {
-        auto info_addrs_vc0 = local_sender_connection_info_addresses_vc0;  // copy for mutability
-        auto info_addrs_vc1 = local_sender_connection_info_addresses_vc1;
+        // auto info_addrs_vc0 = local_sender_connection_info_addresses_vc0;  // copy for mutability
+        // auto info_addrs_vc1 = local_sender_connection_info_addresses_vc1;
         init_local_sender_channel_worker_interfaces(
             local_sender_channel_connection_semaphore_addrs_vc0,
-            info_addrs_vc0,
+            local_sender_connection_info_addresses_vc0,
             local_sender_channel_connection_semaphore_addrs_vc1,
-            info_addrs_vc1,
+            local_sender_connection_info_addresses_vc1,
             local_sender_channel_worker_interfaces_vc0,
             local_sender_channel_worker_interfaces_vc1);
     }

@@ -127,16 +127,6 @@ struct StreamRegAssignments {
     // Receiver channel free slots stream IDs (per-VC, 4 edges each)
     static constexpr std::array<std::array<uint32_t, 4>, builder_config::MAX_NUM_VCS>
         vc_free_slots_from_downstream_edge = {{{14, 15, 16, 17}, {18, 19, 20, 21}}};
-    // Legacy aliases
-    // TODO - SNIJJAR - REVIEW. PREVIOUSLY WAS HARDCODED TO BE THE VALUES ABOVE!
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = vc_free_slots_from_downstream_edge[0][0];
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = vc_free_slots_from_downstream_edge[0][1];
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = vc_free_slots_from_downstream_edge[0][2];
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_4 = vc_free_slots_from_downstream_edge[0][3];
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = vc_free_slots_from_downstream_edge[1][0];
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 = vc_free_slots_from_downstream_edge[1][1];
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 = vc_free_slots_from_downstream_edge[1][2];
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_4 = vc_free_slots_from_downstream_edge[1][3];
     // Sender channel free slots stream IDs.
     // Decremented by respective upstream senders.
     static constexpr uint32_t sender_channel_0_free_slots_stream_id = 22;  // for upstream tensix worker
@@ -179,14 +169,14 @@ struct StreamRegAssignments {
             to_sender_5_pkts_completed_id,
             to_sender_6_pkts_completed_id,
             to_sender_7_pkts_completed_id,
-            vc_0_free_slots_from_downstream_edge_1,
-            vc_0_free_slots_from_downstream_edge_2,
-            vc_0_free_slots_from_downstream_edge_3,
-            vc_0_free_slots_from_downstream_edge_4,
-            vc_1_free_slots_from_downstream_edge_1,
-            vc_1_free_slots_from_downstream_edge_2,
-            vc_1_free_slots_from_downstream_edge_3,
-            vc_1_free_slots_from_downstream_edge_4,
+            vc_free_slots_from_downstream_edge[0][0],
+            vc_free_slots_from_downstream_edge[0][1],
+            vc_free_slots_from_downstream_edge[0][2],
+            vc_free_slots_from_downstream_edge[0][3],
+            vc_free_slots_from_downstream_edge[1][0],
+            vc_free_slots_from_downstream_edge[1][1],
+            vc_free_slots_from_downstream_edge[1][2],
+            vc_free_slots_from_downstream_edge[1][3],
             sender_channel_0_free_slots_stream_id,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
