@@ -4,12 +4,13 @@
 """Debug script: find exact layer where PCC diverges between TTNN and PyTorch."""
 
 import sys
+
 sys.path.append("/workdir/tt-metal")
 
 import torch
-import numpy as np
-import ttnn
 from transformers import BarkModel
+
+import ttnn
 
 
 def pcc(a, b):
@@ -93,7 +94,7 @@ def main():
     print(f"TT combined hidden torch shape: {tt_hidden_torch.shape}")
 
     # Match shapes for PCC comparison
-    ref_combined = (ref_input_embeds + ref_pos_embeds)
+    ref_combined = ref_input_embeds + ref_pos_embeds
     if tt_hidden_torch.dim() != ref_combined.dim():
         tt_hidden_torch = tt_hidden_torch.view_as(ref_combined)
     embed_pcc = pcc(tt_hidden_torch, ref_combined)
@@ -115,8 +116,12 @@ def main():
 
     # Final LN + LM head
     tt_hidden_ln = ttnn.layer_norm(tt_hidden, epsilon=1e-5, weight=tt_model.ln_f_weight, bias=tt_model.ln_f_bias)
-    tt_logits = ttnn.linear(tt_hidden_ln, tt_model.lm_head_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                            compute_kernel_config=tt_model.compute_kernel_config)
+    tt_logits = ttnn.linear(
+        tt_hidden_ln,
+        tt_model.lm_head_weight,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=tt_model.compute_kernel_config,
+    )
     tt_logits_torch = ttnn.to_torch(tt_logits)
     if tt_logits_torch.dim() != ref_logits.dim():
         tt_logits_torch = tt_logits_torch.view_as(ref_logits)
