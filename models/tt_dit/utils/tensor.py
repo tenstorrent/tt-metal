@@ -115,11 +115,6 @@ def from_torch(
     on_host: bool = False,
 ) -> ttnn.Tensor:
     """Convert a torch.Tensor to a ttnn.Tensor with convenient mesh distribution."""
-
-    """In some cases, the API will be called to convert torch to ttnn.tensor. See #36302"""
-    if isinstance(x, ttnn.Tensor):
-        return x
-
     if mesh_axes is not None:
         if device is None:
             msg = "device must be specified if mesh_axes is given"

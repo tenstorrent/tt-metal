@@ -17,7 +17,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
+from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -274,13 +274,7 @@ class WanCausalConv3d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(
-            total_shape=[d, self.out_channels],
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            pad_value=0,
-            dtype=dtype,
-        )
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
@@ -296,11 +290,7 @@ class WanCausalConv3d(Module):
 
         if "weight" in state and "bias" in state:
             weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
-            weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
-            state["weight"] = ttnn.experimental.prepare_conv3d_weights(
-                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
-            )
-            state["bias"] = bias.reshape(1, -1)
+            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -407,7 +397,6 @@ class WanCausalConv3d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
-            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -672,7 +661,6 @@ class WanConv2d(Module):
         super().__init__()
 
         self.in_channels = in_channels
-        self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
         self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
@@ -722,30 +710,16 @@ class WanConv2d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(
-            total_shape=[d, self.out_channels],
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            pad_value=0,
-            dtype=dtype,
-        )
-        self.bias = Parameter(
-            total_shape=[1, self.out_channels],
-            device=mesh_device,
-            pad_value=0,
-            dtype=dtype,
-        )
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state and "bias" in state:
-            weight = state["weight"].unsqueeze(2)
-            weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
-            state["weight"] = ttnn.experimental.prepare_conv3d_weights(
-                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+            state["weight"], state["bias"] = prepare_conv3d_weights(
+                state["weight"].unsqueeze(2), state["bias"], self.conv_config
             )
-            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -829,7 +803,6 @@ class WanConv2d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
-            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
