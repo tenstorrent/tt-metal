@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/group_norm",
   "spec_path": "ttnn/ttnn/operations/group_norm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 2,
-  "last_passing_commit": "673f80de4fdfc315c5243beff78861c02cf5fbef",
+  "current_stage_index": 3,
+  "last_passing_commit": "7a6359affe240fb796792f57aca634fe4dd42041",
   "stages": [
     {
       "name": "data_pipeline",
@@ -112,12 +112,43 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
-      "attempts": 0,
-      "free_retries": 0,
+      "status": "passed",
+      "commit": "7a6359affe240fb796792f57aca634fe4dd42041",
+      "attempts": 1,
+      "free_retries": 1,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: pp: In function 'void chlkc_pack::pack_main()':\n/localdev/mstaletovic/tt-metal/ttnn/ttnn/operations/group_norm/kernels/group_norm_compute.cpp:223:13: error: 'add_tiles_bcast_scalar_init_short' was not",
+          "details": {
+            "error_snippet": "pp: In function 'void chlkc_pack::pack_main()':\n/localdev/mstaletovic/tt-metal/ttnn/ttnn/operations/group_norm/kernels/group_norm_compute.cpp:223:13: error: 'add_tiles_bcast_scalar_init_short' was not declared in this scope\n  223 |             tile_regs_acquire();\n      |             ^~~~~~~~~~~~~~~"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "normalize",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 62.8125",
+          "details": {
+            "max_diff": "62.8125"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 1,
+          "cost": "HARD",
+          "stage": "normalize",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "affine",
@@ -144,7 +175,7 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,

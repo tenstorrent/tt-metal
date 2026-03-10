@@ -176,7 +176,7 @@ def create_program_descriptor(
     )
 
     cb_den_desc = ttnn.CBDescriptor(
-        total_size=1 * tile_page_size,
+        total_size=G * tile_page_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -259,9 +259,16 @@ def create_program_descriptor(
 
     num_sticks = N * HW
 
+    import math
+
     channels_per_group = C // G
     K = HW * channels_per_group  # elements per group per sample
-    inv_K_packed = _bf16_packed_scalar(1.0 / K)
+    # REDUCE_SCALAR applies the scaler at both row and column reduction stages,
+    # so effective scaler = scaler^2.  We need effective = 1/K, so pass 1/sqrt(K).
+    inv_K_packed = _bf16_packed_scalar(1.0 / math.sqrt(K))
+    # Convert eps from float32-packed to double-packed bf16 for generate_reduce_scaler
+    eps_float = struct.unpack("f", struct.pack("I", eps_packed))[0]
+    eps_bf16_packed = _bf16_packed_scalar(eps_float)
 
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
@@ -273,7 +280,7 @@ def create_program_descriptor(
         Ct,
         G * Ct,  # group_scaler_num_tiles
         inv_K_packed,  # pre-packed bf16 1/K for reduce scaler
-        eps_packed,
+        eps_bf16_packed,  # pre-packed bf16 eps for eps scaler tile
     ]
 
     reader_kernel = ttnn.KernelDescriptor(

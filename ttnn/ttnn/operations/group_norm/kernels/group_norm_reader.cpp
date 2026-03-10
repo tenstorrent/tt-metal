@@ -47,6 +47,10 @@ void kernel_main() {
     // inv_K_packed is a double-packed bf16 value of 1/K, prepared by host
     generate_reduce_scaler(cb_scaler, inv_K_packed);
 
+    // ========== STARTUP: FILL EPSILON CB (value eps) ==========
+    // packed_eps is a double-packed bf16 value of eps, prepared by host
+    generate_reduce_scaler(cb_eps, packed_eps);
+
     // ========== STARTUP: READ GROUP SCALER MASK TILES INTO CB 26 ==========
     // These are persistent: G*Ct tiles loaded once, used by compute for all samples.
     cb_reserve_back(cb_group_scaler, group_scaler_num_tiles);
