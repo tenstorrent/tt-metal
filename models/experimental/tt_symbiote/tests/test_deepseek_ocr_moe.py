@@ -124,6 +124,8 @@ def test_deepseek_ocr_moe_full(mesh_device, ocr_moe_layer):
     batch_size, seq_len = 1, 128
     config = torch_moe.config
     inputs = torch.randn((batch_size, seq_len, config.hidden_size), dtype=torch.bfloat16)
+    inputs = torch.load("models/experimental/tt_symbiote/tests/input_test_moe/hidden_states.pt")
+    print("inputs.shape : ", inputs.shape)
 
     with torch.no_grad():
         reference_output = torch_moe(inputs)

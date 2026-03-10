@@ -1022,7 +1022,6 @@ class TTNNExperts(TTNNModule):
         """Move preprocessed weights to device and create mapping tensors."""
 
         self.num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
-        print("num_experts_per_device: ", self.num_experts_per_device)
         self.num_devices = self.device.get_num_devices()
         self.num_dispatch_devices = self.device.shape[1]
 
@@ -1101,12 +1100,8 @@ class TTNNExperts(TTNNModule):
             # Update seq_len to include padding
             seq_len = num_tokens // batch_size_per_device
 
-        print("OG shape input : ", x.shape)
         # 1. Prepare tensors for all-to-all dispatch (convert to ROW_MAJOR)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        print("OG shape : ", x_rm.shape)
-        print("reshape : ", batch_size_per_device, 1, seq_len, self.hidden_size)
 
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, self.hidden_size))
 
@@ -1225,13 +1220,18 @@ class TTNNExperts(TTNNModule):
         combined_output = ttnn.reshape(
             combined_output, shape=(self.num_experts_per_tok, 1, batch_size_per_device * seq_len, self.hidden_size)
         )
+        print("combined_output.shape : ", combined_output.shape)
         combined_output = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
 
         # 9. Apply expert weights
+        print("topk_experts_weights.shape : ", topk_experts_weights.shape)
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
+        print("topk_experts_weights_rm unsqz 1.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
+        print("topk_experts_weights_rm unsqz 2.shape : ", topk_experts_weights_rm.shape)
+        # topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
+        print("topk_experts_weights_rm repeat.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.reshape(
             topk_experts_weights_rm,
             shape=(
@@ -1241,14 +1241,18 @@ class TTNNExperts(TTNNModule):
                 topk_experts_weights_rm.shape[4],
             ),
         )
+        print("topk_experts_weights_rm reshape.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
+        print("topk_experts_weights_rm permute.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
+        print("topk_experts_weights_tile.shape : ", topk_experts_weights_tile.shape)
         ttnn.deallocate(topk_experts_weights_rm)
 
         weighted_output = ttnn.mul(
             combined_output,
             topk_experts_weights_tile,
         )
+        print("weighted_output.shape : ", weighted_output.shape)
 
         # 10. Sum over experts dimension
         final_output = ttnn.sum(weighted_output, dim=0, keepdim=True)
@@ -1258,7 +1262,6 @@ class TTNNExperts(TTNNModule):
             # Slice to remove padding: final_output shape is (1, 1, batch_size_per_device*seq_len, hidden_size)
             # We need to slice the seq dimension from [0:original_num_tokens]
             final_output = ttnn.slice(final_output, (0, 0, 0, 0), (1, 1, original_num_tokens, self.hidden_size))
-            print("here here")
 
         return final_output
 
@@ -1455,17 +1458,16 @@ class TTNNDeepseekV2MoE(TTNNModule):
             hidden_states_4d = hidden_states
             batch, _, seq, hidden = hidden_states_4d.shape
             orig_shape = [batch, seq, hidden]
-        print("hidden_states : ", hidden_states.shape)
-        print("hidden_states_4d : ", hidden_states_4d.shape)
         topk_idx, topk_weight, _ = self.gate(hidden_states)
+
+        torch.save(topk_idx.to_torch, "models/experimental/tt_symbiote/tests/input_test_moe/dump/topk_idx_ttnn.pt")
         torch.save(
-            topk_idx.to_torch,
-            "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/dump_file/topk_idx_ttnn.pt",
+            topk_weight.to_torch, "models/experimental/tt_symbiote/tests/input_test_moe/dump/topk_weight_ttnn.pt"
         )
-        torch.save(
-            topk_weight.to_torch,
-            "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/dump_file/topk_weight_ttnn.pt",
-        )
+        topk_idx = topk_idx[:, :, :6]
+        topk_weight = topk_weight[:, :, :6]
+        print("topk_idx.shape : ", topk_idx.shape)
+        print("topk_weight.shape : ", topk_weight.shape)
         # hidden_states_4d = ttnn.experimental.reduce_scatter_minimal_async(
         #     hidden_states_4d,
         #     persistent_output_buffers=None,
@@ -1490,9 +1492,23 @@ class TTNNDeepseekV2MoE(TTNNModule):
         # )
         # composer = ttnn.concat_mesh_to_tensor_composer(self.device, dim=-1)
         # hidden_states_4d = ttnn.aggregate_tensor(hidden_states_4d, composer)
-        print("hidden_states_4d after reduce_scatter_minimal_async : ", hidden_states_4d.shape)
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
+        print("routed_output before slice : ", routed_output.shape)
+        routed_output = routed_output[:, :, :, :1280]
         print("routed_output : ", routed_output.shape)
+
+        import numpy as np
+
+        np.savetxt(
+            "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/dump_file/tensor_ttnn.txt",
+            routed_output.to_torch.to(torch.float32).cpu().numpy().reshape(-1, routed_output.to_torch.shape[-1]),
+            fmt="%d",
+        )
+        from tests.ttnn.utils_for_testing import check_with_pcc
+
+        routed_output_og = torch.load("models/experimental/tt_symbiote/tests/input_test_moe/dump/routed_output.pt")
+        passed, msg = check_with_pcc(routed_output.to_torch.squeeze(0), routed_output_og)
+        print("********** PCC: ", msg, passed)
         if hasattr(routed_output, "to_ttnn"):
             routed_output = routed_output.to_ttnn
         if self.shared_experts is not None:
