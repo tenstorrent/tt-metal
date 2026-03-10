@@ -13,13 +13,6 @@ from models.demos.rvc.tt_impl.linear import Linear
 LRELU_SLOPE = 0.1
 
 
-def _conv_output_to_nlc(x: ttnn.Tensor) -> ttnn.Tensor:
-    if len(x.shape) == 4:
-        batch, _, length, channels = x.shape
-        return ttnn.reshape(x, (batch, length, channels))
-    return x
-
-
 class LayerNorm:
     def __init__(self, device: ttnn.MeshDevice, channels: int, eps: float = 1e-5) -> None:
         self.device = device
@@ -128,9 +121,7 @@ class WN:
             g_proj = self.cond_layer(g)
 
         for i, (in_layer, res_skip_layer) in enumerate(zip(self.in_layers, self.res_skip_layers, strict=True)):
-            x_in = _conv_output_to_nlc(in_layer(x))
-            # if i == 1:
-            #     return x_in
+            x_in = in_layer(x)
             if g_proj is not None:
                 cond_offset = i * 2 * self.hidden_channels
                 g_l = ttnn.slice(
@@ -220,9 +211,9 @@ class ResBlock1:
         for c1, c2 in zip(self.convs1, self.convs2, strict=True):
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt0 = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
-            xt1 = _conv_output_to_nlc(c1(xt0))
-            xt3 = _conv_output_to_nlc(c2(xt1))
-            x = xt3 + x
+            xt1 = c1(xt0)
+            xt2 = c2(xt1)
+            x = xt2 + x
         return x
 
 
@@ -259,7 +250,7 @@ class ResBlock2:
         for conv in self.convs:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
-            xt = _conv_output_to_nlc(conv(xt))
+            xt = conv(xt)
             x = xt + x
         return x
 
