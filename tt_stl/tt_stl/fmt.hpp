@@ -182,8 +182,8 @@ struct fmt::formatter<std::vector<T, Alloc>> {
     }
 };
 
-// std::vector<bool> — special case: operator[] returns a proxy __bit_const_reference, not a real bool.
-// fmt 11 cannot format proxy references directly; cast each element to bool explicitly.
+// std::vector<bool> — special case: operator[] returns a proxy reference type, not a real bool.
+// fmt 11 cannot format such proxy references directly; cast each element to bool explicitly.
 template <typename Alloc>
 struct fmt::formatter<std::vector<bool, Alloc>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
