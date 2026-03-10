@@ -17,10 +17,11 @@ int main(int argc, char** argv) {
         /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
     int batch_size = 1;
 
-    std::string model_path = "";
-    if (argc > 1) {
-        model_path = argv[1];
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+        return 1;
     }
+    std::string model_path = argv[1];
 
     auto infra = std::make_shared<MobileNetv2TestInfra>(device, batch_size, model_path);
 

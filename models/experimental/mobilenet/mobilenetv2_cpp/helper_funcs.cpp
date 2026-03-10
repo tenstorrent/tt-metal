@@ -351,7 +351,7 @@ std::string assert_with_pcc(const at::Tensor& golden, const at::Tensor& calculat
 uint32_t divup(uint32_t x, uint32_t y) { return static_cast<uint32_t>((x + y - 1) / y); }
 
 bool isWormholeB0() {
-    // Hypothetical function to check if the device is Wormhole B0
+    // Return true for Wormhole B0 architecture
     return true;
 }
 

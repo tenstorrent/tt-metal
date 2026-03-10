@@ -5,10 +5,10 @@
 #ifndef MOBILENETV2_CPP_INFERENCE_MOBILENETV2_INFRA
 #define MOBILENETV2_CPP_INFERENCE_MOBILENETV2_INFRA
 
+#include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
-#include <optional>
-#include <memory>
 #include "ttnn_mobilenetv2.h"
 #include "ttnn/types.hpp"
 #include "torch/script.h"
@@ -21,11 +21,11 @@ public:
 
     MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size, const std::string& model_path = "");
 
-    void setInputTensor(const ttnn::Tensor& input_tensor) { input_tensor_ = std::move(input_tensor); }
+    void setInputTensor(const ttnn::Tensor& input_tensor) { input_tensor_ = input_tensor; }
 
     const ttnn::Tensor& getInputTensor() const { return input_tensor_; }
 
-    ttnn::Tensor getOutputTensor() const { return output_tensor_; }
+    const ttnn::Tensor& getOutputTensor() const { return output_tensor_; }
 
     void run() { output_tensor_ = (*ttnn_mobilenetv2_model_)(input_tensor_); }
 
