@@ -217,6 +217,9 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value);
 
     auto host_dtype = compute_host_dtype(src_data_type, dst_dtype, memory_config.is_sharded());
+    if (col_tilize) {
+        host_dtype = DataType::FLOAT32;
+    }
     auto host_buffer = get_host_tensor(host_dtype);
 
     ttnn::Shape effective_shape = tensor_shape;
