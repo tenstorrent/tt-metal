@@ -492,6 +492,27 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
+    def _fwd_reduce_scatter(
+        cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
+    ) -> ttnn.Tensor:
+        # Use standard reduce_scatter (composite fallback) to avoid shard shape constraints
+        # encountered by the minimal async path in some decode configurations.
+        rs_cfg = cfg["final_output_reduce_scatter"]
+        rs_kwargs = {
+            "dim": rs_cfg["dim"],
+            "cluster_axis": rs_cfg.get("cluster_axis"),
+            "subdevice_id": rs_cfg.get("subdevice_id"),
+            "memory_config": rs_cfg.get("memory_config"),
+            "intermediate_memory_config": rs_cfg.get("intermediate_memory_config"),
+            "num_links": rs_cfg.get("num_links"),
+            "topology": rs_cfg.get("topology"),
+            "chunks_per_sync": rs_cfg.get("chunks_per_sync"),
+            "num_workers_per_link": rs_cfg.get("num_workers_per_link"),
+            "num_buffers_per_channel": rs_cfg.get("num_buffers_per_channel"),
+        }
+        rs_kwargs = {k: v for k, v in rs_kwargs.items() if v is not None}
+        return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
+
     @classmethod
     def forward_prefill(
         cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
@@ -507,9 +528,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
             output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                output, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
-            )
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
 
@@ -539,8 +558,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
             else:
                 output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
-                output = ttnn.experimental.reduce_scatter_minimal_async(
-                    output, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
-                )
+                output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
