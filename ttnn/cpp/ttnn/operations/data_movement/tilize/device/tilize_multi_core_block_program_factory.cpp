@@ -183,6 +183,12 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     // compute
     uint32_t single_sub_block_wh = single_block_size * single_block_size / single_sub_block_size;
     uint32_t single_sub_block_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sub_block_size;
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     if (!core_range.empty()) {
         CreateKernel(
             program,
@@ -190,6 +196,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {single_sub_block_wh, single_sub_block_size, third_dim},
             });
     }
@@ -200,6 +207,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
             });
     }
@@ -210,6 +218,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
             });
     }
@@ -221,6 +230,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {single_sub_block_cliff_col_wh, single_sub_block_size, third_dim},
             });
     }
