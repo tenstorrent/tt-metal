@@ -60,7 +60,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelWriteToL1) {
     uint64_t read_addr = static_cast<uint64_t>(result_l1_addr) + l1_noc_offset;
     std::vector<uint32_t> result(1, 0);
     MetalContext::instance().get_cluster().read_core(
-        result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->id(), virtual_dram_core), read_addr);
+        result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), virtual_dram_core), read_addr);
 
     EXPECT_EQ(result[0], kMagicValue);
 }
@@ -79,7 +79,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelOnMultipleCores) {
     uint64_t l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     // Use internal SoC descriptor to get DRAM worker grid: (num_banks, num_subchannels).
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->id());
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->build_id());
     auto dram_worker_grid = soc_desc.get_grid_size(CoreType::DRAM);
     // Test the first row of DRAM worker cores (subchannel=0, up to 4 banks to keep it fast).
     uint32_t num_cores = std::min(static_cast<size_t>(dram_worker_grid.x), static_cast<size_t>(4));
@@ -111,7 +111,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelOnMultipleCores) {
         uint64_t read_addr = static_cast<uint64_t>(result_l1_addr) + l1_noc_offset;
         std::vector<uint32_t> result(1, 0);
         MetalContext::instance().get_cluster().read_core(
-            result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->id(), virtual_dram_core), read_addr);
+            result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), virtual_dram_core), read_addr);
 
         EXPECT_EQ(result[0], expected_value) << "Failed for DRAM core col=" << col;
     }
