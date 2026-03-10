@@ -232,6 +232,11 @@ class PackerReluType(Enum):
                 raise ValueError(f"Unsupported PackerReluType: {self!r}")
 
 
+def pack_relu_config(mode: "PackerReluType", threshold_bits: int) -> int:
+    """Pack ReLU mode (2 bits) and threshold (16 bits) into a 32-bit config word."""
+    return (mode.value & 0x3) | ((threshold_bits & 0xFFFF) << 16)
+
+
 class Haloize(Enum):
     Yes = True
     No = False

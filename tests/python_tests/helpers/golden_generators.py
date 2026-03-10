@@ -17,6 +17,7 @@ from helpers.llk_params import (
     ReducePool,
     TopKSortDirection,
     format_dict,
+    pack_relu_config,
 )
 from helpers.pack import pack_mxfp8p, pack_mxfp8r
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -1109,6 +1110,26 @@ class PackGolden:
         return result
 
     @staticmethod
+    def get_relu_mode_and_threshold_bits(
+        relu_type: PackerReluType,
+        relu_threshold: float,
+        intermediate_format: DataFormat,
+    ) -> tuple[PackerReluType, int]:
+        """
+        Return (mode, threshold_bits) for use with RELU_CONFIG and golden.
+        threshold_bits is 0 for NO_RELU and ZERO_RELU.
+        """
+        if relu_type in [
+            PackerReluType.MinThresholdRelu,
+            PackerReluType.MaxThresholdRelu,
+        ]:
+            threshold_bits = PackGolden._encode_threshold_to_bits(
+                relu_threshold, intermediate_format
+            )
+            return (relu_type, threshold_bits)
+        return (relu_type, 0)
+
+    @staticmethod
     def generate_relu_config(
         relu_type: PackerReluType,
         relu_threshold: float,
@@ -1123,19 +1144,10 @@ class PackGolden:
         Returns:
             int: 32-bit ReLU configuration value with type in lower 2 bits and threshold in upper 16 bits
         """
-        # Start with ReLU type in lowest 2 bits
-        relu_config = relu_type.value & 0x3
-
-        if relu_type in [
-            PackerReluType.MinThresholdRelu,
-            PackerReluType.MaxThresholdRelu,
-        ]:
-            threshold_bits = PackGolden._encode_threshold_to_bits(
-                relu_threshold, intermediate_format
-            )
-            relu_config |= threshold_bits << 16
-
-        return relu_config
+        mode, threshold_bits = PackGolden.get_relu_mode_and_threshold_bits(
+            relu_type, relu_threshold, intermediate_format
+        )
+        return pack_relu_config(mode, threshold_bits)
 
     @staticmethod
     def _encode_threshold_to_bits(

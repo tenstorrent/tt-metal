@@ -166,7 +166,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
+    const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(params->RELU_CONFIG);
+    _llk_pack_init_<p_pacr::PACK0, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_pack, relu_config);
     _llk_pack_<p_pacr::PACK0>(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
