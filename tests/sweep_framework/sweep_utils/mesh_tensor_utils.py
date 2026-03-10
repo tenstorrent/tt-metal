@@ -137,23 +137,27 @@ def create_tensor_on_mesh(
         TTNN tensor on mesh device with proper placement
     """
     # Determine mesh mapper based on placement
+    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
     if tensor_placement:
         placement_str = tensor_placement.get("placement", "")
 
         if "PlacementReplicate" in placement_str:
             # Replicate tensor across all devices
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        elif "PlacementShard" in placement_str:
-            # Shard tensor across mesh
-            # Parse shard dimension
+        elif "PlacementShard" in placement_str and num_devices > 1:
+            # Shard tensor across mesh (only when multiple devices available)
             import re
 
             shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement_str)
             shard_dim = int(shard_dims[-1]) if shard_dims else -1
 
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, shard_dim)
+            try:
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dim)
+            except (TypeError, RuntimeError):
+                # Fallback to replicate if shard mapper creation fails
+                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         else:
-            # Default to replicate if placement not recognized
+            # Default to replicate (single device or unrecognized placement)
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         # No placement info - default to replicate

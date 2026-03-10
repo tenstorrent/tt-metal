@@ -108,7 +108,24 @@ def run(
     # Golden: softmax(scale * input + mask)
     golden_input = scale * torch_input_a.float()
     if torch_mask is not None:
-        golden_input = golden_input + torch_mask.float()
+        mask_float = torch_mask.float()
+        # Pad mask height to match input if needed (causal mask may be smaller)
+        input_h = golden_input.shape[-2]
+        mask_h = mask_float.shape[-2]
+        if mask_h < input_h:
+            pad_h = input_h - mask_h
+            mask_float = torch.nn.functional.pad(mask_float, (0, 0, pad_h, 0), value=0.0)
+        elif mask_h > input_h:
+            mask_float = mask_float[..., -input_h:, :]
+        # Pad mask width if needed
+        input_w = golden_input.shape[-1]
+        mask_w = mask_float.shape[-1]
+        if mask_w < input_w:
+            pad_w = input_w - mask_w
+            mask_float = torch.nn.functional.pad(mask_float, (pad_w, 0, 0, 0), value=0.0)
+        elif mask_w > input_h:
+            mask_float = mask_float[..., -input_w:]
+        golden_input = golden_input + mask_float
     x_max = torch.max(golden_input, dim=-1, keepdim=True)[0]
     x_exp = torch.exp(golden_input - x_max)
     torch_output = x_exp / torch.sum(x_exp, dim=-1, keepdim=True)

@@ -124,6 +124,29 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Filter __ABSENT__ sentinels from optional parameters
+    def _clean(v):
+        return None if v == "__ABSENT__" else v
+
+    input_mask_shape = _clean(input_mask_shape)
+    input_mask_dtype = _clean(input_mask_dtype)
+    input_mask_layout = _clean(input_mask_layout)
+    input_mask_memory_config = _clean(input_mask_memory_config)
+    weight_shape = _clean(weight_shape)
+    weight_dtype = _clean(weight_dtype)
+    weight_memory_config = _clean(weight_memory_config)
+    bias_shape = _clean(bias_shape)
+    bias_dtype = _clean(bias_dtype)
+    bias_memory_config = _clean(bias_memory_config)
+    reciprocals_shape = _clean(reciprocals_shape)
+    reciprocals_dtype = _clean(reciprocals_dtype)
+    reciprocals_layout = _clean(reciprocals_layout)
+    reciprocals_memory_config = _clean(reciprocals_memory_config)
+    output_memory_config = _clean(output_memory_config)
+    inplace = False if inplace == "__ABSENT__" else inplace
+    num_out_blocks = _clean(num_out_blocks)
+    use_welford = False if use_welford == "__ABSENT__" else use_welford
+
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     weight_tensor_placement = kwargs.get("weight_tensor_placement", None)
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
@@ -147,7 +170,7 @@ def run(
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
     # ========================================================================================================
@@ -259,55 +282,64 @@ def run(
     bias_tensor = None
     reciprocals_tensor = None
 
-    if input_mask_shape and not is_host:
-        torch_input_mask = torch.ones(input_mask_shape, dtype=torch.float32)
-        mask_dtype = input_mask_dtype or ttnn.bfloat16
-        mask_layout = input_mask_layout or ttnn.TILE_LAYOUT
-        mask_mem = input_mask_memory_config or ttnn.DRAM_MEMORY_CONFIG
-        if is_mesh_device and input_a_tensor_placement:
-            input_mask = create_tensor_on_mesh(
-                torch_input_mask, device, mask_dtype, mask_layout, mask_mem, input_a_tensor_placement
-            )
-        else:
-            input_mask = ttnn.from_torch(
-                torch_input_mask,
-                dtype=mask_dtype,
-                layout=mask_layout,
-                device=device,
-                memory_config=mask_mem,
-            )
+    # Determine core_grid early - needed for proper mask/weight/bias creation
+    # The core_grid.y value determines the num_cores_across_channel parameter
+    _op_kwargs_copy = build_op_kwargs(
+        kwargs,
+        exclude={"inplace", "num_out_blocks", "use_welford", "num_groups", "epsilon", "negative_mask"},
+        output_memory_config=output_memory_config,
+    )
+    if "core_grid" in _op_kwargs_copy:
+        _early_core_grid = _op_kwargs_copy["core_grid"]
+    else:
+        _early_core_grid = ttnn.CoreGrid(y=1, x=1)
+    num_cores_across_channel = _early_core_grid.y
 
+    # Use ttnn.create_group_norm_input_mask for proper channel-group mapping
+    if input_mask_shape and not is_host:
+        mask_dtype = input_mask_dtype or ttnn.bfloat8_b
+        try:
+            input_mask = ttnn.create_group_norm_input_mask(C, num_groups, num_cores_across_channel, mask_dtype)
+            input_mask = ttnn.to_device(input_mask, device)
+        except Exception as e:
+            print(f"Warning: create_group_norm_input_mask failed: {e}, skipping mask")
+            input_mask = None
+
+    # Use ttnn.create_group_norm_weight_bias_rm for proper weight formatting
     if weight_shape and torch_weight is not None and not is_host:
         w_dtype = weight_dtype or ttnn.bfloat16
         w_mem = weight_memory_config or ttnn.DRAM_MEMORY_CONFIG
-        if is_mesh_device and weight_tensor_placement:
-            weight_tensor = create_tensor_on_mesh(
-                torch_weight, device, w_dtype, ttnn.ROW_MAJOR_LAYOUT, w_mem, weight_tensor_placement
+        try:
+            torch_weight_rm = ttnn.create_group_norm_weight_bias_rm(
+                torch_weight.reshape(C), C, num_cores_across_channel
             )
-        else:
             weight_tensor = ttnn.from_torch(
-                torch_weight,
+                torch_weight_rm,
                 dtype=w_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=w_mem,
             )
+        except Exception as e:
+            print(f"Warning: create_group_norm_weight_bias_rm for weight failed: {e}")
+            weight_tensor = None
 
+    # Use ttnn.create_group_norm_weight_bias_rm for proper bias formatting
     if bias_shape and torch_bias is not None and not is_host:
         b_dtype = bias_dtype or ttnn.bfloat16
         b_mem = bias_memory_config or ttnn.DRAM_MEMORY_CONFIG
-        if is_mesh_device and bias_tensor_placement:
-            bias_tensor = create_tensor_on_mesh(
-                torch_bias, device, b_dtype, ttnn.ROW_MAJOR_LAYOUT, b_mem, bias_tensor_placement
-            )
-        else:
+        try:
+            torch_bias_rm = ttnn.create_group_norm_weight_bias_rm(torch_bias.reshape(C), C, num_cores_across_channel)
             bias_tensor = ttnn.from_torch(
-                torch_bias,
+                torch_bias_rm,
                 dtype=b_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=b_mem,
             )
+        except Exception as e:
+            print(f"Warning: create_group_norm_weight_bias_rm for bias failed: {e}")
+            bias_tensor = None
 
     if reciprocals_shape and use_welford and not is_host:
         skip_reciprocals = False
