@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages import MoEComputeStage
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages_demo_api import MoEComputeStage
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
