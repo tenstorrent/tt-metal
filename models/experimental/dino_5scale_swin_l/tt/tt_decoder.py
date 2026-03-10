@@ -21,6 +21,85 @@ from loguru import logger
 
 from models.experimental.dino_5scale_swin_l.tt.tt_encoder import TtMSDeformAttn, TtFFN
 
+TILE_SIZE = 32
+
+
+def _create_optimized_matmul_config(
+    m: int,
+    k: int,
+    n: int,
+    device: ttnn.Device,
+    memory_config=ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """
+    Create optimized matmul program config for L1 memory operations.
+
+    Args:
+        m: M dimension (rows of first matrix)
+        k: K dimension (shared inner dimension)
+        n: N dimension (cols of second matrix)
+        device: TTNN device
+        memory_config: Memory config (L1 or DRAM)
+
+    Returns:
+        Optimized MatmulMultiCoreReuseMultiCastProgramConfig
+    """
+    # Get device grid size
+    grid_size = device.compute_with_storage_grid_size()
+    cores_x = max(1, min(8, grid_size.x))  # Limit to reasonable core count, ensure at least 1
+    cores_y = max(1, min(8, grid_size.y))
+
+    # Calculate tiles
+    Mt = math.ceil(m / TILE_SIZE)
+    Kt = math.ceil(k / TILE_SIZE)
+    Nt = math.ceil(n / TILE_SIZE)
+
+    # Calculate per-core dimensions (ensure at least 1 tile per core)
+    per_core_M = max(1, math.ceil(Mt / cores_y))
+    per_core_N = max(1, math.ceil(Nt / cores_x))
+
+    # Optimize in0_block_w (higher is better, but must divide Kt)
+    # For L1 operations, use smaller blocks for better cache behavior
+    in0_block_w = 1
+    if Kt >= 2:
+        # Try to use block_w=2 if K is large enough
+        if Kt % 2 == 0:
+            in0_block_w = 2
+        elif Kt >= 4 and Kt % 4 == 0:
+            in0_block_w = 4
+
+    # Optimize out_subblock (higher is better for performance)
+    # DST can hold up to 8 tiles for BF16 accumulation
+    out_subblock_h = 1
+    out_subblock_w = 1
+
+    # Try to maximize subblock size within DST limits
+    if per_core_M >= 2 and per_core_N >= 2:
+        # Try 2x2 = 4 tiles
+        if per_core_M % 2 == 0 and per_core_N % 2 == 0:
+            out_subblock_h = 2
+            out_subblock_w = 2
+    elif per_core_M >= 2:
+        out_subblock_h = min(2, per_core_M)
+    elif per_core_N >= 2:
+        out_subblock_w = min(2, per_core_N)
+
+    # Ensure subblocks divide evenly
+    out_subblock_h = min(out_subblock_h, per_core_M)
+    out_subblock_w = min(out_subblock_w, per_core_N)
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(cores_x, cores_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
 
 # def coordinate_to_encoding_torch(coord_tensor, num_feats=128, temperature=10000):
 #     """
@@ -231,9 +310,15 @@ class TtMultiheadAttention:
         key = ttnn.to_layout(key, ttnn.TILE_LAYOUT)
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
 
-        q = ttnn.linear(query, self.q_w, bias=self.q_b)
-        k = ttnn.linear(key, self.k_w, bias=self.k_b)
-        v = ttnn.linear(value, self.v_w, bias=self.v_b)
+        # Move inputs to L1 for faster matmul operations
+        query = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG)
+        key = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG)
+        value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
+
+        # Use L1 memory config for QKV projections to reduce DRAM latency
+        q = ttnn.linear(query, self.q_w, bias=self.q_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.linear(key, self.k_w, bias=self.k_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.linear(value, self.v_w, bias=self.v_b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # 3D head reshape (UniAD pattern): [bs, seq, E] → [seq, bs*heads, head_dim] → [bs*heads, seq, head_dim]
         q = ttnn.reshape(q, (tgt_len, bs * self.num_heads, self.head_dim))
@@ -244,20 +329,50 @@ class TtMultiheadAttention:
         v = ttnn.permute(v, (1, 0, 2))
 
         # Scaled dot-product attention — all 3D
+        # Ensure q, k, v are in L1 for faster matmul operations
         q_scaled = q * math.sqrt(1.0 / float(self.head_dim))
         k_t = ttnn.permute(k, (0, 2, 1))
-        attn_weights = ttnn.matmul(q_scaled, k_t)
+
+        # Get shapes for optimized matmul config
+        # q_scaled: [bs*heads, seq, head_dim], k_t: [bs*heads, head_dim, seq]
+        # Result: [bs*heads, seq, seq]
+        m_dim = int(q_scaled.shape[1])  # seq length
+        k_dim = int(q_scaled.shape[2])  # head_dim
+        n_dim = int(k_t.shape[2])  # seq length
+
+        # Create optimized matmul config for attention weights
+        attn_weights_config = _create_optimized_matmul_config(
+            m=m_dim, k=k_dim, n=n_dim, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        attn_weights = ttnn.matmul(
+            q_scaled, k_t, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=attn_weights_config
+        )
 
         if attn_mask is not None:
             attn_weights = attn_weights + attn_mask
 
         attn_weights = ttnn.softmax(attn_weights, dim=-1)
-        attn_out = ttnn.matmul(attn_weights, v)
+
+        # attn_weights: [bs*heads, seq, seq], v: [bs*heads, seq, head_dim]
+        # Result: [bs*heads, seq, head_dim]
+        m_dim_out = int(attn_weights.shape[1])  # seq
+        k_dim_out = int(attn_weights.shape[2])  # seq
+        n_dim_out = int(v.shape[2])  # head_dim
+
+        # Create optimized matmul config for attention output
+        attn_out_config = _create_optimized_matmul_config(
+            m=m_dim_out, k=k_dim_out, n=n_dim_out, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        attn_out = ttnn.matmul(attn_weights, v, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=attn_out_config)
 
         # Merge heads: [bs*heads, seq, head_dim] → [seq, bs*heads, head_dim] → [bs*seq, E] → [bs, seq, E]
         attn_out = ttnn.permute(attn_out, (1, 0, 2))
         attn_out = ttnn.reshape(attn_out, (tgt_len * bs, embed_dim))
-        attn_out = ttnn.linear(attn_out, self.out_proj_weight, bias=self.out_proj_bias)
+        # Move to L1 before output projection for faster matmul
+        attn_out = ttnn.to_memory_config(attn_out, ttnn.L1_MEMORY_CONFIG)
+        attn_out = ttnn.linear(
+            attn_out, self.out_proj_weight, bias=self.out_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         attn_out = ttnn.reshape(attn_out, (bs, tgt_len, embed_dim))
 
         identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
@@ -279,9 +394,11 @@ class TtRefPointHeadMLP:
 
     def __call__(self, x):
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.linear(x, self.w0, bias=self.b0)
+        # Move to L1 for faster matmul operations
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.linear(x, self.w0, bias=self.b0, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.relu(x)
-        x = ttnn.linear(x, self.w1, bias=self.b1)
+        x = ttnn.linear(x, self.w1, bias=self.b1, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
 
 
@@ -297,8 +414,10 @@ class TtRegBranch:
 
     def __call__(self, x):
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # Move to L1 for faster matmul operations
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         for i, layer_params in enumerate(self.layers):
-            x = ttnn.linear(x, layer_params["weight"], bias=layer_params["bias"])
+            x = ttnn.linear(x, layer_params["weight"], bias=layer_params["bias"], memory_config=ttnn.L1_MEMORY_CONFIG)
             if i < len(self.layers) - 1:
                 x = ttnn.relu(x)
         return x

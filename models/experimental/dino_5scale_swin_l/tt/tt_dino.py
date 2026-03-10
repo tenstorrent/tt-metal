@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import torch
 import ttnn
 from loguru import logger
+from tracy import signpost
 
 from models.experimental.swin_l.tt.tt_backbone import TtSwinLBackbone
 from models.experimental.dino_5scale_swin_l.tt.tt_neck import TtDINONeck
@@ -880,6 +881,7 @@ class TtDINO:
         assert self.neck is not None, "Neck not initialized — pass neck_params"
 
         # --- Backbone ---
+        signpost(header="backbone_start")
         logger.info(f"Backbone: input {image.shape}")
         image_tt = ttnn.from_torch(
             image,
@@ -892,6 +894,7 @@ class TtDINO:
         ttnn.synchronize_device(self.device)
         ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Backbone: {len(backbone_feats_tt)} feature maps")
+        signpost(header="backbone_end")
 
         backbone_feats_torch = None
         if return_intermediates:
@@ -901,11 +904,13 @@ class TtDINO:
             ]
 
         # --- Neck ---
+        signpost(header="neck_start")
         logger.info("Neck: ChannelMapper...")
         neck_feats_tt = self.neck(backbone_feats_tt)
         ttnn.synchronize_device(self.device)
         ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Neck: {len(neck_feats_tt)} output levels")
+        signpost(header="neck_end")
 
         neck_feats_torch = None
         if return_intermediates:
@@ -921,6 +926,8 @@ class TtDINO:
         feat_tt = pre_trans["feat_flatten"]
         feat_pos_tt = pre_trans["feat_pos"]
 
+        # --- Encoder ---
+        signpost(header="encoder_start")
         logger.info("Running encoder...")
         memory_tt = self.encoder(
             feat=feat_tt,
@@ -934,6 +941,7 @@ class TtDINO:
         ttnn.deallocate(feat_pos_tt)
         ttnn.synchronize_device(self.device)
         ttnn.ReadDeviceProfiler(self.device)
+        signpost(header="encoder_end")
 
         encoder_memory_torch = None
         if return_intermediates:
@@ -942,6 +950,8 @@ class TtDINO:
 
         pre_dec = self.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
 
+        # --- Decoder ---
+        signpost(header="decoder_start")
         logger.info("Running decoder...")
         hidden_states, references = self.decoder(
             query=pre_dec["query"],
@@ -956,6 +966,7 @@ class TtDINO:
 
         ttnn.synchronize_device(self.device)
         ttnn.ReadDeviceProfiler(self.device)
+        signpost(header="decoder_end")
 
         all_cls, all_coords = self.forward_heads(hidden_states, references)
 
