@@ -148,24 +148,30 @@ struct ProgramDescriptor {
  */
 ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
-/**
- * Compute a hash from a ProgramDescriptor's compile-time parts only.
- *
- * Hashes kernel paths, core ranges, compile args, defines, CB configs, and semaphores.
- * Runtime args VALUES are excluded (only their count is hashed for structural matching).
- *
- * If desc.custom_program_hash is set, returns that value directly (allows override).
- */
-std::uint64_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor);
-
 }  // namespace tt::tt_metal
 
-// Hash support for TileDescriptor (needed for reflection system)
 namespace std {
+
+// Hash support for TileDescriptor (needed for reflection system)
 template <>
 struct hash<tt::tt_metal::TileDescriptor> {
     std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept;
 };
+
+/**
+ * Hash support for ProgramDescriptor.
+ *
+ * Hashes kernel paths, core ranges, compile args, defines, CB configs, and semaphores.
+ * Runtime arg VALUES are excluded (only their count is hashed for structural matching).
+ * If custom_program_hash is set, returns that value directly (allows override).
+ *
+ * Works with ttsl::hash::hash_combine and standard unordered containers.
+ */
+template <>
+struct hash<tt::tt_metal::ProgramDescriptor> {
+    std::size_t operator()(const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept;
+};
+
 }  // namespace std
 
 // Formatter support for TileDescriptor (needed for reflection/logging)

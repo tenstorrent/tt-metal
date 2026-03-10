@@ -171,7 +171,7 @@ struct MeshDeviceOperationAdapter {
     //           create_descriptor and kept alive across cache hits.
     //        -- Most factories do NOT need this.
     //
-    //   3. override_runtime_arguments(Program&, attrs, tensor_args, output)  [OPTIONAL]
+    //   3. override_nondeterministic_runtime_args(Program&, attrs, tensor_args, output)  [OPTIONAL]
     //        -- Use ONLY when non-address runtime args change between calls
     //           (e.g. random seeds).  Called AFTER the framework auto-patches
     //           buffer addresses on every cache hit.
@@ -228,12 +228,12 @@ struct MeshDeviceOperationAdapter {
     public:
         using resource_t = typename ResourceTypeHelper<has_prepare_resources>::type;
 
-        // Detect override_runtime_arguments: for non-address runtime args (e.g. seeds).
+        // Detect override_nondeterministic_runtime_args: for non-address runtime args (e.g. seeds).
         static constexpr bool has_factory_override = requires(
             tt::tt_metal::Program& p,
             const operation_attributes_t& a,
             const tensor_args_t& t,
-            tensor_return_value_t& r) { DescriptorFactory::override_runtime_arguments(p, a, t, r); };
+            tensor_return_value_t& r) { DescriptorFactory::override_nondeterministic_runtime_args(p, a, t, r); };
 
         // Detect post_create_validation: called once on cache miss after the Program
         // is constructed from the descriptor.  Use for sanity checks that require
@@ -331,7 +331,7 @@ struct MeshDeviceOperationAdapter {
 
                 // Verify determinism for pure factories (no prepare_resources, no override).
                 // Factories with prepare_resources have side effects, so skip the double-call.
-                // Factories with override_runtime_arguments handle non-determinism explicitly.
+                // Factories with override_nondeterministic_runtime_args handle non-determinism explicitly.
                 if constexpr (!has_factory_override && !has_prepare_resources) {
                     std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> slot_positions;
                     for (const auto& slot : slots) {
@@ -354,9 +354,10 @@ struct MeshDeviceOperationAdapter {
                                     "addresses may vary between calls. If this factory "
                                     "intentionally produces changing non-address runtime args "
                                     "(e.g. random seeds), add a static "
-                                    "override_runtime_arguments(Program&, operation_attributes_t, "
-                                    "tensor_args_t, tensor_return_value_t) method to the factory "
-                                    "to update them explicitly on each cache hit.",
+                                    "override_nondeterministic_runtime_args(Program&, "
+                                    "operation_attributes_t, tensor_args_t, "
+                                    "tensor_return_value_t) method to the factory to update "
+                                    "them explicitly on each cache hit.",
                                     k,
                                     core1.x,
                                     core1.y,
@@ -421,7 +422,8 @@ struct MeshDeviceOperationAdapter {
                 }
 
                 if constexpr (has_factory_override) {
-                    DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value);
+                    DescriptorFactory::override_nondeterministic_runtime_args(
+                        program, attrs, tensor_args, tensor_return_value);
                 }
             }
         }

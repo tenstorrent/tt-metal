@@ -64,7 +64,7 @@ struct ProgramFactory {
     // Optional: only needed if non-address runtime args change on cache hits
     // (e.g., random seeds, dynamic parameters).
     // Buffer addresses and dynamic CB addresses are auto-patched by the framework.
-    static void override_runtime_arguments(
+    static void override_nondeterministic_runtime_args(
         tt::tt_metal::Program& program,
         const operation_attributes_t&,
         const tensor_args_t&,
@@ -79,7 +79,7 @@ struct ProgramFactory {
 - The framework handles buffer address patching on cache hits automatically.
 - The framework handles dynamic circular buffer address patching automatically
   (set `.buffer` on `CBDescriptor` for sharded ops).
-- `override_runtime_arguments` is only needed for truly dynamic parameters
+- `override_nondeterministic_runtime_args` is only needed for truly dynamic parameters
   (random seeds, semaphore addresses, etc.) — not for buffer addresses.
 - Include `<tt-metalium/program_descriptors.hpp>`.
 
@@ -253,7 +253,7 @@ Run the performance test **3-5 times** and compute the average overhead.
 
 If performance exceeds the threshold, check:
 - Is `compute_program_hash` doing unnecessary work?
-- Is `override_runtime_arguments` doing too much? Buffer addresses are auto-patched.
+- Is `override_nondeterministic_runtime_args` doing too much? Buffer addresses are auto-patched.
 - In `mesh_device_operation_adapter.hpp`, verify the hash path is efficient.
 
 ---
@@ -268,7 +268,7 @@ In `<op_name>_device_operation.hpp`:
 2. Replace each `ProgramFactory` struct: remove `shared_variables_t`,
    `cached_program_t`, `create()`, and `override_runtime_arguments(cached_program_t&, ...)`
    — replace with `create_descriptor()` and optionally
-   `override_runtime_arguments(Program&, ...)`.
+   `override_nondeterministic_runtime_args(Program&, ...)`.
 3. Update the `program_factory_t` variant if factory types changed.
 4. **Preserve the original copyright year.**
 
@@ -359,7 +359,7 @@ Both must succeed with zero errors.
    rename to `type_hash<Op>`. Do NOT remove `type_hash` — it prevents collisions
    between different operations in the shared per-device program cache.
 
-4. **`override_runtime_arguments` signature.** The descriptor pattern uses
+4. **`override_nondeterministic_runtime_args` signature.** The descriptor pattern uses
    `Program&` (not `cached_program_t&`). The kernel handle is an integer index
    matching the order kernels were pushed into `desc.kernels`.
 
@@ -376,7 +376,7 @@ See the FullLike operation for the simplest complete example:
 - Descriptor-based: `ttnn/cpp/ttnn/operations/full_like/device/full_like_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/full_like/device/full_like_device_operation.hpp`
 
-See the Bernoulli operation for an example with `override_runtime_arguments` (seed patching):
+See the Bernoulli operation for an example with `override_nondeterministic_runtime_args` (seed patching):
 - Factory: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp`
 

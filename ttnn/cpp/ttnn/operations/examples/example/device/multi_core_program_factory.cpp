@@ -150,9 +150,9 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     return desc;
 }
 
-// NOTE: No override_runtime_arguments needed here!
+// NOTE: No override_nondeterministic_runtime_args needed here!
 // Buffer addresses are automatically patched by the framework on cache hits.
-// Only implement override_runtime_arguments(Program&, ...) if you have
-// truly dynamic parameters (e.g. random seeds) that change every call.
+// Only implement override_nondeterministic_runtime_args(Program&, ...) if you
+// have truly dynamic parameters (e.g. random seeds) that change every call.
 
 }  // namespace ttnn::operations::examples

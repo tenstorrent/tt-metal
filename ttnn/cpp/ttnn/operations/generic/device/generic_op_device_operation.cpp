@@ -51,7 +51,7 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     size_t hash = 0;
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
         ttsl::hash::hash_combine(hash, mesh_coord_range);
-        ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
+        ttsl::hash::hash_combine(hash, program_descriptor);
     }
     return hash;
 }

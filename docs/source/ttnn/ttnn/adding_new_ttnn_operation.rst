@@ -69,7 +69,7 @@ then handles program construction, caching, and buffer address patching on cache
 
 - **No ``shared_variables_t``** — you don't need to store kernel handles or core lists.
 - **No manual buffer address patching** — the framework auto-patches buffer addresses on cache hits.
-- **No ``override_runtime_arguments`` for buffer addresses** — only implement it if you have
+- **No ``override_nondeterministic_runtime_args`` for buffer addresses** — only implement it if you have
   truly dynamic parameters (e.g., random seeds) that change on every call.
 - **Cleaner code** — the declarative style is easier to read and less error-prone.
 
@@ -87,7 +87,7 @@ then handles program construction, caching, and buffer address patching on cache
 
        // OPTIONAL: Only needed for truly dynamic parameters (random seeds, etc.)
        // Buffer addresses are auto-patched — do NOT patch them here.
-       // static void override_runtime_arguments(
+       // static void override_nondeterministic_runtime_args(
        //     tt::tt_metal::Program& program,
        //     const operation_attributes_t& operation_attributes,
        //     const tensor_args_t& tensor_args,
@@ -154,7 +154,7 @@ then handles program construction, caching, and buffer address patching on cache
        core, KernelDescriptor::CoreRuntimeArgs{buffer_addr, tiles_per_core, offset});
 
    // 4. Push kernels — the order matters: kernel index 0, 1, 2, etc.
-   //    If you implement override_runtime_arguments, use the kernel index
+   //    If you implement override_nondeterministic_runtime_args, use the kernel index
    //    (not a KernelHandle) to access runtime args via GetRuntimeArgs().
    desc.kernels.push_back(std::move(reader_desc));
    desc.kernels.push_back(std::move(compute_desc));

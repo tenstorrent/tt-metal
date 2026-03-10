@@ -163,27 +163,28 @@ static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescri
         semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
 }
 
-std::uint64_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor) {
+}  // namespace tt::tt_metal
+
+std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
+    const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
+}
+
+std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
+    const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept {
     if (descriptor.custom_program_hash) {
         return *descriptor.custom_program_hash;
     }
 
     ttsl::hash::hash_t hash = 0;
     for (const auto& kernel : descriptor.kernels) {
-        ttsl::hash::hash_combine(hash, hash_kernel_descriptor(kernel));
+        ttsl::hash::hash_combine(hash, tt::tt_metal::hash_kernel_descriptor(kernel));
     }
     for (const auto& cb : descriptor.cbs) {
-        ttsl::hash::hash_combine(hash, hash_cb_descriptor(cb));
+        ttsl::hash::hash_combine(hash, tt::tt_metal::hash_cb_descriptor(cb));
     }
     for (const auto& semaphore : descriptor.semaphores) {
-        ttsl::hash::hash_combine(hash, hash_semaphore_descriptor(semaphore));
+        ttsl::hash::hash_combine(hash, tt::tt_metal::hash_semaphore_descriptor(semaphore));
     }
     return hash;
-}
-
-}  // namespace tt::tt_metal
-
-std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
-    const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
 }

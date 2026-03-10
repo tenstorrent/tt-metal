@@ -176,7 +176,7 @@ ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
     return desc;
 }
 
-void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
+void BernoulliDeviceOperation::ProgramFactory::override_nondeterministic_runtime_args(
     Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,

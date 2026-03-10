@@ -57,8 +57,10 @@ concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWor
 // buffer addresses on cache hits.
 //
 // create_descriptor must return tt::tt_metal::ProgramDescriptor.  There is no
-// MeshWorkloadDescriptor — mesh coordination is handled by the adapter layer
-// (DescriptorMeshWorkloadFactoryAdapter).
+// MeshWorkloadDescriptor — mesh coordination is handled by the adapter layer.
+//
+// Optionally, a factory may provide override_nondeterministic_runtime_args(Program&, ...)
+// for non-address runtime args that change per call (e.g. random seeds).
 //
 // Note: some existing factories (e.g. LayerNorm) have create_descriptor alongside the
 // traditional create/override_runtime_arguments.  Those still satisfy ProgramFactoryConcept.

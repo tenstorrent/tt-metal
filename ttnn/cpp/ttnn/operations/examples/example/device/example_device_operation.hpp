@@ -71,9 +71,9 @@ struct ExampleDeviceOperation {
     // The framework handles program construction, caching, and buffer address
     // patching automatically. No shared_variables_t or cached_program_t needed.
     //
-    // override_runtime_arguments(Program&, ...) is OPTIONAL — only implement it
-    // if you have truly dynamic parameters (e.g. random seeds) that change on
-    // every call. Buffer addresses are auto-patched by the framework.
+    // override_nondeterministic_runtime_args(Program&, ...) is OPTIONAL — only
+    // implement it if you have truly dynamic parameters (e.g. random seeds) that
+    // change on every call. Buffer addresses are auto-patched by the framework.
     // =========================================================================
 
     struct SingleCore {
@@ -84,7 +84,7 @@ struct ExampleDeviceOperation {
 
         // Optional: only needed if runtime args change on cache hits beyond buffer addresses.
         // Buffer addresses are auto-patched by the framework — no need to handle them here.
-        // static void override_runtime_arguments(
+        // static void override_nondeterministic_runtime_args(
         //     tt::tt_metal::Program& program,
         //     const operation_attributes_t& operation_attributes,
         //     const tensor_args_t& tensor_args,
@@ -98,7 +98,7 @@ struct ExampleDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         // Optional: only needed if runtime args change on cache hits beyond buffer addresses.
-        // static void override_runtime_arguments(
+        // static void override_nondeterministic_runtime_args(
         //     tt::tt_metal::Program& program,
         //     const operation_attributes_t& operation_attributes,
         //     const tensor_args_t& tensor_args,
