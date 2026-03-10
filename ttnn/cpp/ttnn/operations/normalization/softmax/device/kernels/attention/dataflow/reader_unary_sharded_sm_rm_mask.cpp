@@ -35,7 +35,8 @@ void kernel_main() {
     constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE ? 1024 : 512;
 
     cb_attn_obj.reserve_back(block_wt);
-    auto [my_x, my_y] = noc.get_noc_coords();
+    uint32_t local_noc_x = my_x[noc.get_noc_id()];
+    uint32_t local_noc_y = my_y[noc.get_noc_id()];
     uint32_t write_offset = 0;
     for (uint32_t w = 0; w < block_wt; w++) {
         noc.async_read(
@@ -50,7 +51,7 @@ void kernel_main() {
             experimental::UnicastEndpoint{},
             cb_attn_obj,
             mask_read_tile_face_bytes,
-            {.noc_x = my_x, .noc_y = my_y, .addr = src_addr},
+            {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
             {.offset_bytes = write_offset + mask_read_tile_offset_bytes});
         write_offset += mask_tile_bytes;
     }
