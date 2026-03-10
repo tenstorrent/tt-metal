@@ -8,6 +8,9 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
+#ifndef TT_LLK_SFPU_EXP
+#include "ckernel_sfpu_exp.h"
+#endif
 
 namespace ckernel {
 namespace sfpu {
@@ -21,7 +24,11 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // If fp32 then use higher accuracy exp function
     // Otherwise, use exp_21f (~1 ULP on bfloat16)
     if constexpr (is_fp32_acc_to_dest_mode) {
+#ifdef TT_LLK_SFPU_EXP
+        exp_neg_x = _sfpu_exp_21f_<true>(-x);  // third_party exp from ckernel_sfpu.h
+#else
         exp_neg_x = _sfpu_exp_improved_<true>(-x);
+#endif
     } else {
         exp_neg_x = _sfpu_exp_21f_<true>(-x);
     }
