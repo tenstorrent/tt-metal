@@ -516,20 +516,25 @@ def test_gpt_oss_demo(
         raise ValueError(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
+
+    # Calculate ISL (Input Sequence Length) in tokens, not characters
+    max_isl = max(len(tokenizer.encode(p)) for p in real_prompts)
+    logger.info(f"Max ISL (Input Sequence Length): {max_isl} tokens")
+
     if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 1:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
+        if max_isl > 32 * 1024:
             pytest.skip(
-                "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
+                f"120b model with mesh_shape (1, 8) and ISL {max_isl} > 32k tokens is not supported. OOM error gh issue #38729"
             )
     if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) >= 32 * 1024:
+        if max_isl > 64 * 1024:
             pytest.skip(
-                "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
+                f"120b model with mesh_shape (4, 8) and ISL {max_isl} > 64k tokens is not supported. OOM error gh issue #38728"
             )
     if model_args[0].model_name.split("-")[-1] == "20b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
+        if max_isl > 32 * 1024:
             pytest.skip(
-                "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
+                f"20b model with mesh_shape (4, 8) and ISL {max_isl} > 32k tokens is not supported. Deterministic hang gh issue #38751"
             )
 
     if long_context_mode:
