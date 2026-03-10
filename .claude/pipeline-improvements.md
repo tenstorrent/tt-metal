@@ -115,3 +115,34 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+
+---
+
+### 12. Kernel include path mapping table uses host-side paths for device kernels
+**Status**: Proposed — encountered in layer_norm_rm run (2026-03-10)
+
+The system prompt's include mapping table gives host-side `.hpp` paths (e.g., `ttnn/cpp/ttnn/tensor/accessor/tensor_accessor.hpp`) that don't exist in the kernel compilation include path. Device-side kernels need `api/` prefixed `.h` paths (e.g., `api/tensor/tensor_accessor.h`, `api/compute/compute_kernel_api.h`). Every builder run hits this as a 1 free retry.
+
+**Evidence**: Builder breadcrumb recovery event H1 (2026-03-10T12:26:10Z), builder execution log Section 7 Recommendation 1.
+
+**Proposal**: Fix the include mapping table in the builder's system prompt / reference documentation. Map: TensorAccessor -> `api/tensor/tensor_accessor.h`, compute startup -> `api/compute/compute_kernel_api.h`.
+
+---
+
+### 13. Architect Part 1 runtime arg tables may omit args used only for CB fills
+**Status**: Proposed — encountered in layer_norm_rm run (2026-03-10)
+
+The architect's Part 1 reader runtime args table listed indices 0-4 but omitted index 5 (epsilon). The epsilon was documented only in Part 2 Critical Notes. The builder followed Part 1 and produced a program descriptor without epsilon in the reader args. The kernel writer had to fix this during the normalize TDD stage.
+
+**Evidence**: Kernel writer breadcrumbs upstream_fix events (2026-03-10T12:38:43-12:39:07), op_design.md Part 1 vs Part 2 inconsistency.
+
+**Proposal**: Add a cross-reference validation rule to the architect instructions: for every `prepare_reduce_scaler`, `fill_with_val`, or CB-fill call in Part 2 that takes a runtime parameter, the corresponding runtime arg must appear in the Part 1 arg table.
+
+---
+
+### 14. Kernel writer TDD agent does not generate structured execution logs
+**Status**: Proposed — observed in layer_norm_rm run (2026-03-10)
+
+The builder agent generates both breadcrumbs AND a structured execution log (with recovery tables, handoff notes, instruction improvement recommendations). The kernel writer TDD agent generates only breadcrumbs. Since the kernel writer is the most complex and time-consuming agent, the absence of structured logs reduces post-hoc analysis quality.
+
+**Proposal**: Add execution log generation to the kernel writer TDD agent's completion protocol, following the same format as the builder's execution log.
