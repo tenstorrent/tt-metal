@@ -1793,8 +1793,8 @@ class MLA1D(AbstractModule):
             rope_tensors["cos_matrix_transposeHC"],
             rope_tensors["sin_matrix_transposeHC"],
             rope_tensors["trans_matrix"],
-            is_decode_mode=True,
-            input_transpose=ttnn.RotaryEmbeddingTranspose.HC,
+            is_decode_mode=False,
+            input_transpose=ttnn.RotaryEmbeddingTranspose.NONE,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)

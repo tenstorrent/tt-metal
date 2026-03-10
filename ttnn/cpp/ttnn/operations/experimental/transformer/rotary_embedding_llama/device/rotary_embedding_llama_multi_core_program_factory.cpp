@@ -47,6 +47,10 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
+    // Whether cos/sin and trans_mat are pre-loaded into per-core L1 shards.
+    const bool cos_sin_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+
     tt_metal::IDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -81,13 +85,24 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
     // Reload implementation is used if sequence length is larger than some heuristic threshold where
-    // the buffer size will be too large or if sin/cos are not broadcasted across heads.
-    const bool use_reload_impl = num_rows_per_core > 8 || freq_per_head;
+    // the buffer size will be too large, if sin/cos are not broadcasted across heads, or if
+    // cos/sin are HEIGHT_SHARDED (since the CB is globally-allocated from the shard).
+    const bool use_reload_impl = num_rows_per_core > 8 || freq_per_head || cos_sin_sharded;
     if (use_reload_impl) {
         // Only size CBs to double buffer head_dim_t tiles for all inputs
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
+    // When cos/sin are sharded, CB size is exactly one shard row (head_dim_t tiles).
+    if (cos_sin_sharded) {
+        num_cos_sin_tiles = head_dim_t;
+    }
+
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     uint32_t input_cb_index = CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_input_config =
@@ -97,25 +112,53 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
 
     uint32_t cos_cb_index = CBIndex::c_1;
-    tt_metal::CircularBufferConfig cb_cos_config =
-        tt_metal::CircularBufferConfig(num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_cb_index, cos_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
-
     uint32_t sin_cb_index = CBIndex::c_2;
-    tt_metal::CircularBufferConfig cb_sin_config =
-        tt_metal::CircularBufferConfig(num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_cb_index, sin_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
+    std::optional<CBHandle> cb_cos_handle;
+    std::optional<CBHandle> cb_sin_handle;
+    if (cos_sin_sharded) {
+        auto cos_cb_cfg = tt_metal::CircularBufferConfig(
+                              num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                              .set_page_size(cos_cb_index, cos_single_tile_size)
+                              .set_globally_allocated_address(*cos_buffer);
+        cb_cos_handle = tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
+
+        auto sin_cb_cfg = tt_metal::CircularBufferConfig(
+                              num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                              .set_page_size(sin_cb_index, sin_single_tile_size)
+                              .set_globally_allocated_address(*sin_buffer);
+        cb_sin_handle = tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
+    } else {
+        tt_metal::CircularBufferConfig cb_cos_config =
+            tt_metal::CircularBufferConfig(
+                num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                .set_page_size(cos_cb_index, cos_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
+
+        tt_metal::CircularBufferConfig cb_sin_config =
+            tt_metal::CircularBufferConfig(
+                num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                .set_page_size(sin_cb_index, sin_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
+    }
 
     uint32_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
-    tt_metal::CircularBufferConfig cb_trans_mat_config =
-        tt_metal::CircularBufferConfig(
-            num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-            .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
+    std::optional<CBHandle> cb_trans_mat_handle;
+    if (trans_mat_sharded) {
+        auto tm_cb_cfg =
+            tt_metal::CircularBufferConfig(
+                num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
+                .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size)
+                .set_globally_allocated_address(*trans_mat_buffer);
+        cb_trans_mat_handle = tt_metal::CreateCircularBuffer(program, all_cores, tm_cb_cfg);
+    } else {
+        tt_metal::CircularBufferConfig cb_trans_mat_config =
+            tt_metal::CircularBufferConfig(
+                num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
+                .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
+    }
 
     uint32_t num_interm_tiles = head_dim_t;
     uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
@@ -149,12 +192,6 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
 
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* trans_mat_buffer = trans_mat.buffer();
-    auto* dst_buffer = output.buffer();
-
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
         (std::uint32_t)cos_cb_index,
@@ -164,6 +201,8 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)freq_per_head,
+        (std::uint32_t)trans_mat_sharded,
+        (std::uint32_t)cos_sin_sharded,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
@@ -291,6 +330,9 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     shared_variables.rotary_embedding_kernel_id = rotary_embedding_kernel_id;
     shared_variables.cores = cores;
     shared_variables.num_active_cores = num_active_cores;
+    shared_variables.cb_cos = cb_cos_handle;
+    shared_variables.cb_sin = cb_sin_handle;
+    shared_variables.cb_trans_mat = cb_trans_mat_handle;
 
     return {std::move(program), std::move(shared_variables)};
 }
@@ -332,6 +374,16 @@ void RotaryEmbeddingLlamaMultiCore::override_runtime_arguments(
             auto& runtime_args = cached_writer_args.at(core.x).at(core.y);
             runtime_args[0] = dst_buffer->address();
         }
+    }
+
+    if (shared_variables.cb_cos.has_value()) {
+        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_cos, *cos_buffer);
+    }
+    if (shared_variables.cb_sin.has_value()) {
+        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_sin, *sin_buffer);
+    }
+    if (shared_variables.cb_trans_mat.has_value()) {
+        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_trans_mat, *trans_mat_buffer);
     }
 }
 

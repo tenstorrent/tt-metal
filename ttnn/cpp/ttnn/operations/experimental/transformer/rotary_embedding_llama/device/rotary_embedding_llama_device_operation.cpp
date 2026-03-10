@@ -205,7 +205,16 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             (operation_attributes.input_transpose == RotaryEmbeddingTranspose::NONE),
             "In prefill mode, input_transpose must currently be RotaryEmbeddingTranspose::NONE.");
 
-        // Checks for cos and sin
+        // Checks for cos and sin: accept either INTERLEAVED or HEIGHT_SHARDED.
+        const bool cos_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        const bool sin_sharded = sin.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        TT_FATAL(
+            cos_sharded == sin_sharded,
+            "Cos and sin must both be HEIGHT_SHARDED or both be INTERLEAVED for prefill RoPE");
+        TT_FATAL(
+            cos_sharded || cos.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Cos tensor must be either INTERLEAVED or HEIGHT_SHARDED for prefill RoPE");
+
         TT_FATAL(
             cos.logical_shape()[0] == 1 && cos.logical_shape()[-1] == head_dim,
             "Cos dims must match input dims: cos.shape = {}, head_dim = {}",
@@ -217,22 +226,44 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             "Num heads in cos/sin must match input tensor num heads or be 1. Expected {}, got {}",
             input_tensor.logical_shape()[1],
             cos.logical_shape()[1]);
-        TT_FATAL(
-            input_tensor.memory_config().memory_layout() == sin.memory_config().memory_layout(),
-            "Input tensor and sin tensor must have same memory layout");
-        TT_FATAL(
-            input_tensor.memory_config().memory_layout() == cos.memory_config().memory_layout(),
-            "Input tensor and cos tensor must have same memory layout");
 
-        // Checks for transformation matrix
+        if (cos_sharded) {
+            TT_FATAL(
+                cos.shard_spec()->shape[0] == TILE_HEIGHT,
+                "HEIGHT_SHARDED cos shard height must equal TILE_HEIGHT for prefill RoPE");
+            TT_FATAL(
+                cos.shard_spec()->shape[1] == head_dim,
+                "HEIGHT_SHARDED cos shard width must equal head_dim for prefill RoPE");
+            TT_FATAL(
+                sin.shard_spec()->shape[0] == TILE_HEIGHT,
+                "HEIGHT_SHARDED sin shard height must equal TILE_HEIGHT for prefill RoPE");
+            TT_FATAL(
+                sin.shard_spec()->shape[1] == head_dim,
+                "HEIGHT_SHARDED sin shard width must equal head_dim for prefill RoPE");
+        }
+
+        // Checks for transformation matrix: accept either INTERLEAVED or HEIGHT_SHARDED.
+        const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        TT_FATAL(
+            trans_mat_sharded || trans_mat.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Transformation matrix must be either INTERLEAVED or HEIGHT_SHARDED for prefill RoPE");
         TT_FATAL(
             trans_mat.logical_shape()[0] == 1 && trans_mat.logical_shape()[1] == 1,
             "Transformation matrix must have 1st & 2nd dim equal to 1");
         TT_FATAL(
-            trans_mat.logical_shape()[-2] == TILE_HEIGHT,
-            "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
-        TT_FATAL(
             trans_mat.logical_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4th dim equal to TILE_WIDTH");
+        if (trans_mat_sharded) {
+            TT_FATAL(
+                trans_mat.shard_spec()->shape[0] == TILE_HEIGHT,
+                "HEIGHT_SHARDED trans_mat shard height must equal TILE_HEIGHT for prefill RoPE");
+            TT_FATAL(
+                trans_mat.shard_spec()->shape[1] == TILE_WIDTH,
+                "HEIGHT_SHARDED trans_mat shard width must equal TILE_WIDTH for prefill RoPE");
+        } else {
+            TT_FATAL(
+                trans_mat.logical_shape()[-2] == TILE_HEIGHT,
+                "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
+        }
     }
 }
 
