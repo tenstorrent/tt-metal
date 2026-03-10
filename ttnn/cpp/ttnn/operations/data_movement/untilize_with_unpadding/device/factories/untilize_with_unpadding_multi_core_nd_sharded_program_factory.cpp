@@ -133,7 +133,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
         output_tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         if (output.shard_spec().has_value()) {
             output_page_width = output.shard_spec().value().shape[1];
         } else {
