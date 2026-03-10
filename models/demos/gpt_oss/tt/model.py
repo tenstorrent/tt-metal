@@ -14,6 +14,7 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from ..utils.general_utils import print_memory_usage
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
@@ -351,11 +352,12 @@ class Model:
         """
         # Determine mode based on current_pos presence
         mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
-
+        print_memory_usage(self.mesh_device, save_address=True)
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-
+            print("Before Layer", i)
+            print_memory_usage(self.mesh_device, diff_address=True)
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=rope_mats,
@@ -366,6 +368,8 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            print("After Layer", i)
+            print_memory_usage(self.mesh_device)
         logits = hidden_states
 
         if get_last_token != -1:

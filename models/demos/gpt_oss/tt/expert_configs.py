@@ -30,4 +30,4 @@ class GPTOSSProgramConfig(ProgramConfig):
 
     # Memory
     sequence_chunk_size: int = 4 * 1024
-    down_split_size: int = 1024
+    down_split_size: int = 512

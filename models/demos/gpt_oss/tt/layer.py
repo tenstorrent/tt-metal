@@ -5,6 +5,7 @@ import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
+from ..utils.general_utils import print_memory_usage
 from .attention import Attention, AttentionConfig
 from .attention_configs import GPTOSSAttentionProgramConfig
 from .mlp import MLP
@@ -105,6 +106,8 @@ class DecoderLayer:
 
         # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
         # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
+        print("Before Attention")
+        print_memory_usage(self.mesh_device)
         hidden_states = self.self_attn(
             hidden_states_post_norm,
             rope_mats=position_embeddings,
@@ -116,17 +119,20 @@ class DecoderLayer:
             batch_size=batch_size,
         )
         hidden_states_post_norm.deallocate(True)
-
+        print("After Attention")
+        print_memory_usage(self.mesh_device)
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
-
+        print("Before MLP")
+        print_memory_usage(self.mesh_device)
         hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
         hidden_states_post_norm.deallocate(True)
-
+        print("After MLP")
+        print_memory_usage(self.mesh_device)
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)

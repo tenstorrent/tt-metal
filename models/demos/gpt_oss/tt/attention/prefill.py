@@ -3,6 +3,7 @@
 
 import ttnn
 
+from ...utils.general_utils import print_memory_usage
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
     apply_allreduce,
@@ -51,18 +52,27 @@ def prefill_forward(
     Returns:
         Attention output [batch, seq_len, hidden_size]
     """
-    activation_dtype = ttnn.bfloat16
     total_seq_len = hidden_states.shape[-2]
     hidden_size = hidden_states.shape[-1]
     seq_len = total_seq_len // batch_size  # Per-user sequence length
+    if seq_len > 32 * 1024:
+        activation_dtype = ttnn.bfloat8_b
+    else:
+        activation_dtype = ttnn.bfloat16
 
     # Validate prefill mode
     if seq_len <= 1:
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
+    print("Before QKV Projection")
+    print_memory_usage(mesh_device, diff_address=True)
+
     # QKV projection
     xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    hidden_states.deallocate(True)  # Free input activations after projection
 
+    print("After QKV Projection")
+    print_memory_usage(mesh_device, diff_address=True)
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
     if batch_size > 1:
         xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len, -1])
@@ -73,6 +83,9 @@ def prefill_forward(
 
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
     xqkv_fused.deallocate(True)
+
+    print("After QKV Split")
+    print_memory_usage(mesh_device, diff_address=True)
 
     # Apply RoPE (use per-user seq_len positions)
     if batch_size > 1:
@@ -86,6 +99,9 @@ def prefill_forward(
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
+    print("After Apply Rope")
+    print_memory_usage(mesh_device, diff_address=True)
+
     # Fill KV cache
     k_cache, v_cache = kv_cache
     tt_k_pre_cast = tt_k
@@ -94,6 +110,9 @@ def prefill_forward(
     tt_v = ttnn.typecast(tt_v, v_cache.dtype)
     tt_k_pre_cast.deallocate(True)
     tt_v_pre_cast.deallocate(True)
+
+    print("After TypeCast")
+    print_memory_usage(mesh_device, diff_address=True)
 
     if page_table is not None:
         block_size = k_cache.shape[2]
@@ -133,6 +152,9 @@ def prefill_forward(
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
+    print("After Cache update")
+    print_memory_usage(mesh_device, diff_address=True)
+
     # Scaled dot-product attention
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
@@ -157,10 +179,14 @@ def prefill_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+    print("Before Output Projection")
+    print_memory_usage(mesh_device, diff_address=True)
+    tt_out = apply_output_projection(tt_sdpa_out, weights, ttnn.bfloat8_b)
     # Note: apply_output_projection already deallocates its input tensor internally
-
+    tt_sdpa_out.deallocate(True)
     # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
-
-    return tt_out
+    print("Before Allreduce")
+    print_memory_usage(mesh_device, diff_address=True)
+    tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    tt_out.deallocate(True)
+    return tt_out_result

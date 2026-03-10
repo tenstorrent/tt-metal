@@ -485,24 +485,24 @@ def test_gpt_oss_demo(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
 
-    if "120b" in model_path and mesh_device.shape[0] == 1:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
-            print([len(p) for p in real_prompts])
-            pytest.skip(
-                "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
-            )
-    if "120b" in model_path and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) >= 32 * 1024:
-            print([len(p) for p in real_prompts])
-            pytest.skip(
-                "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
-            )
-    if "20b" in model_path and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
-            print([len(p) for p in real_prompts])
-            pytest.skip(
-                "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
-            )
+    # if "120b" in model_path and mesh_device.shape[0] == 1:
+    #     if max([len(p) for p in real_prompts]) > 32 * 1024:
+    #         print([len(p) for p in real_prompts])
+    #         pytest.skip(
+    #             "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
+    #         )
+    # if "120b" in model_path and mesh_device.shape[0] == 4:
+    #     if max([len(p) for p in real_prompts]) >= 32 * 1024:
+    #         print([len(p) for p in real_prompts])
+    #         pytest.skip(
+    #             "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
+    #         )
+    # if "20b" in model_path and mesh_device.shape[0] == 4:
+    #     if max([len(p) for p in real_prompts]) > 32 * 1024:
+    #         print([len(p) for p in real_prompts])
+    #         pytest.skip(
+    #             "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
+    #         )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)
