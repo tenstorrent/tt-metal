@@ -141,6 +141,9 @@ void kernel_main() {
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+        // THIS IS A TEMPORARY WORKAROUND UNTIL FURTHER DEBUG IS DONE, PLS DO NOT COPY ANYWHERE ELSE
+        //  Issue #38448
+        tensix_sync();
         reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
 
@@ -217,6 +220,7 @@ void kernel_main() {
                     0,
                     post_scaler0,
                     0);  // reducing E(x) and E(x^2) separately to different dst
+
                 cb_pop_front(cb_stats, 1);
             }
             tile_regs_commit();
