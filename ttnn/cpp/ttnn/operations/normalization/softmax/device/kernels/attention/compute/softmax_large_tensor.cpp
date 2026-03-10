@@ -361,15 +361,7 @@ void kernel_main() {
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
     experimental::CircularBuffer cb_scaler_obj(cb_scaler);
     experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
-    experimental::CircularBuffer cb_fused_attn_obj(cb_fused_attn);
-    experimental::CircularBuffer cb_exps_obj(cb_exps);
-    experimental::CircularBuffer cb_scale_mask_obj(cb_scale_mask);
-    experimental::CircularBuffer cb_prev_reduce_obj(cb_prev_reduce);
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
-    experimental::CircularBuffer cb_x_obj(cb_x);
     experimental::CircularBuffer cb_recip_obj(cb_recip);
-    experimental::CircularBuffer cb_prev_max_obj(cb_prev_max);
     experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded);

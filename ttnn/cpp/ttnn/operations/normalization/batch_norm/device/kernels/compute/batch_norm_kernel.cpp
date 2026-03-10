@@ -33,7 +33,6 @@ ALWI void batchnorm_bcast_tiles(
     experimental::CircularBuffer cb_bcast_obj(cb_bcast);
     experimental::CircularBuffer cb_other_obj(cb_other);
     experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
     experimental::CircularBuffer cb_den_obj(cb_den);
     experimental::CircularBuffer cb_weight_obj(cb_weight);
     experimental::CircularBuffer cb_bias_obj(cb_bias);
