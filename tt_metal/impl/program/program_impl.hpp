@@ -401,7 +401,7 @@ private:
     void finalize_single_dfb_config(
         std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
         const CoreCoord& core,
-        bool use_remapper);
+        bool core_has_remapper);
 
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 
