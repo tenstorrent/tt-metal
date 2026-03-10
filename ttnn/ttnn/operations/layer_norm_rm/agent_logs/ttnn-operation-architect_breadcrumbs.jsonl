@@ -16,3 +16,6 @@
 {"event":"design_decision","phase":"reduce_var","choice":"USE HELPER","helper":"reduce<SUM, REDUCE_ROW, WaitAndPopPerTile>()","rationale":"Standard streaming reduce for variance","ts":"2026-03-10T12:25:37+00:00"}
 {"event":"design_decision","phase":"add_eps_rsqrt","choice":"USE HELPER","helper":"add<SCALAR> with rsqrt post_op","rationale":"Binary add for epsilon + rsqrt in post-op avoids extra CB roundtrip","ts":"2026-03-10T12:25:37+00:00"}
 {"event":"design_decision","phase":"untilize","choice":"USE HELPER","helper":"untilize<Wt, final_cb, c_16>()","rationale":"Standard untilize helper for tile->RM conversion","ts":"2026-03-10T12:25:37+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: layer_norm_rm","ts":"2026-03-10T12:28:19+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"0123ceb8df","ts":"2026-03-10T12:28:19+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[],"final_commit":"0123ceb8df","ts":"2026-03-10T12:28:19+00:00"}
