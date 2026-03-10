@@ -14,8 +14,8 @@
 //   2. Send remote-bound tokens from local hs_rm → remote staging_buf via fabric
 //   3. Signal remote device (atomic_inc on SEM_FABRIC_RECV)
 //   4. Wait for remote device's signal (SEM_FABRIC_RECV)
-//   5. Assemble pkt_buf in TILE_LAYOUT from local + received tokens (one tile row at a time)
-//   6. Write assembled tiles to pkt_buf DRAM (2D page indexing)
+//   5. Assemble pkt_buf in TILE_LAYOUT from local + received tokens
+//   6. Write assembled tiles to pkt_buf DRAM
 //   7. Signal SEM_PKT_READY on compute leader
 //   8. Close fabric connection
 //
@@ -38,12 +38,11 @@
 //   [7]  my_phys_y           - this dispatch core's physical Y
 //   [8]  D_bytes             - D * 2 (bytes per token row)
 //   [9]  D_tiles             - D / 32 (tiles per row)
-//   [10] P_tiles             - P / 32 (tile rows in pkt_buf)
-//   [11] local_count         - tokens from local HS for local expert
-//   [12] recv_count          - tokens expected from remote device
-//   [13] send_count          - tokens to send to remote device
-//   [14..14+local_count-1]          - local_token_indices[]
-//   [14+local_count..14+local_count+send_count-1] - send_token_indices[]
+//   [10] local_count         - tokens from local HS for local expert
+//   [11] recv_count          - tokens expected from remote device
+//   [12] send_count          - tokens to send to remote device
+//   [13..13+local_count-1]          - local_token_indices[]
+//   [13+local_count..13+local_count+send_count-1] - send_token_indices[]
 //   [...] FabricConnectionManager RT args
 
 #include "api/dataflow/dataflow_api.h"
@@ -60,7 +59,7 @@ using namespace tt::tt_fabric::linear::experimental;
 inline void scatter_row_to_tiles(
     uint32_t src_l1,       // L1 address of ROW_MAJOR token row (D*2 bytes)
     uint32_t tile_buf_l1,  // L1 address of tile buffer (D_tiles * 2048 bytes)
-    uint32_t row,          // target row within tile row (0..31)
+    uint32_t row,          // target row in pkt_buf (0..P-1)
     uint32_t num_tiles     // D_tiles
 ) {
     uint32_t face_pair = row >> 4;   // row / 16
@@ -105,11 +104,10 @@ void kernel_main() {
     const uint32_t my_phys_y = get_arg_val<uint32_t>(rt_idx++);            // [7]
     const uint32_t D_bytes = get_arg_val<uint32_t>(rt_idx++);              // [8]
     const uint32_t D_tiles = get_arg_val<uint32_t>(rt_idx++);              // [9]
-    const uint32_t P_tiles = get_arg_val<uint32_t>(rt_idx++);              // [10]
-    const uint32_t local_count = get_arg_val<uint32_t>(rt_idx++);          // [11]
-    const uint32_t recv_count = get_arg_val<uint32_t>(rt_idx++);           // [12]
-    const uint32_t send_count = get_arg_val<uint32_t>(rt_idx++);           // [13]
-    const uint32_t indices_base = rt_idx;                                  // [14]
+    const uint32_t local_count = get_arg_val<uint32_t>(rt_idx++);          // [10]
+    const uint32_t recv_count = get_arg_val<uint32_t>(rt_idx++);           // [11]
+    const uint32_t send_count = get_arg_val<uint32_t>(rt_idx++);           // [12]
+    const uint32_t indices_base = rt_idx;                                  // [13]
 
     // Fabric connection args start after all indices
     size_t fab_arg_idx = indices_base + local_count + send_count;
@@ -137,7 +135,14 @@ void kernel_main() {
     cb_reserve_back(cb_tiles, 1);
     const uint32_t tile_buf_l1 = get_write_ptr(cb_tiles);
 
-    const uint32_t total_tokens = local_count + recv_count;
+    // Zero-fill the tile buffer in L1
+    {
+        volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(tile_buf_l1);
+        uint32_t num_words = D_tiles * tile_page_bytes / 4;
+        for (uint32_t i = 0; i < num_words; ++i) {
+            p[i] = 0;
+        }
+    }
 
     // Remote semaphore NOC address: SEM_FABRIC_RECV on remote device's dispatch core.
     // Both devices have the same physical core mapping, so the semaphore L1 address
@@ -207,56 +212,31 @@ void kernel_main() {
     noc_semaphore_wait(recv_sem, 1);
     noc_semaphore_set(recv_sem, 0);
 
-    // ---- Phase 4+5: Assemble and write pkt_buf, one tile row at a time ----
-    // pkt_buf layout: local tokens at rows 0..local_count-1,
-    //                 received tokens at rows local_count..total_tokens-1.
-    // Each tile row holds 32 rows. We stream one tile row through CB6,
-    // scattering the relevant subset of tokens, then write to DRAM.
-    // For P_tiles=1 (P=32), this executes exactly once — same as before.
-    for (uint32_t tr = 0; tr < P_tiles; ++tr) {
-        // Zero-fill tile buffer (D_tiles × 2048 bytes)
-        {
-            volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(tile_buf_l1);
-            uint32_t num_words = D_tiles * tile_page_bytes / 4;
-            for (uint32_t i = 0; i < num_words; ++i) {
-                p[i] = 0;
-            }
-        }
+    // ---- Phase 4: Assemble pkt_buf (ROW_MAJOR → TILE_LAYOUT scatter in L1) ----
+    uint32_t pkt_row = 0;
 
-        uint32_t row_lo = tr * 32;
-        uint32_t row_hi = row_lo + 32;
-
-        // Local tokens: destination rows 0..local_count-1
-        uint32_t loc_start = (row_lo < local_count) ? row_lo : local_count;
-        uint32_t loc_end = (row_hi < local_count) ? row_hi : local_count;
-        for (uint32_t i = loc_start; i < loc_end; ++i) {
-            uint32_t t = get_arg_val<uint32_t>(indices_base + i);
-            noc_async_read_page(t, hs_rm_accessor, temp_l1);
-            noc_async_read_barrier();
-            scatter_row_to_tiles(temp_l1, tile_buf_l1, i - row_lo, D_tiles);
-        }
-
-        // Received tokens: destination rows local_count..total_tokens-1
-        uint32_t recv_abs_lo = local_count;
-        uint32_t recv_row_start = (row_lo > recv_abs_lo) ? row_lo : recv_abs_lo;
-        uint32_t recv_row_end = (row_hi < total_tokens) ? row_hi : total_tokens;
-        if (recv_row_start < recv_row_end) {
-            uint32_t i_start = recv_row_start - recv_abs_lo;
-            uint32_t i_end = recv_row_end - recv_abs_lo;
-            for (uint32_t i = i_start; i < i_end; ++i) {
-                noc_async_read_page(i, staging_accessor, temp_l1);
-                noc_async_read_barrier();
-                scatter_row_to_tiles(temp_l1, tile_buf_l1, (recv_abs_lo + i) - row_lo, D_tiles);
-            }
-        }
-
-        // Write this tile row to pkt_buf DRAM (2D page indexing)
-        for (uint32_t c = 0; c < D_tiles; ++c) {
-            uint32_t page_idx = tr * D_tiles + c;
-            noc_async_write_page(page_idx, pkt_accessor, tile_buf_l1 + c * tile_page_bytes);
-        }
-        noc_async_write_barrier();
+    // 4a: Local tokens from hs_rm
+    for (uint32_t i = 0; i < local_count; ++i) {
+        uint32_t t = get_arg_val<uint32_t>(indices_base + i);
+        noc_async_read_page(t, hs_rm_accessor, temp_l1);
+        noc_async_read_barrier();
+        scatter_row_to_tiles(temp_l1, tile_buf_l1, pkt_row, D_tiles);
+        pkt_row++;
     }
+
+    // 4b: Received tokens from staging_buf
+    for (uint32_t i = 0; i < recv_count; ++i) {
+        noc_async_read_page(i, staging_accessor, temp_l1);
+        noc_async_read_barrier();
+        scatter_row_to_tiles(temp_l1, tile_buf_l1, pkt_row, D_tiles);
+        pkt_row++;
+    }
+
+    // ---- Phase 5: Write assembled tiles to pkt_buf DRAM ----
+    for (uint32_t c = 0; c < D_tiles; ++c) {
+        noc_async_write_page(c, pkt_accessor, tile_buf_l1 + c * tile_page_bytes);
+    }
+    noc_async_write_barrier();
 
     // ---- Phase 6: Signal compute leader ----
     uint64_t leader_sem_addr = get_noc_addr(leader_phys_x, leader_phys_y, get_semaphore(SEM_PKT_READY));

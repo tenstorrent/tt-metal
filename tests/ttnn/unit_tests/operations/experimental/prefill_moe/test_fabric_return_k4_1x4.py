@@ -196,12 +196,16 @@ def _run_test(mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # out_bufs: ROW_MAJOR fragment pages for writer-side untilize (Phase 3).
+    # Shape [1, 1, P*NUM_CORES, n_per_core_dn*TILE] where each row = one fragment page.
+    # Page(r, c) = r * NUM_CORES + c, page_size = n_per_core_dn * TILE * 2 = 384 bytes.
+    n_per_core_dn = (D // TILE) // NUM_CORES  # 90 / 15 = 6
     out_bufs = []
     for e in range(NUM_EXPERTS):
         ob = ttnn.from_torch(
-            torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
+            torch.zeros(1, 1, P * NUM_CORES, n_per_core_dn * TILE, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

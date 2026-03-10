@@ -136,12 +136,14 @@ def _profile(mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # out_bufs: ROW_MAJOR fragment pages for writer-side untilize (Phase 3)
+    n_per_core_dn = (D // TILE) // NUM_CORES  # 6
     out_bufs = []
     for e in range(NUM_EXPERTS):
         ob = ttnn.from_torch(
-            torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
+            torch.zeros(1, 1, P * NUM_CORES, n_per_core_dn * TILE, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

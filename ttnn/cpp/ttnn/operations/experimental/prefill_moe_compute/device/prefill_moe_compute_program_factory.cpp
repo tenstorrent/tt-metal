@@ -190,6 +190,13 @@ PrefillMoeComputeMeshFactory::create_at(
                           .set_page_size(tt::CBIndex::c_3, BF16_TILE_BYTES);
     CreateCircularBuffer(program, dispatch_cores, cb3_config);
 
+    // CB3 on compute cores: fragment buffer for Phase B writer-side untilize.
+    // Each core extracts n_per_core_dn tile columns into a contiguous fragment per row.
+    const uint32_t frag_bytes = n_per_core_dn * TILE_HW * 2;  // 6 * 32 * 2 = 384
+    auto cb_frag_config = CircularBufferConfig(frag_bytes, {{tt::CBIndex::c_3, tt::DataFormat::Float16_b}})
+                              .set_page_size(tt::CBIndex::c_3, frag_bytes);
+    CreateCircularBuffer(program, compute_cores, cb_frag_config);
+
     // Combine core CBs: when fabric_return, used by recv_accumulate (ROW_MAJOR rows, need 3 tiles)
     const uint32_t combine_cb_size = enable_fabric_return ? 3 * BF16_TILE_BYTES : BF16_TILE_BYTES;
     auto cb4_config = CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_4, tt::DataFormat::Float16_b}})
@@ -201,16 +208,15 @@ PrefillMoeComputeMeshFactory::create_at(
     CreateCircularBuffer(program, combine_cores, cb5_config);
 
     if (enable_fabric_return) {
-        // CB0 on return core: batch tile buffer (D_tiles tiles for batch reads per expert)
+        // CB0 on return core: fragment page buffer for ROW_MAJOR out_bufs reads.
+        // Holds P * num_cores pages of frag_bytes each (total same as old tile buffer).
+        // After batch read, row r is contiguous at offset r * D_bytes.
+        const uint32_t P = TILE_HW;  // 32 rows per expert
+        const uint32_t total_frag_pages = P * num_cores;
         auto ret_cb0_config =
-            CircularBufferConfig(D_tiles * BF16_TILE_BYTES, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
-                .set_page_size(tt::CBIndex::c_0, BF16_TILE_BYTES);
+            CircularBufferConfig(total_frag_pages * frag_bytes, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::CBIndex::c_0, frag_bytes);
         CreateCircularBuffer(program, return_cores, ret_cb0_config);
-
-        // CB1 on return core: row extraction buffer (ROW_MAJOR, D_bytes)
-        auto ret_cb1_config = CircularBufferConfig(3 * BF16_TILE_BYTES, {{tt::CBIndex::c_1, tt::DataFormat::Float16_b}})
-                                  .set_page_size(tt::CBIndex::c_1, 3 * BF16_TILE_BYTES);
-        CreateCircularBuffer(program, return_cores, ret_cb1_config);
 
         // CB3 on return core: L1 buffer for metadata read from DRAM
         if (tensor_args.return_metadata_tensor.has_value()) {
@@ -377,25 +383,28 @@ PrefillMoeComputeMeshFactory::create_at(
         for (uint32_t x = 0; x < grid_x; ++x) {
             uint32_t core_idx = y * grid_x + x;
             std::vector<uint32_t> writer_args = {
-                tensor_args.inter_buf.buffer()->address(),
-                k_tiles,
-                k_tiles_dn,
-                n_weight_per_core_gu,
-                n_weight_tiles_gu,
-                core_idx * n_weight_per_core_gu,
-                core_idx * n_out_per_core,
-                n_out_per_core,
-                n_per_core_dn,
-                n_tiles_dn,
-                core_idx * n_per_core_dn,
-                leader_phys_x,
-                leader_phys_y,
-                num_experts,
+                tensor_args.inter_buf.buffer()->address(),  // [0]
+                k_tiles,                                    // [1]
+                k_tiles_dn,                                 // [2]
+                n_weight_per_core_gu,                       // [3]
+                n_weight_tiles_gu,                          // [4]
+                core_idx * n_weight_per_core_gu,            // [5]
+                core_idx * n_out_per_core,                  // [6]
+                n_out_per_core,                             // [7]
+                n_per_core_dn,                              // [8]
+                n_tiles_dn,                                 // [9]
+                core_idx * n_per_core_dn,                   // [10]
+                leader_phys_x,                              // [11]
+                leader_phys_y,                              // [12]
+                num_experts,                                // [13]
+                core_idx,                                   // [14] Phase 3: core index
+                num_cores,                                  // [15] Phase 3: total cores
+                TILE_HW,                                    // [16] Phase 3: P (rows per expert)
             };
             for (uint32_t e = 0; e < num_experts; ++e) {
-                writer_args.push_back(tensor_args.gate_up_weights[e].buffer()->address());
-                writer_args.push_back(tensor_args.down_weights[e].buffer()->address());
-                writer_args.push_back(tensor_args.out_bufs[e].buffer()->address());
+                writer_args.push_back(tensor_args.gate_up_weights[e].buffer()->address());  // [17+e*3+0]
+                writer_args.push_back(tensor_args.down_weights[e].buffer()->address());     // [17+e*3+1]
+                writer_args.push_back(tensor_args.out_bufs[e].buffer()->address());         // [17+e*3+2]
             }
             SetRuntimeArgs(program, writer_kernel_id, CoreCoord(x, y), writer_args);
         }
@@ -503,7 +512,7 @@ PrefillMoeComputeMeshFactory::create_at(
 
         std::vector<uint32_t> return_args = {
             tensor_args.output.buffer()->address(),  // [0]
-            D_tiles,                                 // [1]
+            num_cores,                               // [1] num_cores (was D_tiles)
             D_bytes,                                 // [2]
             num_experts,                             // [3]
             device_index,                            // [4] my_device_id
@@ -512,9 +521,10 @@ PrefillMoeComputeMeshFactory::create_at(
             staging_addr_val,                        // [7] staging_addr
             metadata_addr,                           // [8] metadata DRAM address
             metadata_word_count,                     // [9] metadata word count
+            TILE_HW,                                 // [10] P (rows per expert)
         };
 
-        // Append fabric connection RT args at fixed offset [10+]
+        // Append fabric connection RT args at fixed offset [11+]
         // FabricConnectionManager::build_from_args expects:
         //   [forward_flag] [forward_connection_args if flag=1]
         //   [backward_flag] [backward_connection_args if flag=1]
@@ -606,9 +616,9 @@ void PrefillMoeComputeMeshFactory::override_runtime_arguments(
                 auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_id, CoreCoord(x, y));
                 writer_args[0] = tensor_args.inter_buf.buffer()->address();
                 for (uint32_t e = 0; e < num_experts; ++e) {
-                    writer_args[14 + e * 3 + 0] = tensor_args.gate_up_weights[e].buffer()->address();
-                    writer_args[14 + e * 3 + 1] = tensor_args.down_weights[e].buffer()->address();
-                    writer_args[14 + e * 3 + 2] = tensor_args.out_bufs[e].buffer()->address();
+                    writer_args[17 + e * 3 + 0] = tensor_args.gate_up_weights[e].buffer()->address();
+                    writer_args[17 + e * 3 + 1] = tensor_args.down_weights[e].buffer()->address();
+                    writer_args[17 + e * 3 + 2] = tensor_args.out_bufs[e].buffer()->address();
                 }
             }
         }
