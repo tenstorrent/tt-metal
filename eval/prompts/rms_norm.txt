@@ -1,0 +1,55 @@
+# golden: rms_norm
+/create-op
+RMSNorm operation: normalize along the final dimension using root mean square.
+
+    RMSNorm(x) = x / sqrt(mean(x^2, dim=-1, keepdim=True) + epsilon) * gamma
+
+where gamma is an optional scale parameter matching the last dimension of the input.
+
+The function signature must be:
+
+    rms_norm(
+        input_tensor: ttnn.Tensor,
+        *,
+        gamma: Optional[ttnn.Tensor] = None,
+        epsilon: float = 1e-6,
+    ) -> ttnn.Tensor
+
+This supports these call patterns:
+    rms_norm(x)                                 # no gamma, default epsilon
+    rms_norm(x, gamma=g)                        # with gamma
+    rms_norm(x, epsilon=1e-5)                   # custom epsilon
+    rms_norm(x, gamma=g, epsilon=1e-5)          # full invocation
+
+Supported dtypes: bfloat16 and float32.
+- For float32 input, fp32 accumulation must be enabled (no intermediate bfloat16 downcast).
+
+Supported layouts: ROW_MAJOR_LAYOUT and TILE_LAYOUT.
+- For TILE_LAYOUT, H and W must be divisible by 32.
+- Gamma tensor should always be in ROW_MAJOR_LAYOUT with shape (1, 1, 1, W).
+- Output layout matches input layout.
+
+The operation must validate inputs on the Python side and raise ValueError or
+RuntimeError for:
+- Input tensor with rank < 2
+- Gamma tensor whose last dimension does not match input's last dimension
+
+Import path: from ttnn.operations.rms_norm import rms_norm
+
+Run in FULLY AUTOMATED mode. Introduce reasonable assumptions and DO NOT ask
+for confirmation or clarifications.
+
+Run with FULL BREADCRUMBS LOGGING ENABLED.
+
+## Reporting
+
+In the end, produce a well-structured markdown report summarizing the whole
+process, including:
+- Summary for each agent (analyzer, planner, builder, designer, writer)
+- References to log/breadcrumb files
+- TDD pipeline results: which stages passed, how many attempts each took,
+  any failure classifications encountered
+- Decisions made, deviations from specs, pain points
+- Infrastructure issues: any device access errors, device hangs, build
+  failures or delays, venv problems, or other environment issues encountered
+- Suggestions for improving the agent pipeline
