@@ -250,14 +250,16 @@ class MoELayerTTWeights:
     - w1_experts (gate_proj): per-device [1,experts_per_device,hidden,moe_intermediate]
     - w3_experts (up_proj):   per-device [1,experts_per_device,hidden,moe_intermediate]
     - w2_experts (down_proj): per-device [1,experts_per_device,moe_intermediate,hidden]
+    - w1w3_experts (fused gate+up): [1,experts_per_device,hidden,2*moe_intermediate] (optional)
     """
 
     w_gate: ttnn.Tensor
     e_score_correction_bias: ttnn.Tensor
-    w1_experts: ttnn.Tensor
+    w1_experts: Optional[ttnn.Tensor]  # None when fused gate+up is active
     w2_experts: ttnn.Tensor
-    w3_experts: ttnn.Tensor
+    w3_experts: Optional[ttnn.Tensor]  # None when fused gate+up is active
     e_score_correction_bias_tile: Optional[ttnn.Tensor] = None
+    w1w3_experts: Optional[ttnn.Tensor] = None
 
 
 @dataclass(frozen=True)
@@ -620,20 +622,38 @@ def convert_decoder_layer_weights(
         w2_stacked = torch.stack(w2_list, dim=0)  # [96, moe_intermediate, hidden]
 
         _msync("after expert stacking")
-        w1_experts = _experts_weight_tt(
-            device=device,
-            torch_weights=w1_stacked,
-            cache_file=c("w1_experts", experts_variant),
-            dtype=experts_dtype,
-        )
-        _msync("after w1_experts")
-        w3_experts = _experts_weight_tt(
-            device=device,
-            torch_weights=w3_stacked,
-            cache_file=c("w3_experts", experts_variant),
-            dtype=experts_dtype,
-        )
-        _msync("after w3_experts")
+
+        fuse_gate_up = os.environ.get("GLM4_MOE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
+
+        if fuse_gate_up:
+            # Fused gate+up: single w1w3 tensor replaces separate w1 and w3 (saves DRAM).
+            w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*moe_intermediate]
+            w1w3_experts_tt = _experts_weight_tt(
+                device=device,
+                torch_weights=w1w3_stacked,
+                cache_file=c("w1w3_experts", experts_variant),
+                dtype=experts_dtype,
+            )
+            _msync("after w1w3_experts")
+            w1_experts: Optional[ttnn.Tensor] = None
+            w3_experts: Optional[ttnn.Tensor] = None
+        else:
+            w1_experts = _experts_weight_tt(
+                device=device,
+                torch_weights=w1_stacked,
+                cache_file=c("w1_experts", experts_variant),
+                dtype=experts_dtype,
+            )
+            _msync("after w1_experts")
+            w3_experts = _experts_weight_tt(
+                device=device,
+                torch_weights=w3_stacked,
+                cache_file=c("w3_experts", experts_variant),
+                dtype=experts_dtype,
+            )
+            _msync("after w3_experts")
+            w1w3_experts_tt = None
+
         w2_experts = _experts_weight_tt(
             device=device,
             torch_weights=w2_stacked,
@@ -649,6 +669,7 @@ def convert_decoder_layer_weights(
             w2_experts=w2_experts,
             w3_experts=w3_experts,
             e_score_correction_bias_tile=e_bias_tile,
+            w1w3_experts=w1w3_experts_tt,
         )
 
     return DecoderLayerTTWeights(

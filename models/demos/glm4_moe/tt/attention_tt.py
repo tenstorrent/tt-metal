@@ -344,40 +344,48 @@ class Glm4MoeAttention(LightweightModule):
         if self._use_dram_shard:
             self._setup_dram_sharded_configs()
 
-        # TG user selection matrices (for slicing batch from all-reduce output)
+        # TG user selection matrices (for slicing batch from all-reduce output).
+        # Pre-computed per batch bucket because slice_mat and user_selection_matrix
+        # dimensions depend on the runtime batch size (B_phys, Bg vary per bucket).
+        self._slice_mats: dict[int, object] = {}
+        self._user_sel_mats: dict[int, object] = {}
         if self.TG:
-            B = self.max_batch_size  # logical total batch (e.g. 4, 8, 32)
-            Bg = self.batch_size_per_device_group  # per DP group (B // 4)
-            Ng = self.num_device_groups  # 4 for Galaxy TG
-            # Physical batch dim in TILE_LAYOUT is always padded to multiples of 32.
-            # slice_mat width must match physical_batch from WIDTH_SHARDED QKV output.
-            B_phys = ((B + 31) // 32) * 32  # tile-padded batch (always 32 for B<=32)
+            self._tg_init_batch_mats(self.max_batch_size)
 
-            # slice_mat: [1, num_devices, Bg, B_phys] — each device selects its DP group's batch entries
-            weight = torch.zeros(1, self.num_devices, Bg, B_phys)
-            for i in range(self.num_devices):
-                col = i % Ng
-                weight[:, i, :, col * Bg : (col + 1) * Bg] = torch.eye(Bg)
+    def _tg_init_batch_mats(self, batch_size: int):
+        """Lazily create slice_mat and user_selection_matrix for a given batch size."""
+        if batch_size in self._slice_mats:
+            return
+        Ng = self.num_device_groups  # 4 for Galaxy TG
+        Bg = max(batch_size // Ng, 1)  # per DP group
+        B_phys = ((batch_size + 31) // 32) * 32  # tile-padded
 
-            self.slice_mat = ttnn.from_torch(
-                weight,
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
-            )
-            # user_selection_matrix: [B_phys, B_phys] — reorders batch after all-gather across DP groups
-            user_selection_matrix = torch.eye(Bg, Bg)
-            user_selection_matrix = torch.nn.functional.pad(user_selection_matrix, (0, B_phys - Bg), "constant", 0)
-            user_selection_matrix = [user_selection_matrix] * Ng
-            user_selection_matrix = torch.block_diag(*user_selection_matrix)
-            self.user_selection_matrix = ttnn.from_torch(
-                user_selection_matrix,
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        # slice_mat: [1, num_devices, Bg, B_phys] — each device selects its DP group's batch entries
+        weight = torch.zeros(1, self.num_devices, Bg, B_phys)
+        for i in range(self.num_devices):
+            col = i % Ng
+            weight[:, i, :, col * Bg : (col + 1) * Bg] = torch.eye(Bg)
+        self._slice_mats[batch_size] = ttnn.from_torch(
+            weight,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+        )
+
+        # user_selection_matrix: [Ng*Bg, Ng*B_phys] — reorders batch after all-gather across DP groups
+        Bg_phys = ((Bg + 31) // 32) * 32
+        user_sel = torch.eye(Bg, Bg)
+        user_sel = torch.nn.functional.pad(user_sel, (0, Bg_phys - Bg), "constant", 0)
+        user_sel = [user_sel] * Ng
+        user_sel = torch.block_diag(*user_sel)
+        self._user_sel_mats[batch_size] = ttnn.from_torch(
+            user_sel,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     def _get_shard_cfgs(self, batch: int) -> dict:
         """Return per-batch shard configs (lazily created and cached)."""
@@ -612,12 +620,14 @@ class Glm4MoeAttention(LightweightModule):
         # Reshape to expose physical batch as logical so matmul inner dims match.
         if tg_batch_sliced:
             # Multi-user: slice batch to this DP group entries via matmul.
+            # Lazily create slice_mat/user_sel_mat for this batch size if needed.
+            self._tg_init_batch_mats(active_batch)
             xqkv_shape = [int(d) for d in xqkv.shape]
-            B_phys = ((self.max_batch_size + 31) // 32) * 32
+            B_phys = ((active_batch + 31) // 32) * 32
             if xqkv_shape[-2] != B_phys:
                 xqkv = ttnn.reshape(xqkv, (1, 1, B_phys, xqkv_shape[-1]), (1, 1, B_phys, xqkv_shape[-1]))
             xqkv = ttnn.matmul(
-                self.slice_mat,
+                self._slice_mats[active_batch],
                 xqkv,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -633,10 +643,11 @@ class Glm4MoeAttention(LightweightModule):
         #    q/k/v with batch=32 which breaks paged_update_cache (page_table has batch=1).
         #    Mirrors tt_transformers/tt/attention.py lines 497-501.
         _fqkv_shape = xqkv.shape
+        B_phys_local = ((logical_batch_after_slice + 31) // 32) * 32
         xqkv = ttnn.reshape(
             xqkv,
             (1, 1, logical_batch_after_slice, int(_fqkv_shape[3])),
-            (1, 1, 32, int(_fqkv_shape[3])),
+            (1, 1, B_phys_local, int(_fqkv_shape[3])),
         )
 
         # Split into Q, K, V heads (output must be HEIGHT_SHARDED per ttnn API)
@@ -708,7 +719,7 @@ class Glm4MoeAttention(LightweightModule):
         # Pattern from tt_transformers/tt/attention.py lines 667-687.
         if tg_batch_sliced:
             attn_shape = [int(d) for d in attn_output.shape]
-            B_phys = ((self.max_batch_size + 31) // 32) * 32
+            B_phys = ((logical_batch_after_slice + 31) // 32) * 32
             if attn_shape[-2] != B_phys:
                 attn_output = ttnn.reshape(attn_output, (1, 1, B_phys, attn_shape[-1]), (1, 1, B_phys, attn_shape[-1]))
 
@@ -720,13 +731,13 @@ class Glm4MoeAttention(LightweightModule):
 
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
             attn_output = ttnn.matmul(
-                self.user_selection_matrix,
+                self._user_sel_mats[active_batch],
                 attn_output,
                 core_grid=ttnn.CoreGrid(y=4, x=8),
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
-            B_phys_out = ((self.max_batch_size + 31) // 32) * 32
+            B_phys_out = ((active_batch + 31) // 32) * 32
             attn_output = ttnn.reshape(attn_output, (1, 1, active_batch, attn_shape[-1]), (1, 1, B_phys_out, attn_shape[-1]))
 
         # 10. Output projection (BF16 output for precision through 92 layers)

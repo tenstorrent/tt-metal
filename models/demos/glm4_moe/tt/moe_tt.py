@@ -164,6 +164,9 @@ class Glm4MoeMoERuntime:
     # Memory config for decode-path expert intermediates
     decode_memory_config: ttnn.MemoryConfig
 
+    # Fused gate+up program config (when GLM4_MOE_FUSE_EXPERTS_GATE_UP=1)
+    gate_up_fused_program_config: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None
+
 
 def create_moe_runtime(*, device: Any, hparams: Glm4MoeHParams) -> Glm4MoeMoERuntime:
     """Create per-device MoE runtime constants for GLM-4.7-REAP.
@@ -257,6 +260,16 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeHParams) -> Glm4MoeMoERun
     ep_l1 = _env_bool("GLM4_MOE_EP_L1", default=False)
     decode_memory_config = ttnn.L1_MEMORY_CONFIG if ep_l1 else ttnn.DRAM_MEMORY_CONFIG
 
+    fuse_gate_up = _env_bool("GLM4_MOE_FUSE_EXPERTS_GATE_UP", default=False)
+    gate_up_fused_program_config = None
+    if fuse_gate_up:
+        gate_up_fused_program_config = _make_sparse_matmul_program_config(
+            device=device,
+            out_features=int(hparams.moe_intermediate_size) * 2,
+            in0_block_w=8,
+            per_core_M=per_core_M,
+        )
+
     return Glm4MoeMoERuntime(
         expert_mapping_tensors=expert_mapping_tensors,
         remap_topk_mask=remap_topk_mask,
@@ -277,6 +290,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeHParams) -> Glm4MoeMoERun
         hidden_size=int(hparams.hidden_size),
         moe_intermediate_size=int(hparams.moe_intermediate_size),
         decode_memory_config=decode_memory_config,
+        gate_up_fused_program_config=gate_up_fused_program_config,
     )
 
 
@@ -304,7 +318,7 @@ def moe_topk_tt(
     norm_topk_prob = bool(getattr(hparams, "norm_topk_prob", True))
 
     # Use L1 memory for router ops in decode mode (small token count).
-    use_l1 = int(x.shape[2]) <= 32  # decode mode only
+    use_l1 = int(x.shape[2]) <= 64  # decode mode only (MoE sees full batch, not DP-split)
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
     linear_kwargs: dict[str, Any] = {}
@@ -469,39 +483,79 @@ def moe_sparse_experts_forward_tt(
             device=device, out_features=int(rt.hidden_size),
             in0_block_w=8, per_core_M=num_blocks,
         )
+        _gate_up_fused_pc = (
+            _make_sparse_matmul_program_config(
+                device=device, out_features=int(rt.moe_intermediate_size) * 2,
+                in0_block_w=8, per_core_M=num_blocks,
+            )
+            if rt.gate_up_fused_program_config is not None
+            else None
+        )
     else:
         _gate_up_pc = rt.gate_up_program_config
         _down_pc = rt.down_program_config
+        _gate_up_fused_pc = rt.gate_up_fused_program_config
 
     sparse_mc = rt.decode_memory_config if total_tokens <= block else memory_config
     if sparse_mc is not ttnn.DRAM_MEMORY_CONFIG:
         expert_input = ttnn.to_memory_config(expert_input, sparse_mc)
 
-    # Gate projection (w1).
-    w1_out = ttnn.sparse_matmul(
-        expert_input, moe_w.w1_experts,
-        sparsity=sparsity,
-        memory_config=sparse_mc,
-        program_config=_gate_up_pc,
-        is_input_a_sparse=False,
-        is_input_b_sparse=True,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-        output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
-    )
-    # Up projection (w3).
-    w3_out = ttnn.sparse_matmul(
-        expert_input, moe_w.w3_experts,
-        sparsity=sparsity,
-        memory_config=sparse_mc,
-        program_config=_gate_up_pc,
-        is_input_a_sparse=False,
-        is_input_b_sparse=True,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-        output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
-    )
-    ttnn.deallocate(expert_input, force=False)
+    # STEP 4: Expert compute (gate + up + SiLU + down).
+    if getattr(moe_w, "w1w3_experts", None) is not None and _gate_up_fused_pc is not None:
+        # Fused gate+up projection: single sparse_matmul -> split -> SiLU-gated multiply.
+        w1w3_out = ttnn.sparse_matmul(
+            expert_input, moe_w.w1w3_experts,
+            sparsity=sparsity,
+            memory_config=sparse_mc,
+            program_config=_gate_up_fused_pc,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
+        )
+        ttnn.deallocate(expert_input, force=False)
+
+        # Split fused output [.., 2*moe_intermediate] into gate (w1) and up (w3) halves.
+        moe_inter = int(rt.moe_intermediate_size)
+        ndim = len(w1w3_out.shape)
+        begin_gate = [0] * ndim
+        end_gate = [int(w1w3_out.shape[i]) for i in range(ndim)]
+        end_gate[-1] = moe_inter
+        begin_up = [0] * ndim
+        begin_up[-1] = moe_inter
+        end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
+
+        gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
+        up_view = ttnn.slice(w1w3_out, begin_up, end_up)
+        w1_out = ttnn.clone(gate_view, memory_config=sparse_mc)
+        w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
+        ttnn.deallocate(w1w3_out, force=False)
+    else:
+        # Separate gate (w1) and up (w3) projections.
+        w1_out = ttnn.sparse_matmul(
+            expert_input, moe_w.w1_experts,
+            sparsity=sparsity,
+            memory_config=sparse_mc,
+            program_config=_gate_up_pc,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
+        )
+        w3_out = ttnn.sparse_matmul(
+            expert_input, moe_w.w3_experts,
+            sparsity=sparsity,
+            memory_config=sparse_mc,
+            program_config=_gate_up_pc,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
+        )
+        ttnn.deallocate(expert_input, force=False)
 
     # SiLU(gate) * up.
     x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
@@ -672,34 +726,74 @@ def moe_a2a_experts_forward_tt(
             device=device, out_features=int(rt.hidden_size),
             in0_block_w=8, per_core_M=num_blocks,
         )
+        _gate_up_fused_pc = (
+            _make_sparse_matmul_program_config(
+                device=device, out_features=int(rt.moe_intermediate_size) * 2,
+                in0_block_w=8, per_core_M=num_blocks,
+            )
+            if rt.gate_up_fused_program_config is not None
+            else None
+        )
     else:
         _gate_up_pc = rt.gate_up_program_config
         _down_pc = rt.down_program_config
+        _gate_up_fused_pc = rt.gate_up_fused_program_config
 
     sparse_mc = rt.decode_memory_config if total_tokens <= block else memory_config
 
     # STEP 4: Expert compute (gate + up + SiLU + down).
-    w1_out = ttnn.sparse_matmul(
-        expert_input, moe_w.w1_experts,
-        sparsity=sparsity,
-        memory_config=sparse_mc,
-        program_config=_gate_up_pc,
-        is_input_a_sparse=False, is_input_b_sparse=True,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-        output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
-    )
-    w3_out = ttnn.sparse_matmul(
-        expert_input, moe_w.w3_experts,
-        sparsity=sparsity,
-        memory_config=sparse_mc,
-        program_config=_gate_up_pc,
-        is_input_a_sparse=False, is_input_b_sparse=True,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-        output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
-    )
-    ttnn.deallocate(expert_input, force=False)
+    if getattr(moe_w, "w1w3_experts", None) is not None and _gate_up_fused_pc is not None:
+        # Fused gate+up projection: single sparse_matmul -> split -> SiLU-gated multiply.
+        w1w3_out = ttnn.sparse_matmul(
+            expert_input, moe_w.w1w3_experts,
+            sparsity=sparsity,
+            memory_config=sparse_mc,
+            program_config=_gate_up_fused_pc,
+            is_input_a_sparse=False, is_input_b_sparse=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
+        )
+        ttnn.deallocate(expert_input, force=False)
+
+        # Split fused output [.., 2*moe_intermediate] into gate (w1) and up (w3) halves.
+        moe_inter = int(rt.moe_intermediate_size)
+        ndim = len(w1w3_out.shape)
+        begin_gate = [0] * ndim
+        end_gate = [int(w1w3_out.shape[i]) for i in range(ndim)]
+        end_gate[-1] = moe_inter
+        begin_up = [0] * ndim
+        begin_up[-1] = moe_inter
+        end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
+
+        gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
+        up_view = ttnn.slice(w1w3_out, begin_up, end_up)
+        w1_out = ttnn.clone(gate_view, memory_config=sparse_mc)
+        w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
+        ttnn.deallocate(w1w3_out, force=False)
+    else:
+        # Separate gate (w1) and up (w3) projections.
+        w1_out = ttnn.sparse_matmul(
+            expert_input, moe_w.w1_experts,
+            sparsity=sparsity,
+            memory_config=sparse_mc,
+            program_config=_gate_up_pc,
+            is_input_a_sparse=False, is_input_b_sparse=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
+        )
+        w3_out = ttnn.sparse_matmul(
+            expert_input, moe_w.w3_experts,
+            sparsity=sparsity,
+            memory_config=sparse_mc,
+            program_config=_gate_up_pc,
+            is_input_a_sparse=False, is_input_b_sparse=True,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
+        )
+        ttnn.deallocate(expert_input, force=False)
 
     x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(w1_out, force=False)
