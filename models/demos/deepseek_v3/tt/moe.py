@@ -132,6 +132,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "num_links": 4,
             },
             "ccl": ccl,
+            "moe_gate": BlazeMoeGate.create_state(hf_config, mesh_device),
         }
 
     @classmethod

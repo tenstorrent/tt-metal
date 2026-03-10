@@ -15,7 +15,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     LinearConfig,
     LinearFallbackConfig,
     MeshDeviceStub,
-    MoEGateRoutingConfig,
     MulConfig,
     ReshapeConfig,
     ScatterConfig,
@@ -26,6 +25,7 @@ from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
@@ -61,35 +61,6 @@ class BlazeMoeGate(AbstractModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
                 )
-            },
-            "gate_routing": {
-                "ttnn_output_tensor": shard_and_save(
-                    output_path / f"gate_proj.ttnn_output_tensor",
-                    torch.zeros((1, 32, 32)),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                ),
-                "ttnn_input_indices": shard_and_save(
-                    output_path / f"gate_proj.ttnn_input_indices",
-                    torch.transpose(torch.arange(16 * 16).unsqueeze(0).reshape(1, 16, 16), -2, -1),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.uint16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                ),
-                "ttnn_output_indices": shard_and_save(
-                    output_path / f"gate_proj.ttnn_output_indices",
-                    torch.zeros((1, 32, 32)),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.uint16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                ),
             },
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
@@ -139,6 +110,55 @@ class BlazeMoeGate(AbstractModule):
         }
 
     @classmethod
+    def create_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+    ) -> ModelState:
+        """Create input_indices, output_indices and output_tensor for each MoE layer
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL instance for communication configuration
+        Returns:
+            ModelState containing input_indices, output_indices and output_tensor for each MoE layer
+        """
+        ttnn_output_tensor = ttnn.zeros(
+            shape=(1, 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_output_indices = ttnn.zeros(
+            shape=(1, 32, 32),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_input_indices = ttnn.arange(
+            start=0,
+            end=16 * 16,
+            step=1,
+            dtype=ttnn.int32,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
+        ttnn_input_indices = ttnn.reshape(ttnn_input_indices, (1, 16, 16))
+        ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
+        return {
+            "gate_routing": {
+                "ttnn_output_tensor": ttnn_output_tensor,
+                "ttnn_input_indices": ttnn_input_indices,
+                "ttnn_output_indices": ttnn_output_indices,
+            },
+        }
+
+    @classmethod
     def model_config(
         cls,
         hf_config: PretrainedConfig,
@@ -168,11 +188,6 @@ class BlazeMoeGate(AbstractModule):
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-                ),
-                "gate_routing": MoEGateRoutingConfig(
-                    ttnn_output_tensor=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    ttnn_input_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    ttnn_output_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -243,11 +258,6 @@ class BlazeMoeGate(AbstractModule):
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-                ),
-                "gate_routing": MoEGateRoutingConfig(
-                    ttnn_output_tensor=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    ttnn_input_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    ttnn_output_indices=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
