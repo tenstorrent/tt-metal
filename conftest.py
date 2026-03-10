@@ -1138,7 +1138,7 @@ def reset_tensix(tt_open_devices=None):
 
 
 @pytest.fixture(autouse=True)
-def ttnn_graph_report():
+def ttnn_graph_report(request):
     """
     Automatically generate graph reports when config enables it.
 
@@ -1162,6 +1162,13 @@ def ttnn_graph_report():
     if ttnn.graph.is_graph_capture_active():
         yield
         return
+
+    # Ensure we are torn down before device fixtures: request whichever device
+    # the test uses so pytest tears us down first, then the device.
+    if "mesh_device" in request.fixturenames:
+        request.getfixturevalue("mesh_device")
+    if "device" in request.fixturenames:
+        request.getfixturevalue("device")
 
     report_path = Path(report_path)
     ttnn.graph.enable_buffer_pages()
