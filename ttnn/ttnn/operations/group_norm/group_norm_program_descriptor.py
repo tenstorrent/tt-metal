@@ -51,6 +51,7 @@ CB_EPS = 4
 CB_SCALER = 5
 CB_MEAN = 6
 CB_DEN = 7
+CB_SCRATCH = 8
 CB_NORMALIZED = 16
 CB_OUTPUT_RM = 17
 CB_SQ_SUM = 24
@@ -235,6 +236,19 @@ def create_program_descriptor(
         ],
     )
 
+    # CB 8: cb_scratch - 1 tile scratch for den_tile accumulation in Phase 4
+    cb_scratch_desc = ttnn.CBDescriptor(
+        total_size=1 * tile_page_size,
+        core_ranges=core_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_SCRATCH,
+                data_format=input_tensor.dtype,
+                page_size=tile_page_size,
+            )
+        ],
+    )
+
     # CB 26: cb_group_scaler - G*Ct persistent tiles of per-group scaler masks
     cb_group_scaler_desc = ttnn.CBDescriptor(
         total_size=G * Ct * group_scaler_tile_page_size,
@@ -340,6 +354,7 @@ def create_program_descriptor(
             cb_output_rm_desc,
             cb_sq_sum_desc,
             cb_tmp_desc,
+            cb_scratch_desc,
             cb_group_scaler_desc,
         ],
     )

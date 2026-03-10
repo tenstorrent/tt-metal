@@ -63,6 +63,34 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_group_scaler, group_scaler_num_tiles);
 
+    // ========== STARTUP: READ GAMMA TILES INTO CB 2 ==========
+    // Persistent: Ct tiles, one per tile-column. gamma is TILE_LAYOUT.
+    constexpr uint32_t gamma_tile_size = get_tile_size(cb_gamma);
+    auto gamma_accessor = TensorAccessor(gamma_accessor_args, gamma_addr, gamma_tile_size);
+    cb_reserve_back(cb_gamma, Ct);
+    uint32_t gamma_l1_addr = get_write_ptr(cb_gamma);
+    for (uint32_t t = 0; t < Ct; ++t) {
+        uint64_t noc_addr = gamma_accessor.get_noc_addr(t);
+        noc_async_read(noc_addr, gamma_l1_addr, gamma_tile_size);
+        gamma_l1_addr += gamma_tile_size;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_gamma, Ct);
+
+    // ========== STARTUP: READ BETA TILES INTO CB 3 ==========
+    // Persistent: Ct tiles, one per tile-column. beta is TILE_LAYOUT.
+    constexpr uint32_t beta_tile_size = get_tile_size(cb_beta);
+    auto beta_accessor = TensorAccessor(beta_accessor_args, beta_addr, beta_tile_size);
+    cb_reserve_back(cb_beta, Ct);
+    uint32_t beta_l1_addr = get_write_ptr(cb_beta);
+    for (uint32_t t = 0; t < Ct; ++t) {
+        uint64_t noc_addr = beta_accessor.get_noc_addr(t);
+        noc_async_read(noc_addr, beta_l1_addr, beta_tile_size);
+        beta_l1_addr += beta_tile_size;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_beta, Ct);
+
     // ========== MAIN LOOP: READ RM STICKS ==========
     // Process 32 sticks at a time (one tile-row), pushing Ct pages per block.
     // Each tile-row has 32 sticks * stick_size = Ct * tile_page_size bytes.

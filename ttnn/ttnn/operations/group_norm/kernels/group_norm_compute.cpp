@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Group Norm - Compute Kernel (Stage 3: normalize)
+// Group Norm - Compute Kernel (Stage 4: affine)
 // Phase 0: Tilize (cb_input_rm -> cb_tilized, persistent)
 // Phase 1: Compute per-group mean via mul_tiles(x, binary_mask) + reduce_tile
 // Phase 2: Compute per-group E[x^2] via mul_tiles(x^2, binary_mask) + reduce_tile
 // Phase 3: Compute den_g = rsqrt(E[x^2] - mean_g^2 + eps) per group
 // Phase 4: Build mean_tile, subtract mean, build den_tile, multiply by den
+// Phase 4b: Affine transform: gamma * normalized + beta
 // Phase 5: Untilize (cb_normalized -> cb_output_rm)
 
 #include "api/compute/common.h"
@@ -31,13 +32,15 @@ void kernel_main() {
     // ========== CB INDICES ==========
     constexpr uint32_t cb_input_rm = 0;
     constexpr uint32_t cb_tilized = 1;
-    constexpr uint32_t cb_gamma = 2;  // Used as scratch in normalize stage; holds gamma tiles in affine stage
+    constexpr uint32_t cb_gamma = 2;
+    constexpr uint32_t cb_beta = 3;
     constexpr uint32_t cb_eps = 4;
     constexpr uint32_t cb_scaler = 5;
     constexpr uint32_t cb_mean = 6;
     constexpr uint32_t cb_den = 7;
     constexpr uint32_t cb_normalized = 16;
     constexpr uint32_t cb_output_rm = 17;
+    constexpr uint32_t cb_scratch = 8;
     constexpr uint32_t cb_sq_sum = 24;
     constexpr uint32_t cb_tmp = 25;
     constexpr uint32_t cb_group_scaler = 26;
@@ -56,6 +59,8 @@ void kernel_main() {
         cb_wait_front(cb_scaler, 1);
         cb_wait_front(cb_eps, 1);
         cb_wait_front(cb_group_scaler, G * Ct);
+        cb_wait_front(cb_gamma, Ct);
+        cb_wait_front(cb_beta, Ct);
 
         // ========== PHASE 1: COMPUTE PER-GROUP MEAN ==========
         // mean_g = (1/K) * sum(x * mask_g) for each group
@@ -315,24 +320,24 @@ void kernel_main() {
                 cb_push_back(cb_sq_sum, 1);
 
                 for (uint32_t g = 1; g < G; ++g) {
-                    // den_g * mask[g*Ct+ct] -> cb_gamma (temp, unused in normalize stage)
-                    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_group_scaler, cb_den, cb_gamma);
+                    // den_g * mask[g*Ct+ct] -> cb_scratch (dedicated scratch)
+                    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_group_scaler, cb_den, cb_scratch);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(cb_group_scaler, cb_den, g * Ct + ct, g, 0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    cb_reserve_back(cb_gamma, 1);
-                    pack_tile(0, cb_gamma);
+                    cb_reserve_back(cb_scratch, 1);
+                    pack_tile(0, cb_scratch);
                     tile_regs_release();
-                    cb_push_back(cb_gamma, 1);
+                    cb_push_back(cb_scratch, 1);
 
-                    add_tiles_init(cb_sq_sum, cb_gamma);
+                    add_tiles_init(cb_sq_sum, cb_scratch);
                     tile_regs_acquire();
                     cb_wait_front(cb_sq_sum, 1);
-                    cb_wait_front(cb_gamma, 1);
-                    add_tiles(cb_sq_sum, cb_gamma, 0, 0, 0);
+                    cb_wait_front(cb_scratch, 1);
+                    add_tiles(cb_sq_sum, cb_scratch, 0, 0, 0);
                     cb_pop_front(cb_sq_sum, 1);
-                    cb_pop_front(cb_gamma, 1);
+                    cb_pop_front(cb_scratch, 1);
                     tile_regs_commit();
                     tile_regs_wait();
                     cb_reserve_back(cb_sq_sum, 1);
@@ -349,6 +354,34 @@ void kernel_main() {
                 mul_tiles(cb_tmp, cb_sq_sum, 0, 0, 0);
                 cb_pop_front(cb_tmp, 1);
                 cb_pop_front(cb_sq_sum, 1);
+                tile_regs_commit();
+                tile_regs_wait();
+                // Pack normalized to cb_tmp for affine transform
+                cb_reserve_back(cb_tmp, 1);
+                pack_tile(0, cb_tmp);
+                tile_regs_release();
+                cb_push_back(cb_tmp, 1);
+
+                // --- Phase 4b: Affine = gamma[ct] * normalized + beta[ct] ---
+                // Step 1: gamma * normalized
+                mul_tiles_init(cb_tmp, cb_gamma);
+                tile_regs_acquire();
+                cb_wait_front(cb_tmp, 1);
+                mul_tiles(cb_tmp, cb_gamma, 0, ct, 0);
+                cb_pop_front(cb_tmp, 1);
+                tile_regs_commit();
+                tile_regs_wait();
+                cb_reserve_back(cb_tmp, 1);
+                pack_tile(0, cb_tmp);
+                tile_regs_release();
+                cb_push_back(cb_tmp, 1);
+
+                // Step 2: gamma * normalized + beta
+                add_tiles_init(cb_tmp, cb_beta);
+                tile_regs_acquire();
+                cb_wait_front(cb_tmp, 1);
+                add_tiles(cb_tmp, cb_beta, 0, ct, 0);
+                cb_pop_front(cb_tmp, 1);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, cb_normalized);
