@@ -227,28 +227,27 @@ class TtBarkAttention:
         if len(qkv.shape) == 4:
             qkv = ttnn.squeeze(qkv, dim=1)
 
-        # Manual Q/K/V split and head reshape to guarantee correct memory ordering.
-        # ttnn.transformer.split_query_key_value_and_split_heads can misinterpret
-        # tile boundaries, so we split manually on host then send back to device.
-        qkv_torch = ttnn.to_torch(qkv)
+        # On-device Q/K/V split — eliminates 2 PCIe roundtrips per layer.
+        # qkv shape: [B, S, 3*H]
+        B = qkv.shape[0]
+        S = qkv.shape[1]
+        H = self.embed_dim
+
+        # Slice Q, K, V along last dim (all on device, no host transfer)
+        query = qkv[:, :, :H]
+        key = qkv[:, :, H : 2 * H]
+        value = qkv[:, :, 2 * H :]
         ttnn.deallocate(qkv)
 
-        # qkv_torch: [B, S, 3*H] → split into Q, K, V each [B, S, H]
-        B, S, _ = qkv_torch.shape
-        H = self.embed_dim
-        q_torch = qkv_torch[..., :H]
-        k_torch = qkv_torch[..., H:2*H]
-        v_torch = qkv_torch[..., 2*H:]
+        # Reshape to multi-head: [B, S, H] → [B, S, num_heads, head_dim]
+        query = ttnn.reshape(query, [B, S, self.num_heads, self.head_dim])
+        key = ttnn.reshape(key, [B, S, self.num_heads, self.head_dim])
+        value = ttnn.reshape(value, [B, S, self.num_heads, self.head_dim])
 
-        # Reshape to multi-head: [B, S, H] → [B, num_heads, S, head_dim]
-        q_torch = q_torch.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
-        k_torch = k_torch.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
-        v_torch = v_torch.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # Send back to device in TILE layout for SDPA
-        query = ttnn.from_torch(q_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        key = ttnn.from_torch(k_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        value = ttnn.from_torch(v_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        # Transpose to [B, num_heads, S, head_dim] for SDPA
+        query = ttnn.transpose(query, 1, 2)
+        key = ttnn.transpose(key, 1, 2)
+        value = ttnn.transpose(value, 1, 2)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -263,11 +262,14 @@ class TtBarkAttention:
 
         layer_present = (key, value) if use_cache else None
 
-        # Fully on-device SDPA with dynamic chunk sizing
-        # TTNN SDPA requires seq_len to be compatible with chunk sizes
+        # Fully on-device SDPA with mode selection:
+        # - Prefill mode (seq_q>=32): use chunked SDPA on device
+        # - Decode/small seq: PyTorch SDPA (TTNN SDPA requires chunk_size >= 32)
         q_seq_len = query.shape[-2]
+        k_seq_len = key.shape[-2]
+
         if q_seq_len >= 32:
-            # Dynamic chunk size: must divide evenly into seq_len, max 128
+            # Prefill mode: process full sequence with chunked SDPA
             chunk_size = min(128, q_seq_len)
             while q_seq_len % chunk_size != 0 and chunk_size > 32:
                 chunk_size //= 2
@@ -278,12 +280,7 @@ class TtBarkAttention:
                 q_chunk_size=chunk_size,
                 k_chunk_size=chunk_size,
             )
-            # TTNN causal SDPA requires Sq == Sk
-            is_causal_mode = (
-                self.is_causal
-                and layer_past is None
-                and query.shape[-2] == key.shape[-2]
-            )
+            is_causal_mode = self.is_causal and layer_past is None and query.shape[-2] == key.shape[-2]
 
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 query,
@@ -296,7 +293,7 @@ class TtBarkAttention:
                 compute_kernel_config=self.compute_kernel_config,
             )
         else:
-            # Fallback to PyTorch SDPA for very small sequences (< TILE_SIZE)
+            # Edge case fallback for small sequences (1 < seq < 32, no KV cache)
             q_torch = ttnn.to_torch(query)
             k_torch = ttnn.to_torch(key)
             v_torch = ttnn.to_torch(value)
@@ -483,13 +480,18 @@ class TtBarkGPT:
             layer_present: List of updated (key, value) tuples
         """
         if inputs_embeds is None and input_ids is not None:
-            # Handle both torch and ttnn input_ids
+            # Handle both torch and ttnn input_ids — ensure uint32 for embedding
             if isinstance(input_ids, torch.Tensor):
                 tt_input_ids = ttnn.from_torch(
                     input_ids.to(torch.int32), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
                 )
             else:
-                tt_input_ids = input_ids
+                # TTNN tensor (e.g. from argmax) — convert to uint32 via host roundtrip
+                # ttnn.argmax produces Long/int64 which embedding can't consume directly
+                input_torch = ttnn.to_torch(input_ids).to(torch.int32)
+                tt_input_ids = ttnn.from_torch(
+                    input_torch, dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
 
             inputs_embeds = ttnn.embedding(tt_input_ids, self.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
             # ttnn.embedding returns ROW_MAJOR; convert to TILE for downstream ops
