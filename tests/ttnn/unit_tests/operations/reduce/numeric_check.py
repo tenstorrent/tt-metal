@@ -166,7 +166,7 @@ def collect_and_dump_numeric_metrics(
     # expected_allclose = expected_allclose[mask_nonzero]
     # actual_allclose = actual_allclose[mask_nonzero]
 
-    near_zero_threshold = allclose_atol
+    near_zero_threshold = NEAR_ZERO_THRESHOLD
     non_near_zero_mask = torch.abs(expected_allclose) >= near_zero_threshold
     if non_near_zero_mask.any():
         expected_allclose = expected_allclose[non_near_zero_mask]

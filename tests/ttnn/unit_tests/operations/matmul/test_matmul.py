@@ -578,7 +578,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     logger.info(pcc_message)
 
     # Collect numeric metrics and dump to CSV using reusable function
-    test_name = f"test_matmul_reuse_config_sharded_tiny_tile[k={k},n={n},has_bias={has_bias},grid_size={grid_size},tile_h={tile_h},tile_w={tile_w},in0_sharded={in0_sharded},in1_sharded={in1_sharded},out_sharded={out_sharded},in1_dtype={in1_dtype},transpose_tile={transpose_tile}]"
+    test_name = f"test_matmul_reuse_config_sharded_tiny_tile[b={b},h={h},m={m},k={k},n={n},grid_size={grid_size},tile_h={tile_h},tile_w={tile_w},in0_sharded={in0_sharded},in1_sharded={in1_sharded},out_sharded={out_sharded},in1_dtype={in1_dtype},transpose_tile={transpose_tile}]"
     collect_and_dump_numeric_metrics(
         pt_out,
         output_tensor,
@@ -1451,7 +1451,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         pt_out += bias
 
     # Collect numeric metrics and dump to CSV using reusable function
-    test_name = f"test_matmul_2d_tiny_tile[m={m},k={k},n={n},has_bias={has_bias},grid_size={grid_size},tile_h={tile_h},tile_w={tile_w},in0_sharded={in0_sharded},out_sharded={out_sharded},in1_dtype={in1_dtype},transpose_tile={transpose_tile}]"
+    test_name = f"test_matmul_1d_multiple_output_blocks_per_core[m={m},k={k},n={n},has_bias={has_bias},grid_size={grid_size},in_sharded={in_sharded},out_sharded={out_sharded},num_out_block_h={num_out_block_h},num_out_block_w={num_out_block_w},mcast_in0={mcast_in0},uneven_width={uneven_width}]"
     collect_and_dump_numeric_metrics(
         pt_out,
         output_tensor,
