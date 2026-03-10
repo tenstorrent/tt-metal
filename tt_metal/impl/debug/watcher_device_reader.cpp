@@ -411,23 +411,11 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Dump DRAM cores (Blackhole only)
     {
         const auto& hal = MetalContext::instance().hal();
-        bool has_dram_fw = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) <
-                           hal.get_programmable_core_type_count();
+        bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
         if (has_dram_fw) {
             const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                CoreCoord coord{dram_core.x, dram_core.y};
-                try {
-                    Core::Create(coord, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
-                } catch (const std::exception& e) {
-                    fprintf(
-                        f,
-                        "Device %d dram core(x=%2zu,y=%2zu): watcher error - %s\n",
-                        device_id,
-                        coord.x,
-                        coord.y,
-                        e.what());
-                }
+                Core::Create(dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
             }
         }
     }
