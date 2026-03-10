@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,78 +10,203 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline void load_value_param_float(uint value) {
-    TT_SFPLOADI(p_sfpu::LREG2, 10, value & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG2, 8, value >> 16);
-}
+sfpi_inline void load_value_param_float(uint value) { sfpi::vConstIntPrgm0 = value; }
 
 template <bool IS_MAX_OP>
 sfpi_inline void calculate_unary_max_min_float_body() {
-    // Load input to lreg0
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
-
-    // Copy value param to lreg1
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
-
-    // Swap and store maximum in lreg1, minimum in lreg0
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
     if constexpr (IS_MAX_OP) {
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);
+        // L0 = max(L0, constant); this will only write to L0 since L12 is a constant register.
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9); // mod1=9 means set VD=max and VC=min
     } else {
-        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+        // L0 = min(L0, constant); this will only write to L0 since L12 is a constant register.
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
-}
-
-
-sfpi_inline void load_value_param_int(uint value) {
-    int scalar = value;
-    if (scalar < 0) {  // To convert from 2's complement to sign+magnitude
-        scalar = -scalar;
-        scalar = 0x80000000 | (scalar & 0x7FFFFFFF);
-    }
-    _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
-}
-
-template <bool IS_MAX_OP>
-sfpi_inline void calculate_unary_max_min_int32_body() {
-    // Load input tensor to lreg0
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-
-    // Copy value param to lreg2 to lreg1
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
-
-    // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
-
-    // Store the result
-    if constexpr (IS_MAX_OP) {
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-    } else {
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-    }
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 }
 
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
-    // Load value param to lreg2
+    // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
+    //
+    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+    //
+    // t  | Load | Simple              | MAD | Round | Store |
+    // -- | ---- | ------------------- | --- | ----- | ----- |
+    //  0 | [a]  |                     |     |       |       |
+    //  1 | nop  | swap_minmax([a], v) |     |       |       |
+    //  0 | ...  |                     |     |       |       |
+    //  1 | ...  |                     |     |       | [a]   |
+
     load_value_param_float(value);
+    constexpr int offset = 0;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_max_min_float_body<IS_MAX_OP>();
-        sfpi::dst_reg++;
+        int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset | (a >> 2));
+        TTI_SFPNOP;
     }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_UNSIGNED = false>
+sfpi_inline void load_value_param_int(uint value) {
+    // if msb(value) == (IS_UNSIGNED ? 0 : 1), we need to invert for SFPSWAP to work
+    sfpi::vConstIntPrgm0 = IS_UNSIGNED ^ ((int)value >= 0) ? value : ~value;
+}
+
+template <bool IS_MAX_OP>
+sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+
+    if ((int)value >= 0) {
+        // if msb(value) == 0, we can safely use SFPSWAP even though it expects sign-magnitude integers
+        TTI_SFPSWAP(
+            0,
+            p_sfpu::LREG12,
+            p_sfpu::LREG0,
+            IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+    } else {
+        // if msb(value) == 1, we need to invert both values for SFPSWAP to work
+        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPSWAP(
+            0,
+            p_sfpu::LREG12,
+            p_sfpu::LREG0,
+            IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
+        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    }
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+}
+
+template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min_int32(uint value) {
-    load_value_param_int(value);
-#pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_max_min_int32_body<IS_MAX_OP>();
-        sfpi::dst_reg++;
+    load_value_param_int<IS_UNSIGNED>(value);
+
+    constexpr int offset = 0;
+
+    if (IS_UNSIGNED ^ ((int)value < 0)) {
+        // This uses SFPLOADMACRO to achieve a throughput of 4 cycles per input row.
+        //
+        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+        //
+        // t | Load | Simple                | MAD | Round | Store   |
+        // - | ---- | --------------------- | --- | ----- | ------- |
+        // 0 | [a]  |                       |     |       |         |
+        // 1 |      | a = not(a)            |     |       |         |
+        // 2 |      | swap_minmax(a, not_v) |     |       |         |
+        // 3 | nop  |                       |     |       |         |
+        // 0 | ...  | [a] L16 = not(a)      |     |       |         |
+        // 1 | ...  |                       |     |       | [a] L16 |
+
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            constexpr int a = p_sfpu::LREG0;
+            TTI_SFPLOADMACRO((1 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_2, offset | (a >> 2));
+            TTI_SFPNOT(0, a, a, 0);
+            TTI_SFPSWAP(
+                0,
+                p_sfpu::LREG12,
+                a,
+                IS_MAX_OP ^ IS_UNSIGNED ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
+            TTI_SFPNOP;
+        }
+    } else {
+        // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
+        //
+        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+        //
+        // t | Load | Simple              | MAD | Round | Store |
+        // - | ---- | ------------------- | --- | ----- | ----- |
+        // 0 | [a]  |                     |     |       |       |
+        // 1 | nop  | swap_minmax([a], v) |     |       |       |
+        // 0 | ...  |                     |     |       |       |
+        // 1 | ...  |                     |     |       | [a]   |
+
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+            TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_2, offset | (a >> 2));
+            TTI_SFPNOP;
+        }
     }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
 }
 
+template <bool IS_MAX_OP = true>
+inline void unary_max_min_init() {
+    // InstructionTemplate[0]
+    TTI_SFPSWAP(
+        0,
+        p_sfpu::LREG12,
+        12,
+        IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+
+    // Macro 0
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x00 | (2 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+    }
+
+    // Misc: {
+    //   StoreMod0: DEFAULT,
+    //   UsesLoadMod0ForStore: {1},
+    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
+    // }
+    TTI_SFPCONFIG(0x110, 8, 1);
+}
+
+template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
+inline void unary_max_min_int32_init() {
+    // InstructionTemplate[0]
+    TTI_SFPSWAP(
+        0,
+        p_sfpu::LREG12,
+        12,
+        IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+
+    // InstructionTemplate[1]
+    TTI_SFPNOT(0, 0, 13, 0);
+
+    // Macro 0
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x00 | (2 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+    }
+
+    // Macro 1
+    {
+        constexpr uint simple_bits = 0x00 | 0x40 | (3 << 3) | 5;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x40 | (4 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
+    }
+
+    // Misc: {
+    //   StoreMod0: DEFAULT,
+    //   UsesLoadMod0ForStore: {1,1},
+    //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
+    // }
+    TTI_SFPCONFIG(0x330, 8, 1);
+}
 }  // namespace ckernel::sfpu

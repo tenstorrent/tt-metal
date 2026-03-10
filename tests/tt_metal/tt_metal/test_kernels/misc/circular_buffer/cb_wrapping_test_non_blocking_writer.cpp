@@ -16,14 +16,12 @@
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN { core_agnostic_main(); }
-}  // namespace NAMESPACE
+#include "api/compute/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-void kernel_main() { core_agnostic_main(); }
 #endif
+
+#include "experimental/circular_buffer.h"
 
 using namespace tt;
 
@@ -34,25 +32,29 @@ static constexpr std::size_t CHURN_TARGET = (0x10000 - 2 * CB_STEP_SIZE);
 static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
 
 void core_agnostic_main() {
+    experimental::CircularBuffer cb(CB_ID);
+
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
-        cb_reserve_back(CB_ID, CB_STEP_SIZE);
-        cb_push_back(CB_ID, CB_STEP_SIZE);
+        cb.reserve_back(CB_STEP_SIZE);
+        cb.push_back(CB_STEP_SIZE);
     }
 
 #ifdef CHECK_BACK
     // We fill the buffer.
-    cb_reserve_back(CB_ID, CB_STEP_SIZE);
-    cb_push_back(CB_ID, CB_STEP_SIZE);
-    cb_reserve_back(CB_ID, CB_STEP_SIZE);
-    cb_push_back(CB_ID, CB_STEP_SIZE);
+    cb.reserve_back(CB_STEP_SIZE);
+    cb.push_back(CB_STEP_SIZE);
+    cb.reserve_back(CB_STEP_SIZE);
+    cb.push_back(CB_STEP_SIZE);
 
     auto result_ptr = get_arg_val<uint32_t*>(0);
     auto success_token = get_arg_val<uint32_t>(1);
 
-    if (!cb_pages_reservable_at_back(CB_ID, CB_STEP_SIZE)) {
+    if (!cb.pages_reservable_at_back(CB_STEP_SIZE)) {
         *result_ptr = success_token;
     } else {
         *result_ptr = 0;
     }
 #endif
 }
+
+void kernel_main() { core_agnostic_main(); }

@@ -4,43 +4,83 @@
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-
+#include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
-TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-
-    if (input_tensor.memory_config().is_sharded()) {
-        TT_FATAL(
-            !operation_attributes.sub_core_grids.has_value(),
-            "Sharded tilize does not support sub core grid specification");
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
-    }
-    if (!operation_attributes.enough_space_height) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
-    }
-    if (!operation_attributes.use_multicore) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory{};
+namespace {
+bool can_use_sharded_optimized_factory(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
     }
 
-    return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory{};
+    if (operation_attributes.output_mem_config.memory_layout() != input_tensor.memory_config().memory_layout()) {
+        return false;
+    }
+
+    const auto& padded_shape = input_tensor.padded_shape();
+
+    for (uint32_t i = 0; i < padded_shape.rank(); i++) {
+        if (i != padded_shape.rank() - 2 && (padded_shape[i] != operation_attributes.output_padded_shape[i])) {
+            return false;
+        }
+    }
+    return !operation_attributes.sub_core_grids.has_value();
 }
 
-void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}  // namespace
+
+TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    if (input_tensor.memory_config().is_sharded()) {
+        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+            return TilizeWithValPaddingMultiCoreShardedFactory{};
+        }
+        return TilizeWithValPaddingMultiCoreDefaultFactory{};
+    }
+    if (!operation_attributes.enough_space_height) {
+        return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+    }
+    if (!operation_attributes.use_multicore) {
+        return TilizeWithValPaddingSingleCoreFactory{};
+    }
+    auto* device = input_tensor.device();
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid =
+        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
+    uint32_t num_blocks = operation_attributes.output_padded_shape.volume() /
+                          operation_attributes.output_padded_shape[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = operation_attributes.output_padded_shape[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t num_tiles_per_col = operation_attributes.output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
+                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        }
+    }
+    return TilizeWithValPaddingMultiCoreDefaultFactory{};
 }
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.padded_shape();
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -85,32 +125,36 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
+        uint32_t shard_width = input_tensor.shard_spec().has_value()
+                                   ? input_tensor.shard_spec().value().shape[1]
+                                   : input_tensor.nd_shard_spec().value().shard_shape[-1];
+
+        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-            "Input tensor must be width sharded");
-        TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Output tensor must have the same memory layout as input tensor");
-        for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
-            if (i != input_shape.rank() - 2) {
-                TT_FATAL(
-                    input_shape[i] == operation_attributes.output_padded_shape[i],
-                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                    i,
-                    input_shape[i],
-                    i,
-                    operation_attributes.output_padded_shape[i]);
-            }
-        }
+            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
+            "buffer alignment "
+            "requirement",
+            shard_width,
+            page_size_bytes,
+            alignment_requirement);  // The shard_width must be an aligned size, or we will face alignment issues when
+                                     // the reader tries to write to the CB, since we might write to unaligned
+                                     // addresses.
     }
 }
 
-TilizeWithValPaddingDeviceOperation::spec_return_value_t TilizeWithValPaddingDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
+TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    const auto& input_shape = input_tensor.logical_shape();
 
-    if (input_tensor.memory_config().is_sharded()) {
+    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
+        // tensor to be width-sharded.
+        log_warning(
+            tt::LogOp,
+            "ttnn::tilize_with_val_padding: Making the output tensor width-sharded because the optimized sharded "
+            "program factory is being used");
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
@@ -135,16 +179,12 @@ TilizeWithValPaddingDeviceOperation::spec_return_value_t TilizeWithValPaddingDev
             operation_attributes.output_padded_shape));
 }
 
-TilizeWithValPaddingDeviceOperation::tensor_return_value_t TilizeWithValPaddingDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+Tensor TilizeWithValPaddingDeviceOperation::create_output_tensors(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    return create_device_tensor(compute_output_specs(operation_attributes, input_tensor), input_tensor.device());
 }
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_return_value_t tilize_with_val_padding(
+Tensor tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue& pad_value,
@@ -154,9 +194,8 @@ ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_ret
     bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<TilizeWithValPaddingDeviceOperation>(
+        TilizeWithValPaddingParams{
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
@@ -166,6 +205,6 @@ ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_ret
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
         },
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        input_tensor);
 }
 }  // namespace ttnn::prim

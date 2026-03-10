@@ -50,14 +50,14 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
     uint32_t M,
     uint32_t N,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h) {
+    uint32_t /*out_subblock_h*/) {
     uint32_t num_bytes_for_df = 2;
     uint32_t in0_cb = 0;
     uint32_t in1_cb = 1;
@@ -307,6 +307,7 @@ bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -461,7 +462,7 @@ bool single_block_matmul(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    sleep(1);
+    distributed::Finish(cq);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
@@ -638,7 +639,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    sleep(1);
+    distributed::Finish(cq);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////

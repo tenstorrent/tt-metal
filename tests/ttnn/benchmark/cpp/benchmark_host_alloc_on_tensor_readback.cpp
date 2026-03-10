@@ -5,7 +5,7 @@
 #include <benchmark/benchmark.h>
 
 #include <ttnn/tensor/tensor.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -17,7 +17,7 @@ ttnn::distributed::MeshDevice* device = nullptr;
 
 void BM_host_alloc_on_tensor_readback(benchmark::State& state) {
     const size_t global_tensor_size = state.range(0);
-    tt::tt_metal::Tensor device_tensor = tt::tt_metal::allocate_tensor_on_device(
+    tt::tt_metal::Tensor device_tensor = tt::tt_metal::create_device_tensor(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({global_tensor_size / sizeof(float) / device->num_devices()}),
             tt::tt_metal::TensorLayout(
@@ -27,7 +27,7 @@ void BM_host_alloc_on_tensor_readback(benchmark::State& state) {
         device);
 
     // Note we are reading garbage data from the device, but it is not important for this benchmark.
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto host_tensor = device_tensor.cpu(/*blocking=*/true);
         benchmark::DoNotOptimize(host_tensor);
     }

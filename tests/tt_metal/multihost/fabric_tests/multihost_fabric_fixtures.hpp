@@ -311,4 +311,35 @@ public:
     }
 };
 
+class SplitGalaxyMeshDeviceFixture : public tt::tt_metal::GenericMeshDeviceFabric2DFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+        tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (not cluster.is_ubb_galaxy()) {
+            return false;
+        }
+        // Check if the number of processes spawned by the user is equal to the number of processes specified in the MGD
+        uint32_t num_user_procs = *tt::tt_metal::MetalContext::instance().global_distributed_context().size();
+        auto mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        uint32_t num_meshes = mesh_graph.get_mesh_ids().size();
+        // TODO (AS): For now assume that all meshes have the same number of processes per mesh
+        const auto& host_ranks = mesh_graph.get_host_ranks(tt::tt_fabric::MeshId{0});
+        uint32_t num_procs_per_mesh = host_ranks.size();
+        return num_user_procs == num_meshes * num_procs_per_mesh;
+    }
+};
+
 }  // namespace tt::tt_fabric::fabric_router_tests

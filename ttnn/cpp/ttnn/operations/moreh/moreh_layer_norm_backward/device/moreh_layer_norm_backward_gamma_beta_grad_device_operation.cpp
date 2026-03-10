@@ -8,27 +8,15 @@
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {
 void MorehLayerNormBackwardGammaBetaGradOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
-
-MorehLayerNormBackwardGammaBetaGradOperation::program_factory_t
-MorehLayerNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
-}
-
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
+}
 
 MorehLayerNormBackwardGammaBetaGradOperation::spec_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<std::optional<TensorSpec>> result(2);
     if (tensor_args.gamma_grad.has_value()) {
         result[0] = tensor_args.gamma_grad->tensor_spec();
@@ -38,11 +26,11 @@ MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
         result[1] = tensor_args.beta_grad->tensor_spec();
     }
     return result;
-};
+}
 
 MorehLayerNormBackwardGammaBetaGradOperation::tensor_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<std::optional<Tensor>> result(2);
     if (tensor_args.gamma_grad.has_value()) {
         result[0] = tensor_args.gamma_grad.value();

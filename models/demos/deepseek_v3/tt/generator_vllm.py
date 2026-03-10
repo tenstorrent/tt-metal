@@ -12,6 +12,7 @@ from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USERS_PER_ROW) -> torch.Tensor:
@@ -36,6 +37,11 @@ def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USER
 
 
 class DeepseekV3ForCausalLM(DeepseekGenerator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -72,6 +78,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
+        start_pos = kwargs.get("start_pos", None)
+        assert (start_pos is None) or all(
+            x == 0 for x in start_pos
+        ), f"Prefix caching is not supported for DeepseekV3ForCausalLM, got start_pos: {start_pos}"
         assert self.model_run_config_prefill is not None, "Model run config prefill is not initialized"
 
         kwargs.pop("enable_trace", None)
@@ -123,30 +133,49 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def decode_forward(self, *args, **kwargs):
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
-        page_table = kwargs.get("page_table", None)
+        page_tables = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        enable_trace = kwargs.get("enable_trace", False)
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
+
         return_value = (
-            self._decode_step(
-                tokens_step=tokens_step,
-                positions=kwargs["start_pos"],
+            super()
+            .decode_forward(
+                tokens=tokens_step,
+                start_pos=kwargs["start_pos"],
                 batch_size_per_row=USERS_PER_ROW,
-                page_table=page_table,
+                enable_trace=enable_trace,
+                page_table=page_tables,
             )
-            .squeeze(0)
-            .squeeze(0)
             .unsqueeze(1)
-        )  # [1,1,B,V] -> [B, 1, V]
+        )  # [B, V] -> [B, 1, V]
         return return_value
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         assert (
             num_layers == self.hf_config.num_hidden_layers
         ), f"Number of layers {num_layers} does not match the number of layers in the model {self.hf_config.num_hidden_layers}"
+
+        if kv_cache_shape is not None:
+            block_size = int(kv_cache_shape[2])
+            max_num_blocks = int(kv_cache_shape[0])
+            if (
+                self.paged_config is None
+                or self.paged_config.block_size != block_size
+                or self.paged_config.max_num_blocks != max_num_blocks
+            ):
+                logger.info(
+                    "Aligning paged_config to vLLM kv_cache: block_size={} max_num_blocks={}",
+                    block_size,
+                    max_num_blocks,
+                )
+                self.paged_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+                self.page_tables_tt = None
+        self.kv_cache_shape = kv_cache_shape
 
         kv_cache_config = KvCacheConfig(kv_cache_shape=kv_cache_shape, dtype=dtype)
         self._prepare_run_configs("prefill", kv_cache_override=kv_cache_config)

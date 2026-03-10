@@ -200,15 +200,15 @@ init_packages() {
                 "python3-dev"
                 "python3-pip"
                 "python3-venv"
+                "python3-pkg-resources" # needed for setuptools
                 "libhwloc-dev"
                 "libnuma-dev"
                 "libatomic1"
                 "libstdc++6"
-                "libboost-dev"
                 "libtbb-dev"
                 "libcapstone-dev"
-                "libc++-17-dev"
-                "libc++abi-17-dev"
+                "libc++-20-dev"
+                "libc++abi-20-dev"
                 "wget"
                 "curl"
                 "xxd"
@@ -238,7 +238,6 @@ init_packages() {
                 "numactl-devel"
                 "libatomic"
                 "libstdc++"
-                "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
                 "wget"
@@ -281,8 +280,18 @@ prep_ubuntu_system() {
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Add Kitware repository for latest CMake
-    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+    # If the kitware-archive-keyring package has not been installed previously, manually obtain a copy of our signing key
+    test -f /usr/share/doc/kitware-archive-keyring/copyright || wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+
+    # Add the repository to sources list and update
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    apt-get update
+
+    # If the kitware-archive-keyring package was not installed previously, remove the manually obtained key to make room for the package
+    test -f /usr/share/doc/kitware-archive-keyring/copyright || rm /usr/share/keyrings/kitware-archive-keyring.gpg
+
+    # Install the kitware-archive-keyring package to ensure that your keyring stays up to date as keys are rotated
+    apt-get install -y --no-install-recommends kitware-archive-keyring
 
     # Add GCC toolchain repository for specific g++ versions if needed
     if [[ "$OS_ID" == "ubuntu" ]]; then
@@ -312,18 +321,21 @@ install_llvm() {
         return
     fi
 
-    LLVM_VERSION="17"
-    echo "[INFO] Checking if LLVM $LLVM_VERSION is already installed..."
-    if command -v clang-$LLVM_VERSION &> /dev/null; then
-        echo "[INFO] LLVM $LLVM_VERSION is already installed. Skipping installation."
+    # Install LLVM 20:
+    # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
+    chmod u+x $TEMP_DIR/llvm.sh
+
+    echo "[INFO] Checking if LLVM 20 is already installed..."
+    if command -v clang-20 &> /dev/null; then
+        echo "[INFO] LLVM 20 is already installed. Skipping installation."
     else
-        echo "[INFO] Installing LLVM $LLVM_VERSION..."
-        TEMP_DIR=$(mktemp -d)
-        wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
-        chmod u+x $TEMP_DIR/llvm.sh
-        $TEMP_DIR/llvm.sh $LLVM_VERSION
-        rm -rf "$TEMP_DIR"
+        echo "[INFO] Installing LLVM 20..."
+        $TEMP_DIR/llvm.sh 20
     fi
+
+    rm -rf "$TEMP_DIR"
 }
 
 install_sfpi() {

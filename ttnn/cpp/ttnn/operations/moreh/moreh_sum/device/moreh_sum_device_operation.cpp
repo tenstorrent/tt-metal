@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_sum_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <cstdint>
@@ -21,20 +22,20 @@ MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
             return MorehSumWIntFactory{};
-        } else if (operation_attributes.dim == input_rank - 2) {
-            return MorehSumHIntFactory{};
-        } else {
-            return MorehSumNCIntFactory{};
         }
+        if (operation_attributes.dim == input_rank - 2) {
+            return MorehSumHIntFactory{};
+        }
+        return MorehSumNCIntFactory{};
     }
 
     if (operation_attributes.dim == input_rank - 1) {
         return MorehSumWFactory{};
-    } else if (operation_attributes.dim == input_rank - 2) {
-        return MorehSumHFactory{};
-    } else {
-        return MorehSumNCFactory{};
     }
+    if (operation_attributes.dim == input_rank - 2) {
+        return MorehSumHFactory{};
+    }
+    return MorehSumNCFactory{};
 }
 
 void validate_tensors(
@@ -54,11 +55,6 @@ void validate_tensors(
 }
 
 void MorehSumOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-};
-
-void MorehSumOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };

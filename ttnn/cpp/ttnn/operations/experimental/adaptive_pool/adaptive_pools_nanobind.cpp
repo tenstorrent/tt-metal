@@ -5,26 +5,21 @@
 #include "adaptive_pools_nanobind.hpp"
 
 #include <array>
-#include <variant>
 #include <cstdint>
 #include <optional>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools.hpp"
 
 namespace ttnn::operations::experimental::adaptive_pool {
 
 void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"adaptive_avg_pool2d">(
         mod,
-        ttnn::adaptive_avg_pool2d,
         R"doc(
         Applies experimental adaptive average pooling to the input tensor. Unlike regular pooling, adaptive pooling
         automatically calculates the kernel size and stride to produce the desired output size.
@@ -71,32 +66,8 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                         )
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::adaptive_avg_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
-               uint32_t batch_size,
-               uint32_t input_h,
-               uint32_t input_w,
-               uint32_t channels,
-               std::array<uint32_t, 2> output_size,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               bool deallocate_input,
-               bool reallocate_output) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    batch_size,
-                    input_h,
-                    input_w,
-                    channels,
-                    output_size,
-                    memory_config,
-                    applied_shard_scheme,
-                    compute_kernel_config,
-                    deallocate_input,
-                    reallocate_output);
-            },
+        ttnn::overload_t(
+            &ttnn::adaptive_avg_pool2d,
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
             nb::arg("input_h"),
@@ -105,16 +76,16 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("output_size"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("deallocate_input") = false,
-            nb::arg("reallocate_output") = true});
+            nb::arg("reallocate_output") = true));
 }
 
 void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"adaptive_max_pool2d">(
         mod,
-        ttnn::adaptive_max_pool2d,
         R"doc(
         Applies experimental adaptive max pooling to the input tensor. Unlike regular pooling, adaptive pooling
         automatically calculates the kernel size and stride to produce the desired output size.
@@ -160,30 +131,8 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                         )
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::adaptive_max_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
-               uint32_t batch_size,
-               uint32_t input_h,
-               uint32_t input_w,
-               uint32_t channels,
-               std::array<uint32_t, 2> output_size,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               bool deallocate_input,
-               bool reallocate_output) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    batch_size,
-                    input_h,
-                    input_w,
-                    channels,
-                    output_size,
-                    memory_config,
-                    applied_shard_scheme,
-                    deallocate_input,
-                    reallocate_output);
-            },
+        ttnn::overload_t(
+            &ttnn::adaptive_max_pool2d,
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
             nb::arg("input_h"),
@@ -192,9 +141,10 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
             nb::arg("output_size"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("deallocate_input") = false,
-            nb::arg("reallocate_output") = true});
+            nb::arg("reallocate_output") = true));
 }
 
 }  // namespace ttnn::operations::experimental::adaptive_pool

@@ -43,6 +43,7 @@ enum class ClusterType : std::uint8_t {
     SIMULATOR_QUASAR = 15,       // Simulator Quasar
     BLACKHOLE_GALAXY = 16,       // Blackhole Galaxy, all chips with mmio
     P300_X2 = 17,                // 2 P300 cards
+    CUSTOM = 18,  // Custom cluster type, used boards with custom fabric mesh graph descriptor path specified
 };
 
 /**

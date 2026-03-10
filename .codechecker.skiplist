@@ -1,0 +1,21 @@
+# CodeChecker skip list - exclude third-party and generated code
+# See: https://codechecker.readthedocs.io/en/latest/analyzer/user_guide/#skip
+
+# External third-party dependencies
+-*/.cpmcache/*
+-*/third_party/tracy/*
+-*/third_party/umd/*
+
+# Build directories
+-*/.build/*
+-*/build/*
+-*/build-*/*
+
+# System headers
+-/usr/*
+
+# Generated files
+-*_generated.h
+-*_generated.cpp
+-*.pb.h
+-*.pb.cc

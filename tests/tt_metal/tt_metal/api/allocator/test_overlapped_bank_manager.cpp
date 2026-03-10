@@ -8,12 +8,10 @@
 #include <tt-metalium/allocator.hpp>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/allocator/bank_manager.hpp"
 

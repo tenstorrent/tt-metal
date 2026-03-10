@@ -6,7 +6,6 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include <vector>
@@ -89,9 +88,8 @@ std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::Me
     const auto& shard = shards_.at(coord);
     if (shard.is_local() && shard->is_populated) {
         return std::make_optional(shard->buffer);
-    } else {
-        return std::nullopt;
     }
+    return std::nullopt;
 }
 
 void DistributedHostBuffer::emplace_shard(

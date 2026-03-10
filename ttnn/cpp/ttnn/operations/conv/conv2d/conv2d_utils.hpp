@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -16,7 +16,12 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::conv {
-using namespace conv2d;
+using ttnn::prim::Conv2dBlockConfig;
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dInputs;
+using ttnn::prim::Conv2dParallelizationConfig;
+using ttnn::prim::Conv2dParams;
+using ttnn::prim::Conv2dSliceConfig;
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
@@ -169,7 +174,10 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
-    std::optional<uint32_t> act_block_h_override = std::nullopt);
+    std::optional<uint32_t> act_block_h_override = std::nullopt,
+    bool enable_channels_padding = true,
+    bool is_shard_height_tile_multiple = true,
+    bool is_shard_width_tile_multiple = true);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype);
@@ -302,79 +310,6 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 4> padding_n4,
     const Conv2dConfig& conv_config);
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
-
-struct ConvDRAMParamters {
-    uint32_t in_channels;
-    uint32_t out_channels;
-    uint32_t batch_size;
-    uint32_t input_height;
-    uint32_t input_width;
-    uint32_t output_height;
-    uint32_t output_width;
-    std::array<uint32_t, 2> kernel_size;
-    std::array<uint32_t, 2> stride;
-    std::array<uint32_t, 4> padding_n4;
-    std::array<uint32_t, 2> dilation;
-    uint32_t groups;
-    Conv2dConfig conv_config;
-    DeviceComputeKernelConfig compute_kernel_config;
-    CoreCoord compute_grid;
-    DataType weights_datatype;
-    DataType input_datatype;
-    DataType output_datatype;
-    Layout input_layout;
-    bool enable_bias;
-    bool mm_conv;
-
-    bool operator<(const ConvDRAMParamters& other) const;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "in_channels",
-        "out_channels",
-        "batch_size",
-        "input_height",
-        "input_width",
-        "output_height",
-        "output_width",
-        "kernel_size",
-        "stride",
-        "padding_n4",
-        "dilation",
-        "groups",
-        "conv_config",
-        "compute_kernel_config",
-        "compute_grid",
-        "weights_datatype",
-        "input_datatype",
-        "output_datatype",
-        "input_layout",
-        "enable_bias",
-        "mm_conv");
-    auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->in_channels),
-            std::cref(this->out_channels),
-            std::cref(this->batch_size),
-            std::cref(this->input_height),
-            std::cref(this->input_width),
-            std::cref(this->output_height),
-            std::cref(this->output_width),
-            std::cref(this->kernel_size),
-            std::cref(this->stride),
-            std::cref(this->padding_n4),
-            std::cref(this->dilation),
-            std::cref(this->groups),
-            std::cref(this->conv_config),
-            std::cref(this->compute_kernel_config),
-            std::cref(this->compute_grid),
-            std::cref(this->weights_datatype),
-            std::cref(this->input_datatype),
-            std::cref(this->output_datatype),
-            std::cref(this->input_layout),
-            std::cref(this->enable_bias),
-            std::cref(this->mm_conv));
-    }
-};
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 

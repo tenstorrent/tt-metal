@@ -4,6 +4,7 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
+#include <tt_stl/reflection.hpp>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -16,6 +17,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -37,6 +39,7 @@
 #include "distribution_mode.hpp"
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -257,6 +260,7 @@ void py_module(nb::module_& mod) {
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })
+        .def("get_fabric_node_id", &MeshDevice::get_fabric_node_id, nb::arg("coord"))
         .def(
             "create_submesh",
             &MeshDevice::create_submesh,
@@ -371,6 +375,18 @@ void py_module(nb::module_& mod) {
                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
            )doc")
         .def("get_view", &MeshDevice::get_view, nb::rv_policy::reference_internal)
+        .def(
+            "get_system_mesh_id",
+            &MeshDevice::get_system_mesh_id,
+            R"doc(
+               Get the system mesh ID assigned by the control plane.
+
+               This ID uniquely identifies the mesh in the system and is used for
+               inter-mesh communication and fabric routing.
+
+               Returns:
+                   int: The system mesh ID as an unsigned integer.
+           )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
@@ -448,15 +464,15 @@ void py_module(nb::module_& mod) {
             "Number of entries in the program cache for this device")
         .def(
             "sfpu_eps",
-            [](MeshDevice* device) { return tt::tt_metal::hal::get_eps(); },
+            [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_eps(); },
             R"doc(Returns machine epsilon value for current architecture.)doc")
         .def(
             "sfpu_nan",
-            [](MeshDevice* device) { return tt::tt_metal::hal::get_nan(); },
+            [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_nan(); },
             R"doc(Returns NaN value for current architecture.)doc")
         .def(
             "sfpu_inf",
-            [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
+            [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_inf(); },
             R"doc(Returns Infinity value for current architecture.)doc")
         .def(
             "worker_core_from_logical_core",
@@ -476,6 +492,31 @@ void py_module(nb::module_& mod) {
                     >>> logical_core = ttnn.CoreCoord(0, 0)
                     >>> worker_core = device.worker_core_from_logical_core(logical_core)
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc")
+        .def(
+            "get_optimal_dram_bank_to_logical_worker_assignment",
+            &MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment,
+            nb::arg("noc"),
+            R"doc(
+                Returns the optimal DRAM bank to logical worker assignment based on the NOC.
+
+                This function returns a list of logical worker coordinates that are optimally
+                mapped to DRAM banks for the specified NOC. The mapping is optimized for
+                minimizing NOC hops when reading/writing to DRAM.
+
+                Args:
+                    noc (NOC): The NOC to use for optimal assignment (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
+
+                Returns:
+                    List[CoreCoord]: List of logical worker coordinates optimally mapped to DRAM banks.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> # Get optimal worker cores for DRAM reads (NOC_0 is typically preferred)
+                    >>> worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+                    >>> print(f"Number of optimal worker cores: {len(worker_cores)}")
+                    >>> for i, core in enumerate(worker_cores):
+                    ...     print(f"DRAM bank {i} -> worker core ({core.x}, {core.y})")
             )doc")
         .def(
             "get_worker_noc_hop_distance",
@@ -561,8 +602,8 @@ void py_module(nb::module_& mod) {
             })
         .def(
             "__eq__",
-            [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) { return true; })
-        .def("__ne__", [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) {
+            [](const MeshMapperConfig::Replicate& /*lhs*/, const MeshMapperConfig::Replicate& /*rhs*/) { return true; })
+        .def("__ne__", [](const MeshMapperConfig::Replicate& /*lhs*/, const MeshMapperConfig::Replicate& /*rhs*/) {
             return false;
         });
     auto py_mesh_mapper_config = static_cast<nb::class_<MeshMapperConfig>>(mod.attr("MeshMapperConfig"));
@@ -594,7 +635,7 @@ void py_module(nb::module_& mod) {
             [](MeshMapperConfig* t,
                std::optional<mmc_dim_t> row_dim,
                std::optional<mmc_dim_t> col_dim,
-               const std::optional<MeshShape>& mesh_shape_override) {
+               const std::optional<MeshShape>& /*mesh_shape_override*/) {
                 new (t) MeshMapperConfig;
                 t->placements.push_back(
                     row_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*row_dim}}
@@ -984,6 +1025,9 @@ void py_module(nb::module_& mod) {
                 >>> ttnn.distributed_context_barrier()
                 >>> # All processes continue from here
         )doc");
+
+    auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
+    ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
 }
 
 }  // namespace ttnn::distributed

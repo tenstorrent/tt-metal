@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_norm_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -114,19 +115,14 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
     const auto input_rank = tensor_args.input.padded_shape().rank();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
-    } else if (dim == input_rank - 2) {
-        return ProgramFactoryHOther{};
-    } else {
-        return ProgramFactoryNCOther{};
     }
+    if (dim == input_rank - 2) {
+        return ProgramFactoryHOther{};
+    }
+    return ProgramFactoryNCOther{};
 }
 
 void MorehNormOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehNormOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };

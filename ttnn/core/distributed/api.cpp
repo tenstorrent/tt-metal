@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/api.hpp"
 
 #include <memory>
@@ -64,15 +65,16 @@ std::shared_ptr<MeshDevice> open_mesh_device(
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
-    if (std::holds_alternative<tt::tt_metal::HostStorage>(tensor.storage())) {
+    if (is_cpu_tensor(tensor)) {
         std::vector<ttnn::Tensor> tensors;
         auto gathered_tensor = host_ccl::all_gather(tensor);
         const auto& distributed_buffer = gathered_tensor.host_storage().buffer();
         distributed_buffer.apply(
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
-    } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+    }
+    if (is_device_tensor(tensor)) {
+        const auto& device_storage = tensor.device_storage();
         if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
             std::vector<ttnn::Tensor> tensors;
             tensors.reserve(device_storage.coords.size());
@@ -81,12 +83,10 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
                 tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
             }
             return tensors;
-        } else {
-            return {tensor};
         }
-    } else {
         return {tensor};
     }
+    return {tensor};
 }
 
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {

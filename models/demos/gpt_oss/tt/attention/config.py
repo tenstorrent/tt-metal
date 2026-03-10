@@ -15,6 +15,9 @@ class AttentionConfig:
     num_kv_heads: int
     head_dim: int
     max_seq_len: int
+    max_local_batch_size: int
+
+    users_row_sharded: bool = False
     sliding_window: int | None = None
     scaling: float | None = None  # Computed if None
 
@@ -97,7 +100,7 @@ class ProgramConfig:
     def get_decode_sdpa_config(self, mesh_device) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for decode mode"""
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=self.decode_q_chunk_size,
             k_chunk_size=self.decode_k_chunk_size,
             exp_approx_mode=False,
@@ -113,7 +116,7 @@ class ProgramConfig:
             k_chunk = self.prefill_k_chunk_size_small
 
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,

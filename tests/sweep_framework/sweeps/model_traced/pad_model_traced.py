@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -46,6 +45,20 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Invalidate test vectors that will fail due to memory or resource constraints.
+    Also skips HOST operations (weight/bias padding done on CPU during model init).
+    """
+    # Skip all HOST operations - these are CPU-side preprocessing, not device operations
+    storage_type = test_vector.get("storage_type")
+    if storage_type and "HOST" in str(storage_type):
+        return True, "HOST storage operation: CPU-side preprocessing, not a device operation to test"
+
+    # All DEVICE operations pass - MasterConfigLoader bug is fixed
+    return False, None
+
+
 def mesh_device_fixture():
     """
     Override default device fixture for pad operation.
@@ -63,14 +76,13 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
     padding=None,
     value=0.0,
     output_padded_shape=None,
     input_tensor_start=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 

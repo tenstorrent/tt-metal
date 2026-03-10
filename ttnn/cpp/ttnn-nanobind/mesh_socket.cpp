@@ -12,12 +12,17 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/pair.h>
 
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace ttnn::mesh_socket {
 
 void py_module_types(nb::module_& mod) {
+    nb::enum_<tt::tt_metal::distributed::SocketEndpoint>(mod, "SocketEndpoint")
+        .value("SENDER", tt::tt_metal::distributed::SocketEndpoint::SENDER, "Sender endpoint")
+        .value("RECEIVER", tt::tt_metal::distributed::SocketEndpoint::RECEIVER, "Receiver endpoint");
+
     nb::class_<tt::tt_metal::distributed::MeshCoreCoord>(mod, "MeshCoreCoord")
         .def(
             nb::init<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord>(),
@@ -29,7 +34,25 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     device_coord (MeshCoordinate): The device coordinate of the core
                     core_coord (CoreCoord): The core coordinate of the core
-            )doc");
+                )doc")
+        .def_rw("device_coord", &tt::tt_metal::distributed::MeshCoreCoord::device_coord, "Device coordinate")
+        .def_rw("core_coord", &tt::tt_metal::distributed::MeshCoreCoord::core_coord, "Core coordinate")
+        .def(
+            "__eq__",
+            [](const tt::tt_metal::distributed::MeshCoreCoord& a, const tt::tt_metal::distributed::MeshCoreCoord& b) {
+                return a == b;
+            })
+        .def(
+            "__ne__",
+            [](const tt::tt_metal::distributed::MeshCoreCoord& a, const tt::tt_metal::distributed::MeshCoreCoord& b) {
+                return a != b;
+            })
+        .def("__repr__", [](const tt::tt_metal::distributed::MeshCoreCoord& mcc) {
+            std::stringstream ss;
+            ss << "MeshCoreCoord(device=" << mcc.device_coord << ", core=(" << mcc.core_coord.x << ","
+               << mcc.core_coord.y << "))";
+            return ss.str();
+        });
     nb::class_<tt::tt_metal::distributed::SocketConnection>(mod, "SocketConnection")
         .def(
             nb::init<tt::tt_metal::distributed::MeshCoreCoord, tt::tt_metal::distributed::MeshCoreCoord>(),
@@ -41,7 +64,10 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     sender_core (MeshCoreCoord): The mesh core coordinate of the sender
                     receiver_core (MeshCoreCoord): The mesh core coordinate of the receiver
-            )doc");
+            )doc")
+        .def_rw("sender_core", &tt::tt_metal::distributed::SocketConnection::sender_core, "Sender core coordinate")
+        .def_rw(
+            "receiver_core", &tt::tt_metal::distributed::SocketConnection::receiver_core, "Receiver core coordinate");
     nb::class_<tt::tt_metal::distributed::SocketMemoryConfig>(mod, "SocketMemoryConfig")
         .def(
             nb::init<
@@ -66,12 +92,12 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::distributed::SocketConfig* config,
-               std::vector<tt::tt_metal::distributed::SocketConnection> connections,
-               tt::tt_metal::distributed::SocketMemoryConfig memory_config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
                std::optional<int> sender_rank,
                std::optional<int> receiver_rank) {
                 new (config) tt::tt_metal::distributed::SocketConfig();
-                config->socket_connection_config = std::move(connections);
+                config->socket_connection_config = connections;
                 config->socket_mem_config = memory_config;
                 if (sender_rank.has_value()) {
                     config->sender_rank = tt::tt_metal::distributed::multihost::Rank(sender_rank.value());
@@ -92,6 +118,32 @@ void py_module_types(nb::module_& mod) {
                     memory_config (SocketMemoryConfig): The memory config of the socket
                     sender_rank (int, optional): The rank of the sender host in a multi-host context
                     receiver_rank (int, optional): The rank of the receiver host in a multi-host context
+            )doc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::distributed::SocketConfig* config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
+               uint32_t sender_mesh_id,
+               uint32_t receiver_mesh_id) {
+                new (config) tt::tt_metal::distributed::SocketConfig(
+                    connections,
+                    memory_config,
+                    tt::tt_fabric::MeshId(sender_mesh_id),
+                    tt::tt_fabric::MeshId(receiver_mesh_id));
+            },
+            nb::arg("connections"),
+            nb::arg("memory_config"),
+            nb::arg("sender_mesh_id"),
+            nb::arg("receiver_mesh_id"),
+            R"doc(
+                Initialize a SocketConfig with connections, memory config, and mesh IDs.
+
+                Args:
+                    connections (List[SocketConnection]): The connections of the socket
+                    memory_config (SocketMemoryConfig): The memory config of the socket
+                    sender_mesh_id (int): The system mesh ID of the sender mesh
+                    receiver_mesh_id (int): The system mesh ID of the receiver mesh
             )doc");
     nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket")
         .def(
@@ -110,6 +162,59 @@ void py_module_types(nb::module_& mod) {
                 Note:
                     Sockets should typically be created in pairs using create_socket_pair()
                     rather than using this constructor directly.
+            )doc")
+        .def(
+            "get_config_buffer_address",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) {
+                return static_cast<uint32_t>(socket.get_config_buffer()->address());
+            },
+            R"doc(
+                Returns the L1 address of the socket configuration buffer on the device.
+                This address is passed to device kernels to access socket metadata.
+            )doc")
+        .def(
+            "get_active_cores",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_active_cores(); },
+            R"doc(
+                Returns the active cores of the socket.
+            )doc")
+        .def(
+            "get_mesh_device",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_mesh_device(); },
+            R"doc(
+                Returns the mesh device of the socket.
+            )doc")
+        .def(
+            "get_connection_config",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) {
+                return socket.get_config().socket_connection_config;
+            },
+            R"doc(
+            Returns the connection config of the socket.
+            )doc")
+        .def(
+            "get_socket_endpoint_type",
+            &tt::tt_metal::distributed::MeshSocket::get_socket_endpoint_type,
+            R"doc(
+                Returns the socket endpoint type (SENDER or RECEIVER).
+
+                Returns:
+                    SocketEndpoint: The endpoint type of this socket.
+            )doc")
+        .def(
+            "get_fabric_node_id",
+            &tt::tt_metal::distributed::MeshSocket::get_fabric_node_id,
+            nb::arg("endpoint"),
+            nb::arg("coord"),
+            R"doc(
+                Returns the fabric node ID for a given endpoint and device coordinate.
+
+                Args:
+                    endpoint (SocketEndpoint): The endpoint type (SENDER or RECEIVER).
+                    coord (MeshCoordinate): The device coordinate to look up.
+
+                Returns:
+                    FabricNodeId: The fabric node ID for the given endpoint and coordinate.
             )doc");
 }
 

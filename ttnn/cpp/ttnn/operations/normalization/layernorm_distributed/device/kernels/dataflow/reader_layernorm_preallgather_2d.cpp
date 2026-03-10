@@ -8,10 +8,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram

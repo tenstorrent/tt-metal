@@ -6,7 +6,6 @@
 
 #include <optional>
 
-#include <fmt/core.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
@@ -15,18 +14,6 @@
 #include "layernorm_post_all_gather.hpp"
 
 namespace ttnn::operations::normalization::detail {
-
-void bind_normalization_layernorm_distributed_program_config(nb::module_& mod) {
-    nb::class_<LayerNormDistributedDefaultProgramConfig>(mod, "LayerNormDistributedDefaultProgramConfig")
-        .def(
-            nb::init<bool, bool>(),
-            nb::kw_only(),
-            nb::arg("legacy_reduction").noconvert() = false,
-            nb::arg("legacy_rsqrt").noconvert() = false)
-        .def("__repr__", [](const LayerNormDistributedDefaultProgramConfig& config) {
-            return fmt::format("{}", config);
-        });
-}
 
 void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
@@ -57,8 +44,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 residual_input_tensor (ttnn.Tensor, optional): the residual input tensor. Defaults to None.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration. Defaults to None.
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
-                distributed_program_config (ttnn.LayerNormDistributedDefaultProgramConfig, optional): the distributed program configuration. Defaults to LayerNormDistributedDefaultProgramConfig().
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
+                recip_tensor (ttnn.Tensor, optional): the reciprocals tensor for Welford algorithm. Required when using Welford (use_welford=True in program_config). Create using :func:`ttnn.create_layer_norm_reciprocals`. Defaults to None.
 
               Returns:
                 ttnn.Tensor: the output tensor.
@@ -89,6 +76,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 - Unsharded runs: :attr:`input_tensor` must be interleaved.
                 - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
                 - When using :attr:`residual_input_tensor` with sharding, it must match the :attr:`input_tensor` padded shape and sharding.
+                - When using Welford algorithm (use_welford=True), :attr:`recip_tensor` must be provided.
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
@@ -97,8 +85,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("distributed_program_config") = nb::cast(LayerNormDistributedDefaultProgramConfig{}),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("recip_tensor") = nb::none()});
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
@@ -133,7 +121,6 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
                   memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
                   compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration. Defaults to None.
                   program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
-                  distributed_program_config (ttnn.LayerNormDistributedDefaultProgramConfig, optional): the distributed program configuration. Defaults to LayerNormDistributedDefaultProgramConfig().
                   dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to None.
 
                 Returns:
@@ -185,12 +172,10 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("distributed_program_config") = nb::cast(LayerNormDistributedDefaultProgramConfig{}),
             nb::arg("dtype") = nb::none()});
 }
 
 void bind_normalization_layernorm_distributed(nb::module_& mod) {
-    bind_normalization_layernorm_distributed_program_config(mod);
     bind_normalization_layernorm_pre_all_gather_operation(mod);
     bind_normalization_layernorm_post_all_gather_operation(mod);
 }

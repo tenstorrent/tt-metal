@@ -15,9 +15,6 @@
 #
 # === Evaluated ===
 #
-# bugprone-branch-clone:
-#   Attempted, no fixit, lots of violations.
-#
 # bugprone-unchecked-optional-access:
 #   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
 #
@@ -37,7 +34,6 @@
 #   potential flush dependency.
 Checks: >
   *,
-  -bugprone-branch-clone,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-implicit-widening-of-multiplication-result,
@@ -63,6 +59,7 @@ Checks: >
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -cppcoreguidelines-pro-type-const-cast,
   -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-type-member-init,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-type-union-access,
   -cppcoreguidelines-pro-type-vararg,
@@ -85,7 +82,6 @@ Checks: >
   -misc-include-cleaner,
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
-  -misc-unused-parameters,
   -misc-use-anonymous-namespace,
   -misc-use-internal-linkage,
   -modernize-avoid-bind,
@@ -93,7 +89,6 @@ Checks: >
   -modernize-macro-to-enum,
   -modernize-pass-by-value,
   -modernize-return-braced-init-list,
-  -modernize-type-traits,
   -modernize-use-auto,
   -modernize-use-constraints,
   -modernize-use-designated-initializers,
@@ -109,10 +104,8 @@ Checks: >
   -performance-no-int-to-ptr,
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
-  -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-convert-member-functions-to-static,
-  -readability-else-after-return,
   -readability-enum-initial-value,
   -readability-function-size,
   -readability-identifier-length,
@@ -122,7 +115,6 @@ Checks: >
   -readability-math-missing-parentheses,
   -readability-named-parameter,
   -readability-redundant-casting,
-  -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof,
@@ -159,6 +151,7 @@ Checks: >
   -hicpp-explicit-conversions,
   -hicpp-function-size,
   -hicpp-invalid-access-moved,
+  -hicpp-member-init,
   -hicpp-move-const-arg,
   -hicpp-multiway-paths-covered,
   -hicpp-named-parameter,
@@ -182,7 +175,7 @@ CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
   - key: readability-function-cognitive-complexity.Threshold
-    value: 339
+    value: 312
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch
@@ -190,6 +183,10 @@ CheckOptions:
     value: false
   - key: performance-unnecessary-copy-initialization.AllowedTypes
     value: "^MemoryPin$"
+  - key: readability-else-after-return.WarnOnUnfixable
+    value: false
+  - key: readability-else-after-return.WarnOnConditionVariables
+    value: false
 
 FormatStyle: 'file'
 

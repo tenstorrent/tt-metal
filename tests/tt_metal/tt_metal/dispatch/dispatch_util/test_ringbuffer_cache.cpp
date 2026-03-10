@@ -144,11 +144,8 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
     constexpr size_t num_iterations = 10'000'000;
     for (size_t i = 0; i < num_iterations; ++i) {
         pgm_id = dist_pgm_id(gen_pgm_id);
-        if (pgm_id_size_map.contains(pgm_id)) {
-            pgm_size = pgm_id_size_map[pgm_id];
-        } else {
-            pgm_size = dist_pgm_size(gen_pgm_size);
-            pgm_id_size_map[pgm_id] = pgm_size;
+        if (!pgm_id_size_map.contains(pgm_id)) {
+            pgm_id_size_map[pgm_id] = dist_pgm_size(gen_pgm_size);
         }
     }
 

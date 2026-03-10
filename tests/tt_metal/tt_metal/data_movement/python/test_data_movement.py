@@ -15,7 +15,7 @@ import numpy as np
 from collections import defaultdict
 
 
-from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, clear_profiler_runtime_artifacts
 
 from tests.tt_metal.tt_metal.data_movement.python.config import DataMovementConfig
 from tests.tt_metal.tt_metal.data_movement.python.test_metadata import TestMetadataLoader
@@ -54,7 +54,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Print stats if explicitly requested
     stats_reporter = StatsReporter(
-        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch
+        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch, metadata_loader
     )
 
     if verbose:
@@ -66,7 +66,9 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Plot results
     if plot:
-        plotter = Plotter(dm_stats, aggregate_stats, DEFAULT_OUTPUT_DIR, arch, test_id_to_name, test_id_to_comment)
+        plotter = Plotter(
+            dm_stats, aggregate_stats, DEFAULT_OUTPUT_DIR, arch, test_id_to_name, test_id_to_comment, metadata_loader
+        )
         plotter.plot_dm_stats()
 
     # Check performance
@@ -81,6 +83,9 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 def profile_dm_tests(verbose=False, gtest_filter=None):
     if verbose:
         logger.info(f"Profiling Kernels...")
+
+    clear_profiler_runtime_artifacts()
+
     cmd = f"TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=1333 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
 
     if gtest_filter:

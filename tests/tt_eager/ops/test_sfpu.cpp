@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -43,6 +42,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

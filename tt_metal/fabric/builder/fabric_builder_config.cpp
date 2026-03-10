@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "fabric_builder_config.hpp"
 #include "fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -41,7 +42,7 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 }
 
 uint32_t get_downstream_edm_count(bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d : builder_config::num_downstream_edms_1d;
+    return is_2D_routing ? builder_config::max_downstream_edms : builder_config::num_downstream_edms_1d;
 }
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {

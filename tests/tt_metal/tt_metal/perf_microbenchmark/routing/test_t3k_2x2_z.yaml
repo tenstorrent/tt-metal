@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# ======================================================================================
+# Optional Top-Level Configuration: Physical Mesh
+# This section allows you to specify a custom mesh descriptor based on a mesh graph
+# descriptor YAML file and ethernet coord mapping. If not specified, the default mesh
+# descriptor will be used. Both the ethernet mapping and yaml path are required
+# ======================================================================================
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_z_mesh_graph_descriptor.textproto"
+   eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+    ]
+
+Tests:
+  # ======================================================================================
+  # Test 1: A simple, fully specified unicast test for multi-host.
+  # This demonstrates the most basic configuration using ChipIds.
+  # Fabric must be 2D.
+  # ======================================================================================
+  - name: UnicastWithChipId
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+      - device: [0, 3]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [1, 1]
+      - device: [1, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [1, 0]
+  # ======================================================================================
+  # Test 2: A simple, fully specified unicast test for mult-host.
+  # This demonstrates the most basic configuration using MeshCoordinates.
+  # Fabric must be 2D.
+  # ======================================================================================
+  - name: UnicastWithMeshCoordinates
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 1]]
+      - device: [0, [0, 1]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [1, [1, 0]]
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [1, [1, 1]]
+  # ======================================================================================
+  # Test 3: Parameterized Unicast Test
+  # See Test 2 in test_features.yaml for a more detailed explanation on paramtrization
+  # ======================================================================================
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [512, 1024, 2048]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
+        iterations: 2
+  # ======================================================================================
+  # Test 4: Parameterized Unicast Test
+  # ======================================================================================
+  - name: UnicastRandomPairing
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 10
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 1

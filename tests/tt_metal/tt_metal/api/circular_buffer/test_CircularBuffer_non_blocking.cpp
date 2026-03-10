@@ -36,7 +36,7 @@ constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
 std::vector<std::shared_ptr<Buffer>> create_output_buffers(
-    distributed::MeshWorkload& workload, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    distributed::MeshWorkload& /*workload*/, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto* device = mesh_device->get_devices()[0];
@@ -121,6 +121,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         tt::tt_metal::SetRuntimeArgs(program_, subordinate_kernel_id, worker_core, subordinate_rt_args);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> out_buf(data_buffer_size);
         for (size_t i = 0; i < n_cbs; i++) {

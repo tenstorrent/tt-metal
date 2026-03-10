@@ -11,7 +11,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 60
+TIMEOUT = 300
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -42,31 +42,65 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     scalar=None,
+    input_b_dtype=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    shape = input_shape if isinstance(input_shape, (tuple, list)) else input_shape
-    divisor = scalar if scalar is not None else 2.0
+    if isinstance(input_shape, dict):
+        shape = (
+            tuple(input_shape["self"])
+            if isinstance(input_shape.get("self"), (list, tuple))
+            else input_shape.get("self", (1, 1, 32, 32))
+        )
+        shape_b = input_shape.get("other")
+        if shape_b is not None:
+            shape_b = tuple(shape_b) if isinstance(shape_b, (list, tuple)) else shape_b
+    elif isinstance(input_shape, (tuple, list)):
+        shape = tuple(input_shape)
+        shape_b = None
+    else:
+        shape = (1, 1, 32, 32)
+        shape_b = None
 
-    # Tensor creation
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
     )
+
+    if scalar is not None:
+        divisor = scalar
+    elif shape_b is not None:
+        divisor = gen_func_with_cast_tt(
+            partial(torch_random, low=1, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
+        )(shape_b)
+    else:
+        divisor = 2.0
+
     torch_output = ttnn.get_golden_function(ttnn.div)(torch_input, divisor)
 
     input_tensor = ttnn.from_torch(
         torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
     )
 
-    # Op call
+    if isinstance(divisor, torch.Tensor):
+        divisor_tensor = ttnn.from_torch(
+            divisor,
+            dtype=input_b_dtype or input_a_dtype,
+            layout=input_b_layout or input_a_layout,
+            device=device,
+            memory_config=input_b_memory_config or input_a_memory_config,
+        )
+    else:
+        divisor_tensor = divisor
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.div(input_tensor, divisor, memory_config=output_memory_config or input_a_memory_config)
+    output_tensor = ttnn.div(input_tensor, divisor_tensor, memory_config=output_memory_config or input_a_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Comparison
     return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]

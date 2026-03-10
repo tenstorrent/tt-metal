@@ -37,7 +37,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
-#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -99,7 +99,6 @@ namespace ttnn::device {
 
 void py_device_module_types(nb::module_& m_device) {
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
-        .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
         .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
 
@@ -137,8 +136,7 @@ void py_device_module_types(nb::module_& m_device) {
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
         .def_ro("num_banks", &tt::tt_metal::detail::MemoryView::num_banks)
         .def_ro("total_bytes_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_per_bank)
-        .def_ro(
-            "total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
+        .def_ro("total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
         .def_ro("total_bytes_free_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_free_per_bank)
         .def_ro(
             "largest_contiguous_bytes_free_per_bank",
@@ -326,9 +324,13 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> nb::list {
             auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
-            return std::vector<uint32_t>(result.cbegin(), result.cend());
+            nb::list py_list;
+            for (auto val : result) {
+                py_list.append(val);
+            }
+            return py_list;
         },
         nb::arg("unpadded_shape"),
         R"doc(
@@ -348,12 +350,6 @@ void device_module(nb::module_& m_device) {
 
         )doc");
 
-    m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
-        Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
-    )doc");
-    m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
-        Disables kernel compilation cache from being persistent across runs
-    )doc");
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 
@@ -370,6 +366,26 @@ void device_module(nb::module_& m_device) {
         Example:
             >>> import ttnn
             >>> ttnn.device.ClearKernelCache()
+    )doc");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        nb::arg("device").noconvert(),
+        R"doc(
+        Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
+
+        Args:
+            device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+    )doc");
+    m_device.def(
+        "terminate_fast_dispatch",
+        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().terminate_fast_dispatch(device); },
+        nb::arg("device").noconvert(),
+        R"doc(
+        Disable Fast Dispatch on a MeshDevice, returning it to Slow Dispatch mode.
+
+        Args:
+            device (ttnn.Device): The mesh device to disable Fast Dispatch on.
     )doc");
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
@@ -463,9 +479,9 @@ void device_module(nb::module_& m_device) {
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "ReadDeviceProfiler",
-        [](MeshDevice* device) {
+        [](MeshDevice* mesh_device) {
             ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-            tt::tt_metal::ReadMeshDeviceProfilerResults(*device, ProfilerReadState::NORMAL, prof_metadata);
+            tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::NORMAL, prof_metadata);
         },
         nb::arg("device"),
         R"doc(
@@ -491,6 +507,57 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
+
+    m_device.def(
+        "get_optimal_dram_bank_to_logical_worker_assignment",
+        [](MeshDevice* device, tt::tt_metal::NOC noc) {
+            return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+        },
+        nb::arg("device"),
+        nb::arg("noc"),
+        R"doc(
+            [EXPERIMENTAL] Returns the optimal DRAM bank to logical worker core assignment.
+
+            This function returns an ordered list of logical worker core coordinates that are optimally
+            placed to interface with DRAM banks. Placing DRAM reader or writer kernels on these worker
+            cores will minimize NOC congestion and the number of NOC hops required to complete a DRAM
+            read or write.
+
+            Args:
+                device (ttnn.Device): The TT device to query.
+                noc (ttnn.NOC): The Network-on-Chip to use (NOC_0 or NOC_1, or RISCV_0_default/RISCV_1_default).
+
+            Returns:
+                List[ttnn.CoreCoord]: A list of logical worker core coordinates, where index i corresponds
+                to the optimal worker core for DRAM bank i.
+
+            Example:
+                >>> import ttnn
+                >>> device = ttnn.open_device(device_id=0)
+                >>> cores = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(
+                ...     device, ttnn.NOC.RISCV_0_default
+                ... )
+                >>> print(f"DRAM bank 0 maps to core: {cores[0]}")
+        )doc");
+
+    m_device.def(
+        "enable_asynchronous_slow_dispatch",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            tt::tt_metal::experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(device);
+        },
+        nb::arg("device"),
+        R"doc(
+        Experimental: If Slow Dispatch is enabled, this function enables running multiple non-overlapping programs concurrently on the same device.
+        )doc");
+    m_device.def(
+        "disable_asynchronous_slow_dispatch",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            tt::tt_metal::experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(device);
+        },
+        nb::arg("device"),
+        R"doc(
+        Experimental: If Slow Dispatch is enabled, this function disables the ability to run multiple non-overlapping programs concurrently on the same device.
+        )doc");
 }
 
 void py_device_module(nb::module_& mod) {

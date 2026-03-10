@@ -51,6 +51,20 @@ inline const std::unordered_map<std::string, NodeTypeInfo>& create_node_type_loo
         {"BH_GALAXY_X_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
         {"BH_GALAXY_Y_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
         {"BH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_AB", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},    // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_AB_X_TORUS",
+         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_AB_Y_TORUS",
+         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_AB_XY_TORUS",
+         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},                     // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_C", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_C_X_TORUS",
+         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_C_Y_TORUS",
+         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_C_XY_TORUS",
+         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
     };
     return lookup;
 }
@@ -83,7 +97,8 @@ std::string find_node_type_from_template(
         if (child.has_node_ref()) {
             // Found a node reference - this is the node type
             return child.node_ref().node_descriptor();
-        } else if (child.has_graph_ref()) {
+        }
+        if (child.has_graph_ref()) {
             // Recurse into nested graph to find node type
             return find_node_type_from_template(child.graph_ref().graph_template(), cluster_desc);
         }

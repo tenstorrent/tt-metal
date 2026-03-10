@@ -7,6 +7,8 @@
 #include <utility>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -28,11 +30,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::SQUARED_DIFFERENCE:
-            return a == b && (
-                a == DataType::FLOAT32 ||
-                a == DataType::INT32 ||
-                a == DataType::UINT32 ||
-                a == DataType::UINT16);
+            return a == b &&
+                   (a == DataType::FLOAT32 || a == DataType::INT32 || a == DataType::UINT32 || a == DataType::UINT16);
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
@@ -55,13 +54,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
-            return a == b && (
-                a == DataType::INT32 ||
-                a == DataType::UINT32 ||
-                a == DataType::UINT16);
+            return a == b && (a == DataType::INT32 || a == DataType::UINT32 || a == DataType::UINT16);
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
+        case BinaryOpType::FMOD:
         case BinaryOpType::POWER: return true;
         default: return false;
     }
@@ -93,9 +90,8 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
         if (sfpu_op_check) {
             return ElementWiseMultiCoreSfpu{};
-        } else {
-            return ElementWiseMultiCore{};
         }
+        return ElementWiseMultiCore{};
     }
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
@@ -105,7 +101,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
             if (tensor_args.input_tensor_a.is_sharded()) {
                 if (tensor_args.input_tensor_a.padded_shape()[0] == tensor_args.input_tensor_b->padded_shape()[0] ||
                     (tensor_args.input_tensor_a.padded_shape()[0] > 1 &&
-                        tensor_args.input_tensor_b->padded_shape()[0] == 1)) {
+                     tensor_args.input_tensor_b->padded_shape()[0] == 1)) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};
@@ -121,7 +117,6 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
 
 void BinaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
@@ -214,7 +209,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 }
 
 void BinaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
 
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -339,16 +334,10 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
     auto program_factory = select_program_factory(attributes, tensor_args);
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
+        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
         return operation::hash_operation<BinaryDeviceOperation>(
             attributes,
@@ -365,7 +354,7 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
 operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_t>
 BinaryDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -397,8 +386,8 @@ BinaryDeviceOperation::create_op_performance_model(
 }
 
 bool BinaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }

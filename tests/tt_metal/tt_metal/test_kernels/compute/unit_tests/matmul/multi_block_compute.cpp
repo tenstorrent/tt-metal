@@ -4,11 +4,10 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api.h"
+#include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
     const uint32_t in1_cb = get_compile_time_arg_val(1);
     const uint32_t out_cb = get_compile_time_arg_val(2);
@@ -22,6 +21,11 @@ void MAIN {
     const uint32_t num_blocks = get_compile_time_arg_val(10);
     const uint32_t last_block_id = num_blocks - 1;
 
+    experimental::CircularBuffer cb0(in0_cb);
+    experimental::CircularBuffer cb1(in1_cb);
+    experimental::CircularBuffer cb_partials(partials_cb);
+    experimental::CircularBuffer cb_out(out_cb);
+
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
     mm_init(in0_cb, in1_cb, out_cb);
@@ -29,17 +33,17 @@ void MAIN {
         acquire_dst();
         if (block_id > 0) {
             copy_tile_to_dst_init_short(partials_cb);
-            cb_wait_front(partials_cb, out_block_num_tiles);
+            cb_partials.wait_front(out_block_num_tiles);
             for (uint32_t i = 0; i < out_block_num_tiles; i++) {
                 copy_tile(partials_cb, i, i);
             }
-            cb_pop_front(partials_cb, out_block_num_tiles);
+            cb_partials.pop_front(out_block_num_tiles);
             mm_init_short(in0_cb, in1_cb);
         }
         uint32_t out_tile_index = 0;
         uint32_t in0_index_r_offset = 0;
-        cb_wait_front(in0_cb, in0_block_num_tiles);
-        cb_wait_front(in1_cb, in1_block_num_tiles);
+        cb0.wait_front(in0_block_num_tiles);
+        cb1.wait_front(in1_block_num_tiles);
         for (uint32_t r = 0; r < out_r; r++) {
             for (uint32_t c = 0; c < out_c; c++) {
                 uint32_t in1_index_c_offset = 0;
@@ -53,21 +57,20 @@ void MAIN {
             }
             in0_index_r_offset += in0_k;
         }
-        cb_pop_front(in0_cb, in0_block_num_tiles);
-        cb_pop_front(in1_cb, in1_block_num_tiles);
+        cb0.pop_front(in0_block_num_tiles);
+        cb1.pop_front(in1_block_num_tiles);
 
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
             if (block_id == last_block_id) {
-                cb_reserve_back(out_cb, out_block_num_tiles);
+                cb_out.reserve_back(out_block_num_tiles);
                 pack_tile(tile_index, out_cb);
-                cb_push_back(out_cb, out_block_num_tiles);
+                cb_out.push_back(out_block_num_tiles);
             } else {
-                cb_reserve_back(partials_cb, out_block_num_tiles);
+                cb_partials.reserve_back(out_block_num_tiles);
                 pack_tile(tile_index, partials_cb);
-                cb_push_back(partials_cb, out_block_num_tiles);
+                cb_partials.push_back(out_block_num_tiles);
             }
         }
         release_dst();
     }
 }
-}  // namespace NAMESPACE

@@ -10,12 +10,10 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::indexed_fill::program {
+namespace ttnn::prim {
 
 IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const IndexedFillParams& /*operation_attributes*/, const IndexedFillInputs& tensor_args, Tensor& output) {
     const auto& batch_ids = tensor_args.batch_id;
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
@@ -73,7 +71,7 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -111,9 +109,9 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
 
 void IndexedFillProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const IndexedFillParams& /*operation_attributes*/,
+    const IndexedFillInputs& tensor_args,
+    Tensor& output) {
     const auto& batch_ids = tensor_args.batch_id;
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
@@ -149,4 +147,4 @@ void IndexedFillProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::indexed_fill::program
+}  // namespace ttnn::prim

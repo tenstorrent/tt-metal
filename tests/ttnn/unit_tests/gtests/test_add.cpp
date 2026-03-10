@@ -31,7 +31,7 @@ struct Add1DTensorAndScalarParam {
     uint32_t w;
 };
 
-class Add1DTensorAndScalarFixture : public TTNNFixtureWithDevice,
+class Add1DTensorAndScalarFixture : public TTNNFixtureWithSuiteDevice<Add1DTensorAndScalarFixture>,
                                     public testing::WithParamInterface<Add1DTensorAndScalarParam> {};
 
 TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
@@ -47,7 +47,6 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
         TT_FATAL(
             ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
-    ttnn::close_device(device);
 }
 
 INSTANTIATE_TEST_SUITE_P(

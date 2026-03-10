@@ -8,7 +8,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Import helper functions from unit test
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     nearest_n,
     nearest_pow_2,
     fa_rand,
@@ -62,19 +62,10 @@ if model_traced_params:
 def run(
     input_shape,
     input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
     input_b_dtype=None,
-    input_b_layout=None,
-    input_b_memory_config=None,
-    input_c_dtype=None,
-    input_c_layout=None,
-    input_c_memory_config=None,
-    input_d_dtype=None,  # cur_pos tensor dtype
-    input_d_layout=None,  # cur_pos tensor layout
-    input_d_memory_config=None,  # cur_pos tensor memory config
-    output_memory_config=None,
-    storage_type="StorageType::DEVICE",
+    input_c_dtype=None,  # cur_pos tensor dtype
+    # curtensor layout
+    # curtensor memory config
     scale=None,  # Extracted from arg8
     sliding_window_size=None,  # Extracted from arg9
     is_causal=None,  # Extracted from arg3

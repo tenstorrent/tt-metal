@@ -131,14 +131,14 @@ struct ExecuteBackwardBiasGelu {
         const Tensor& grad_tensor,
         const Tensor& input_a,
         const Tensor& input_b,
-        std::string approximate,
+        const std::string& approximate,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor,
         const Tensor& input_tensor,
         float bias,
-        std::string approximate,
+        const std::string& approximate,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
@@ -191,7 +191,7 @@ struct ExecuteBackwardSub {
         const Tensor& input_tensor,
         float alpha,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
+        const std::optional<Tensor>& input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor,
@@ -199,8 +199,8 @@ struct ExecuteBackwardSub {
         const Tensor& other,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt,
-        std::optional<Tensor> other_grad = std::nullopt);
+        const std::optional<Tensor>& input_grad = std::nullopt,
+        const std::optional<Tensor>& other_grad = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor& grad_tensor,
@@ -215,7 +215,7 @@ struct ExecuteBackwardDiv {
         const Tensor& grad_tensor,
         const Tensor& input_tensor,
         float scalar,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 
@@ -223,7 +223,7 @@ struct ExecuteBackwardDiv {
         const Tensor& grad_tensor,
         const Tensor& input_a,
         const Tensor& other,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt,

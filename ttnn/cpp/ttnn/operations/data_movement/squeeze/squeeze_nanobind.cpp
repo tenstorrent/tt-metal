@@ -25,14 +25,15 @@ void bind_squeeze(nb::module_& mod, const data_movement_operation_t& operation, 
                 -> ttnn::Tensor {
                 if (dim.is_none()) {  // None
                     return self(input_tensor);
-                } else if (nb::isinstance<nb::int_>(dim)) {  // int
+                }
+                if (nb::isinstance<nb::int_>(dim)) {  // int
                     return self(input_tensor, nb::cast<int>(dim));
-                } else if (nb::isinstance<nb::list>(dim)) {  // List[int]
+                }
+                if (nb::isinstance<nb::list>(dim)) {  // List[int]
                     auto dims = nb::cast<ttnn::SmallVector<int>>(dim);
                     return self(input_tensor, dims);
-                } else {
-                    throw std::invalid_argument("dim must be an int, a list of ints, or None");
                 }
+                throw std::invalid_argument("dim must be an int, a list of ints, or None");
             },
             nb::arg("input_tensor"),
             nb::arg("dim") = nb::none()  // Default value is None

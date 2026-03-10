@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/grouped_query_attention.hpp"
@@ -42,7 +44,16 @@ public:
         float dropout_prob = 0.0F,
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;
+
+    // Forward with KV cache for inference
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input,
+        const autograd::TensorPtr& mask,
+        std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+        const uint32_t layer_idx,
+        const uint32_t new_tokens);
 };
 
 }  // namespace ttml::modules

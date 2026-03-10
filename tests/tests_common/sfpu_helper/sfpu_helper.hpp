@@ -5,6 +5,13 @@
 // Sfpu golden functions
 #include <cmath>
 #include <numbers>
+#include <vector>
+#include <cstdint>
+#include <functional>
+#include <random>
+#include <map>
+
+#include <tt-metalium/bfloat16.hpp>
 
 inline float exponential(float x) { return std::exp(x); }
 
@@ -29,6 +36,10 @@ inline float ref_log10(float x) { return ref_log(x) * std::numbers::log10e; }
 inline float ref_log2(float x) { return ref_log(x) * std::numbers::log2e_v<float>; }
 
 inline float ref_tanh(float x) { return std::tanh(x); }
+
+inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(size_t num_bytes, int seed) {
+    return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed);  // 0.0f..2.0f
+}
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2_plus_1(uint32_t num_bytes, int seed) {
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, 1.0f);  // 0.0f..2.0f
@@ -71,6 +82,25 @@ inline std::vector<uint32_t> sfpu(const std::vector<uint32_t>& src, const std::f
     return dst;
 }
 
+inline std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed) {
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, 1), std::mt19937(seed));
+
+    std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
+    for (std::uint32_t& num : vec) {
+        float num_1_float = rand_float();
+        float num_2_float = rand_float();
+
+        num_1_float = (num_1_float > 0.5);
+        num_2_float = (num_2_float > 0.5);
+
+        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
+        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+
+        num = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+    }
+    return vec;
+}
+
 // Helper functions
 inline std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint32_t num_bytes, int seed) {
     // Used for reciprocal, since binary vectors are filled with 0s and 1s, and recip of 0 is undefined,
@@ -102,6 +132,8 @@ inline std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint
 // Comparison functions
 inline bool equal_within_two_sig_figs(float a, float b) { return equal_within_n_sig_figs(a, b, 2); }
 
+inline bool equal_within_absolute_tolerance(float a, float b, float tol) { return std::abs(a - b) < tol; }
+
 inline bool equal_within_absolute_tolerance_of_0p03(float a, float b) {
     return equal_within_absolute_tolerance(a, b, 0.03);
 }
@@ -111,6 +143,10 @@ inline bool is_close_0p015(float a, float b) { return is_close(a, b, 0.015f); }
 inline bool is_close_rtol_0p06_atol_0p006(float a, float b) { return is_close(a, b, 0.06f, 0.006f); }
 
 inline bool is_close_rtol_0p175_atol_0p1(float a, float b) { return is_close(a, b, 0.175f, 0.1f); }
+
+inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_1_1(size_t num_bytes, int seed) {
+    return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, -1.0f);  // -1.0..1.0
+}
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
 static std::vector<std::string> sfpu_op = {

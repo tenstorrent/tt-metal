@@ -228,7 +228,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     command = f'pytest "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_ff_matmul_with_gelu_sdxl" -v'
     subdir = f"ff_matmul_with_gelu_sdxl_perf"
     cols = ["DEVICE KERNEL"]
-    op_name = "Matmul"
+    op_name = "MatmulDeviceOperation"
 
     # Run the performance test and get detailed results
     results = run_device_perf_detailed(
@@ -277,7 +277,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1115831  # Measured: 1.12ms for Conv2D SDXL block sharded
+    expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(

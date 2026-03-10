@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
-
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -34,14 +32,11 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = ttnn::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input.device();
+        TT_ASSERT(
+            ttnn::GetDefaultDevice() != nullptr, "Requires setting default device if no inputs to op are on device");
     }
 
     uint32_t n = input.logical_shape()[0], c = input.logical_shape()[1], h = input.logical_shape()[2],
@@ -158,19 +153,16 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     const CoreRangeSet& grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = ttnn::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input.device();
+        TT_ASSERT(
+            ttnn::GetDefaultDevice() != nullptr, "Requires setting default device if no inputs to op are on device");
     }
 
     uint32_t n = input.logical_shape()[0], c = input.logical_shape()[1], h = input.logical_shape()[2],
              w = input.logical_shape()[3];
-    auto padded_c = c + pad_c;      // end padding only
+    auto padded_c = c + pad_c;        // end padding only
     auto padded_h = h + (pad_h * 2);  // front and end padding
     auto padded_w = w + (pad_w * 2);  // front and end padding
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
@@ -199,9 +191,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "pad_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphw_mem_config =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3);
 
     log_debug(tt::LogOp, "transpose_hw_output: {}", tt_output_tensor.logical_shape());
 
@@ -219,9 +209,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "pad_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphc_mem_config =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", tt_output_tensor.logical_shape());
 
@@ -233,9 +221,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "reshape_hc_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphw_mem_config2 =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config2);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3);
 
     log_debug(tt::LogOp, "transpose_hw_output2: {}", tt_output_tensor.logical_shape());
 
@@ -247,9 +233,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "reshape_hw_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphc_mem_config2 =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config2);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2);
 
     log_debug(tt::LogOp, "transpose_hc_output2: {}", tt_output_tensor.logical_shape());
 
@@ -339,8 +323,7 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, reshaped_tensor.memory_config(), false);
+    auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);
 
     // Reshape back to padded original dimensions
     ttnn::Shape padded_shape(
@@ -353,7 +336,7 @@ static Tensor apply_halo_padding(
 // This function checks if the current shard height is divisible by (stride_h * input_width).
 // If not, it calculates an optimal number of cores and corresponding shard height
 // to enable efficient fold computation across the tensor dimensions.
-Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t stride_w) {
+Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t /*stride_w*/) {
     ttnn::Shape input_shape = input.logical_shape();
     uint32_t input_width = input_shape[2];
     uint32_t pixels_per_compute_row = stride_h * input_width;
@@ -427,9 +410,8 @@ Tensor FoldOperation::invoke(
                        core_grid.value_or(CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 1}}}),
                        override_memory_config)
                 .at(0);
-        } else {
-            return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
         }
+        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
     }
     // Modern sharded tensor path
     if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {
@@ -470,9 +452,9 @@ Tensor FoldOperation::invoke(
         // Apply padding if needed
         if (has_hw_padding || has_c_padding) {
             ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
-            padding_spec.push_back({0, 0});                 // N dimension
-            padding_spec.push_back({pad_top, pad_bottom});  // H dimension
-            padding_spec.push_back({pad_left, pad_right});  // W dimension
+            padding_spec.push_back({0, 0});                     // N dimension
+            padding_spec.push_back({pad_top, pad_bottom});      // H dimension
+            padding_spec.push_back({pad_left, pad_right});      // W dimension
             padding_spec.push_back({pad_c_front, pad_c_back});  // C dimension
 
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);

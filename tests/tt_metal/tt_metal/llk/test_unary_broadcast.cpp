@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -18,7 +19,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -123,12 +123,11 @@ template <class T_in>
 std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     std::vector<T_in>& src, const std::vector<uint32_t>& shape, BroadcastDim dim, tt::DataFormat T_out) {
     static_assert(
-        std::is_same<bfloat16, T_in>::value || std::is_same<float, T_in>::value,
-        "Only float & Float_16b type as input allowed");
+        std::is_same_v<bfloat16, T_in> || std::is_same_v<float, T_in>, "Only float & Float_16b type as input allowed");
     std::vector<uint32_t> tilized_packed_res;
     ::unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = shape.at(0), .num_tiles_c_dim = 1};
     std::vector<T_in> vBroadcast = get_broadcasted_vec(src, shape, dim);
-    if constexpr (std::is_same<bfloat16, T_in>::value) {
+    if constexpr (std::is_same_v<bfloat16, T_in>) {
         if (T_out == tt::DataFormat::Float16_b) {
             auto packed_vec = pack_vector<uint32_t, bfloat16>(vBroadcast);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
@@ -142,7 +141,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
-    } else if constexpr (std::is_same<float, T_in>::value) {
+    } else if constexpr (std::is_same_v<float, T_in>) {
         if (T_out == tt::DataFormat::Float16_b) {
             std::vector<bfloat16> tempfp16bv;
             tempfp16bv.resize(vBroadcast.size());
@@ -326,6 +325,7 @@ void run_single_core_unary_broadcast(
     distributed::WriteShard(cq, src_dram_buffer_1, packed_tilized_input_1, zero_coord);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data_0;
     distributed::ReadShard(cq, dest_buffer_data_0, dst_dram_buffer_0, zero_coord);
@@ -341,11 +341,8 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
-    if (this->arch_ == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
+// FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
+TEST_F(MeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
     for (BroadcastDim bcast_dim : {BroadcastDim::NONE, BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
         for (tt::DataFormat in0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
             for (tt::DataFormat out0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {

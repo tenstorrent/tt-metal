@@ -97,14 +97,14 @@ void get_max_page_size_and_num_pages(
     uint32_t& num_pages,
     uint32_t& num_pages_w_per_receiver) {
     uint64_t half_row_bytes = static_cast<uint64_t>(num_tiles_w / 2) * tile_size;
-    TT_ASSERT(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
+    TT_FATAL(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
 
     page_size = (8192 / tile_size) * tile_size;
     // Each receiver core receives half the data, so each receiver cores's block size is half of the total block size
     while (half_row_bytes % page_size != 0 && page_size > tile_size) {
         page_size -= tile_size;
     }
-    TT_ASSERT(page_size % tile_size == 0, "page_size must be a multiple of tile_size!");
+    TT_FATAL(page_size % tile_size == 0, "page_size must be a multiple of tile_size!");
     num_pages = num_tiles_w * num_tiles_h * tile_size / page_size;
     num_pages_w_per_receiver = half_row_bytes / page_size;
 }
@@ -112,11 +112,11 @@ void get_max_page_size_and_num_pages(
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& all_dram_reader_cores,
-    const CoreRangeSet& all_l1_receiver_cores,
+    const CoreRangeSet& /*all_l1_receiver_cores*/,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
-    uint32_t num_tiles_cb,
-    uint32_t num_tiles_per_core,
+    uint32_t /*num_tiles_cb*/,
+    uint32_t /*num_tiles_per_core*/,
     uint32_t k,
     uint32_t n,
     uint32_t num_blocks,
@@ -272,7 +272,7 @@ bool validation(
     std::vector<uint32_t>& input_vec,
     uint32_t num_cores,
     std::vector<CoreCoord>& all_cores,
-    uint32_t num_tiles_per_core,
+    uint32_t /*num_tiles_per_core*/,
     uint32_t cb_addr,
     uint32_t single_tile_size,
     uint32_t num_tiles_cb,
@@ -350,14 +350,11 @@ bool validation(
 }
 
 uint32_t get_dram_bandwidth(tt::ARCH arch) {
-    constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
     }
     return dram_bandwidth_gb_per_sec;
 }
@@ -470,7 +467,7 @@ int main(int argc, char** argv) {
         test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
 
         if (use_device_profiler) {

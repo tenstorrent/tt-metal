@@ -36,7 +36,7 @@ export TT_SYMBIOTE_RUN_MODE=DPL && pytest tests/test_vit.py
 
 TT-Symbiote supports multiple dispatcher implementations via the `TT_SYMBIOTE_DISPATCHER` environment variable:
 
-- **DEFAULT** - Standard TTNN operation dispatcher
+- **DEFAULT** - Standard TTNN operation dispatcher (Not set by default. CPU set by default)
 - **DEBUG** - Verbose logging dispatcher for debugging
 - **CPU** - CPU-only dispatcher for testing
 

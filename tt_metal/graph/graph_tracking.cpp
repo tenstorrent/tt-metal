@@ -4,6 +4,7 @@
 
 #include <graph_tracking.hpp>
 
+#include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
@@ -12,6 +13,8 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
+
+nlohmann::json IGraphProcessor::end_capture() { return nullptr; }
 
 GraphTracker& GraphTracker::instance() {
     static GraphTracker tracker;
@@ -112,9 +115,11 @@ bool GraphTracker::hook_deallocate(Buffer* buffer) {
     if (hooked) {
         std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
         auto buffer_it = hooked_buffers.find(buffer);
-        TT_FATAL(
-            buffer_it != hooked_buffers.end(), "Can't hook deallocation of a buffer which allocation wasn't hooked");
-        hooked_buffers.erase(buffer_it);
+        if (buffer_it == hooked_buffers.end()) {
+            log_warning(tt::LogMetal, "Can't hook deallocation of a buffer which allocation wasn't hooked");
+        } else {
+            hooked_buffers.erase(buffer_it);
+        }
     }
     return hooked;
 }

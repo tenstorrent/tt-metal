@@ -7,7 +7,6 @@
 #include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
@@ -27,7 +26,7 @@ uint32_t get_cluster_axis_index(
 
 namespace {
 
-using SliceOp = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+using SliceOp = ttnn::prim::SliceDeviceOperation;
 
 // Helper function to compute slice parameters for a given mesh coordinate
 auto compute_slice_parameters(
@@ -46,7 +45,7 @@ auto compute_slice_parameters(
         cluster_index,
         cluster_size);
 
-    auto input_shape = input_tensor.logical_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto partitioned_dim_size = input_shape[dim] / cluster_size;

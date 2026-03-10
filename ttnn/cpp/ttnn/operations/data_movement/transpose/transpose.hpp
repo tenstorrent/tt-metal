@@ -16,13 +16,9 @@ struct ExecuteTranspose {
         int64_t dim1,
         int64_t dim2,
         const std::optional<MemoryConfig>& memory_config_arg,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+        float pad_value = 0.0f);
 
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int64_t dim1,
-        int64_t dim2,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, float pad_value = 0.0f);
 };
 
 }  // namespace operations::data_movement::transpose

@@ -7,15 +7,17 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::unary {
+namespace ttnn::prim {
+
+using ttnn::operations::unary::UnaryOpType;
 
 namespace {
-void validate_supported_arch_dtype(
-    tt::ARCH arch, DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
+void validate_supported_arch_dtype(DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
@@ -52,17 +54,12 @@ void validate_supported_arch_dtype(
 UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
-        return program::UnaryShardedProgramFactory{};
-    } else if(args.sub_core_grids.has_value()) {
-        return program::UnarySubCoreGridProgramFactory{};
-    } else {
-        return program::UnaryProgramFactory{};
+        return UnaryShardedProgramFactory{};
     }
-}
-
-void UnaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    if (args.sub_core_grids.has_value()) {
+        return UnarySubCoreGridProgramFactory{};
+    }
+    return UnaryProgramFactory{};
 }
 
 void UnaryDeviceOperation::validate_on_program_cache_miss(
@@ -77,10 +74,9 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         output_datatype = preallocated_output_tensor->dtype();
     }
 
-    auto arch = input_tensor.device()->arch();
     auto input_datatype = input_tensor.dtype();
     for (const auto& unary_op : args.op_chain) {
-        validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.type());
+        validate_supported_arch_dtype(input_datatype, output_datatype, unary_op.type());
     }
 
     TT_FATAL(
@@ -100,12 +96,6 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.layout() == Layout::TILE,
-            "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
-            "tensor layout: {}",
-            static_cast<int>(input_tensor.layout()));
-
-        TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Unary operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
@@ -122,35 +112,37 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        if(!input_tensor.is_sharded()){
+        if (!input_tensor.is_sharded()) {
             TT_FATAL(
-                (preallocated_output_tensor.value().layout() == Layout::TILE),
-                "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
+                (preallocated_output_tensor.value().layout() == input_tensor.layout()),
+                "Unary operation requires output tensor layout ({}) to match input tensor layout ({}) when working "
+                "with non-sharded tensor.",
+                static_cast<int>(preallocated_output_tensor.value().layout()),
+                static_cast<int>(input_tensor.layout()));
         }
     }
 }
 
-spec_return_value_t UnaryDeviceOperation::compute_output_specs(
+TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.layout();
-    }
+    const auto output_layout = tensor_args.input.layout();
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout::fromPaddedShape(
-        args.output_dtype,
-        PageConfig(output_layout),
-        args.output_memory_config,
+    return TensorSpec(
         output_shape,
-        tensor_args.input.padded_shape()));
+        TensorLayout::fromPaddedShape(
+            args.output_dtype,
+            PageConfig(output_layout),
+            args.output_memory_config,
+            output_shape,
+            tensor_args.input.padded_shape()));
 }
 
-tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
+Tensor UnaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -164,28 +156,39 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto& input_shape = input_tensor.padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        args.sub_core_grids,
-        input_shape.volume());
+    operation::Hash hash;
+
+    if (input_tensor.layout() == Layout::TILE) {
+        hash = operation::hash_operation<UnaryDeviceOperation>(
+            args,
+            args.sub_core_grids,
+            program_factory.index(),
+            input_tensor.dtype(),
+            input_tensor.memory_config(),
+            input_shape.volume(),
+            input_tensor.layout());
+    } else {
+        hash = operation::hash_operation<UnaryDeviceOperation>(
+            args,
+            args.sub_core_grids,
+            program_factory.index(),
+            input_tensor.dtype(),
+            input_tensor.memory_config(),
+            input_shape,
+            input_tensor.layout());
+    }
 
     return hash;
 }
 
 bool UnaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-}  // namespace ttnn::operations::unary
-
-namespace ttnn::prim {
-ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
+Tensor unary(
     const Tensor& input,
     const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
@@ -195,8 +198,7 @@ ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::unary::UnaryDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = UnaryParams{
         .op_chain = op_chain,
         .output_dtype = output_dtype,
         .output_memory_config = output_memory_config,
@@ -205,8 +207,9 @@ ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
         .bfp8_pack_precise = bfp8_pack_precise,
         .sub_core_grids = sub_core_grids,
     };
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+    auto tensor_args = UnaryInputs{.input = input, .preallocated_output = preallocated_output};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<UnaryDeviceOperation>(operation_attributes, tensor_args);
 }
-} // namespace ttnn::prim
+
+}  // namespace ttnn::prim

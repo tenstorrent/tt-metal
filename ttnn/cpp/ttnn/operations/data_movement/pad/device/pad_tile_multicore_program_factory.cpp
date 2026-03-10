@@ -10,7 +10,8 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::get_num_pages;
 
 static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
@@ -26,9 +27,7 @@ static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::S
 }
 
 PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
@@ -40,13 +39,13 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
+        sub_core_grids.has_value() ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_pages)
+                                   : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
+
+    auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t page_size = output.buffer()->page_size();
@@ -55,30 +54,44 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     tt::tt_metal::CircularBufferConfig input_cb_config =
         tt::tt_metal::CircularBufferConfig(page_size * multi_buffering_size, {{input_cb_index, cb_data_format}})
             .set_page_size(input_cb_index, page_size);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, input_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(page_size * multi_buffering_size, {{output_cb_index, cb_data_format}})
             .set_page_size(output_cb_index, page_size);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, output_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t pad_val_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig pad_val_cb_config =
         tt::tt_metal::CircularBufferConfig(page_size, {{pad_val_cb_index, cb_data_format}})
             .set_page_size(pad_val_cb_index, page_size);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, pad_val_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, pad_val_cb_config);
 
     Buffer* input_buffer = a.buffer();
     Buffer* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    bfloat16 bfloat_pad_value = bfloat16(pad_value);
+    switch (a.dtype()) {
+        case DataType::INT32:
+        case DataType::UINT32: packed_pad_value = pad_value; break;
+        case DataType::BFLOAT16:
+            packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+            break;
+        case DataType::UINT16:
+            packed_pad_value = ttnn::operations::data_movement::pack_two_uint16_into_uint32(
+                {ttnn::operations::data_movement::float_to_uint16(pad_value),
+                 ttnn::operations::data_movement::float_to_uint16(pad_value)});
+            break;
+        case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
+        default:
+            packed_pad_value = 0;
+            TT_ASSERT(
+                false,
+                "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                "FLOAT32");
     }
 
     std::vector<uint32_t> reader_ct_args = {
@@ -102,12 +115,12 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     /*
@@ -164,8 +177,8 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
 
     std::vector<uint32_t> all_runtime_args;
 
-    for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = cores_in_order[i];
 
         uint32_t num_pages_per_core;
         if (core_group_1.contains(core)) {
@@ -217,24 +230,26 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         // The input and output id_per_dim should now be set correctly for the next core
     }
 
-    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size}};
+    return cached_program_t{
+        std::move(program),
+        {reader_kernel_id,
+         writer_kernel_id,
+         compute_with_storage_grid_size,
+         sub_core_grids,
+         std::move(cores_in_order)}};
 }
 
 void PadTileMulticoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
+    Tensor& output) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
 
-    uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = cached_program.shared_variables.compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    const auto& cores = cached_program.shared_variables.cores_with_rtargs;
 
-    for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for (const auto& core : cores) {
         // Update reader kernel runtime args
         {
             auto& runtime_args =
@@ -251,4 +266,4 @@ void PadTileMulticoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -112,6 +113,8 @@ int main(int argc, char** argv) {
 
     cmdline_parser.apply_overrides(raw_test_configs);
 
+    raw_test_configs = tt::tt_fabric::fabric_tests::expand_channel_trimming(std::move(raw_test_configs));
+
     if (raw_test_configs.empty()) {
         log_fatal(tt::LogTest, "No test configurations loaded or generated. Exiting.");
         return 1;
@@ -158,7 +161,8 @@ int main(int argc, char** argv) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
             continue;
-        } else if (builder.should_skip_test_on_platform(test_config)) {
+        }
+        if (builder.should_skip_test_on_platform(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
             continue;
         }
@@ -176,11 +180,21 @@ int main(int argc, char** argv) {
             topology,
             fabric_tensix_config);
 
-        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        bool open_devices_success = test_context.open_devices(
+            test_config.fabric_setup, test_config.channel_trimming_mode);
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
             continue;
+        }
+
+        // Validate device frequencies for performance tests. Validation runs only once
+        // since device frequencies are cached in TestFixture for its lifetime.
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+            if (!fixture->validate_device_frequencies_for_performance_tests()) {
+                test_context.close_devices();
+                return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
+            }
         }
 
         // Check topology-based skip conditions after devices are opened
@@ -198,8 +212,6 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Building tests");
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-            // Set performance test mode and line sync for this test group
-            test_context.set_performance_test_mode(test_config.performance_test_mode);
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
             test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
             // Set skip_packet_validation flag
@@ -214,6 +226,9 @@ int main(int argc, char** argv) {
 
                 // Prepare allocator and memory maps for this specific test
                 test_context.prepare_for_test(built_test);
+
+                // Set performance test mode for each iteration
+                test_context.set_performance_test_mode(built_test.performance_test_mode);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");

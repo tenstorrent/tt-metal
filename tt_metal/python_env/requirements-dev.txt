@@ -28,9 +28,6 @@ mypy==1.9.0
 # For sweep testing
 -r ../../tests/sweep_framework/requirements-sweeps.txt
 
-# For all Llama3 demo tests
-git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
-
 # For Mistral-7B-v0.3 demo tests
 protobuf==3.20.2
 
@@ -40,9 +37,9 @@ huggingface-hub >= 0.30.0
 
 # testing
 pytest==8.4.2
+pytest-cov==7.0.0
 pytest-timeout==2.4.0
 pytest-split==0.10.0
-pytest-xdist==3.8.0
 pytest-benchmark==5.1.0
 jsbeautifier==1.14.7
 datasets==2.9.0
@@ -56,7 +53,7 @@ xlsxwriter==3.0.8
 tiktoken==0.7.0
 tqdm==4.66.3
 enlighten==1.12.4
-sentencepiece==0.2.0
+sentencepiece==0.2.1
 numba>=0.58.1
 librosa==0.10.0
 timm>=1.0.0
@@ -87,13 +84,13 @@ open_clip_torch==2.32.0 # Required for SDXL accuracy evaluation
 # Needed for various tests
 pyyaml>=5.4
 matplotlib
-Pillow==10.3.0
+Pillow==12.1.1
 jupyterlab==4.2.5
 ipywidgets==8.1.1
 bokeh==3.1.1
 click==8.1.7
 dash==2.15.0
-pandas==2.0.3
+pandas==2.3.3
 plotly==5.18.0
 seaborn==0.13.2
 medpy==0.5.2 # Required for vanilla unet

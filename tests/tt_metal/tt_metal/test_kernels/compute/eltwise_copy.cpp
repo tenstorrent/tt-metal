@@ -4,29 +4,50 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
+#include "experimental/circular_buffer.h"
+#endif
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
+#ifdef ARCH_QUASAR
+    experimental::DataflowBuffer dfb_in(0);
+    experimental::DataflowBuffer dfb_out(1);
+    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
+#else
+    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+#endif
+
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         acquire_dst();
 
+#ifdef ARCH_QUASAR
+        dfb_in.wait_front(1);
+        dfb_out.reserve_back(1);
+        copy_tile(dfb_in.get_id(), 0, 0);
+        pack_tile(0, dfb_out.get_id());
+        dfb_in.pop_front(1);
+        dfb_out.push_back(1);
+#else
         // Pop tile after tile, copy to DST and pack
-        cb_wait_front(tt::CBIndex::c_0, 1);
-        cb_reserve_back(tt::CBIndex::c_16, 1);
+        cb0.wait_front(1);
+        cb16.reserve_back(1);
         copy_tile(tt::CBIndex::c_0, 0, 0);
 
         pack_tile(0, tt::CBIndex::c_16);
 
-        cb_pop_front(tt::CBIndex::c_0, 1);
-        cb_push_back(tt::CBIndex::c_16, 1);
+        cb0.pop_front(1);
+        cb16.push_back(1);
+#endif
 
         release_dst();
     }
 }
-}  // namespace NAMESPACE

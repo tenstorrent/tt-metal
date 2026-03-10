@@ -146,6 +146,13 @@ class RotarySetup:
         position_idxs = position_idxs.clamp_min(0)
 
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
+        max_pos = int(torch.max(position_idxs).item())
+        if max_pos >= int(self.hf_config.max_seq_len):
+            raise ValueError(
+                f"position idxs must be < max_seq_len ({self.hf_config.max_seq_len}); "
+                f"got max position {max_pos}. "
+                "Trim inputs or increase the configured max_seq_len (DeepseekGenerator MAX_SEQ_LEN)."
+            )
 
         # Add padding if needed
         pad_size = ttnn.core.roundup(position_idxs.shape[1], ttnn.TILE_SIZE) - position_idxs.shape[1]
@@ -175,7 +182,9 @@ class RotarySetup:
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
 
         if seq_len is not None:
-            assert seq_len <= self.hf_config.max_seq_len, "seq_len must be less than or equal to max_seq_len"
+            assert (
+                seq_len <= self.hf_config.max_seq_len
+            ), f"seq_len {seq_len} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
             cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
             sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
 

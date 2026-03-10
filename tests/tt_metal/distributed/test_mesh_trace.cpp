@@ -520,6 +520,37 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     mesh_device_->end_mesh_trace(0, trace_id);
 }
 
+TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
+    // Create a non-convex grid pattern by using non-contiguous device ranges
+    MeshCoordinateRange top_left_corner({0, 0}, {0, 1});      // Devices (0,0) to (0,1)
+    MeshCoordinateRange bottom_right_corner({1, 2}, {1, 3});  // Devices (1,2) to (1,3)
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        2, mesh_device_->compute_with_storage_grid_size(), 0);
+
+    auto mesh_workload = std::make_shared<MeshWorkload>();
+    mesh_workload->add_program(top_left_corner, std::move(*programs[0]));
+    mesh_workload->add_program(bottom_right_corner, std::move(*programs[1]));
+
+    // Compile workload first
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Capture trace with non-convex grid
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    mesh_device_->end_mesh_trace(0, trace_id);
+
+    // Replay trace multiple times to ensure it works correctly
+    for (int i = 0; i < 100; i++) {
+        mesh_device_->replay_mesh_trace(0, trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Cleanup
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
 // Sweep Tests on T3K and TG
 void run_heterogenous_trace_sweep(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -728,6 +759,305 @@ INSTANTIATE_TEST_SUITE_P(
                                                        {tg_full_grid()},
                                                        // Run on middle columns
                                                        {MeshCoordinateRange({0, 1}, {3, 3})}})));
+
+// Tests for dynamic trace buffer allocation (trace_region_size = 0)
+class MeshTraceDynamicAllocationTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshTraceDynamicAllocationTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = 0}) {}
+};
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
+    // Verify trace capture and replay works when trace_region_size=0 with no tensor allocations during trace
+    uint32_t num_workloads = 3;
+    uint32_t num_replays = 5;
+
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+    std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
+
+    // Create workloads before trace capture
+    for (uint32_t i = 0; i < num_workloads; i++) {
+        auto workload = std::make_shared<MeshWorkload>();
+        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+            1, mesh_device_->compute_with_storage_grid_size(), 42);
+        workload->add_program(all_devices, std::move(*programs[0]));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        mesh_workloads.push_back(workload);
+    }
+
+    // Capture trace
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    for (auto& workload : mesh_workloads) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    }
+    mesh_device_->end_mesh_trace(0, trace_id);
+
+    // Replay trace multiple times
+    for (uint32_t i = 0; i < num_replays; i++) {
+        mesh_device_->replay_mesh_trace(0, trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCapture) {
+    // Verify trace works when small allocations during capture don't overlap
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 123);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Begin trace capture
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+
+    // Allocate a small DRAM buffer during trace (simulating tensor allocation)
+    // Use a small size to ensure no overlap
+    constexpr size_t small_buffer_size = 1024 * 1024;  // 1MB
+    ReplicatedBufferConfig global_buffer_config{.size = small_buffer_size};
+    DeviceLocalBufferConfig device_local_config{
+        .page_size = small_buffer_size,
+        .buffer_type = BufferType::DRAM,
+        .bottom_up = true  // bottom_up = true (like tensor allocations)
+    };
+    auto small_buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
+
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // End trace capture (should succeed - no overlap)
+    mesh_device_->end_mesh_trace(0, trace_id);
+
+    // Deallocate buffer and replay trace
+    small_buffer.reset();
+    mesh_device_->replay_mesh_trace(0, trace_id, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
+    // Verify TT_FATAL is raised when trace buffer would overlap with allocations made during trace
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 456);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Begin trace capture - this starts high water mark tracking
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+
+    // Record many command iterations to make the trace buffer larger
+    for (uint32_t i = 0; i < 1000; i++) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    }
+
+    // Allocate as many buffers as possible DURING trace capture (bottom-up, like tensor allocations)
+    // This increases the high water mark, which should cause overlap with the trace buffer
+    std::vector<std::shared_ptr<MeshBuffer>> blocking_buffers;
+    constexpr size_t min_buffer_size = 4 * 1024;            // 4KB minimum
+    constexpr size_t max_buffer_size = 1024 * 1024 * 1024;  // 1GB max per buffer
+    size_t current_buffer_size = max_buffer_size;
+    size_t total_allocated = 0;
+
+    // Keep allocating buffers until we can't allocate even the minimum size
+    while (current_buffer_size >= min_buffer_size) {
+        try {
+            ReplicatedBufferConfig global_buffer_config{.size = current_buffer_size};
+            DeviceLocalBufferConfig device_local_config{
+                .page_size = current_buffer_size,
+                .buffer_type = BufferType::DRAM,
+                .bottom_up = true  // bottom_up = true (like tensor allocations)
+            };
+            auto buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
+            blocking_buffers.push_back(buffer);
+            total_allocated += current_buffer_size;
+            // Successfully allocated, try same size again
+        } catch (...) {
+            // Failed to allocate at this size, try smaller
+            current_buffer_size /= 2;
+        }
+    }
+
+    log_info(
+        tt::LogTest,
+        "Allocated {} buffers totaling {} bytes during trace capture",
+        blocking_buffers.size(),
+        total_allocated);
+
+    if (blocking_buffers.empty()) {
+        // Could not allocate any buffer - fail test
+        mesh_device_->end_mesh_trace(0, trace_id);
+        mesh_device_->release_mesh_trace(trace_id);
+        ASSERT_TRUE(false) << "Could not allocate any blocking buffers for overlap test";
+    }
+
+    // Delete all buffers before ending trace - high water mark should still reflect peak allocation
+    blocking_buffers.clear();
+
+    // Try to end trace - this should detect overlap between trace buffer and high water mark
+    bool overlap_detected = false;
+    try {
+        mesh_device_->end_mesh_trace(0, trace_id);
+        // If we get here, no overlap was detected
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+        if (error_msg.find("overlap") != std::string::npos || error_msg.find("high water mark") != std::string::npos) {
+            overlap_detected = true;
+        } else {
+            // Re-throw unexpected errors
+            throw;
+        }
+    }
+    ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOverlap) {
+    // Verify that top-down allocations during trace capture cause overlap detection
+    // The trace buffer itself is allocated top-down, so it will conflict with top-down allocations made during trace
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 789);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Begin trace capture - this starts high water mark tracking
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+
+    // Record many command iterations to make the trace buffer large
+    for (uint32_t i = 0; i < 1000; i++) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    }
+
+    // Allocate a large top-down DRAM buffer during trace capture
+    // This will be tracked in the high water mark
+    constexpr size_t buffer_size = 512 * 1024 * 1024;  // 512MB - large enough to likely cause overlap
+
+    ReplicatedBufferConfig global_buffer_config{.size = buffer_size};
+    DeviceLocalBufferConfig top_down_config{
+        .page_size = buffer_size,
+        .buffer_type = BufferType::DRAM,
+        .bottom_up = false  // Top-down allocation
+    };
+
+    std::shared_ptr<MeshBuffer> top_down_buffer;
+    try {
+        top_down_buffer = MeshBuffer::create(global_buffer_config, top_down_config, mesh_device_.get());
+    } catch (...) {
+        // If we can't allocate the buffer, fail the test
+        mesh_device_->end_mesh_trace(0, trace_id);
+        mesh_device_->release_mesh_trace(trace_id);
+        ASSERT_TRUE(false) << "Could not allocate large top-down buffer for overlap test";
+    }
+
+    log_info(tt::LogTest, "Allocated {} MB top-down buffer during trace", buffer_size / (1024 * 1024));
+
+    // Deallocate the buffer before ending trace
+    // The high water mark should still remember it was there
+    top_down_buffer.reset();
+
+    // Try to end trace - the trace buffer (also top-down) should overlap with where the top-down buffer was
+    bool overlap_detected = false;
+    try {
+        mesh_device_->end_mesh_trace(0, trace_id);
+        // If we get here, no overlap was detected
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+        if (error_msg.find("overlap") != std::string::npos || error_msg.find("high water mark") != std::string::npos) {
+            overlap_detected = true;
+        } else {
+            // Re-throw unexpected errors
+            throw;
+        }
+    }
+    ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with top-down allocation";
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocationsBefore) {
+    // Verify that high water mark tracks allocations made before trace capture that are deallocated during trace.
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 999);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Allocate buffers BEFORE trace capture starts
+    // These will NOT be tracked initially since tracking hasn't started yet
+    std::vector<std::shared_ptr<MeshBuffer>> pre_existing_buffers;
+    constexpr size_t min_buffer_size = 4 * 1024;            // 4KB minimum
+    constexpr size_t max_buffer_size = 1024 * 1024 * 1024;  // 1GB max per buffer
+    size_t current_buffer_size = max_buffer_size;
+    size_t total_allocated = 0;
+
+    // Allocate as many buffers as possible before trace starts
+    while (current_buffer_size >= min_buffer_size) {
+        try {
+            ReplicatedBufferConfig global_buffer_config{.size = current_buffer_size};
+            DeviceLocalBufferConfig device_local_config{
+                .page_size = current_buffer_size,
+                .buffer_type = BufferType::DRAM,
+                .bottom_up = true  // bottom_up = true (like tensor allocations)
+            };
+            auto buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
+            pre_existing_buffers.push_back(buffer);
+            total_allocated += current_buffer_size;
+            // Successfully allocated, try same size again
+        } catch (...) {
+            // Failed to allocate at this size, try smaller
+            current_buffer_size /= 2;
+        }
+    }
+
+    log_info(
+        tt::LogTest,
+        "Allocated {} buffers totaling {} bytes BEFORE trace capture",
+        pre_existing_buffers.size(),
+        total_allocated);
+
+    ASSERT_GT(total_allocated, 0);
+
+    // Begin trace capture - this starts tracking at 0
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+
+    // Record many command iterations to make the trace buffer larger
+    for (uint32_t i = 0; i < 1000; i++) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    }
+
+    // Deallocate all buffers (both pre-existing and during-trace) BEFORE ending trace
+    // The high water mark should remember the during-trace allocations
+    pre_existing_buffers.clear();
+
+    log_info(tt::LogTest, "Deallocated all buffers before ending trace");
+
+    // Try to end trace - this should detect overlap because the high water mark
+    // was set from allocations made during trace (even though they're now deallocated)
+    bool overlap_detected = false;
+    try {
+        mesh_device_->end_mesh_trace(0, trace_id);
+        // If we get here, no overlap was detected
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+        if (error_msg.find("overlap") != std::string::npos || error_msg.find("high water mark") != std::string::npos) {
+            overlap_detected = true;
+        } else {
+            // Re-throw unexpected errors
+            throw;
+        }
+    }
+    ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
+}
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

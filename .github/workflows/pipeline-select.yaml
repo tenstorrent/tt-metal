@@ -11,16 +11,6 @@ on:
           - models-mandatory
           - models-extended
         default: manual
-      build-type:
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: Release
       extra-tag:
         required: true
         type: string
@@ -45,6 +35,29 @@ on:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: Release
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 run-name: ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
@@ -90,10 +103,11 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
-      version: "22.04"
   single-card-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]

@@ -10,11 +10,11 @@
 #include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
 #include "internal/firmware_common.h"
-#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/hw_thread.h"
 #include "tdma_xmov.h"
 
 #include "api/debug/waypoint.h"
@@ -23,7 +23,7 @@
 // clang-format on
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t* const ncrisc_run = &mailboxes->subordinate_sync.dm1;
+volatile tt_l1_ptr uint8_t* const ncrisc_run = mailboxes->subordinate_sync.map;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -43,6 +43,11 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -125,7 +130,8 @@ int main(int argc, char* argv[]) {
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
+        uint32_t kernel_config_base =
+            firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, internal_::get_hw_thread_idx());
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
@@ -135,8 +141,23 @@ int main(int argc, char* argv[]) {
 #endif
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+        // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+        // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_CB_SANITIZE)
+        // Zero all CB interfaces so stale entries from previous programs
+        // don't cause false positives in the CB sanitize check.
+        for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+            get_local_cb_interface(i).fifo_size = 0;
+        }
+#endif
+        uint64_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
+        setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
+#ifdef ARCH_BLACKHOLE
+        uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
+        setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 32, local_cb_mask_upper);
+#endif
 
 #if defined(ARCH_WORMHOLE)
         l1_to_ncrisc_iram_copy_wait();

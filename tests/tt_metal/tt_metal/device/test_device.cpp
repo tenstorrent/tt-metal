@@ -41,6 +41,7 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -323,7 +324,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
             .noc = NOC::RISCV_0_default,
             .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
     ChipId mmio_device_id =
@@ -490,7 +491,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
-    IDevice* device = mesh_device->get_device(target_coord);
+    IDevice* device = mesh_device->impl().get_device(target_coord);
     EXPECT_TRUE(device->is_mmio_capable());
 
     CoreCoord logical_core(0, 0);
@@ -556,6 +557,61 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     // Compare with a std::vector copy to avoid allocator type mismatch in EXPECT_EQ
     std::vector<uint32_t> aligned_copy(aligned_buf->begin(), aligned_buf->end());
     EXPECT_EQ(src, aligned_copy);
+}
+
+// Test that slow dispatch users get full grid access (no reserved dispatch cores)
+TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_simulator_enabled()) {
+        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware.";
+    }
+
+    for (const auto& mesh_device : devices_) {
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            auto* device = mesh_device->get_device(coord[0], coord[1]);
+            auto compute_grid = device->compute_with_storage_grid_size();
+            auto logical_grid = device->logical_grid_size();
+
+            EXPECT_EQ(compute_grid.x, logical_grid.x)
+                << "Device " << device->id() << ": compute grid X (" << compute_grid.x
+                << ") != logical grid X (" << logical_grid.x << ")";
+            EXPECT_EQ(compute_grid.y, logical_grid.y)
+                << "Device " << device->id() << ": compute grid Y (" << compute_grid.y
+                << ") != logical grid Y (" << logical_grid.y << ")";
+
+            log_info(
+                tt::LogTest,
+                "Device {}: compute_grid={}x{}, logical_grid={}x{} - FULL GRID ACCESS ✓",
+                device->id(),
+                compute_grid.x,
+                compute_grid.y,
+                logical_grid.x,
+                logical_grid.y);
+        }
+
+        // Validate that buffers can be created and used with the full grid
+        uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+        const uint32_t num_tiles = 128;
+
+        distributed::DeviceLocalBufferConfig buffer_config{
+            .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
+        distributed::ReplicatedBufferConfig global_config{.size = num_tiles * single_tile_size};
+        auto mesh_buffer = distributed::MeshBuffer::create(global_config, buffer_config, mesh_device.get());
+
+        std::vector<uint32_t> src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
+        std::iota(src_vec.begin(), src_vec.end(), 42);
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, src_vec);
+        Finish(mesh_device->mesh_command_queue());
+
+        std::vector<uint32_t> dst_vec = {};
+        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
+        EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
+    }
 }
 
 }  // namespace tt::tt_metal

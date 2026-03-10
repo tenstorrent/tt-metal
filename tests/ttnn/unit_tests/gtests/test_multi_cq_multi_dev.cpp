@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cstring>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/event.hpp>
 #include <map>
 #include <memory>
 #include <optional>
@@ -15,24 +15,21 @@
 #include <vector>
 
 #include "common_test_utils.hpp"
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -69,7 +66,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
 
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
                 ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-                auto input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
+                auto input_tensor = create_device_tensor(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(0),
@@ -122,13 +119,14 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                 for (uint32_t j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
+
                 // Pre-compute expected output: input goes through dispatch_ops_to_device which applies -32x + 128
                 float expected_val = (-1 * (i + dev_idx) * 32) + 128;
                 for (uint32_t j = 0; j < buf_size_datums; j++) {
                     expected_data[j] = bfloat16(expected_val);
                 }
 
-                auto input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
+                auto input_tensor = create_device_tensor(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),
@@ -184,7 +182,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 }
 
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
-                auto input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
+                auto input_tensor = create_device_tensor(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),

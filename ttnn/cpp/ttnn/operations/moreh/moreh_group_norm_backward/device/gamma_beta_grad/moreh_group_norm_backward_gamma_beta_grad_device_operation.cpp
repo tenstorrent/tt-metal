@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -56,18 +57,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-MorehGroupNormBackwardGammaBetaGradOperation::program_factory_t
-MorehGroupNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return MorehGroupNormBackwardGammaBetaGradFactory();
-}
-
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-}
-
-void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }

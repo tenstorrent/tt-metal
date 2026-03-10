@@ -35,7 +35,9 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.2-11B     | T3K         | 90        | 98        | 62.7          | 47        |
 | Llama-3.2-11B     | TG          | 87        | 97        | 29.5          |           |
 | Llama-3.1-70B     | T3K         | 96        | 100       | 16.6          | 164       |
+| Llama-3.3-70B     | T3K         | 96        | 100       | 16.6          | 164       |
 | Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
+| Llama-3.3-70B     | TG          | 95        | 100       | 12.7          |           |
 | Llama-3.1-70B     | TG   (DP=4) |           |           | 14.8          | 189       |
 | Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5535      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
@@ -52,7 +54,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
 | Phi-4 | N300 | 97 | 100 | 37.34 | 123.33 |
 | Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
-
+| Ministral-8B      | N300        | 93        | 98        | 22.15         | 79.3      |
 
 ## Accuracy
 
@@ -94,6 +96,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
 | Phi-4 | N300 | 99 | 100 | 20.48 | 146.32 |
 | Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+| Ministral-8B      | N300        | 97        | 100       | 19.95         | 93.22     |
 
 ##  Long-context (64K Tokens)
 

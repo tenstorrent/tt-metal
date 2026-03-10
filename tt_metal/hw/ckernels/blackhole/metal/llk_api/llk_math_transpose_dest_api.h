@@ -9,6 +9,8 @@
 
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void llk_math_transpose_dest(uint dst_index) {
+    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+
     _llk_math_transpose_dest_<DST_ACCUM_MODE, transpose_of_faces, is_32bit>(dst_index);
 }
 

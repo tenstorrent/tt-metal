@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "index_fill.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
 
 namespace ttnn::operations::index_fill {

@@ -18,9 +18,10 @@
 #include "common/core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
@@ -54,7 +55,7 @@ inline std::string get_core_descriptor_file(
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
-        if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid
+        if (grid_size.y <= 2 || grid_size.x <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
     }
@@ -73,12 +74,13 @@ inline std::string get_core_descriptor_file(
             tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
         bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
 
+        auto core_type = get_core_type_from_config(dispatch_core_config);
         switch (arch) {
             default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0:
-                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                if (core_type == CoreType::ETH) {
                     return core_desc_dir + "wormhole_b0_80_arch_eth_dispatch.yaml";
                 } else if (use_fabric_tensix) {
                     return core_desc_dir + "wormhole_b0_80_arch_fabric_mux.yaml";
@@ -86,14 +88,14 @@ inline std::string get_core_descriptor_file(
                     return core_desc_dir + "wormhole_b0_80_arch.yaml";
                 }
             case tt::ARCH::BLACKHOLE:
-                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                if (core_type == CoreType::ETH) {
                     return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
                 } else if (use_fabric_tensix) {
                     return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
         };
     }
     return "";
@@ -101,14 +103,16 @@ inline std::string get_core_descriptor_file(
 
 const core_descriptor_t& get_core_descriptor_config(
     ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    // {arch : {product : {dispatch core axis: {fabric tensix config: {num hardware command queues : config}}}}}
+    // {arch : {product : {dispatch core axis: {fabric tensix config: {num_hw_cqs : {fast_dispatch : config}}}}}}
     static std::unordered_map<
         ARCH,
         std::unordered_map<
             std::string,
             std::unordered_map<
                 tt_metal::DispatchCoreConfig,
-                std::unordered_map<tt_fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
+                std::unordered_map<
+                    tt_fabric::FabricTensixConfig,
+                    std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>>>>>
         config_by_arch;
 
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
@@ -136,10 +140,11 @@ const core_descriptor_t& get_core_descriptor_config(
 
     tt_fabric::FabricTensixConfig fabric_tensix_config =
         tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
+    bool fast_dispatch = tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
-    if (config_by_num_cqs.contains(num_hw_cqs)) {
-        return config_by_num_cqs.at(num_hw_cqs);
+    if (config_by_num_cqs[num_hw_cqs].contains(fast_dispatch)) {
+        return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
     }
 
     YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_config));
@@ -192,9 +197,25 @@ const core_descriptor_t& get_core_descriptor_config(
             compute_with_storage_end[0].as<std::string>(),
             compute_with_storage_end[1].as<std::string>());
     }
-    CoreCoord compute_grid_size(
-        (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
-        (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
+    size_t end_x = compute_with_storage_end[0].as<size_t>();
+    size_t end_y = compute_with_storage_end[1].as<size_t>();
+    size_t start_x = compute_with_storage_start[0].as<size_t>();
+    size_t start_y = compute_with_storage_start[1].as<size_t>();
+
+    CoreCoord compute_grid_size;
+    // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
+    if (!fast_dispatch && !tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        compute_grid_size =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(
+                CoreType::TENSIX);
+        log_info(
+            tt::LogDevice,
+            "Slow dispatch mode: Using full logical grid ({}, {})",
+            compute_grid_size.x,
+            compute_grid_size.y);
+    } else {
+        compute_grid_size = CoreCoord((end_x - start_x) + 1, (end_y - start_y) + 1);
+    }
 
     std::vector<RelativeCoreCoord> compute_cores;
     for (auto x = 0; x < compute_grid_size.x; x++) {
@@ -212,15 +233,19 @@ const core_descriptor_t& get_core_descriptor_config(
 
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    auto logical_active_eth_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+    // For mock devices, control plane doesn't exist, use empty set
+    std::unordered_set<CoreCoord> logical_active_eth_cores;
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        logical_active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+    }
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
             // Logical coord
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
-            if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+            if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
                 auto logical_coord = get_core_coord_from_relative(coord, grid_size);
                 if (logical_active_eth_cores.contains(logical_coord)) {
                     continue;
@@ -258,12 +283,15 @@ const core_descriptor_t& get_core_descriptor_config(
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
     std::vector<CoreCoord> logical_dispatch_cores;
-    logical_dispatch_cores.reserve(dispatch_cores.size());
-    std::transform(
-        dispatch_cores.cbegin(),
-        dispatch_cores.cend(),
-        std::back_inserter(logical_dispatch_cores),
-        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    // In slow dispatch mode, no cores are reserved for dispatch
+    if (fast_dispatch) {
+        logical_dispatch_cores.reserve(dispatch_cores.size());
+        std::transform(
+            dispatch_cores.cbegin(),
+            dispatch_cores.cend(),
+            std::back_inserter(logical_dispatch_cores),
+            [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    }
 
     // Convert fabric mux cores to logical coordinates
     std::vector<CoreCoord> logical_fabric_mux_cores;
@@ -274,18 +302,17 @@ const core_descriptor_t& get_core_descriptor_config(
         std::back_inserter(logical_fabric_mux_cores),
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
-    auto [it, _] = config_by_num_cqs.emplace(std::make_pair(
-        num_hw_cqs,
-        core_descriptor_t{
-            .compute_grid_size = compute_grid_size,
-            .relative_compute_cores = std::move(compute_cores),
-            .relative_dispatch_cores = std::move(dispatch_cores),
-            .relative_fabric_mux_cores = std::move(fabric_mux_cores),
-            .logical_compute_cores = std::move(logical_compute_cores),
-            .logical_dispatch_cores = std::move(logical_dispatch_cores),
-            .logical_fabric_mux_cores = std::move(logical_fabric_mux_cores),
-        }));
-    return it->second;
+    core_descriptor_t config{
+        .compute_grid_size = compute_grid_size,
+        .relative_compute_cores = std::move(compute_cores),
+        .relative_dispatch_cores = std::move(dispatch_cores),
+        .relative_fabric_mux_cores = std::move(fabric_mux_cores),
+        .logical_compute_cores = std::move(logical_compute_cores),
+        .logical_dispatch_cores = std::move(logical_dispatch_cores),
+        .logical_fabric_mux_cores = std::move(logical_fabric_mux_cores),
+    };
+    config_by_num_cqs[num_hw_cqs][fast_dispatch] = std::move(config);
+    return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
 }
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
@@ -293,7 +320,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     // Get logical compute grid dimensions and num workers
     static std::unordered_map<uint32_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
     // Unique hash generated based on the config that's being queried
-    uint32_t config_hash = ((uint8_t)(dispatch_core_config.get_core_type())) |
+    uint32_t config_hash = ((uint8_t)(get_core_type_from_config(dispatch_core_config))) |
                            ((uint8_t)(dispatch_core_config.get_dispatch_core_axis()) << 4) | (num_hw_cqs << 8) |
                            (device_id << 16);
     if (!physical_grid_config_cache.contains(config_hash)) {

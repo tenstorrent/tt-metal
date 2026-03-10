@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -36,6 +35,18 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture for nlp_concat_heads operation.
+    Using explicit DispatchCoreConfig to handle sharded memory configs.
+    """
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -45,6 +56,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
@@ -58,10 +70,9 @@ def run(
     )(shape)
 
     # nlp_concat_heads concatenates heads: [B, H, S, D] -> [B, 1, S, H*D]
-    # So we need to compute the expected output shape
+    # Compute the expected output and reshape
     if len(shape) == 4:
         batch, num_heads, seq_len, head_dim = shape
-        expected_output_shape = (batch, 1, seq_len, num_heads * head_dim)
         # Reshape input to match expected output for comparison
         torch_output_tensor = (
             torch_input_tensor_a.permute(0, 2, 1, 3)

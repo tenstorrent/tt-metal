@@ -267,6 +267,31 @@ def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
 
 
+def _golden_function_xielu(x, *args, alpha_p=0.8, alpha_n=0.8, **kwargs):
+    # xIELU (Expanded Integral of the Exponential Linear Unit)
+    # A Custom piecewise trainable activation function from "Deriving Activation Functions Using Integration" paper (https://arxiv.org/abs/2411.13010)
+
+    # With beta = 0.5 and eps = -1e-6:
+    #      x > 0 :  alpha_p * x^2 + beta * x
+    #      x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+    import torch
+
+    dtype = x.dtype
+    if dtype == torch.bfloat16:
+        # Compute the golden reference in float32 and convert to bf16 only once after evaluation for a more reliable comparison.
+        x = x.to(torch.float32)
+    beta = 0.5
+    eps = -1e-6
+    pos_part = alpha_p * x * x + beta * x
+    x_clipped = torch.minimum(x, torch.full_like(x, eps))
+    neg_part = alpha_n * torch.expm1(x_clipped) - alpha_n * x + beta * x
+    out = torch.where(x > 0, pos_part, neg_part)
+    return out.to(dtype)
+
+
+ttnn.attach_golden_function(ttnn.xielu, golden_function=_golden_function_xielu)
+
+
 def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
     import torch
 
@@ -763,10 +788,10 @@ def _golden_function_frac(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 
-def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwargs):
+def _golden_function_rdiv(input_tensor_a, value, *args, rounding_mode=None, **kwargs):
     import torch
 
-    return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=round_mode)
+    return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=rounding_mode)
 
 
 ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
@@ -781,5 +806,7 @@ def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
+
+SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 
 __all__ = []

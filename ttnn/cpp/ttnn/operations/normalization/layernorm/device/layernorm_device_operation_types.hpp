@@ -9,11 +9,12 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "layernorm_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct LayerNormParams {
     LayerNormType norm_type = LayerNormType::LAYERNORM;
     DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED;
     float eps = 0.0f;
@@ -21,18 +22,16 @@ struct operation_attributes_t {
     LayerNormProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
+    std::optional<operations::unary::UnaryWithParam> fused_activation;
 };
 
-struct tensor_args_t {
+struct LayerNormInputs {
     Tensor input;
     std::optional<Tensor> residual_input_tensor;  // b
     std::optional<Tensor> weight;                 // gamma
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
+    std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim

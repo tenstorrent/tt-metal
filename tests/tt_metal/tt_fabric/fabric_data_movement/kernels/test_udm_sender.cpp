@@ -20,9 +20,6 @@ constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(10);
 constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(11);
 
 void kernel_main() {
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     // Per-core receiver coordinates from runtime args
     uint32_t arg_index = 0;
     uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);
@@ -80,9 +77,6 @@ void kernel_main() {
         noc_async_writes_flushed();
         target_address += packet_payload_size_bytes;
     }
-
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 

@@ -91,7 +91,7 @@ class TtSpatialCrossAttention:
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):
                 index_query_per_img = indexes[i]
-                index_query_per_img = ttnn.to_torch(index_query_per_img)
+                index_query_per_img = ttnn.to_torch(index_query_per_img).long()
                 queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
                 reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
                     j, index_query_per_img
@@ -123,7 +123,7 @@ class TtSpatialCrossAttention:
         queries = ttnn.to_torch(queries)
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
-                index_query_per_img = ttnn.to_torch(index_query_per_img)
+                index_query_per_img = ttnn.to_torch(index_query_per_img).long()
 
                 slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
         for j in range(bs):

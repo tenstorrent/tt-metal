@@ -7,8 +7,7 @@
 #include <utility>
 
 #include "device/copy_device_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
 

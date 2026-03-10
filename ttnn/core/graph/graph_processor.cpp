@@ -2,22 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_argument_serializer.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
-#include <cxxabi.h>
+#include "ttnn/tensor/tensor_utils.hpp"
+#include <boost/algorithm/string/replace.hpp>
 #include <memory>
 #include <string>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/reflection.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
 
 namespace {
+
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
@@ -26,11 +26,6 @@ std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
         case TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";
         default: return "UNKNOWN";  // Handle unexpected values
     }
-}
-
-template <class Variant>
-const std::type_info& get_type_in_var(const Variant& v) {
-    return std::visit([](auto&& x) -> decltype(auto) { return typeid(x); }, v);
 }
 
 nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
@@ -57,7 +52,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -180,7 +175,8 @@ consteval std::pair<const std::type_info&, void (*)(GraphProcessor&, const std::
     return {typeid(std::reference_wrapper<T>), &process<T, Process>};
 }
 
-void GraphProcessor::track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {
+void GraphProcessor::track_function_start(
+    std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) {
     static constexpr std::array begin_function_any_map = {
         make_process<std::vector<Tensor>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::begin_function_process>(),
@@ -205,7 +201,12 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     };
 
     std::vector<std::string> serialized_arguments;
-    serialized_arguments = GraphArgumentSerializer::instance().to_list(input_parameters);
+    serialized_arguments.reserve(input_parameters.size());
+    for (const auto& arg : input_parameters) {
+        auto str = arg.to_string_fn(arg.value);
+        boost::algorithm::replace_all(str, "__1::", "");
+        serialized_arguments.push_back(std::move(str));
+    }
 
     node_id counter = graph.size();
     // Track stacking level: current stack depth (before pushing this operation)
@@ -227,14 +228,16 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         current_op_id.push(counter);
     }
 
-    for (auto& any : input_parameters) {
-        const auto* const it = std::ranges::find(
-            begin_function_any_map, any.type(), [](const auto& pair) -> const auto& { return pair.first; });
+    for (auto& tracked_arg : input_parameters) {
+        const auto* const it =
+            std::ranges::find(begin_function_any_map, tracked_arg.value.type(), [](const auto& pair) -> const auto& {
+                return pair.first;
+            });
 
         if (it != begin_function_any_map.end()) {
-            it->second(*this, any);
+            it->second(*this, tracked_arg.value);
         } else {
-            log_debug(tt::LogAlways, "input any type name ignored: {}", graph_demangle(any.type().name()));
+            log_debug(tt::LogAlways, "input any type name ignored: {}", tracked_arg.value.type().name());
         }
     }
 
@@ -286,30 +289,26 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     if (it != end_function_any_map.end()) {
         it->second(*this, output_tensors);
     } else {
-        log_debug(tt::LogAlways, "output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
+        log_debug(tt::LogAlways, "output any type name ignored: {}", output_tensors.type().name());
     }
     TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
-    const auto& storage = t.storage();
-    tt::tt_metal::Buffer* buffer = std::visit(
-        [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-                    // It has an ID different from the "backing" buffer that was used to perform the allocation.
-                    // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-                    // buffer.
-                    return storage.mesh_buffer->get_backing_buffer();
-                } else {
-                    return t.buffer();
-                }
-            }
-            return nullptr;
-        },
-        storage);
+    tt::tt_metal::Buffer* buffer = nullptr;
+    if (is_device_tensor(t)) {
+        const auto& storage = t.device_storage();
+        if (storage.mesh_buffer) {
+            // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
+            // It has an ID different from the "backing" buffer that was used to perform the allocation.
+            // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
+            // buffer.
+            buffer = storage.mesh_buffer->get_backing_buffer();
+        } else {
+            buffer = t.buffer();
+        }
+    }
 
     // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
     std::uint64_t tensor_id = t.tensor_id;
@@ -342,10 +341,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     if (buffer == nullptr) {
-        log_debug(
-            tt::LogAlways,
-            "Tensor doesn't have buffer, but storage is {}",
-            graph_demangle(get_type_in_var(t.storage()).name()));
+        log_debug(tt::LogAlways, "Tensor doesn't have buffer, but storage is {}", t.storage_type());
     } else {
         node_id buffer_node_id = add_buffer(buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
@@ -476,17 +472,19 @@ nlohmann::json GraphProcessor::end_graph_capture() {
     return res;
 }
 
-bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
+    return do_block;
+}
 
-bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
     return do_block;
 }
 

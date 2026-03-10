@@ -142,11 +142,11 @@ check_linker_flag(
     LINKER_SUPPORTS_COMPRESS_ZLIB
 )
 
-if(COMPILER_SUPPORTS_GZ_ZSTD AND LINKER_SUPPORTS_COMPRESS_ZSTD)
-    message(STATUS "Using zstd compressed debug sections")
-    add_compile_options(-gz=zstd)
-    add_link_options(-Wl,--compress-debug-sections=zstd)
-elseif(COMPILER_SUPPORTS_GZ AND LINKER_SUPPORTS_COMPRESS_ZLIB)
+#if(COMPILER_SUPPORTS_GZ_ZSTD AND LINKER_SUPPORTS_COMPRESS_ZSTD)
+#    message(STATUS "Using zstd compressed debug sections")
+#    add_compile_options(-gz=zstd)
+#    add_link_options(-Wl,--compress-debug-sections=zstd)
+if(COMPILER_SUPPORTS_GZ AND LINKER_SUPPORTS_COMPRESS_ZLIB)
     message(STATUS "Using zlib compressed debug sections")
     add_compile_options(-gz)
     add_link_options(-Wl,--compress-debug-sections=zlib)
@@ -203,7 +203,19 @@ endif()
 #===============================================================================
 # LINKER MISC CONFIGURATION
 #===============================================================================
-add_link_options($<$<CONFIG:Debug,RelWithDebInfo>:-Wl,--gdb-index>)
+# Check if linker supports --gdb-index for faster debugging
+check_linker_flag(
+    CXX
+    "-Wl,--gdb-index"
+    LINKER_SUPPORTS_GDB_INDEX
+)
+
+if(LINKER_SUPPORTS_GDB_INDEX)
+    message(STATUS "Linker supports --gdb-index, enabling for Debug builds")
+    add_link_options($<$<CONFIG:Debug,RelWithDebInfo>:-Wl,--gdb-index>)
+else()
+    message(STATUS "Linker does not support --gdb-index, skipping")
+endif()
 
 #===============================================================================
 # LTO (LINK TIME OPTIMIZATION) CONFIGURATION
@@ -241,14 +253,16 @@ if(TT_ENABLE_LTO)
 
         if(COMPILER_SUPPORTS_FAT_LTO_OBJECTS AND LINKER_SUPPORTS_FAT_LTO_OBJECTS)
             message(STATUS "Using fat LTO objects")
-            add_compile_options(-ffat-lto-objects)
-            add_link_options(-ffat-lto-objects)
+            add_compile_options($<$<CONFIG:Release,RelWithDebInfo>:-ffat-lto-objects>)
+            add_link_options($<$<CONFIG:Release,RelWithDebInfo>:-ffat-lto-objects>)
         endif()
 
+        # For Release builds, enable more aggressive deduplication
         add_compile_options(
             $<$<CONFIG:Release>:-ffunction-sections>
             $<$<CONFIG:Release>:-fdata-sections>
         )
+
         add_link_options(
             $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:Clang>>:-Wl,--icf=safe>
             $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:Clang>>:-Wl,--ignore-data-address-equality>
@@ -263,29 +277,39 @@ if(TT_ENABLE_LTO)
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-Wlto-type-mismatch>
         )
 
-        # Ensure all thinLTO jobs are passed to the linker in bulk
-        # Mold won't properly parallelize thinLTO without this
-        add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-jobs=all>)
+        set(LTO_CACHE_DIR "${CMAKE_BINARY_DIR}/lto-cache")
+        file(MAKE_DIRECTORY "${LTO_CACHE_DIR}")
+        set(LTO_CACHE_MAX_FILES 10000)
 
-        # Set up LTO cache for faster incremental builds
-        # Single Release build results in ~250M cache, RelWithDebInfo ~1.7G
-        add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache>)
-
-        # Limit LTO cache size to the least of 2GB, 10% disk space, or 10000 files
-        # Default pruning happens every 20 minutes
+        # Clang thinLTO config
+        add_compile_options($<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-fforce-emit-vtables>)
         add_link_options(
-            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=10000>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-fwhole-program-vtables>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-jobs=all>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-cache-dir=${LTO_CACHE_DIR}>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=${LTO_CACHE_MAX_FILES}>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,-plugin-opt=-import-instr-limit=40>
         )
 
-        # Mozilla recommendation for non-PGO builds (default is 100)
-        # PGO builds can use 5-10. Reduces excessive inlining bloat
-        add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,-plugin-opt=-import-instr-limit=40>)
+        # GCC LTO Config
+        # Break up LTO units by file to reduce bottlenecking, add LTO cache, add more aggressive devirtualization
+        add_compile_options(
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-partition=1to1>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fuse-linker-plugin>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental=${LTO_CACHE_DIR}>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental-cache-size=${LTO_CACHE_MAX_FILES}>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-speculatively>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-at-ltrans>
+        )
 
-        # Enable virtual constant propagation and aggressive vtable optimizations
-        # Adds some link time but still faster than -flto=full
-        # FIXME: -fforce-emit-vtables doesn't play nice with AnyIterator for some reason
-        # add_compile_options($<$<CXX_COMPILER_ID:Clang>:-fforce-emit-vtables>)
-        add_link_options($<$<CXX_COMPILER_ID:Clang>:-fwhole-program-vtables>)
+        add_link_options(
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-partition=1to1>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fuse-linker-plugin>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental=${LTO_CACHE_DIR}>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental-cache-size=${LTO_CACHE_MAX_FILES}>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-speculatively>
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-at-ltrans>
+        )
     else()
         message(WARNING "LTO/IPO is not supported: ${lto_check_output}")
     endif()

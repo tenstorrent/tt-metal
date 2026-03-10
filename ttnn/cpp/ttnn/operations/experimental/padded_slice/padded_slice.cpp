@@ -5,7 +5,6 @@
 #include "device/padded_slice_device_operation.hpp"
 #include <array>
 #include <cstdint>
-#include <tt-logger/tt-logger.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -25,7 +24,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     tt::stl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
+    const std::optional<float>& /*pad_value*/) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
