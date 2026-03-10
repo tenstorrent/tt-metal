@@ -1073,6 +1073,7 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_workers_per_link=1,
+            use_broadcast=1,
         )
         wq_kv_a_r_config = {
             "dims": [1],
