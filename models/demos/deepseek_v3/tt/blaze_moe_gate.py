@@ -150,6 +150,7 @@ class BlazeMoeGate(AbstractModule):
         ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
         ttnn_input_indices = ttnn.reshape(ttnn_input_indices, (1, 16, 16))
         ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
+        ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
         return {
             "gate_routing": {
                 "ttnn_output_tensor": ttnn_output_tensor,
