@@ -37,6 +37,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                     - When using sharded input tensors, :func:`ttnn.determine_expected_group_norm_sharded_config_and_grid_size` can provide the appropriate memory configuration and grid size.
                     - When using interleaved (DRAM) input tensors, :func:`ttnn.determine_expected_group_norm_dram_grid_size` can provide the appropriate grid size.
                     - :func:`ttnn.dram_group_norm_params_from_torch` is a convenience function that prepares the weight, bias, and input mask from PyTorch tensors for interleaved inputs.
+                    - :func:`ttnn.get_group_norm_cores_across_channel` returns the number of cores that split the channel axis for a given memory layout, grid, and shard orientation. This value must be passed consistently to :func:`ttnn.create_group_norm_input_mask` and :func:`ttnn.create_group_norm_weight_bias_rm`. For HEIGHT_SHARDED inputs this is always 1; for BLOCK_SHARDED inputs it is ``core_grid.x`` when using ROW_MAJOR shard orientation, or ``core_grid.y`` when using COL_MAJOR.
                     - :func:`ttnn.create_group_norm_input_mask` creates the appropriate input mask for a given tensor dimension and group size.
                     - :func:`ttnn.create_group_norm_weight_bias_rm` converts the weight and bias tensors into appropriately padded and tiled inputs
 

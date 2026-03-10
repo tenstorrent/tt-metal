@@ -426,6 +426,7 @@ from ttnn.operations.normalization import (
     create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     determine_expected_group_norm_dram_grid_size,
+    get_group_norm_cores_across_channel,
     dram_group_norm_params_from_torch,
     layernorm_default_compute_config,
     rmsnorm_default_compute_config,

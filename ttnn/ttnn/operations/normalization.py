@@ -238,8 +238,10 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
         num_cores_channels = device_grid_size[1]
         # num_channels_tiles = num_channels // 16
         num_channels_tiles = num_channels // 8
-        while (num_channels_tiles % num_cores_channels != 0) or (
-            ((num_channels // num_cores_channels) % group_size) != 0
+        while (
+            (num_channels_tiles % num_cores_channels != 0)
+            or ((num_channels // num_cores_channels) % group_size != 0)
+            or (num_channels // num_cores_channels < 32)
         ):
             num_cores_channels -= 1
             assert num_cores_channels > 0
@@ -495,12 +497,18 @@ def create_group_norm_reciprocals(N, C, H, W, num_groups, core_grid):
     return create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid)
 
 
-def get_group_norm_cores_across_channel(memory_layout, core_grid):
+def get_group_norm_cores_across_channel(memory_layout, core_grid, shard_orientation=None):
     """Compute effective cores that split the channel axis.
-    Used to reshape gamma/beta per-core views in the golden code.
+
+    For BLOCK_SHARDED, the channel axis lives in grid.y (COL_MAJOR)
+    or grid.x (ROW_MAJOR).  When *shard_orientation* is not supplied
+    the legacy COL_MAJOR behaviour is assumed.
     """
     if memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
-        num_cores_across_channel = core_grid.y
+        if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+            num_cores_across_channel = core_grid.x
+        else:
+            num_cores_across_channel = core_grid.y
     elif memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
         num_cores_across_channel = 1
     else:
@@ -524,7 +532,10 @@ def _golden_function(
     import torch
 
     num_channels = input_tensor.shape[-1]
-    num_cores_across_channel = get_group_norm_cores_across_channel(memory_config.memory_layout, core_grid)
+    shard_orientation = getattr(memory_config.shard_spec, "orientation", None) if memory_config.shard_spec else None
+    num_cores_across_channel = get_group_norm_cores_across_channel(
+        memory_config.memory_layout, core_grid, shard_orientation
+    )
     weight = weight.reshape((num_cores_across_channel, -1))
     weight = weight[:, : num_channels // num_cores_across_channel].flatten()
     if bias is not None:

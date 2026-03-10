@@ -59,10 +59,18 @@ def test_group_norm(device):
     # As a result, the input_mask_tensor would be a [1, 4, 32, 32] tensor that selects either the first or second half of the tile
     # e.g. The mask at [0][0][:][:] would be a 32x32 tensor where the left half is 1 and the right half is 0
     # While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1
+    # Determine how many cores split the channel dimension.
+    # For height sharding this is always 1; for block sharding it depends on the shard orientation.
+    num_cores_across_channel = get_group_norm_cores_across_channel(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        grid_size,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
     input_mask_tensor = ttnn.create_group_norm_input_mask(
         num_channel=C,
         num_groups=num_groups,
-        num_cores_across_channel=1,  # As explained in the Limitations, supply 1 for height sharded input tensors
+        num_cores_across_channel=num_cores_across_channel,
         data_type=ttnn.bfloat8_b,
     )
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
@@ -70,10 +78,12 @@ def test_group_norm(device):
     # Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing
     # First they will zero padded if needed (does not apply to this example)
     # Then reshaped to be [1, 1, tiles_per_core_total, 32], which in this case will be [1, 1, 2, 32]
-
-    # As with the input mask, we supply a core count of 1 for height sharded input tensors
-    gamma = ttnn.create_group_norm_weight_bias_rm(input_tensor=torch_weight, num_channels=C, num_cores_x=1)
-    beta = ttnn.create_group_norm_weight_bias_rm(input_tensor=torch_bias, num_channels=C, num_cores_x=1)
+    gamma = ttnn.create_group_norm_weight_bias_rm(
+        input_tensor=torch_weight, num_channels=C, num_cores_x=num_cores_across_channel
+    )
+    beta = ttnn.create_group_norm_weight_bias_rm(
+        input_tensor=torch_bias, num_channels=C, num_cores_x=num_cores_across_channel
+    )
 
     gamma_t = ttnn.from_torch(
         gamma,
