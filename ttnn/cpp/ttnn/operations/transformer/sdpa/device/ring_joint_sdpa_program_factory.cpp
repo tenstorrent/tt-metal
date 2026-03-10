@@ -5,6 +5,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -291,6 +292,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
+    TT_FATAL(
+        Sq_chunk_t % qk_out_subblock_h == 0,
+        "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
+        Sq_chunk_t,
+        qk_out_subblock_h);
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
@@ -373,7 +379,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size};
+        args.all_gather_operation_attributes.ring_size,
+        qk_out_subblock_h};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -392,9 +399,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
+    const auto sem_args_offset = reader_compile_time_args.size();
     reader_compile_time_args.push_back(sender_semaphore_id);
     reader_compile_time_args.push_back(receiver_semaphore_id);
     reader_compile_time_args.push_back(valid_semaphore_id);
+    reader_compile_time_args.push_back(0);  // mcast_enabled placeholder (patched after chain construction)
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -482,28 +491,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
-
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
-
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    // NOTE: CreateKernel calls are deferred until after chain construction so that
+    // the mcast_enabled compile-time arg can be determined first.
 
     // Create circular buffers
 
@@ -688,6 +677,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
+        bool use_mcast = false;
+        uint32_t mcast_num_dests = 0;
+        uint32_t mcast_sender_wait = 0;
     };
 
     std::vector<CoreWork> core_work(num_cores);
@@ -754,7 +746,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         next_global_chunk += chunk_count;
     }
 
-    // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
+    // Construct chains: for each head that spans >= 2 cores, pick first core
+    // with single head segment as injector. Linear forward traversal only —
+    // no wrap-around (wrapping back would pull in straddling cores whose
+    // q_iter_local is inflated by prior-head work, causing deadlock).
+    // Injector reselection for DRAM channel spreading is deferred to the
+    // mcast eligibility pass below.
     for (auto& segments : head_segments) {
         if (segments.size() < 2) {
             continue;
@@ -809,6 +806,233 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             }
         }
     }
+
+    // Third pass: Check multicast eligibility and configure mcast for eligible chains
+    uint32_t mcast_chains = 0;
+    {
+        struct McastCandidate {
+            std::vector<uint32_t> core_indices;
+            uint32_t ref_q_chunks;
+        };
+        std::vector<McastCandidate> candidates;
+        bool all_eligible = true;
+
+        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+            const auto& segments = head_segments[head_id];
+            if (segments.size() < 2) {
+                continue;
+            }
+
+            std::vector<uint32_t> chain_core_indices;
+            for (const auto& seg : segments) {
+                if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
+                    core_chain_info[seg.core_idx].batch == (head_id / NH) &&
+                    core_chain_info[seg.core_idx].head == (head_id % NH)) {
+                    chain_core_indices.push_back(seg.core_idx);
+                }
+            }
+
+            if (chain_core_indices.size() < 2) {
+                continue;
+            }
+
+            // Eligibility condition 1: All physical cores share the same Y coordinate
+            const uint32_t ref_y = core_work[chain_core_indices[0]].physical_core.y;
+            bool same_row = true;
+            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+                if (core_work[chain_core_indices[ci]].physical_core.y != ref_y) {
+                    same_row = false;
+                    break;
+                }
+            }
+
+            if (!same_row) {
+                all_eligible = false;
+                log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
+                break;
+            }
+
+            // Eligibility condition 2: no non-chain worker cores inside the mcast rectangle.
+            uint32_t min_x = core_work[chain_core_indices[0]].physical_core.x;
+            uint32_t max_x = min_x;
+            for (const auto& ci : chain_core_indices) {
+                uint32_t x = core_work[ci].physical_core.x;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+            }
+
+            bool has_gap = false;
+            for (uint32_t ci = 0; ci < num_cores; ++ci) {
+                const auto& phys = core_work[ci].physical_core;
+                if (phys.y == ref_y && phys.x >= min_x && phys.x <= max_x) {
+                    bool in_chain = false;
+                    for (const auto& chain_ci : chain_core_indices) {
+                        if (chain_ci == ci) {
+                            in_chain = true;
+                            break;
+                        }
+                    }
+                    if (!in_chain) {
+                        has_gap = true;
+                        break;
+                    }
+                }
+            }
+
+            if (has_gap) {
+                all_eligible = false;
+                log_debug(
+                    tt::LogOp, "Head {}: mcast ineligible - non-chain worker core inside mcast rectangle", head_id);
+                break;
+            }
+
+            // Eligibility condition 3: All chain cores must have the same q_chunk_count.
+            const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
+            bool uniform_q_mcast = true;
+            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+                if (core_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
+                    uniform_q_mcast = false;
+                    break;
+                }
+            }
+
+            if (!uniform_q_mcast) {
+                all_eligible = false;
+                log_debug(tt::LogOp, "Head {}: mcast ineligible - mixed q_chunk_counts", head_id);
+                break;
+            }
+
+            candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
+        }
+
+        if (all_eligible && !candidates.empty()) {
+            mcast_chains = candidates.size();
+            // Track injector physical X columns for DRAM channel spreading
+            std::vector<uint32_t> injector_phys_x;
+            for (const auto& cand : candidates) {
+                const uint32_t chain_size = cand.core_indices.size();
+                const uint32_t num_receivers = chain_size - 1;
+
+                // Find current injector
+                uint32_t injector_idx = cand.core_indices[0];
+                for (const auto& ci : cand.core_indices) {
+                    if (core_chain_info[ci].is_injector) {
+                        injector_idx = ci;
+                        break;
+                    }
+                }
+
+                // Reselect injector for DRAM channel spreading: pick the core
+                // whose physical X is furthest from all previously chosen injectors.
+                {
+                    uint32_t best_idx = injector_idx;
+                    uint32_t best_dist = 0;
+                    for (const auto& ci : cand.core_indices) {
+                        const uint32_t phys_x = core_work[ci].physical_core.x;
+                        uint32_t min_dist = UINT32_MAX;
+                        for (uint32_t ix : injector_phys_x) {
+                            uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
+                            min_dist = std::min(min_dist, d);
+                        }
+                        if (min_dist > best_dist) {
+                            best_dist = min_dist;
+                            best_idx = ci;
+                        }
+                    }
+                    if (best_idx != injector_idx) {
+                        // Clear old injector, set new one
+                        core_chain_info[injector_idx].is_injector = false;
+                        core_chain_info[injector_idx].is_sink = true;
+                        core_chain_info[best_idx].is_injector = true;
+                        core_chain_info[best_idx].is_sink = false;
+                        injector_idx = best_idx;
+                    }
+                }
+                injector_phys_x.push_back(core_work[injector_idx].physical_core.x);
+
+                uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
+                uint32_t max_x = min_x;
+                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
+                    uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
+                    min_x = std::min(min_x, x);
+                    max_x = std::max(max_x, x);
+                }
+                const uint32_t injector_y = core_work[injector_idx].physical_core.y;
+                const CoreCoord rect_start = CoreCoord{min_x, injector_y};
+                const CoreCoord rect_end = CoreCoord{max_x, injector_y};
+
+                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
+                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
+                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+
+                auto& injector_chain = core_chain_info[injector_idx];
+                injector_chain.use_mcast = true;
+                injector_chain.prev_physical = rect_start;
+                injector_chain.next_physical = rect_end;
+                injector_chain.mcast_num_dests = mcast_num_dests;
+                injector_chain.mcast_sender_wait = num_receivers;
+                injector_chain.next_core_q_chunks = cand.ref_q_chunks;
+
+                for (const auto& ci : cand.core_indices) {
+                    if (ci == injector_idx) {
+                        continue;
+                    }
+                    auto& receiver_chain = core_chain_info[ci];
+                    receiver_chain.use_mcast = true;
+                    receiver_chain.prev_physical = core_work[injector_idx].physical_core;
+                    receiver_chain.next_physical = CoreCoord{0, 0};
+                    receiver_chain.next_core_q_chunks = 0;
+                    receiver_chain.is_sink = true;
+                }
+
+                log_debug(
+                    tt::LogOp,
+                    "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect "
+                    "({},{}) to ({},{})",
+                    num_receivers,
+                    injector_idx,
+                    core_work[injector_idx].physical_core.x,
+                    mcast_num_dests,
+                    rect_start.x,
+                    rect_start.y,
+                    rect_end.x,
+                    rect_end.y);
+            }
+        }
+
+        log_debug(
+            tt::LogOp,
+            "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
+            mcast_chains,
+            static_cast<uint32_t>(candidates.size()));
+    }
+
+    // Update mcast_enabled compile-time arg now that chain construction is complete
+    reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+
+    // Create kernels (deferred until after chain construction for mcast_enabled flag)
+    auto reader_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
+        core_grid,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+
+    auto writer_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
+        core_grid,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+
+    auto compute_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
+        core_grid,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -871,6 +1095,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
         reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
         reader_args.push_back(chain.next_core_q_chunks);
+        reader_args.push_back(chain.mcast_num_dests);
+        reader_args.push_back(chain.mcast_sender_wait);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
