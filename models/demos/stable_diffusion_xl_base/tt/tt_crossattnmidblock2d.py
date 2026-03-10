@@ -18,6 +18,7 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
         num_attn_heads,
         out_dim,
         debug_mode=False,
+        lora_weights_manager=None,
     ):
         super().__init__()
 
@@ -36,6 +37,7 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
                     query_dim,
                     num_attn_heads,
                     out_dim,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
 

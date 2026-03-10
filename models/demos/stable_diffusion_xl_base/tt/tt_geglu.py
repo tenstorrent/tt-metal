@@ -9,7 +9,7 @@ from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear
 
 
 class TtGEGLU(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config):
+    def __init__(self, device, state_dict, module_path, model_config, lora_weights_manager=None):
         super().__init__()
         self.device = device
 
@@ -26,8 +26,16 @@ class TtGEGLU(LightweightModule):
         w2 = w2.unsqueeze(0).unsqueeze(0)  # same
 
         ff_weights_dtype = model_config.ff_weights_dtype
-        self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, w1, b1, ff_weights_dtype)
-        self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, w2, b2, ff_weights_dtype)
+        if lora_weights_manager:
+            self.tt_weights_1, self.tt_bias_1 = lora_weights_manager.prepare_lora_linear_params(
+                device, w1, b1, ff_weights_dtype, f"{module_path}.proj.linear_1"
+            )
+            self.tt_weights_2, self.tt_bias_2 = lora_weights_manager.prepare_lora_linear_params(
+                device, w2, b2, ff_weights_dtype, f"{module_path}.proj.linear_2"
+            )
+        else:
+            self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, w1, b1, ff_weights_dtype)
+            self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, w2, b2, ff_weights_dtype)
 
         self.program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split")
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
