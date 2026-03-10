@@ -1028,23 +1028,22 @@ struct SenderKernelTrafficConfig {
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
     template <bool BENCHMARK_MODE>
-    FORCE_INLINE void send_packets_stateful (
-        SenderKernelTrafficConfig* const traffic_config,
-        tt::tt_fabric::WorkerToFabricEdmSenderImpl<false, 0>* const conn,
-        const uint32_t num_packets,
-        const uint32_t num_warmup) {
+    FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
+        ASSERT(connection_ptr_ != nullptr);
+        auto* conn = static_cast<WorkerToFabricEdmSender*>(connection_ptr_);
+
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
         // Phase 1: Warmup — send actual headers to fill all buffer slots
         const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
         for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
-            traffic_config->template send_one_packet<BENCHMARK_MODE, false>();
+            this->template send_one_packet<BENCHMARK_MODE, false>();
         }
 
         conn->setup_credit_update_noc_state();
 
         // Phase 2: Steady state — credit-only sends with stateful NOC
         for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
-            traffic_config->template send_one_packet<BENCHMARK_MODE, true>();
+            this->template send_one_packet<BENCHMARK_MODE, true>();
         }
     }
 
