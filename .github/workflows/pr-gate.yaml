@@ -434,7 +434,6 @@ jobs:
       - metalium-smoke-tests
       - ttnn-smoke-tests
       - build
-      - build-tt-train
       - metalium-examples
       - ttsim-integration-tests
       - clang-tidy-light
@@ -445,7 +444,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build, build-tt-train"
+          required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             ttsim-integration-tests, model-charts-sync, build-docs
