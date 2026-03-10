@@ -1338,6 +1338,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 debug_mtp_steps = 3
                 debug_mtp_step_idx = 0
                 mtp_step_trace = debug_mtp
+                live_accept_progress_records: list[tuple[int, int, bool]] = []
                 if use_mtp_path:
                     if self.mtp_skip_on_accept is None:
                         skip_accept_decode = os.getenv("DEEPSEEK_MTP_DISABLE_SKIP_ACCEPT", "0") != "1"
@@ -1484,6 +1485,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                             if generated_counts[i] >= max_new_tokens:
                                 continue
 
+                            generated_before = int(generated_counts[i].item())
                             next_value = int(pred_next[i].item())
                             generations[i].append(next_value)
                             step_user_tokens[i] += 1
@@ -1504,6 +1506,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                             total_verifies += 1
                             accepted = next_value == int(spec_tokens[i].item())
+                            live_accept_progress_records.append((i, generated_before - 1, accepted))
                             if use_interleaved and prompt_user_ids is not None:
                                 prompt_uid = int(prompt_user_ids[i].item())
                             else:
@@ -1761,6 +1764,45 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 accepted_committed_second_token if skip_accept_decode else 0,
                             )
                         )
+                        if debug_mtp and live_accept_progress_records:
+                            bin_size = 32
+
+                            def _summarize_live_accept_bins(
+                                records: list[tuple[int, int, bool]],
+                            ) -> list[dict[str, int | float]]:
+                                bins: dict[int, dict[str, int | float]] = {}
+                                for _prompt_idx, trajectory_step, accepted in records:
+                                    bin_idx = max(trajectory_step, 0) // bin_size
+                                    if bin_idx not in bins:
+                                        start = bin_idx * bin_size
+                                        bins[bin_idx] = {
+                                            "start": start,
+                                            "end": start + bin_size - 1,
+                                            "accepts": 0,
+                                            "total": 0,
+                                        }
+                                    bins[bin_idx]["total"] += 1
+                                    if accepted:
+                                        bins[bin_idx]["accepts"] += 1
+
+                                out: list[dict[str, int | float]] = []
+                                for bin_idx in sorted(bins):
+                                    entry = bins[bin_idx]
+                                    total = int(entry["total"])
+                                    accepts = int(entry["accepts"])
+                                    entry["rate"] = accepts / max(total, 1)
+                                    out.append(entry)
+                                return out
+
+                            overall_bins = _summarize_live_accept_bins(live_accept_progress_records)
+                            logger.info("MTP live accept bins overall: {}", overall_bins)
+
+                            prompt0_records = [record for record in live_accept_progress_records if record[0] == 0]
+                            if prompt0_records:
+                                prompt0_bins = _summarize_live_accept_bins(prompt0_records)
+                                prompt0_steps = [record[1] for record in prompt0_records]
+                                logger.info("MTP live accept bins prompt0: {}", prompt0_bins)
+                                logger.info("MTP live accept visited trajectory steps prompt0: {}", prompt0_steps)
                         if self.min_mtp_accept_rate is not None and mtp_accept_rate < self.min_mtp_accept_rate:
                             raise RuntimeError(
                                 f"MTP accept rate {mtp_accept_rate:.3f} below required minimum "
