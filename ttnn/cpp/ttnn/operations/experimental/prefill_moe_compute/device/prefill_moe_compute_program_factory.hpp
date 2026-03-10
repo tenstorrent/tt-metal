@@ -29,12 +29,11 @@ struct PrefillMoeComputeMeshFactory {
         uint32_t grid_x;
         uint32_t grid_y;
 
-        // Fabric reduce (populated only when enable_fabric_reduce is true)
-        std::optional<tt::tt_metal::KernelHandle> reduce_kernel_id;
-        std::optional<CoreCoord> reduce_core;
-
-        // Fabric dispatch (populated only when enable_fabric_dispatch is true)
-        bool fabric_dispatch_enabled = false;
+        // Fabric return (populated only when enable_fabric_return is true)
+        bool enable_fabric_return = false;
+        std::optional<tt::tt_metal::KernelHandle> return_kernel_id;
+        std::optional<tt::tt_metal::KernelHandle> recv_kernel_id;
+        std::optional<CoreCoord> return_core;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

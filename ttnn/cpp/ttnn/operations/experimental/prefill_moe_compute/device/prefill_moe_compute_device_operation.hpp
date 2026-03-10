@@ -47,16 +47,14 @@ struct PrefillMoeComputeDeviceOperation {
         uint32_t num_cores,
         uint32_t grid_x,
         uint32_t grid_y,
-        const std::optional<Tensor>& reduce_recv_buf,
-        bool enable_fabric_reduce,
-        const std::optional<Tensor>& hidden_states_rm = std::nullopt,
-        const std::optional<Tensor>& staging_buf = std::nullopt,
+        const std::optional<std::reference_wrapper<const Tensor>>& hidden_states_rm = std::nullopt,
+        const std::optional<std::reference_wrapper<const Tensor>>& staging_buf = std::nullopt,
         bool enable_fabric_dispatch = false,
         const std::vector<std::vector<uint32_t>>& dispatch_metadata = {},
-        const std::vector<uint32_t>& dispatch_target_cols = {},
-        const std::optional<std::vector<std::vector<uint32_t>>>& per_expert_dispatch_sources = std::nullopt,
-        const std::optional<std::vector<std::vector<uint32_t>>>& multi_dest_dispatch_metadata = std::nullopt,
-        bool enable_fpu_combine = false);
+        bool enable_fabric_return = false,
+        const std::vector<std::vector<uint32_t>>& return_metadata = {},
+        const std::optional<Tensor>& recv_staging_buf = std::nullopt,
+        const std::optional<Tensor>& return_metadata_tensor = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::prefill_moe_compute

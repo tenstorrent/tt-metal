@@ -20,52 +20,33 @@ struct operation_attributes_t {
     // Per-device combine routing metadata.
     // Index = linearized mesh coordinate (row-major).
     // Single device: vector of size 1.  Multi-device: one entry per device.
-    // Each inner vector is packed as:
-    //   Per expert: [out_buf_addr, M_e, token_row[0..M_e-1], weight_bf16[0..M_e-1]]
     std::vector<std::vector<uint32_t>> per_device_combine_metadata;
-    // When true, use TT-Fabric to all-reduce partial outputs across mesh devices.
-    // Requires reduce_recv_buf in tensor_args.
-    bool enable_fabric_reduce = false;
-    // When true, use TT-Fabric dispatch kernel for token exchange between devices.
-    // Requires hidden_states_rm, staging_buf, and dispatch_metadata.
+    // Fabric dispatch (optional):
     bool enable_fabric_dispatch = false;
-    // Per-device dispatch routing metadata.
-    // Each inner vector is packed as:
-    //   [local_count, recv_count, send_count, local_indices..., send_indices...]
     std::vector<std::vector<uint32_t>> dispatch_metadata;
-    // Per-device target column for fabric dispatch exchange.
-    // Index = device index. Value = target device column in mesh.
-    // When empty, defaults to immediate neighbor (forward preferred for 1x2).
-    std::vector<uint32_t> dispatch_target_cols;
-    // Per-device per-expert dispatch token sources for per-expert pkt_buf assembly.
-    // When present, overrides the default "all experts share same pkt_buf" behavior.
-    // Outer vector: per device. Inner vector: flat array of
-    //   [num_experts, M_0, source_0_0...source_0_{M0-1}, M_1, source_1_0..., ...]
-    // Each source encodes: bit 31 = is_recv (0=local hs_rm, 1=staging_buf),
-    //                       bits 0-30 = row index in that source buffer.
-    std::optional<std::vector<std::vector<uint32_t>>> per_expert_dispatch_sources;
-    // Multi-destination dispatch metadata (optional, for 1xN N>2).
-    // When present, overrides dispatch_metadata for the send portion of fabric dispatch.
-    // Each inner vector is flat: [recv_device_count, send_dest_count,
-    //   {dir, hops, offset, count, indices...}×send_dest_count]
-    // Requires per_expert_dispatch_sources to also be set.
-    std::optional<std::vector<std::vector<uint32_t>>> multi_dest_dispatch_metadata;
-    // When true, use FPU combine on compute cores instead of scalar combine on
-    // a dedicated core. ~370x faster at E=4. Requires CB3/4/5 on compute cores.
-    bool enable_fpu_combine = false;
+    // Fabric return (optional):
+    bool enable_fabric_return = false;
+    // Per-device return routing metadata.
+    // Index = linearized mesh coordinate.
+    // Each inner vector: per-expert [out_buf_addr, M_e, per-token: src_row,
+    //   dest_device, dest_token_index, weight_bf16, ...], total_expected_remote
+    std::vector<std::vector<uint32_t>> return_metadata;
 };
 
 struct tensor_args_t {
     const Tensor& hidden_states;                 // [1,1,P,D] BF16 input activation
-    const Tensor& pkt_buf;                       // [1,1,E*M,D] BF16 scratch for dispatch
-    const Tensor& inter_buf;                     // [1,1,M,D] BF16 scratch for intermediate
-    const Tensor& output;                        // [1,1,P_out,D] BF16 pre-allocated output (zero-filled)
+    const Tensor& pkt_buf;                       // [1,1,P,D] BF16 scratch for dispatch
+    const Tensor& inter_buf;                     // [1,1,P,D_FF/2] BF16 scratch for intermediate
+    const Tensor& output;                        // [1,1,P,D] BF16 pre-allocated output (zero-filled)
     const std::vector<Tensor>& gate_up_weights;  // Per-expert [1,1,D,D_FF] BFP4_b
     const std::vector<Tensor>& down_weights;     // Per-expert [1,1,D_FF/2,D] BFP4_b
-    const std::vector<Tensor>& out_bufs;         // Per-expert [1,1,P_out,D] BF16 scratch
-    std::optional<Tensor> reduce_recv_buf;       // [1,1,P,D] BF16 receive buffer for fabric reduce
-    std::optional<Tensor> hidden_states_rm;      // [1,1,P,D] BF16 ROW_MAJOR for fabric dispatch
-    std::optional<Tensor> staging_buf;           // [1,1,P,D] BF16 ROW_MAJOR fabric receive staging
+    const std::vector<Tensor>& out_bufs;         // Per-expert [1,1,P,D] BF16 scratch
+    // Fabric dispatch (optional):
+    std::optional<std::reference_wrapper<const Tensor>> hidden_states_rm;  // [1,1,P,D] BF16 ROW_MAJOR
+    std::optional<std::reference_wrapper<const Tensor>> staging_buf;       // [1,1,P,D] BF16 ROW_MAJOR
+    // Fabric return (optional):
+    std::optional<Tensor> recv_staging_buf;        // [1,1,N,D] BF16 ROW_MAJOR recv staging
+    std::optional<Tensor> return_metadata_tensor;  // [1,1,1,N*2] BF16 ROW_MAJOR (packed uint32 metadata)
 };
 
 // Output: the pre-allocated output tensor (modified in-place)

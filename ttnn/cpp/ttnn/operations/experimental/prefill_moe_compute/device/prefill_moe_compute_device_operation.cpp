@@ -18,18 +18,6 @@ void PrefillMoeComputeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_args.gate_up_weights.size() == attrs.num_experts, "gate_up_weights size must match num_experts");
     TT_FATAL(tensor_args.down_weights.size() == attrs.num_experts, "down_weights size must match num_experts");
     TT_FATAL(tensor_args.out_bufs.size() == attrs.num_experts, "out_bufs size must match num_experts");
-    TT_FATAL(!attrs.per_device_combine_metadata.empty(), "per_device_combine_metadata must have at least one entry");
-    if (attrs.enable_fabric_reduce) {
-        TT_FATAL(
-            tensor_args.reduce_recv_buf.has_value(), "reduce_recv_buf is required when enable_fabric_reduce is true");
-    }
-    if (attrs.enable_fabric_dispatch) {
-        TT_FATAL(
-            tensor_args.hidden_states_rm.has_value(),
-            "hidden_states_rm is required when enable_fabric_dispatch is true");
-        TT_FATAL(tensor_args.staging_buf.has_value(), "staging_buf is required when enable_fabric_dispatch is true");
-        TT_FATAL(!attrs.dispatch_metadata.empty(), "dispatch_metadata is required when enable_fabric_dispatch is true");
-    }
 }
 
 spec_return_value_t PrefillMoeComputeDeviceOperation::compute_output_specs(
@@ -56,16 +44,14 @@ PrefillMoeComputeDeviceOperation::invoke(
     uint32_t num_cores,
     uint32_t grid_x,
     uint32_t grid_y,
-    const std::optional<Tensor>& reduce_recv_buf,
-    bool enable_fabric_reduce,
-    const std::optional<Tensor>& hidden_states_rm,
-    const std::optional<Tensor>& staging_buf,
+    const std::optional<std::reference_wrapper<const Tensor>>& hidden_states_rm,
+    const std::optional<std::reference_wrapper<const Tensor>>& staging_buf,
     bool enable_fabric_dispatch,
     const std::vector<std::vector<uint32_t>>& dispatch_metadata,
-    const std::vector<uint32_t>& dispatch_target_cols,
-    const std::optional<std::vector<std::vector<uint32_t>>>& per_expert_dispatch_sources,
-    const std::optional<std::vector<std::vector<uint32_t>>>& multi_dest_dispatch_metadata,
-    bool enable_fpu_combine) {
+    bool enable_fabric_return,
+    const std::vector<std::vector<uint32_t>>& return_metadata,
+    const std::optional<Tensor>& recv_staging_buf,
+    const std::optional<Tensor>& return_metadata_tensor) {
     return {
         operation_attributes_t{
             num_experts,
@@ -73,13 +59,10 @@ PrefillMoeComputeDeviceOperation::invoke(
             grid_x,
             grid_y,
             per_device_combine_metadata,
-            enable_fabric_reduce,
             enable_fabric_dispatch,
             dispatch_metadata,
-            dispatch_target_cols,
-            per_expert_dispatch_sources,
-            multi_dest_dispatch_metadata,
-            enable_fpu_combine},
+            enable_fabric_return,
+            return_metadata},
         tensor_args_t{
             hidden_states,
             pkt_buf,
@@ -88,9 +71,10 @@ PrefillMoeComputeDeviceOperation::invoke(
             gate_up_weights,
             down_weights,
             out_bufs,
-            reduce_recv_buf,
             hidden_states_rm,
-            staging_buf}};
+            staging_buf,
+            recv_staging_buf,
+            return_metadata_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::prefill_moe_compute
