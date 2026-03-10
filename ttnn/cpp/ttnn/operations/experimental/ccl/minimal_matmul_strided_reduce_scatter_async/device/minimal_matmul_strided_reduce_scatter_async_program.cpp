@@ -58,6 +58,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
+    std::optional<CoreRangeSet> rs_core_grid,
     std::optional<uint32_t> mm_cores_y,
     uint32_t mm_block_ht,
     uint32_t mm_block_wt,
@@ -178,6 +179,7 @@ minimal_matmul_strided_reduce_scatter_async_program(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord reduce_scatter_core_grid_offset,
+    const std::optional<CoreRangeSet> rs_core_grid,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
 
     /* Matmul Params */
@@ -242,6 +244,7 @@ minimal_matmul_strided_reduce_scatter_async_program(
         num_workers_per_link,
         num_buffers_per_channel,
         reduce_scatter_core_grid_offset,
+        rs_core_grid,
         mm_cores_y_val,
         mm_block_ht_val,
         mm_block_wt_val,
@@ -322,6 +325,7 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.reduce_scatter_core_grid_offset,
+        attributes.rs_core_grid,
         attributes.chunk_width_in_mm_blocks,
 
         /* Matmul Params */

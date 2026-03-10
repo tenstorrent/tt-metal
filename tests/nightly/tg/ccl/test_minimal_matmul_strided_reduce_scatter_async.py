@@ -228,6 +228,25 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="bh_xlarge_9472_3456_5120_x12_y8_cwimb1_rs5",
         ),
+        # Blackhole column-based RS layout: MM uses 9x10 grid (cols 0..8, all 10 rows),
+        # RS workers placed in cols 9..11 (3 cols x 10 rows = 30 available cores).
+        # num_links=2, num_workers_per_dir=6 -> 2*2*(1+6)=28 cores used (2 idle at row 9 x=10,11).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(9, 10),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=6,
+                rs_core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(9, 0), ttnn.CoreCoord(11, 9))}),
+            ),
+            id="bh_xlarge_9472_3456_5120_x9_y10_col_rs_cwimb2_rs6",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -323,6 +342,7 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
         rs_mode=rs_mode,
         cluster_axis=cluster_axis,
+        rs_core_grid=cfg.rs_core_grid,
     )
 
 
@@ -357,17 +377,17 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     "device_params, topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": _make_fabric_router_config(8192),
-                "trace_region_size": 1531456,
-            },
-            ttnn.Topology.Ring,
-        ),
+        # (
+        #     {
+        #         "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        #         "fabric_router_config": _make_fabric_router_config(8192),
+        #         "trace_region_size": 1531456,
+        #     },
+        #     ttnn.Topology.Ring,
+        # ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_ring_8kib_payload"],
+    ids=["fabric_ring"],  # "fabric_ring_8kib_payload"],
 )
 def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
     mesh_device,

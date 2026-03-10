@@ -40,6 +40,7 @@ struct ExecuteMinimalMatmulStridedReduceScatterAsync {
         std::optional<uint32_t> chunk_width_in_mm_blocks = std::nullopt,
         const std::optional<Tensor>& optional_rs_intermediate_tensor = std::nullopt,
         const std::optional<Tensor>& optional_rs_output_tensor = std::nullopt,
+        std::optional<CoreRangeSet> rs_core_grid = std::nullopt,
         std::optional<float> fused_ternary_scalar = std::nullopt,
         const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
         const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);

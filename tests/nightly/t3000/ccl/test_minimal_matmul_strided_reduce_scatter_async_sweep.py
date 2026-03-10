@@ -80,6 +80,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     rs_core_grid_offset=None,
+    rs_core_grid=None,
     allowed_pcc=0.99,
     sweep_key=None,
 ):
@@ -184,8 +185,10 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     )
 
     ##### Run the op #####
-    rs_zone_capacity = (compute_grid_size.y - mm_core_grid.y) * compute_grid_size.x
-    num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
+    if num_workers_per_link is None:
+        # Auto-compute workers from the row-based RS zone below the MM grid.
+        rs_zone_capacity = (compute_grid_size.y - mm_core_grid.y) * compute_grid_size.x
+        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
     def run_op(i):
         (
@@ -209,6 +212,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
             chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+            rs_core_grid=rs_core_grid,
         )
         return tt_mm_out, tt_rs_out
 

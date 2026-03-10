@@ -32,6 +32,7 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     const std::optional<Tensor>& optional_rs_intermediate_tensor,
     const std::optional<Tensor>& optional_rs_output_tensor,
+    std::optional<CoreRangeSet> rs_core_grid,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2) {
@@ -60,6 +61,7 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
         chunk_width_in_mm_blocks,
         optional_rs_intermediate_tensor,
         optional_rs_output_tensor,
+        rs_core_grid,
         fused_ternary_scalar,
         addcmul_input_tensor1,
         addcmul_input_tensor2);

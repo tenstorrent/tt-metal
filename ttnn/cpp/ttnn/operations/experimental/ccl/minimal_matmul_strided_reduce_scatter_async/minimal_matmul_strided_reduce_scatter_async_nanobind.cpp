@@ -56,6 +56,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                std::optional<uint32_t> chunk_width_in_mm_blocks,
                const std::optional<Tensor>& optional_rs_intermediate_tensor,
                const std::optional<Tensor>& optional_rs_output_tensor,
+               std::optional<CoreRangeSet> rs_core_grid,
                std::optional<float> fused_ternary_scalar,
                const std::optional<const Tensor>& addcmul_input_tensor1,
                const std::optional<const Tensor>& addcmul_input_tensor2) -> std::vector<ttnn::Tensor> {
@@ -84,6 +85,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                     chunk_width_in_mm_blocks,
                     optional_rs_intermediate_tensor,
                     optional_rs_output_tensor,
+                    rs_core_grid,
                     fused_ternary_scalar,
                     addcmul_input_tensor1,
                     addcmul_input_tensor2);
@@ -113,6 +115,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
             nb::arg("chunk_width_in_mm_blocks") = nb::none(),
             nb::arg("optional_rs_intermediate_tensor") = nb::none(),
             nb::arg("optional_rs_output_tensor") = nb::none(),
+            nb::arg("rs_core_grid") = nb::none(),
             nb::arg("fused_ternary_scalar") = nb::none(),
             nb::arg("addcmul_input_tensor1") = nb::none(),
             nb::arg("addcmul_input_tensor2") = nb::none()});
@@ -162,6 +165,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`chunk_width_in_mm_blocks` (Optional[int]): MM output blocks per RS chunk.
             * :attr:`optional_rs_intermediate_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS intermediate.
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
+            * :attr:`rs_core_grid` (Optional[ttnn.CoreRangeSet]): Explicit core range for RS workers
+              (e.g. a column slice for column-based layouts). When set, ``reduce_scatter_core_grid_offset``
+              is ignored and workers are placed within this range using row-major order.
 
         )doc");
 }

@@ -40,6 +40,9 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const std::optional<uint32_t> chunk_width_in_mm_blocks;
 
     const CoreCoord reduce_scatter_core_grid_offset;
+    // When set, RS workers are placed within this explicit core range (column-based or arbitrary
+    // layouts). The core_grid_offset is ignored when this is provided.
+    const std::optional<CoreRangeSet> rs_core_grid;
     const std::vector<tt::tt_metal::IDevice*> devices;
 };
 

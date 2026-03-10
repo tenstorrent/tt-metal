@@ -425,6 +425,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
+    std::optional<CoreRangeSet> rs_core_grid,
     std::optional<uint32_t> mm_cores_y,
     uint32_t mm_block_ht,
     uint32_t mm_block_wt,
@@ -474,8 +475,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         sender_device_coord, forward_coord, backward_coord, ring_size - 1, ring_size - 1, mesh_device);
 
+    // When an explicit rs_core_grid is provided (e.g. for column-based layouts), use it as
+    // sub_core_grid with no offset so workers are placed within that exact range.
+    const CoreCoord effective_offset = rs_core_grid.has_value() ? CoreCoord(0, 0) : core_grid_offset;
     const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, effective_offset, rs_core_grid);
 
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (!dir && backward_coord.has_value()) || (dir && forward_coord.has_value());
@@ -1086,6 +1090,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         CoreCoord(0, 0),
+        std::nullopt,  // rs_core_grid (column-based layout not used in standalone RS path)
         operation_attributes.mm_cores_y,
         operation_attributes.mm_block_ht,
         operation_attributes.mm_block_wt,

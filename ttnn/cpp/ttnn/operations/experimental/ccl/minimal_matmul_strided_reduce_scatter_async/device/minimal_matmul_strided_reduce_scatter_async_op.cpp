@@ -110,6 +110,7 @@ tt::tt_metal::operation::Hash MinimalMatmulStridedReduceScatterAsync::compute_pr
         attributes.num_buffers_per_channel,
         attributes.chunk_width_in_mm_blocks,
         attributes.reduce_scatter_core_grid_offset,
+        attributes.rs_core_grid.has_value(),
         // MM params
         attributes.matmul_struct,
         // Tensor info
@@ -154,6 +155,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     const std::optional<Tensor>& optional_rs_intermediate_tensor,
     const std::optional<Tensor>& optional_rs_output_tensor,
+    const std::optional<CoreRangeSet> rs_core_grid,
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2) {
@@ -194,6 +196,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* num_buffers_per_channel */ num_buffers_per_channel,
         /* chunk_width_in_mm_blocks */ chunk_width_in_mm_blocks,
         /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset,
+        /* rs_core_grid */ rs_core_grid,
         /* devices */ devices};
 
     auto tensor_args = OperationType::tensor_args_t{

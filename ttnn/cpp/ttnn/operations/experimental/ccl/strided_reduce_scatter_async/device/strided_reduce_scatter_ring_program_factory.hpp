@@ -63,6 +63,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
+    std::optional<CoreRangeSet> rs_core_grid,
     std::optional<uint32_t> mm_cores_y,
     uint32_t mm_block_ht,
     uint32_t mm_block_wt,

@@ -37,17 +37,18 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
 @pytest.mark.parametrize(
     "device_params, topology",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": _make_fabric_router_config(8192),
-                "trace_region_size": 1531456,
-            },
-            ttnn.Topology.Ring,
-        ),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+        # (
+        #     {
+        #         "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        #         "fabric_router_config": _make_fabric_router_config(8192),
+        #         "trace_region_size": 1531456,
+        #     },
+        #     ttnn.Topology.Ring,
+        # ),Z
     ],
     indirect=["device_params"],
-    ids=["fabric_ring_8kib_payload"],
+    ids=["fabric_ring"],  # "fabric_ring_8kib_payload"],
 )
 def test_minimal_matmul_strided_reduce_scatter_async_bh_subblock_sweep(
     mesh_device,
@@ -97,16 +98,18 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_subblock_sweep(
                             topology=topology,
                             enable_trace=True,
                             num_iters=2,
-                            num_workers_per_link=5,
+                            num_workers_per_link=6,
                             num_buffers_per_channel=num_buffers_per_channel,
                             mm_block_m=256,
                             mm_block_k=128,
                             mm_block_n=256,
                             subblock_h=sub_h,
                             subblock_w=sub_w,
-                            mm_core_grid=ttnn.CoreCoord(12, 8),
-                            chunk_width_in_mm_blocks=1,
-                            rs_core_grid_offset=ttnn.CoreCoord(0, 8),
+                            mm_core_grid=ttnn.CoreCoord(9, 10),
+                            chunk_width_in_mm_blocks=2,
+                            rs_core_grid=ttnn.CoreRangeSet(
+                                {ttnn.CoreRange(ttnn.CoreCoord(9, 0), ttnn.CoreCoord(11, 9))}
+                            ),
                             rs_mode="fused",
                             cluster_axis=cluster_axis,
                             math_fidelity=ttnn.MathFidelity.HiFi2,

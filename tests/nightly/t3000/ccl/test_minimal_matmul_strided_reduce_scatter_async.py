@@ -35,6 +35,7 @@ class MinimalMatmulStridedReduceScatterTestConfig:
     layout: object = None  # ttnn.Layout, set in __post_init__
     input_dtype: object = None  # ttnn.DataType, set in __post_init__
     num_workers_per_link: object = None  # Optional[int]
+    rs_core_grid: object = None  # Optional[ttnn.CoreRangeSet]: explicit RS core range
 
     def __post_init__(self):
         if self.layout is None:
@@ -79,6 +80,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     rs_core_grid_offset=None,
+    rs_core_grid=None,
     allowed_pcc=0.99,
 ):
     torch.manual_seed(0)
@@ -220,6 +222,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+                rs_core_grid=rs_core_grid,
             )
             return tt_mm_out, tt_rs_out
         else:
@@ -603,4 +606,5 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
         rs_mode=rs_mode,
         cluster_axis=cluster_axis,
+        rs_core_grid=cfg.rs_core_grid,
     )
