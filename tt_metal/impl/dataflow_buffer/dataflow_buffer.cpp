@@ -534,9 +534,9 @@ void ProgramImpl::finalize_single_dfb_config(
         !(producer_is_tensix_only && consumer_is_tensix_only),
         "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
         "counters");
-    TT_FATAL(
-        !(producer_is_tensix_only && config.cap == ::experimental::AccessPattern::BLOCKED),
-        "Tensix producer with BLOCKED consumer pattern is not supported");
+    // TT_FATAL(
+    //     !(producer_is_tensix_only && config.cap == ::experimental::AccessPattern::BLOCKED),
+    //     "Tensix producer with BLOCKED consumer pattern is not supported");
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
