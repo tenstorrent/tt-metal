@@ -100,7 +100,7 @@ void kernel_main() {
     // Runtime args: []
     // ============================================================================
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
-    constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
+    constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("mla_reconfig_cb_config_l1_addr");
     uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
     // This is needed at the start because mcast is getting the cb ptrs for src/dst addresses
     unified_kernels::reconfig_cb_interfaces(cb_config);

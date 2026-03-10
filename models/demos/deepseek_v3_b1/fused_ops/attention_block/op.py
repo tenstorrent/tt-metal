@@ -3951,7 +3951,7 @@ class AttentionBlock:
 
         # TODO: Passing the address here as a named compile time arg is not ideal. Done for simplicity.
         additional_named_compile_time_args = [
-            ("reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
+            ("mla_reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
             ("num_iterations", num_iterations),
         ]
 

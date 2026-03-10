@@ -245,7 +245,7 @@ class DecoderBlock:
 
         # TODO: Passing the address here as a named compile time arg is not ideal. Done for simplicity.
         additional_named_compile_time_args = [
-            ("reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
+            ("mla_reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
             ("num_iterations", num_iterations),
         ]
 
@@ -340,6 +340,7 @@ class DecoderBlock:
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,
+                defines=moe.kernel_defines,
                 ncrisc_compile_time_args=ctx["ncrisc_compile_time_args"],
                 brisc_compile_time_args=ctx["brisc_compile_time_args"],
                 ncrisc_named_compile_time_args=mesh_coord_args
