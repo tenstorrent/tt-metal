@@ -132,6 +132,14 @@ struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
 
     auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
 };
+
+template <>
+struct fmt::formatter<tt::tt_fabric::MeshId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::MeshId& mesh_id, format_context& ctx) const -> format_context::iterator;
+};
+
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
@@ -149,3 +157,10 @@ std::ostream& operator<<(std::ostream& os, const TrayID& tray_id);
 std::ostream& operator<<(std::ostream& os, const ASICLocation& asic_location);
 
 }  // namespace tt::tt_metal
+
+template <>
+struct fmt::formatter<tt::tt_metal::AsicID> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::AsicID& asic_id, format_context& ctx) const -> format_context::iterator;
+};

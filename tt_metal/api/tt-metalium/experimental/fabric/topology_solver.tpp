@@ -824,7 +824,7 @@ namespace tt::tt_fabric::detail {
 constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
 
 // DFS call limit to prevent excessive search for complex topologies
-constexpr size_t DFS_CALL_LIMIT = 1000000;  // 1 million calls
+constexpr size_t DFS_CALL_LIMIT = 100000000;  // 1 million calls
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
@@ -1767,7 +1767,10 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
                 graph_data.target_nodes[selection.target_idx],
                 remaining_targets,
                 remaining_global);
-            log_debug(tt::LogFabric, "{}", error_msg);
+            // Suppress verbose debug messages in quiet mode to avoid spam
+            if (!quiet_mode_) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            }
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -1776,7 +1779,10 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             std::string error_msg = fmt::format(
                 "Search error: no unassigned target nodes found, but {} nodes still need to be placed",
                 graph_data.n_target - pos);
-            log_debug(tt::LogFabric, "{}", error_msg);
+            // Suppress verbose debug messages in quiet mode to avoid spam
+            if (!quiet_mode_) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            }
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -1839,6 +1845,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
     state_.used.resize(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
 
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging
