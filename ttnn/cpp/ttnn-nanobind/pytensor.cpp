@@ -1365,6 +1365,17 @@ void pytensor_module(nb::module_& mod) {
             The tensor must be on device.
         )doc")
         .def(
+            "element_size",
+            [](const Tensor& self) -> uint32_t {
+                return tt::datum_size(datatype_to_dataformat_converter(self.dtype()));
+            },
+            R"doc(
+            Get the size of a single element in bytes for this tensor's data type.
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 

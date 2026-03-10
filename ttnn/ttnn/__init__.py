@@ -339,6 +339,7 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
 import ttnn.database
