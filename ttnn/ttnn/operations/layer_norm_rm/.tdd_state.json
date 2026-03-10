@@ -1,0 +1,173 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads RM sticks, compute tilizes then untilizes (passthrough), writer writes RM sticks. Tests the full data pipeline without normalization.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "x",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 32, 256)",
+        "(1, 1, 64, 128)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "subtract_mean",
+      "description": "Add reduce_mean and sub_mean phases. Compute tilizes input, reduces each row to mean (SUM * 1/W), subtracts mean with COL broadcast, then untilizes the centered result.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_subtract_mean.py",
+      "reference_body": "x - x.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 32, 256)",
+        "(1, 1, 64, 128)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "square_centered",
+      "description": "Add square phase after mean subtraction. Output is (x - mean)^2 element-wise.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_square_centered.py",
+      "reference_body": "(x - x.mean(dim=-1, keepdim=True)).pow(2)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 32, 256)",
+        "(1, 1, 64, 128)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "full_normalize",
+      "description": "Add reduce_var, add_eps_rsqrt, and mul_rsqrt phases. Completes the layer normalization without gamma/beta.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_full_normalize.py",
+      "reference_body": "(x - x.mean(dim=-1, keepdim=True)) / torch.sqrt(x.var(dim=-1, unbiased=False, keepdim=True) + 1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 32, 256)",
+        "(1, 1, 64, 128)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "gamma_beta",
+      "description": "Add gamma (scale) and beta (shift) affine transform phases. Reader loads gamma/beta RM sticks, compute tilizes them once at program start, then applies mul(ROW) and add(ROW) per tile-row.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_gamma_beta.py",
+      "reference_body": "torch.nn.functional.layer_norm(x, [x.shape[-1]], weight=gamma.view(-1), bias=beta.view(-1), eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 32, 256)",
+        "(1, 1, 64, 128)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "gamma_t, beta_t",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, x.shape[-1])\nbeta = torch.randn(1, 1, 1, x.shape[-1])",
+      "extra_ttnn_setup": "gamma_t = ttnn.from_torch(gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\nbeta_t = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
