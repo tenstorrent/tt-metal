@@ -202,12 +202,16 @@ If CB aliasing is broken (e.g., old ShardSpec API that produces `buffer_distribu
 
 | Test | Status | Notes |
 |---|---|---|
-| `test_moe_gpt_e2e.py::run_test_dispatch_compute_combine` | **PASSING** | dispatch + moe_gpt output[4] (matmul accuracy) verified |
+| `test_dispatch` | **PASSING** | Dispatch metadata only |
+| `test_dispatch_compute` | **PASSING** | Dispatch + moe_gpt compute (PCC ~0.990) |
+| `test_dispatch_compute_combine` | **PASSING** | Dispatch + moe_gpt + selective_reduce_combine (PCC ~0.987) |
+| `test_moe_gpt_e2e` | **PASSING** | Full pipeline with accuracy verification on all 32 devices |
+| `test_moe_gpt_e2e_perf` | **PASSING** | Full pipeline with Tracy-compatible perf measurement |
 | Output[0] – per-expert token counts | **PASSING** | Verified against torch routing |
 | Output[2] – e_t flat token indices | **PASSING** | Stride-1 format, zero-padded |
 | Output[4] – combine output (matmul accuracy) | **PASSING** | PCC > threshold vs torch W0/W1/SwiGLU/W2 reference |
 | `selective_reduce_combine` after moe_gpt | **PASSING** | With correct batch_size=128 (total ring tokens) |
-| Output[1] – activation metadata | **IN PROGRESS** | Two bugs fixed 2026-03-10 (see §9); needs re-run |
+| Output[1] – activation metadata | **PASSING** | Verified on all 32 devices |
 
 ### Verification Approach
 
@@ -267,15 +271,24 @@ The E2E test (`test_moe_gpt_e2e.py`) runs:
 - moe_gpt kernel works with global mapping `[32, 128]` directly; ring-local `[32, 16]` only works in the 4-device simulation test
 - Production code: use global `[32, 128]` mapping
 
+### (k) `selective_reduce_combine` worker core ordering mismatch (2026-03-10)
+- `corerange_to_cores()` defaults to `row_wise=False` (column-major: x-outer, y-inner)
+- BLOCK_SHARDED with `ShardOrientation::ROW_MAJOR` assigns shards in row-major order (y-outer, x-inner)
+- Each data-parallel worker read from the wrong L1 shard, producing PCC ~0.02
+- **Fixed**: pass `row_wise=True` to `corerange_to_cores()` so worker cores match shard assignment
+
+### (l) `test_moe_gpt_e2e` experts_total semantics (2026-03-10)
+- `experts_total` param was 16 (per-ring) but should be 128 (global) for 4x8 Galaxy
+- `create_expert_mapping_tensors` called with wrong keyword args
+- Output reshape used `[:E*M, :]` slice (only first height shard) instead of full tensor
+- **Fixed**: corrected all three issues
+
 ---
 
 ## 10. What Still Needs to Be Done for Model Integration
 
-### 10.1 Re-verify output[1] after latest bug fixes
-Bugs (d) and (e) were fixed on 2026-03-10 but the test has not been re-run. Run:
-```bash
-pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py -s -v
-```
+### 10.1 ~~Re-verify output[1]~~ DONE
+All 5 tests pass on all 32 devices (2026-03-10). Output[1] verified.
 
 ### 10.2 Remove debug logging from `fused_decode.py`
 `fused_decode.py` currently has extensive `logger.info` and tensor read-back calls (lines ~128–218) for debugging. These do device→host transfers every step and will significantly impact performance. They must be removed or gated behind a debug flag before production use.
@@ -316,17 +329,19 @@ Once wired in, run a text generation test with `gpt-oss-20b` on Galaxy and compa
 
 ---
 
-## 11. Performance Reference (from Tracy profiling, 2026-03-06)
+## 11. Performance Reference (from Tracy profiling, 2026-03-10)
 
-On a (4,8) Galaxy mesh, single decode step:
-| Stage | Avg device kernel time |
-|---|---|
-| `all_to_all_dispatch_metadata` | ~32 μs |
-| `moe_gpt` | ~366 μs |
-| `selective_reduce_combine` | ~34 μs |
-| **Total kernel** | **~432 μs** |
+On a (4,8) Galaxy mesh, single decode step (`python3 -m tracy -m -r -p pytest ...`):
+| Stage | Kernel Avg (μs) | Kernel Max (μs) | FW Avg (μs) | FW Max (μs) |
+|---|---|---|---|---|
+| `all_to_all_dispatch_metadata` | 25.4 | 58.1 | 26.5 | 59.2 |
+| `moe_gpt` | 259.5 | 262.3 | 263.4 | 266.2 |
+| `selective_reduce_combine` | 37.0 | 79.4 | 38.0 | 80.4 |
+| `CopyDeviceOperation` (DRAM→L1) | 3.0 | 3.4 | 4.1 | 4.4 |
+| **Total** | **~325 μs** | | **~332 μs** | |
 
-E2E wall clock (including host/PCIe overhead): ~163 ms (dominated by `synchronize_device` calls during debug). In production without synchronize overhead this should be much lower.
+Note: moe_gpt dominates at ~260 μs (80% of total). The dispatch and combine steps
+are fast (~25-37 μs each). Max times are higher due to fabric synchronization variance.
 
 ---
 
