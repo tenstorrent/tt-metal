@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,7 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 
-using namespace sfpi;
-
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 // ======================================================================
 // LUT-based erfc via piecewise rational P(x)/Q(x)
@@ -56,10 +53,10 @@ constexpr std::array<float, 34> ERFC_LUT = {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat x = dst_reg[0];
-        dst_reg[0] =
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] =
             piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE>(ERFC_LUT, x);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -68,5 +65,4 @@ void erfc_init() {
     sfpu_reciprocal_init();
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
