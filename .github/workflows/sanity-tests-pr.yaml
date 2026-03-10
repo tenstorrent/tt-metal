@@ -1,9 +1,6 @@
 name: "PR - Sanity tests"
 
 on:
-  push:
-    branches:
-      - roseli/0-rename-apc-to-sanity
   pull_request:
     branches:
       - main
