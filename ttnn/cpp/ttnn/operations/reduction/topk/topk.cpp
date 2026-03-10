@@ -270,12 +270,15 @@ std::vector<Tensor> topk(
 
             // Creating indices tensor on host and copying to device (there is no direct way to write
             // to a device tensor with a scalar value).
-            const TensorSpec& idx_spec = indices.tensor_spec();
-            TT_FATAL(idx_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
+            const TensorSpec& indices_spec = indices.tensor_spec();
+            TT_FATAL(
+                indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
             // Although we only need to store one value, have to account for extra padding
             // in the tile layout. So host buffer size needs to match device buffer size.
-            auto buf = std::vector<uint16_t>(idx_spec.physical_shape().height() * idx_spec.physical_shape().width(), 0);
-            Tensor host_indices(HostBuffer(std::move(buf)), desired_final_shape, DataType::UINT16, indices.layout());
+            auto indices_vec = std::vector<uint16_t>(
+                indices_spec.physical_shape().height() * indices_spec.physical_shape().width(), 0);
+            Tensor host_indices(
+                HostBuffer(std::move(indices_vec)), desired_final_shape, DataType::UINT16, indices.layout());
             copy_to_device(host_indices, indices);
 
             return {values, indices};
