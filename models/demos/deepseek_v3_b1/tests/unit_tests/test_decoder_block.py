@@ -812,6 +812,16 @@ def create_decoder_block_tensors(
     ],
     ids=["hardcoded_experts", "full_routing"],
 )
+@pytest.mark.parametrize(
+    "validate_standalone_mla",
+    [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
+    ids=["validate_standalone_mla", "just_decoder_mla"],
+)
+@pytest.mark.parametrize(
+    "validate_standalone_moe",
+    [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
+    ids=["validate_standalone_moe", "just_decoder_moe"],
+)
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
@@ -832,6 +842,8 @@ def test_decoder(
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
+    validate_standalone_mla,
+    validate_standalone_moe,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
@@ -878,56 +890,58 @@ def test_decoder(
     # ========================================================================
     # Run standalone AttentionBlock.op as sanity reference (uses cloned KV cache)
     # ========================================================================
-    logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
-    attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
-    ttnn_attn_ref_result = AttentionBlock.op(
-        d["input_tensor_mesh"],
-        d["gamma_overlapped"],
-        d["matmul_weights_overlapped"],
-        d["rmsnorm2_gamma_overlapped"],
-        d["matmul2_weights_overlapped"],
-        d["matmul3_weights_overlapped"],
-        d["ttnn_qrope_sin"],
-        d["ttnn_qrope_cos"],
-        d["ttnn_trans_mat"],
-        d["ttnn_krope_cos"],
-        d["ttnn_krope_sin"],
-        d["dkv_matmul_weights_overlapped"],
-        d["dkv_rmsnorm_gamma_overlapped"],
-        d["ttnn_kv_cache_attn_ref"],
-        d["ttnn_position_ids"],
-        d["scale"],
-        d["ttnn_sdpa_output"],
-        d["sdpa_kv_cache_buffer"],
-        d["sdpa_out_interm_buffer"],
-        d["sender_coord"],
-        d["kv_b2_overlapped"],
-        d["o_proj_overlapped"],
-        d["ttnn_sdpa_input_l"],
-        d["ttnn_sdpa_input_ms"],
-        d["ttnn_sdpa_output_l"],
-        d["ttnn_sdpa_intermediate_recv"],
-        d["ttnn_sdpa_forwarder_scratch"],
-        d["device_chunk_size"],
-        d["ttnn_attn_ref_output"],
-        attn_ref_semaphores,
-        bcast_cluster_axis,
-        bcast_secondary_cluster_axis,
-        reduce_cluster_axis,
-        0,  # sdpa_cluster_axis
-        1.0,  # sdpa_scale_fp32
-        1,  # num_links
-        epsilon,
-        use_fp32,
-        False,  # skip_ccl
-        noc_mode,
-        num_iterations=num_internal_iterations,
-    )
-    ttnn.synchronize_device(submesh)
-    ttnn_attn_ref_output_torch = ttnn.to_torch(
-        d["ttnn_attn_ref_output"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
-    )
-    logger.info("Standalone AttentionBlock.op completed.")
+    ttnn_attn_ref_output_torch = None
+    if validate_standalone_mla:
+        logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
+        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+        ttnn_attn_ref_result = AttentionBlock.op(
+            d["input_tensor_mesh"],
+            d["gamma_overlapped"],
+            d["matmul_weights_overlapped"],
+            d["rmsnorm2_gamma_overlapped"],
+            d["matmul2_weights_overlapped"],
+            d["matmul3_weights_overlapped"],
+            d["ttnn_qrope_sin"],
+            d["ttnn_qrope_cos"],
+            d["ttnn_trans_mat"],
+            d["ttnn_krope_cos"],
+            d["ttnn_krope_sin"],
+            d["dkv_matmul_weights_overlapped"],
+            d["dkv_rmsnorm_gamma_overlapped"],
+            d["ttnn_kv_cache_attn_ref"],
+            d["ttnn_position_ids"],
+            d["scale"],
+            d["ttnn_sdpa_output"],
+            d["sdpa_kv_cache_buffer"],
+            d["sdpa_out_interm_buffer"],
+            d["sender_coord"],
+            d["kv_b2_overlapped"],
+            d["o_proj_overlapped"],
+            d["ttnn_sdpa_input_l"],
+            d["ttnn_sdpa_input_ms"],
+            d["ttnn_sdpa_output_l"],
+            d["ttnn_sdpa_intermediate_recv"],
+            d["ttnn_sdpa_forwarder_scratch"],
+            d["device_chunk_size"],
+            d["ttnn_attn_ref_output"],
+            attn_ref_semaphores,
+            bcast_cluster_axis,
+            bcast_secondary_cluster_axis,
+            reduce_cluster_axis,
+            0,  # sdpa_cluster_axis
+            1.0,  # sdpa_scale_fp32
+            1,  # num_links
+            epsilon,
+            use_fp32,
+            False,  # skip_ccl
+            noc_mode,
+            num_iterations=num_internal_iterations,
+        )
+        ttnn.synchronize_device(submesh)
+        ttnn_attn_ref_output_torch = ttnn.to_torch(
+            d["ttnn_attn_ref_output"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        logger.info("Standalone AttentionBlock.op completed.")
 
     # ========================================================================
     # Run decoder operation
@@ -1017,75 +1031,81 @@ def test_decoder(
     )
 
     # ========================================================================
-    # Run standalone MoeOp.op on MLA output (validate golden MoE path)
+    # Extract decoder MoE output and reduce root info (always needed for golden)
     # ========================================================================
-    logger.info(
-        f"Running standalone MoeOp.op (enable_routing={enable_routing}, hardcoded={use_hardcoded_expert_index})..."
-    )
-    moe_ref_semaphores = MoeOp.create_semaphores(submesh)
-    moe_ref_reduce_sems = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
-    ttnn.synchronize_device(submesh)
-
-    moe_ref_result = MoeOp.op(
-        attention_block_output_tensor,
-        gate_mm_weights_tensor=d["gate_mm_overlapped"],
-        gate_bias_tensor=d["ttnn_gate_bias"],
-        gate_indices_tensor=d["ttnn_gate_indices"],
-        gate_output_scores_tensor=d["moe_ref_gate_output_scores"],
-        gate_output_indices_tensor=d["moe_ref_gate_output_indices"],
-        gate_proj_weights_tensor=d["gate_proj_weights"],
-        up_proj_weights_tensor=d["up_proj_weights"],
-        down_proj_weights_tensor=d["down_proj_weights"],
-        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
-        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
-        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
-        shared_down_weights_tensor=d["shared_down_weights_tensor"],
-        shared_k_parallel=d["shared_k_parallel"],
-        shared_n_parallel=d["shared_n_parallel"],
-        enable_routing=enable_routing,
-        use_hardcoded_expert_index=use_hardcoded_expert_index,
-        sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
-        sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
-        num_iterations=num_internal_iterations,
-        reduce_intermediate_tensors=d["moe_ref_reduce_intermediate"],
-        reduce_output_tensor=d["moe_ref_reduce_output"],
-        reduce_semaphores=moe_ref_reduce_sems,
-        reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
-        semaphores=moe_ref_semaphores,
-        noc_mode=noc_mode,
-    )
-    ttnn.synchronize_device(submesh)
-    logger.info("Standalone MoeOp.op completed.")
-
-    if enable_routing:
-        moe_ref_scores_tensor, moe_ref_indices_tensor, moe_ref_result = moe_ref_result
-        moe_ref_scores_torch = ttnn.to_torch(
-            moe_ref_scores_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
-        )
-        moe_ref_indices_torch = ttnn.to_torch(
-            moe_ref_indices_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
-        )
-    else:
-        moe_ref_scores_torch = None
-        moe_ref_indices_torch = None
-
-    moe_reduce_torch = ttnn.to_torch(moe_ref_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     decoder_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_coord_tuple = d["reduce_root_coord"]
     root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
-    moe_reduce_root = moe_reduce_torch[root_device_idx]
-    moe_device_output_valid = extract_routed_expert_output(
-        moe_reduce_root.unsqueeze(0),
-        d["num_gate_proj_cores"],
-        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
-        d["per_core_down_proj_N"],
-    )
     decoder_moe_output_valid = extract_routed_expert_output(
         decoder_moe_output.unsqueeze(0),
         d["num_gate_proj_cores"],
         RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
         d["per_core_down_proj_N"],
     )
+
+    # ========================================================================
+    # Run standalone MoeOp.op on MLA output (validate golden MoE path)
+    # ========================================================================
+    moe_device_output_valid = None
+    if validate_standalone_moe:
+        logger.info(
+            f"Running standalone MoeOp.op (enable_routing={enable_routing}, hardcoded={use_hardcoded_expert_index})..."
+        )
+        moe_ref_semaphores = MoeOp.create_semaphores(submesh)
+        moe_ref_reduce_sems = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+        ttnn.synchronize_device(submesh)
+
+        moe_ref_result = MoeOp.op(
+            attention_block_output_tensor,
+            gate_mm_weights_tensor=d["gate_mm_overlapped"],
+            gate_bias_tensor=d["ttnn_gate_bias"],
+            gate_indices_tensor=d["ttnn_gate_indices"],
+            gate_output_scores_tensor=d["moe_ref_gate_output_scores"],
+            gate_output_indices_tensor=d["moe_ref_gate_output_indices"],
+            gate_proj_weights_tensor=d["gate_proj_weights"],
+            up_proj_weights_tensor=d["up_proj_weights"],
+            down_proj_weights_tensor=d["down_proj_weights"],
+            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+            shared_down_weights_tensor=d["shared_down_weights_tensor"],
+            shared_k_parallel=d["shared_k_parallel"],
+            shared_n_parallel=d["shared_n_parallel"],
+            enable_routing=enable_routing,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+            sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
+            sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
+            num_iterations=num_internal_iterations,
+            reduce_intermediate_tensors=d["moe_ref_reduce_intermediate"],
+            reduce_output_tensor=d["moe_ref_reduce_output"],
+            reduce_semaphores=moe_ref_reduce_sems,
+            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+            semaphores=moe_ref_semaphores,
+            noc_mode=noc_mode,
+        )
+        ttnn.synchronize_device(submesh)
+        logger.info("Standalone MoeOp.op completed.")
+
+        if enable_routing:
+            moe_ref_scores_tensor, moe_ref_indices_tensor, moe_ref_result = moe_ref_result
+            moe_ref_scores_torch = ttnn.to_torch(
+                moe_ref_scores_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+            )
+            moe_ref_indices_torch = ttnn.to_torch(
+                moe_ref_indices_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+            )
+        else:
+            moe_ref_scores_torch = None
+            moe_ref_indices_torch = None
+
+        moe_reduce_torch = ttnn.to_torch(moe_ref_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        moe_reduce_root = moe_reduce_torch[root_device_idx]
+        moe_device_output_valid = extract_routed_expert_output(
+            moe_reduce_root.unsqueeze(0),
+            d["num_gate_proj_cores"],
+            RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+            d["per_core_down_proj_N"],
+        )
 
     # ========================================================================
     # Compute golden reference
@@ -1267,34 +1287,44 @@ def test_decoder(
         logger.info(f"Golden MoE indices: {moe_indices}")
 
     # ========================================================================
-    # Validate decoder output (full pipeline)
+    # Validate decoder MLA output (full pipeline)
     # ========================================================================
     for device_idx in range(mesh_rows * mesh_cols):
         received = ttnn_attention_output[device_idx : device_idx + 1, :]
-        pure_mla = ttnn_attn_ref_output_torch[device_idx : device_idx + 1, :]
         passing, pcc = comp_pcc(mla_output, received, 0.996)
-        pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.996)
         logger.info(f"Device {device_idx} DecoderBlock Output PCC: {pcc}")
-        logger.info(f"Pure MLA PCC: {pure_mla_pcc}")
         logger.info(f"Golden MLA output: {mla_output}")
         logger.info(f"DecoderBlock MLA output: {received}")
-        logger.info(f"Pure MLA output: {pure_mla}")
+        if validate_standalone_mla:
+            pure_mla = ttnn_attn_ref_output_torch[device_idx : device_idx + 1, :]
+            pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.996)
+            logger.info(f"Pure MLA PCC: {pure_mla_pcc}")
+            logger.info(f"Pure MLA output: {pure_mla}")
         assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
 
     # ========================================================================
-    # Validate standalone MoE output vs DecoderBlock golden MoE output
+    # Validate MoE output vs DecoderBlock golden MoE output
     # ========================================================================
     # Golden with moe_num_devices>1 computes per-device golden with TP-sharded shared
     # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
     passing, pcc = comp_pcc(moe_output.flatten(), decoder_moe_output_valid.flatten(), 0.996)
-    pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.996)
-    logger.info(f"MoE PCC: {pcc}")
-    logger.info(f"Pure MoE PCC: {pure_moe_pcc}")
+    logger.info(f"MoE PCC (decoder vs golden): {pcc}")
     logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MoE output: {decoder_moe_output_valid.flatten()[:8]}")
-    logger.info(f"Pure MoE output: {moe_device_output_valid.flatten()[:8]}")
-    if use_hardcoded_expert_index:
-        assert pure_moe_passing, f"Standalone MoE PCC check failed: {pure_moe_pcc}"
+
+    if validate_standalone_moe:
+        pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.996)
+        logger.info(f"Pure MoE PCC (standalone vs golden): {pure_moe_pcc}")
+        logger.info(f"Pure MoE output: {moe_device_output_valid.flatten()[:8]}")
+
+        device_passing, device_pcc = comp_pcc(
+            decoder_moe_output_valid.flatten(), moe_device_output_valid.flatten(), 0.996
+        )
+        logger.info(f"Pure MoE vs Decoder MoE PCC: {device_pcc}")
+
+        if use_hardcoded_expert_index:
+            assert pure_moe_passing, f"Standalone MoE PCC check failed: {pure_moe_pcc}"
+        assert device_passing, f"Pure MoE vs Decoder MoE PCC check failed: {device_pcc}"
 
     logger.info("✓ DecoderBlock mesh test passed!")
 

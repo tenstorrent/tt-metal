@@ -79,20 +79,20 @@ def _reference_layer_state_dict(
         state[f"model.layers.{layer_idx}.mlp.gate.weight"] = _scaled_randn(256, _REF_K, generator=g)
         state[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"] = torch.randn(
             256, generator=g, dtype=torch.bfloat16
-        )
+        ).clamp(-2, 2)
         state[f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight"] = _scaled_randn(
             *_REF_HF_SHARED_GATE_UP,
             generator=g,
-        )
+        ).clamp(-2, 2)
         state[f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight"] = _scaled_randn(
             *_REF_HF_SHARED_GATE_UP,
             generator=g,
-        )
+        ).clamp(-2, 2)
         state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = _scaled_randn(
             7168,
             _REF_HF_SHARED_GATE_UP[0],
             generator=g,
-        )
+        ).clamp(-2, 2)
         gate_seed = seed + 0
         up_seed = seed + 256
         down_seed = seed + 512
