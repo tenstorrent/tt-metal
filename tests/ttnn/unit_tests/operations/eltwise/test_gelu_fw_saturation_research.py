@@ -35,12 +35,6 @@ except ImportError:
 # =============================================================================
 
 
-def float_to_bf16_bits_truncate(f: float) -> int:
-    """Convert float to BF16 bit representation (truncation, for enumeration only)."""
-    f32_bytes = struct.pack(">f", f)
-    return struct.unpack(">H", f32_bytes[:2])[0]
-
-
 def float_to_bf16_bits(f: float) -> int:
     """Convert float to BF16 bit representation (round-to-nearest-even).
 
@@ -70,14 +64,6 @@ def is_bf16_denormal(bits: int) -> bool:
 
 def apply_daz(f: float) -> float:
     """Apply Denormals-Are-Zero: if f is denormal in BF16, return 0."""
-    bits = float_to_bf16_bits(f)
-    if is_bf16_denormal(bits):
-        return 0.0
-    return f
-
-
-def apply_ftz(f: float) -> float:
-    """Apply Flush-To-Zero: if result is denormal in BF16, flush to 0."""
     bits = float_to_bf16_bits(f)
     if is_bf16_denormal(bits):
         return 0.0
