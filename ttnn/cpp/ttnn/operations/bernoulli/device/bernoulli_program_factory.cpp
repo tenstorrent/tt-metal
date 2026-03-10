@@ -16,12 +16,6 @@ namespace ttnn::operations::bernoulli {
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace {
-std::mt19937 rng(std::time(nullptr));
-std::uniform_int_distribution d(1, 1 << 20);
-uint32_t get_random_seed() { return d(rng); }
-}  // namespace
-
 ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -159,9 +153,8 @@ ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
         reader_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), tile_offset, units_per_core});
 
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
+            core, KernelDescriptor::CoreRuntimeArgs{operation_attributes.seed + i, tile_offset, units_per_core});
 
         writer_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), tile_offset, units_per_core});
@@ -174,25 +167,6 @@ ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
-}
-
-void BernoulliDeviceOperation::ProgramFactory::override_nondeterministic_runtime_args(
-    Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output) {
-    auto grid = output.device()->compute_with_storage_grid_size();
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(grid, units_to_divide);
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
-
-    // Compute kernel is index 2 (reader=0, writer=1, compute=2 per create_descriptor).
-    constexpr uint32_t compute_kernel_handle = 2;
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        auto& runtime_args = GetRuntimeArgs(program, compute_kernel_handle, cores[i]);
-        runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-    }
 }
 
 }  // namespace ttnn::operations::bernoulli

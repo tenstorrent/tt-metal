@@ -86,3 +86,13 @@ repos:
       language: system
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: detect-legacy-device-op
+      name: Detect legacy device operation classes in newly added files
+      entry: python3 scripts/detect_legacy_device_op.py --check-new-only
+      language: system
+      types: [file]
+      files: ^ttnn/.*\.hpp$
+      pass_filenames: true
+      require_serial: true

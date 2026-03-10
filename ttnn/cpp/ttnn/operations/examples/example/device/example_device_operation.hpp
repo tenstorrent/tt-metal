@@ -68,12 +68,13 @@ struct ExampleDeviceOperation {
     // ProgramDescriptor-based factories (RECOMMENDED for all new operations)
     //
     // These use `create_descriptor()` which returns a declarative ProgramDescriptor.
-    // The framework handles program construction, caching, and buffer address
-    // patching automatically. No shared_variables_t or cached_program_t needed.
+    // The framework handles program construction, caching, buffer address
+    // patching, and seed patching automatically. No shared_variables_t or
+    // cached_program_t needed.
     //
-    // override_nondeterministic_runtime_args(Program&, ...) is OPTIONAL — only
-    // implement it if you have truly dynamic parameters (e.g. random seeds) that
-    // change on every call. Buffer addresses are auto-patched by the framework.
+    // Seed handling is automatic: if operation_attributes_t has a uint32_t seed
+    // field, the framework excludes it from hashing and patches compute kernel
+    // runtime_args[0] with (seed + core_index) on every cache hit.
     // =========================================================================
 
     struct SingleCore {
@@ -81,14 +82,6 @@ struct ExampleDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
-
-        // Optional: only needed if runtime args change on cache hits beyond buffer addresses.
-        // Buffer addresses are auto-patched by the framework — no need to handle them here.
-        // static void override_nondeterministic_runtime_args(
-        //     tt::tt_metal::Program& program,
-        //     const operation_attributes_t& operation_attributes,
-        //     const tensor_args_t& tensor_args,
-        //     tensor_return_value_t& tensor_return_value);
     };
 
     struct MultiCore {
@@ -96,13 +89,6 @@ struct ExampleDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
-
-        // Optional: only needed if runtime args change on cache hits beyond buffer addresses.
-        // static void override_nondeterministic_runtime_args(
-        //     tt::tt_metal::Program& program,
-        //     const operation_attributes_t& operation_attributes,
-        //     const tensor_args_t& tensor_args,
-        //     tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;

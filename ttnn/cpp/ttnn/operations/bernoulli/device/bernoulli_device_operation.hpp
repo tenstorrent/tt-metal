@@ -31,15 +31,6 @@ struct BernoulliDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
-
-        // Needed because `seed` is a non-address runtime arg that changes per call.
-        // Buffer addresses are auto-patched by the framework, but seed is not an
-        // address -- so we must patch it manually on cache hits.
-        static void override_nondeterministic_runtime_args(
-            tt::tt_metal::Program& program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -47,10 +38,6 @@ struct BernoulliDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // Custom hash that zeros out `seed` so that calls differing only in seed
-    // share the same cached program (seed is patched via override_nondeterministic_runtime_args).
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::bernoulli

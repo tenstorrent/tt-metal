@@ -69,8 +69,9 @@ then handles program construction, caching, and buffer address patching on cache
 
 - **No ``shared_variables_t``** — you don't need to store kernel handles or core lists.
 - **No manual buffer address patching** — the framework auto-patches buffer addresses on cache hits.
-- **No ``override_nondeterministic_runtime_args`` for buffer addresses** — only implement it if you have
-  truly dynamic parameters (e.g., random seeds) that change on every call.
+- **Automatic seed handling** — if ``operation_attributes_t`` has a ``uint32_t seed`` field,
+  the framework automatically excludes it from hashing and patches compute kernel
+  ``runtime_args[0]`` with ``(seed + core_index)`` on every cache hit.
 - **Cleaner code** — the declarative style is easier to read and less error-prone.
 
 **ProgramFactory interface:**
@@ -84,14 +85,6 @@ then handles program construction, caching, and buffer address patching on cache
            const operation_attributes_t& operation_attributes,
            const tensor_args_t& tensor_args,
            tensor_return_value_t& tensor_return_value);
-
-       // OPTIONAL: Only needed for truly dynamic parameters (random seeds, etc.)
-       // Buffer addresses are auto-patched — do NOT patch them here.
-       // static void override_nondeterministic_runtime_args(
-       //     tt::tt_metal::Program& program,
-       //     const operation_attributes_t& operation_attributes,
-       //     const tensor_args_t& tensor_args,
-       //     tensor_return_value_t& tensor_return_value);
 
        // OPTIONAL: Only needed when create_descriptor requires a device-side
        // resource (e.g. config tensor) not already in tensor_args or the output.
@@ -154,8 +147,6 @@ then handles program construction, caching, and buffer address patching on cache
        core, KernelDescriptor::CoreRuntimeArgs{buffer_addr, tiles_per_core, offset});
 
    // 4. Push kernels — the order matters: kernel index 0, 1, 2, etc.
-   //    If you implement override_nondeterministic_runtime_args, use the kernel index
-   //    (not a KernelHandle) to access runtime args via GetRuntimeArgs().
    desc.kernels.push_back(std::move(reader_desc));
    desc.kernels.push_back(std::move(compute_desc));
    return desc;
@@ -170,27 +161,6 @@ then handles program construction, caching, and buffer address patching on cache
    compile with a ``'get_named_compile_time_arg_val' was not declared in this
    scope`` error. This applies to all kernel types (reader, writer, and
    compute).
-
-**``compute_program_hash``:**
-
-If your operation has dynamic fields in its attributes that don't affect program
-compilation (e.g., random seeds), you **must** provide a custom ``compute_program_hash``
-that excludes those fields. Otherwise the cache will miss on every call. Always include
-``type_hash<YourDeviceOperation>`` to prevent collisions with other operations:
-
-.. code-block:: cpp
-
-   static tt::stl::hash::hash_t compute_program_hash(
-       const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-       auto hashable = attrs;
-       hashable.seed = 0;  // Exclude dynamic fields
-       return tt::stl::hash::hash_objects_with_default_seed(
-           tt::stl::hash::type_hash<MyDeviceOperation>, hashable, tensors);
-   }
-
-If all attributes are compile-time deterministic, you can omit ``compute_program_hash``
-and the framework will use a sensible default that hashes ``type_hash<YourDeviceOperation>``,
-all of ``operation_attributes_t``, and all of ``tensor_args_t``.
 
 Full example files:
 

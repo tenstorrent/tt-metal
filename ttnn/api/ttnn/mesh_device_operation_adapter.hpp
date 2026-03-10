@@ -21,6 +21,15 @@
 
 namespace ttnn::device_operation {
 
+// Detect if operation_attributes_t has a uint32_t seed field.
+// When true, the framework automatically:
+//   1. Excludes seed from the program hash (so different seeds share cached programs)
+//   2. Patches compute kernel runtime_args[0] with (attrs.seed + core_index) on cache hits
+template <typename T>
+concept HasSeed = requires(const T& t) {
+    { t.seed } -> std::convertible_to<uint32_t>;
+};
+
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
@@ -101,6 +110,11 @@ struct MeshDeviceOperationAdapter {
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else if constexpr (HasSeed<operation_attributes_t>) {
+            auto attrs_copy = attrs;
+            attrs_copy.seed = 0;
+            return tt::stl::hash::hash_objects_with_default_seed(
+                tt::stl::hash::type_hash<DeviceOperation>, attrs_copy, tensor_args);
         } else {
             return tt::stl::hash::hash_objects_with_default_seed(
                 tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
@@ -171,18 +185,19 @@ struct MeshDeviceOperationAdapter {
     //           create_descriptor and kept alive across cache hits.
     //        -- Most factories do NOT need this.
     //
-    //   3. override_nondeterministic_runtime_args(Program&, attrs, tensor_args, output)  [OPTIONAL]
-    //        -- Use ONLY when non-address runtime args change between calls
-    //           (e.g. random seeds).  Called AFTER the framework auto-patches
-    //           buffer addresses on every cache hit.
-    //
-    //   4. post_create_validation(Program&, attrs, tensor_args, output)  [OPTIONAL]
+    //   3. post_create_validation(Program&, attrs, tensor_args, output)  [OPTIONAL]
     //        -- Called once on cache miss after the Program is constructed from the
     //           descriptor.  Use for sanity checks that require the materialized
     //           Program (e.g. verifying CB sizes match expected L1 usage).
     //
+    // Automatic seed handling: if operation_attributes_t has a uint32_t seed
+    // field (detected via HasSeed concept), the framework automatically patches
+    // compute kernel runtime_args[0] with (attrs.seed + core_index) on cache
+    // hits.  No developer code needed -- just put seed in your attrs and use
+    // (seed + i) at arg[0] in create_descriptor.
+    //
     // The framework handles everything else: address slot scanning, dynamic
-    // CB patching, cache-hit dispatch, and determinism verification.
+    // CB patching, seed patching, cache-hit dispatch, and determinism verification.
     // -----------------------------------------------------------------------
     template <ProgramDescriptorFactoryConcept DescriptorFactory>
     struct DescriptorMeshWorkloadFactoryAdapter {
@@ -196,6 +211,11 @@ struct MeshDeviceOperationAdapter {
         struct CBSlot {
             tt::tt_metal::CBHandle cb_handle;
             uint16_t buffer_id;  // index into the flat vector returned by collect_buffers
+        };
+
+        struct ComputeKernelCores {
+            uint32_t kernel_handle;
+            std::vector<CoreCoord> cores;
         };
 
         // --- Optional hook detection ---
@@ -228,12 +248,7 @@ struct MeshDeviceOperationAdapter {
     public:
         using resource_t = typename ResourceTypeHelper<has_prepare_resources>::type;
 
-        // Detect override_nondeterministic_runtime_args: for non-address runtime args (e.g. seeds).
-        static constexpr bool has_factory_override = requires(
-            tt::tt_metal::Program& p,
-            const operation_attributes_t& a,
-            const tensor_args_t& t,
-            tensor_return_value_t& r) { DescriptorFactory::override_nondeterministic_runtime_args(p, a, t, r); };
+        static constexpr bool has_seed = HasSeed<operation_attributes_t>;
 
         // Detect post_create_validation: called once on cache miss after the Program
         // is constructed from the descriptor.  Use for sanity checks that require
@@ -247,6 +262,7 @@ struct MeshDeviceOperationAdapter {
         struct shared_variables_t {
             std::vector<AddressSlot> address_slots;
             std::vector<CBSlot> cb_slots;
+            std::vector<ComputeKernelCores> compute_kernel_cores;
             uint32_t num_kernel_handles{};
             // Keeps prepare_resources return value alive across cache hits.
             // Zero-cost (empty base optimization) when resource_t is monostate.
@@ -282,6 +298,31 @@ struct MeshDeviceOperationAdapter {
             }
         }
 
+        // Check if kernel k is a compute kernel.
+        static bool is_compute_kernel(const tt::tt_metal::KernelDescriptor& kd) {
+            return std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(kd.config);
+        }
+
+        // Build set of (kernel, core, arg_index) positions that hold seed values.
+        // These are excluded from both address-slot scanning and determinism checks.
+        static std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> build_seed_positions(
+            const tt::tt_metal::ProgramDescriptor& desc) {
+            std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> positions;
+            if constexpr (has_seed) {
+                for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
+                    if (!is_compute_kernel(desc.kernels[k])) {
+                        continue;
+                    }
+                    for (const auto& [core, args] : desc.kernels[k].runtime_args) {
+                        if (!args.empty()) {
+                            positions.emplace(k, core.x, core.y, 0);
+                        }
+                    }
+                }
+            }
+            return positions;
+        }
+
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -313,6 +354,27 @@ struct MeshDeviceOperationAdapter {
                 auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, resources);
                 uint32_t num_kernels = static_cast<uint32_t>(desc.kernels.size());
 
+                // Build seed positions (compute kernel arg[0]) to exclude from address scanning.
+                auto seed_positions = build_seed_positions(desc);
+
+                // --- Record compute kernel cores for seed patching on cache hits ---
+                std::vector<ComputeKernelCores> compute_kernel_cores;
+                if constexpr (has_seed) {
+                    for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
+                        if (!is_compute_kernel(desc.kernels[k])) {
+                            continue;
+                        }
+                        std::vector<CoreCoord> cores;
+                        cores.reserve(desc.kernels[k].runtime_args.size());
+                        for (const auto& [core, args] : desc.kernels[k].runtime_args) {
+                            cores.push_back(core);
+                        }
+                        if (!cores.empty()) {
+                            compute_kernel_cores.push_back({k, std::move(cores)});
+                        }
+                    }
+                }
+
                 // --- Runtime arg address slots ---
                 std::vector<AddressSlot> slots;
                 if (!has_addr_collision) {
@@ -320,6 +382,9 @@ struct MeshDeviceOperationAdapter {
                         const auto& kernel_desc = desc.kernels[k];
                         for (const auto& [core, args] : kernel_desc.runtime_args) {
                             for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
+                                if (seed_positions.count({k, core.x, core.y, i})) {
+                                    continue;
+                                }
                                 auto it = addr_to_id.find(args[i]);
                                 if (it != addr_to_id.end()) {
                                     slots.push_back({k, core, i, it->second});
@@ -329,16 +394,15 @@ struct MeshDeviceOperationAdapter {
                     }
                 }
 
-                // Verify determinism for pure factories (no prepare_resources, no override).
-                // Factories with prepare_resources have side effects, so skip the double-call.
-                // Factories with override_nondeterministic_runtime_args handle non-determinism explicitly.
-                if constexpr (!has_factory_override && !has_prepare_resources) {
-                    std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> slot_positions;
+                // Verify determinism for pure factories (no prepare_resources).
+                // Seed positions and address slots are expected to differ between calls.
+                if constexpr (!has_prepare_resources) {
+                    std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> skip_positions = seed_positions;
                     for (const auto& slot : slots) {
-                        slot_positions.emplace(slot.kernel_handle, slot.core.x, slot.core.y, slot.arg_index);
+                        skip_positions.emplace(slot.kernel_handle, slot.core.x, slot.core.y, slot.arg_index);
                     }
 
-                    auto desc2 = DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+                    auto desc2 = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, resources);
                     for (uint32_t k = 0; k < num_kernels; ++k) {
                         const auto& k1 = desc.kernels[k];
                         const auto& k2 = desc2.kernels[k];
@@ -347,17 +411,12 @@ struct MeshDeviceOperationAdapter {
                             const auto& [core2, args2] = k2.runtime_args[ci];
                             for (uint32_t ai = 0; ai < static_cast<uint32_t>(args1.size()); ++ai) {
                                 TT_FATAL(
-                                    args1[ai] == args2[ai] || slot_positions.count({k, core1.x, core1.y, ai}),
+                                    args1[ai] == args2[ai] || skip_positions.count({k, core1.x, core1.y, ai}),
                                     "ProgramDescriptorFactory produces non-deterministic runtime "
                                     "args (kernel={}, core=({},{}), arg_index={}, values {} vs "
                                     "{}). create_descriptor must be deterministic: only buffer "
-                                    "addresses may vary between calls. If this factory "
-                                    "intentionally produces changing non-address runtime args "
-                                    "(e.g. random seeds), add a static "
-                                    "override_nondeterministic_runtime_args(Program&, "
-                                    "operation_attributes_t, tensor_args_t, "
-                                    "tensor_return_value_t) method to the factory to update "
-                                    "them explicitly on each cache hit.",
+                                    "addresses (and seed, if attrs has a seed field) may vary "
+                                    "between calls.",
                                     k,
                                     core1.x,
                                     core1.y,
@@ -394,6 +453,7 @@ struct MeshDeviceOperationAdapter {
                 shared_variables[range] = shared_variables_t{
                     .address_slots = std::move(slots),
                     .cb_slots = std::move(cb_slots),
+                    .compute_kernel_cores = std::move(compute_kernel_cores),
                     .num_kernel_handles = num_kernels,
                     .resources = std::move(resources),
                 };
@@ -421,9 +481,13 @@ struct MeshDeviceOperationAdapter {
                         program, cb_slot.cb_handle, *bufs[cb_slot.buffer_id]);
                 }
 
-                if constexpr (has_factory_override) {
-                    DescriptorFactory::override_nondeterministic_runtime_args(
-                        program, attrs, tensor_args, tensor_return_value);
+                if constexpr (has_seed) {
+                    for (const auto& ck : sv.compute_kernel_cores) {
+                        for (uint32_t i = 0; i < static_cast<uint32_t>(ck.cores.size()); ++i) {
+                            auto& args = tt::tt_metal::GetRuntimeArgs(program, ck.kernel_handle, ck.cores[i]);
+                            args[0] = attrs.seed + i;
+                        }
+                    }
                 }
             }
         }
@@ -434,17 +498,19 @@ struct MeshDeviceOperationAdapter {
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args,
         [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
-        // Two-tier hash logic:
+        // Hash logic:
         //  1. If the operation provides a custom compute_program_hash, use it.
-        //  2. Otherwise, fall back to the default hash of type + attrs + tensor_args.
-        //
-        // Note: descriptor-based operations that have dynamic fields in their
-        // attributes (e.g. random seeds) MUST provide compute_program_hash to
-        // exclude those fields and avoid cache misses on every call.
+        //  2. If the operation has a seed field (HasSeed), auto-zero it before hashing.
+        //  3. Otherwise, fall back to the default hash of type + attrs + tensor_args.
         tt::stl::hash::hash_t hash;
 
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else if constexpr (HasSeed<operation_attributes_t>) {
+            auto attrs_copy = attrs;
+            attrs_copy.seed = 0;
+            hash = tt::stl::hash::hash_objects_with_default_seed(
+                tt::stl::hash::type_hash<DeviceOperation>, attrs_copy, tensor_args);
         } else {
             hash = tt::stl::hash::hash_objects_with_default_seed(
                 tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);

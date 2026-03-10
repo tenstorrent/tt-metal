@@ -7,76 +7,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 using namespace tt;
 using namespace tt::constants;
 
 namespace ttnn::prim::matmul_detail {
-
-// ---- MeshWorkloadFactoryConcept methods ----
-
-MultiCoreDescriptorFactory::cached_mesh_workload_t MultiCoreDescriptorFactory::create_mesh_workload(
-    const MatmulParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    // Extract grid info needed for override_runtime_arguments
-    auto* device = tensor_args.input_tensors.at(0).device();
-    auto compute_grid = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_grid.y;
-    const auto& cshape = tensor_return_value.at(0).padded_shape();
-    uint32_t c_batch_size = get_batch_size(cshape);
-    auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
-    auto [num_cores, all_cores, cg1, cg2, npt1, npt2] =
-        tt::tt_metal::split_work_to_cores(compute_grid, num_output_tiles_total);
-
-    for (const auto& range : tensor_coords.ranges()) {
-        auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-        tt::tt_metal::Program program{desc};
-        mesh_workload.add_program(range, std::move(program));
-        shared_variables[range] = shared_variables_t{
-            .num_cores = static_cast<uint32_t>(num_cores),
-            .num_cores_y = num_cores_y,
-        };
-    }
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
-}
-
-void MultiCoreDescriptorFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const MatmulParams& /*operation_attributes*/,
-    const MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    // Only buffer addresses change between invocations.
-    // Reader kernel (handle 0): runtime_args[0] = src0_addr, [1] = src1_addr
-    // Writer kernel (handle 1): runtime_args[0] = dst_addr
-    uint32_t src0_addr = tensor_args.input_tensors.at(0).buffer()->address();
-    uint32_t src1_addr = tensor_args.input_tensors.at(1).buffer()->address();
-    uint32_t dst_addr = tensor_return_value.at(0).buffer()->address();
-
-    for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
-        auto& sv = cached_workload.shared_variables.at(coord_range);
-        for (uint32_t i = 0; i < sv.num_cores; i++) {
-            CoreCoord core = {i / sv.num_cores_y, i % sv.num_cores_y};
-            {
-                auto& args = tt::tt_metal::GetRuntimeArgs(program, 0, core);
-                args[0] = src0_addr;
-                args[1] = src1_addr;
-            }
-            {
-                auto& args = tt::tt_metal::GetRuntimeArgs(program, 1, core);
-                args[0] = dst_addr;
-            }
-        }
-    }
-}
-
-// ---- ProgramDescriptor construction (used by create_mesh_workload) ----
 
 tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     const MatmulParams& operation_attributes,

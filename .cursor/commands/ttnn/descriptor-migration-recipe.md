@@ -60,15 +60,6 @@ struct ProgramFactory {
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&);
-
-    // Optional: only needed if non-address runtime args change on cache hits
-    // (e.g., random seeds, dynamic parameters).
-    // Buffer addresses and dynamic CB addresses are auto-patched by the framework.
-    static void override_nondeterministic_runtime_args(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&);
 };
 ```
 
@@ -79,8 +70,10 @@ struct ProgramFactory {
 - The framework handles buffer address patching on cache hits automatically.
 - The framework handles dynamic circular buffer address patching automatically
   (set `.buffer` on `CBDescriptor` for sharded ops).
-- `override_nondeterministic_runtime_args` is only needed for truly dynamic parameters
-  (random seeds, semaphore addresses, etc.) — not for buffer addresses.
+- **Automatic seed handling:** if `operation_attributes_t` has a `uint32_t seed`
+  field, the framework automatically excludes it from the program hash and patches
+  compute kernel `runtime_args[0]` with `(seed + core_index)` on every cache hit.
+  Just put `seed + i` at arg[0] in `create_descriptor` and let the framework do the rest.
 - Include `<tt-metalium/program_descriptors.hpp>`.
 
 **Optional `prepare_resources` hook:**
@@ -147,29 +140,16 @@ return desc;
 **Reuse existing kernels** — point `kernel_source` to the old operation's kernels directory.
 No need to duplicate kernel files.
 
-### 1.4 `compute_program_hash`
+### 1.4 Hashing
 
-**Important for cache-hit performance.** During coexistence (old + new), include a
-type hash to avoid cache collisions:
+No custom `compute_program_hash` is needed. The framework automatically hashes
+`type_hash<YourDeviceOperation>` + all of `operation_attributes_t` + all of
+`tensor_args_t`. If `operation_attributes_t` has a `uint32_t seed` field, the
+framework auto-zeros it before hashing.
 
-```cpp
-std::uint64_t MyNewDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    auto hashable_attrs = attrs;
-    hashable_attrs.seed = 0;  // Zero out dynamic fields that don't affect compilation
-    return tt::stl::hash::hash_objects_with_default_seed(
-        tt::stl::hash::type_hash<MyNewDeviceOperation>,  // Prevents collision with old op
-        hashable_attrs, tensors);
-}
-```
-
-Keep the `type_hash<>` after migration as well — it prevents collisions between
-different operations in the shared device cache. Rename it from `type_hash<MyNewOp>`
-to `type_hash<MyOp>` in Phase 3.
-
-If all attributes are compile-time deterministic, you can omit `compute_program_hash`
-and the framework will use a sensible default that hashes `type_hash<YourDeviceOperation>`,
-all of `operation_attributes_t`, and all of `tensor_args_t`.
+While both the old and `_new` operations exist side by side (Phase 1), their program
+caches won't collide because the default hash includes `type_hash<YourDeviceOperation>`,
+which differs between the two distinct operation types.
 
 ### 1.5 CMakeLists.txt
 
@@ -252,8 +232,6 @@ Run the performance test **3-5 times** and compute the average overhead.
 | Performance  | < 3% overhead (release), < 5% for complex ops |
 
 If performance exceeds the threshold, check:
-- Is `compute_program_hash` doing unnecessary work?
-- Is `override_nondeterministic_runtime_args` doing too much? Buffer addresses are auto-patched.
 - In `mesh_device_operation_adapter.hpp`, verify the hash path is efficient.
 
 ---
@@ -267,8 +245,7 @@ In `<op_name>_device_operation.hpp`:
 1. Add `#include <tt-metalium/program_descriptors.hpp>`
 2. Replace each `ProgramFactory` struct: remove `shared_variables_t`,
    `cached_program_t`, `create()`, and `override_runtime_arguments(cached_program_t&, ...)`
-   — replace with `create_descriptor()` and optionally
-   `override_nondeterministic_runtime_args(Program&, ...)`.
+   — replace with `create_descriptor()`.
 3. Update the `program_factory_t` variant if factory types changed.
 4. **Preserve the original copyright year.**
 
@@ -280,13 +257,10 @@ directory. Update:
 - Include paths (from `<op_name>_new_device_operation.hpp` to `<op_name>_device_operation.hpp`)
 - Class names (from `<Op>NewDeviceOperation` to `<Op>DeviceOperation`)
 
-### 3.3 Update `compute_program_hash`
+### 3.3 Delete `compute_program_hash`
 
-Change `type_hash<MyNewDeviceOperation>` to `type_hash<MyDeviceOperation>` to match
-the renamed type. Keep the `type_hash` — it prevents cache collisions between
-different operations that happen to hash the same attributes. The default fallback
-in `compute_mesh_workload_hash` already includes `type_hash`, so custom hashes
-should too for consistency.
+If the old operation had a custom `compute_program_hash`, delete it. The framework
+handles hashing automatically (including seed auto-zeroing via the `HasSeed` concept).
 
 ### 3.4 Update CMakeLists.txt
 
@@ -336,7 +310,7 @@ Both must succeed with zero errors.
 |------|--------------|
 | Header | `device/<op>_device_operation.hpp` — ProgramFactory struct |
 | Factory impl | `device/<op>_program_factory.cpp` (or `device/factory/*.cpp`) |
-| Hash | `device/<op>_device_operation.cpp` — `compute_program_hash` |
+| Hash | Delete `compute_program_hash` if present (framework handles it) |
 | CMake (op) | `<op>/CMakeLists.txt` — source entries |
 | CMake (ttnn) | `ttnn/CMakeLists.txt` — remove `_new` subdirectory and link target |
 | Tests | `tests/.../sources.cmake` — remove benchmark entries |
@@ -354,19 +328,10 @@ Both must succeed with zero errors.
    live in `tt::tt_metal::detail`. If your factory is in a namespace where `detail::`
    resolves differently, fully qualify as `tt::tt_metal::detail::`.
 
-3. **Cache collisions.** Always include `type_hash<YourOp>` in
-   `compute_program_hash`. During coexistence use `type_hash<NewOp>`; after migration
-   rename to `type_hash<Op>`. Do NOT remove `type_hash` — it prevents collisions
-   between different operations in the shared per-device program cache.
-
-4. **`override_nondeterministic_runtime_args` signature.** The descriptor pattern uses
-   `Program&` (not `cached_program_t&`). The kernel handle is an integer index
-   matching the order kernels were pushed into `desc.kernels`.
-
-5. **External consumers of old factories.** Check sparse matmul, CCL fusion ops, and
+3. **External consumers of old factories.** Check sparse matmul, CCL fusion ops, and
    any other code that directly instantiates your factory type.
 
-6. **Don't delete useful comments.** When copying factory implementations, preserve
+4. **Don't delete useful comments.** When copying factory implementations, preserve
    algorithmic comments from the original code. These explain non-obvious hardware
    behavior, NOC bandwidth constraints, padding rules, etc.
 
@@ -376,7 +341,7 @@ See the FullLike operation for the simplest complete example:
 - Descriptor-based: `ttnn/cpp/ttnn/operations/full_like/device/full_like_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/full_like/device/full_like_device_operation.hpp`
 
-See the Bernoulli operation for an example with `override_nondeterministic_runtime_args` (seed patching):
+See the Bernoulli operation for an example with automatic seed handling:
 - Factory: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp`
 
