@@ -144,7 +144,9 @@ def _html_head() -> str:
                                     border-bottom: 1px solid #e2e8f0; }
   table.tests th { background: #f1f5f9; font-weight: 600; }
   td.msg { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-           font-family: monospace; font-size: 0.75rem; color: #64748b; }
+           font-family: monospace; font-size: 0.75rem; color: #64748b; cursor: pointer; }
+  td.msg.expanded { white-space: pre-wrap; word-break: break-word; overflow: visible;
+                    max-width: none; background: #fef9e7; padding: 8px; }
 
   .annotation { display: inline-block; }
   .stars { color: #f59e0b; }
@@ -380,10 +382,11 @@ def _html_run_detail(rid: int, details: dict) -> str:
             status_html = f'<span style="{_status_bg(status)}">{status.upper()}</span>'
             cat = t.get("failure_category")
             cat_html = f'<span style="{_category_bg(cat)}">{cat}</span>' if cat else "--"
-            msg = html.escape(t.get("failure_message") or "")[:120]
+            full_msg = html.escape(t.get("failure_message") or "")
+            short_msg = full_msg[:120]
             parts.append(
                 f"<tr><td>{tname}</td><td>{shape}</td><td>{status_html}</td>"
-                f'<td>{cat_html}</td><td class="msg" title="{html.escape(t.get("failure_message") or "")}">{msg}</td></tr>'
+                f'<td>{cat_html}</td><td class="msg" onclick="toggleMsg(this)" data-full="{full_msg}" data-short="{short_msg}">{short_msg}</td></tr>'
             )
         parts.append("</tbody></table>")
     else:
@@ -463,6 +466,15 @@ function showSection(runId, section) {
       block.dataset.highlighted = 'true';
     }
   });
+}
+function toggleMsg(td) {
+  if (td.classList.contains('expanded')) {
+    td.classList.remove('expanded');
+    td.textContent = td.dataset.short;
+  } else {
+    td.classList.add('expanded');
+    td.textContent = td.dataset.full;
+  }
 }
 function showKernel(kernelGroupId, index) {
   var parent = document.getElementById(kernelGroupId + '-' + index).parentElement;

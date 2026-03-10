@@ -137,7 +137,7 @@ def parse_junit_xml(xml_path: Path) -> list:
                     "shape": shape,
                     "status": "failed",
                     "failure_category": category,
-                    "failure_message": full_text[:500],
+                    "failure_message": full_text[:2000],
                 }
             )
         elif error is not None:
@@ -152,7 +152,7 @@ def parse_junit_xml(xml_path: Path) -> list:
                     "shape": shape,
                     "status": "error",
                     "failure_category": category,
-                    "failure_message": full_text[:500],
+                    "failure_message": full_text[:2000],
                 }
             )
         elif skipped is not None:
@@ -165,7 +165,7 @@ def parse_junit_xml(xml_path: Path) -> list:
                     "shape": shape,
                     "status": "skipped",
                     "failure_category": category,
-                    "failure_message": message[:500] if message else None,
+                    "failure_message": message[:2000] if message else None,
                 }
             )
         else:
