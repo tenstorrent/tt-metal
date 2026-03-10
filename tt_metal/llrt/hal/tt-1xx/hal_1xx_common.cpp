@@ -144,6 +144,8 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
         case HalProgrammableCoreType::DRAM:
             if (params.is_fw) {
                 srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/drisc.cc");
+            } else {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/drisck.cc");
             }
             break;
         default:

@@ -21,7 +21,7 @@ from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ParsedElfFile
 from ttexalens.memory_access import MemoryAccess
-from dispatcher_data import run as get_dispatcher_data, DispatcherData, RunChecks
+from dispatcher_data import run as get_dispatcher_data, DispatcherData, RunChecks, create_l1_mem_access
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -45,11 +45,13 @@ class CoreMagicValues:
         self.worker = fw_elf.get_enum_value("CoreMagicNumber::WORKER")
         self.active_eth = fw_elf.get_enum_value("CoreMagicNumber::ACTIVE_ETH")
         self.idle_eth = fw_elf.get_enum_value("CoreMagicNumber::IDLE_ETH")
+        self.dram = fw_elf.get_enum_value("CoreMagicNumber::DRAM")
 
         self.magic_to_name = {
             self.worker: "WORKER",
             self.active_eth: "ACTIVE_ETH",
             self.idle_eth: "IDLE_ETH",
+            self.dram: "DRAM",
         }
 
     def get_name(self, magic_value: int) -> str | None:
@@ -71,6 +73,8 @@ def get_expected_magic_for_location(
             return magic_values.idle_eth, "IDLE_ETH"
         case "active_eth":
             return magic_values.active_eth, "ACTIVE_ETH"
+        case "dram":
+            return magic_values.dram, "DRAM"
         case _:
             return magic_values.worker, "WORKER"
 
@@ -147,10 +151,12 @@ def check_core_magic(
         other_elfs_to_try.append(("IDLE_ETH", dispatcher_data._idle_erisc_elf))
     if expected_type != "ACTIVE_ETH":
         other_elfs_to_try.append(("ACTIVE_ETH", dispatcher_data._active_erisc_elf))
+    if expected_type != "DRAM" and dispatcher_data._drisc_elf is not None:
+        other_elfs_to_try.append(("DRAM", dispatcher_data._drisc_elf))
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_mem_access(location)
         other_magic = try_read_magic_with_elf(l1_mem_access, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)
@@ -176,10 +182,10 @@ def check_core_magic(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
     # Only check one RISC per core since magic is core-wide, not per-RISC
-    # Use brisc for tensix, erisc/erisc0 for eth
-    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0"]
+    # Use brisc for tensix, erisc/erisc0 for eth, drisc for dram
+    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "drisc"]
 
     dispatcher_data = get_dispatcher_data(args, context)
     run_checks = get_run_checks(args, context)

@@ -953,8 +953,8 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     const auto& hal = MetalContext::instance().hal();
-    uint64_t kernel_config_base =
-        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
+    HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+    uint64_t kernel_config_base = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);

@@ -111,8 +111,8 @@ def collect_device_health_summary(run_checks: RunChecks) -> list[DeviceHealthSum
 def run(args, context: Context):
     global _USER_VIEW
     _USER_VIEW = bool(args["--user-view"])
-    RISC_CORES_TO_CHECK = ["brisc", "trisc0", "trisc1", "trisc2", "erisc", "erisc0", "erisc1"]
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    RISC_CORES_TO_CHECK = ["brisc", "trisc0", "trisc1", "trisc2", "erisc", "erisc0", "erisc1", "drisc"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "dram"]
     run_checks = get_run_checks(args, context)
     # These are used to test health of devices and cores and populate broken_devices and broken_cores sets in RunChecks
     run_checks.run_per_device_check(lambda device: probe_device(device), print_broken_devices=False)

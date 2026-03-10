@@ -35,6 +35,8 @@ HalCoreInfoType create_dram_mem_map() {
     static_assert(sizeof(mailboxes_t) <= MEM_DRISC_MAILBOX_SIZE);
     static_assert(MEM_DRISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 
+    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0;
@@ -45,7 +47,9 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] =
         GET_DRISC_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_DRISC_MAILBOX_ADDRESS_HOST(profiler);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_MAP_END;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_KERNEL_CONFIG_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        tt::align(MEM_DRISC_KERNEL_CONFIG_BASE + MEM_DRISC_KERNEL_CONFIG_SIZE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_DRISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_DRISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
@@ -63,7 +67,9 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = 0;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_KERNEL_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        MEM_DRISC_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t) * go_message_num_entries;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
@@ -96,7 +102,7 @@ HalCoreInfoType create_dram_mem_map() {
 
     return {
         HalProgrammableCoreType::DRAM,
-        CoreType::DRAM,
+        CoreType::DRAM_WORKER,
         std::move(processor_classes),
         std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),

@@ -923,9 +923,12 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        uint64_t l1_noc_offset = hal.get_l1_noc_offset(programmable_core_type);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             auto kernel_config = kg->launch_msg.view().kernel_config();
-            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
+            uint64_t kernel_config_base =
+                static_cast<uint64_t>(kernel_config.kernel_config_base()[index]) + l1_noc_offset;
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -1316,6 +1319,36 @@ KernelHandle CreateKernelFromString(
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
+}
+
+static KernelHandle CreateDramKernel(
+    Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
+    TT_FATAL(
+        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
+    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(kernel_src, core_range_set, config);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
 
 CBHandle CreateCircularBuffer(
