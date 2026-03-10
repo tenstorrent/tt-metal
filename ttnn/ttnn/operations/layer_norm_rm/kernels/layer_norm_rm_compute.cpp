@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // layer_norm_rm - Compute Kernel
-// Stage 3: tilize -> reduce_mean -> sub_mean -> square -> untilize
-// Uses reduce helper for row-wise mean computation (REDUCE_ROW with 1/W scaler).
+// Stage 4: tilize -> reduce_mean -> sub_mean -> square -> reduce_var -> add_eps+rsqrt -> mul_rsqrt -> untilize
+// Full normalization: (x - mean) / sqrt(var + eps)
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -20,6 +21,9 @@ constexpr uint32_t cb_output_rm = 16;    // c_16: Untilized RM output
 constexpr uint32_t cb_mean = 24;         // c_24: Row mean
 constexpr uint32_t cb_centered = 25;     // c_25: x - mean
 constexpr uint32_t cb_centered_sq = 26;  // c_26: (x - mean)^2
+constexpr uint32_t cb_var = 27;          // c_27: Row variance
+constexpr uint32_t cb_rsqrt = 28;        // c_28: rsqrt(var + eps)
+constexpr uint32_t cb_normalized = 31;   // c_31: Normalized output
 
 // Compile-time args
 constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -63,17 +67,45 @@ void kernel_main() {
         cb_pop_front(cb_tilized, Wt);
 
         // Phase 4: Square centered values
-        // c_25: Wt tiles, WaitUpfrontNoPop (persists for Phase 7 in later stages)
+        // c_25: Wt tiles, WaitUpfrontNoPop (persists for Phase 7)
         // c_26: Wt tiles centered^2, pushed
         compute_kernel_lib::square<compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
             cb_centered, cb_centered_sq, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
-        // Pop c_25 now (not needed until stage 4 adds Phase 7)
-        cb_pop_front(cb_centered, Wt);
 
-        // Phase 10: Untilize (tile -> RM) c_26 -> c_16
+        // Phase 5: Reduce variance (row-wise sum * 1/W)
+        // c_26: Wt tiles, default WaitAndPopPerTile (consumed)
+        // c_8: 1/W scaler
+        // c_27: 1 tile variance, pushed
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_centered_sq, cb_scaler, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+
+        // Phase 6: Add epsilon + rsqrt
+        // c_27: 1 tile variance, WaitAndPopPerTile (consumed)
+        // c_9: 1 tile epsilon, NoWaitNoPop (program lifetime, manually managed)
+        // c_28: 1 tile rsqrt(var+eps), pushed
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::SCALAR,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_var, cb_eps, cb_rsqrt, compute_kernel_lib::BinaryInputBlockShape::single(), [](uint32_t dst_idx) {
+                rsqrt_tile_init();
+                rsqrt_tile(dst_idx);
+            });
+
+        // Phase 7: Multiply by rsqrt (broadcast COL)
+        // c_25: Wt tiles centered, NoWaitPopAtEnd (already waited in Phase 4, pop at end)
+        // c_28: 1 tile rsqrt, WaitAndPopPerTile (COL broadcast, consumed)
+        // c_31: Wt tiles normalized, pushed
+        compute_kernel_lib::mul<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_centered, cb_rsqrt, cb_normalized, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+
+        // Phase 10: Untilize (tile -> RM) c_31 -> c_16
         compute_kernel_lib::untilize<
             Wt,
-            cb_centered_sq,
+            cb_normalized,
             cb_output_rm,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit>(1);
     }
