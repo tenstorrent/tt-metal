@@ -1,0 +1,99 @@
+task: "fused ag+mm 7x8 num_links=4 for llama prefill"
+
+# Baseline: separate AllGather + Matmul (non-fused)
+baseline_non_fused:
+  prompt_length: "8k"
+  ag_us: 530.09
+  mm_us: 1321.09
+  total_us: 1851.18
+  notes: "ring_all_gather with num_links=4, separate matmul"
+
+# Baseline: fused op with num_links=1 (current default for 7x8)
+baseline_fused_1link:
+  prompt_length: "8k"
+  total_us: 2097.87
+  notes: "fused path but only 1 link due to 7 % 4 != 0"
+
+# Target: fused op with num_links=4
+target_fused_4link:
+  prompt_length: "8k"
+  total_us: null  # to be determined
+  notes: "goal is to beat baseline_non_fused (1851.18 µs)"
+
+current_goal:
+  grid_x: 7
+  grid_y: 8
+  num_links: 4
+  transpose_core_grid: true
+  full_grid_size_x: 7
+  full_grid_size_y: 10
+
+# Device constraints
+device_constraints:
+  worker_grid: "7x8 (columns 0-6, rows 0-7)"
+  storage_rows: "rows 8-9"
+  mux_cores_needed: 8  # 4 links × 2 directions
+  mux_positions_available_x: 7
+  mux_positions_available_y: 10
+
+# Commands
+rebuild_command: |
+  cd /home/cust-team/teja/tt-metal
+  ./build_metal.sh
+
+reset_command: |
+  tt-smi -glx_reset
+  sleep 60
+
+venv_command: |
+  cd /home/cust-team/teja/tt-metal
+  source python_env/bin/activate
+
+profiler_command: |
+  SKIP_PREFILL_WARMUP=1 USE_FUSED_AG_MM=1 ./scripts/run_profiler_sweep.sh --prompt-lengths 8k --run-name ag_mm_fused_8k
+
+profiler_with_logs: |
+  SKIP_PREFILL_WARMUP=1 USE_FUSED_AG_MM=1 TT_METAL_LOGGER_LEVEL=INFO ./scripts/run_profiler_sweep.sh --prompt-lengths 8k --run-name ag_mm_fused_8k
+
+prefill_csv_path: "profiler_sweep_results/<run_name>/8k/prefill.csv"
+
+# Activation proof
+activation_proof:
+  log_message: "AG+MM: 7x8+4-links"
+  grep_command: "grep 'AG+MM.*7x8' <profiler_output>"
+
+# Known failure categories
+failure_categories:
+  - name: "CoreRangeSet overlap"
+    cause: "Mux cores placed at same position due to wrapping"
+    error_pattern: "Cannot create CoreRangeSet.*overlap"
+
+  - name: "Illegal NOC usage"
+    cause: "Mux cores placed on same column as worker cores"
+    error_pattern: "Illegal NOC usage"
+
+  - name: "Not enough mux cores"
+    cause: "num_links × 2 exceeds available positions"
+    error_pattern: "not enough cores for.*mux"
+
+  - name: "Hang during prefetcher"
+    cause: "Worker-to-mux communication broken"
+    error_pattern: "Stuck at 'Running TtLlamaPrefetcherSetup'"
+
+  - name: "Path not taken"
+    cause: "Python side not passing correct parameters"
+    error_pattern: "No 'AG+MM.*7x8' in logs"
+
+# Success criteria
+success_criteria:
+  - "build succeeds"
+  - "runtime succeeds (no hang)"
+  - "fused path actually uses num_links=4 (log message present)"
+  - "fused op duration < 1851.18 µs (beats non-fused baseline)"
+  - "no regression to 8x8 or other grid configs"
+
+# Key files to modify
+key_files:
+  cpp_program_factory: "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp"
+  python_ccl: "models/demos/llama3_70b_galaxy/tt/llama_ccl.py"
+  python_mlp: "models/demos/llama3_70b_galaxy/tt/llama_mlp.py"
