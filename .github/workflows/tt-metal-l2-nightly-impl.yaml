@@ -459,7 +459,7 @@ jobs:
         if: always()
 
   ttnn-sdxl-tests:
-    if: ${{ inputs.run_sdxl_tests }}
+    if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100' }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
