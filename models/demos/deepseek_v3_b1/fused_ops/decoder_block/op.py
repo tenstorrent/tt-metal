@@ -583,4 +583,4 @@ class DecoderBlock:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
         print("Running DecoderBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        return result, attention_block_output_tensor, moe_final_output_tensor
+        return result, attention_block_output_tensor

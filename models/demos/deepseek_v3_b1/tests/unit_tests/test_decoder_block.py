@@ -934,7 +934,7 @@ def test_decoder(
     # ========================================================================
     logger.info(f"Running decoder operation with position_id={position_id}...")
     for i in range(num_iters):
-        ttnn_output_result, attention_block_output_tensor, moe_final_output_tensor = DecoderBlock.op(
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
             # AttentionBlock parameters
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -1012,7 +1012,6 @@ def test_decoder(
     if validate_local_flash_mla:
         sdpa_output_torch = ttnn.to_torch(t.ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
-    ttnn_final_output = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     ttnn_attention_output = ttnn.to_torch(
         attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
     )
