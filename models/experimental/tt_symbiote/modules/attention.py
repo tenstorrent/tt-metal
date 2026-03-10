@@ -985,7 +985,6 @@ class LlamaAttention(TTNNModule):
                 dtype=hidden_states.dtype,
             )
             query_states = ttnn.concat([zero_pad, query_states.to_ttnn], dim=2)
-
         attn_out = self.sdpa(
             self,
             query_states,
@@ -993,18 +992,18 @@ class LlamaAttention(TTNNModule):
             value_states,
             None,
             dropout=0.0,
-            scaling=1.0,
+            scaling=self.torch_layer.scaling,
             is_causal=self.torch_layer.is_causal,
-            transpose_output=True,
+            transpose_output=False,
         )
-
+        attn_out = ttnn.experimental.nlp_concat_heads(attn_out.to_ttnn)
+        attn_out = ttnn.squeeze(attn_out, 1)
         # Slice output if query was padded
         if self.torch_layer.is_causal and original_q_len < kv_len:
-            # Slice: [B, kv_len, H, D] -> [B, q_len, H, D]
-            attn_out = attn_out[:, -original_q_len:, :, :]
+            # Slice: [B, kv_len, D] -> [B, q_len, D]
+            attn_out = attn_out[:, -original_q_len:, :]
 
-        attn_out = ttnn.reshape(attn_out.to_ttnn, (bsz, q_len, -1))
-        return self.o_proj(attn_out), None, past_key_value
+        return self.o_proj(attn_out), None
 
 
 class TTNNGR00TSelfAttention(TTNNModule):
