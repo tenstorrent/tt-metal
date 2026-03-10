@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import pytest
 import random
@@ -204,7 +205,7 @@ def run_all_to_all_dispatch_metadata_test(
 
     # Compute tokens per device for height sharding the input indices/scores
     # After mesh sharding, each device gets batch/devices tokens
-    tokens_per_device = batch // devices
+    tokens_per_device = batch // mesh_shape[cluster_axis]
 
     # Create height sharded memory config for input indices and scores
     # 1 row per core, with tokens_per_device cores total
@@ -653,11 +654,6 @@ def run_all_to_all_dispatch_metadata_test(
 
 
 # Correctness test - single focused test case for pipeline validation
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
-@pytest.mark.skipif(
-    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
-)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -675,14 +671,10 @@ def run_all_to_all_dispatch_metadata_test(
     "mesh_shape, mesh_device, cluster_axis",
     [
         pytest.param(
-            (1, 8),
-            (1, 8),
+            (4, 8),
+            (4, 8),
             1,
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-            ),
-            id="1x8",
+            id="4x8",
         ),
         pytest.param(
             (1, 16),
@@ -700,7 +692,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize("experts_per_device", [2])
 def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     batches_per_device = 32
-    experts = experts_per_device * mesh_shape[cluster_axis]
+    experts = experts_per_device * math.prod(mesh_shape)
     select_experts_k = 8
     hidden_size = 7168
     seq_len = 1

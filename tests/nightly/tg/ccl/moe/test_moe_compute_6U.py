@@ -912,11 +912,7 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     return golden_e_t, experts_per_device
 
 
-def compute_matmul_golden(
-    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden
-):
-    tokens = tokens_per_device * devices
-
+def compute_matmul_golden(torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens, hidden):
     # (L, D, E/D, T, H) -> (L, E, T, H)
     torch_input_ref = torch_input_ref.reshape(layers, experts, tokens, hidden)
 
@@ -979,11 +975,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
-@pytest.mark.skipif(
-    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
-)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1000,13 +991,9 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     "mesh_shape, mesh_device",
     [
         pytest.param(
-            (1, 8),
-            (1, 8),
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-            ),
-            id="1x8",
+            (4, 8),
+            (4, 8),
+            id="4x8",
         ),
         pytest.param(
             (1, 16),
@@ -1024,13 +1011,12 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 1), (8, 5, 1)],
-    ids=["perf", "accuracy"],  # only perf tests failing (1x8)
+    "selected_experts_k, num_layers, num_iterations, enable_trace",
+    [(1, 1, 1, True), (8, 5, 1, False)],
+    ids=["perf", "accuracy"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_moe_compute(
@@ -1061,8 +1047,6 @@ def test_moe_compute(
     torch.manual_seed(2003)
     random.seed(2003)
 
-    experts = experts_per_device * mesh_shape[cluster_axis]
-
     #########################################
     # TEST SETUP
     #########################################
@@ -1070,6 +1054,7 @@ def test_moe_compute(
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
     total_tokens = tokens_per_device * num_dispatch_devices
+    experts = experts_per_device * num_devices
 
     logger.info(f"Test configuration:")
     logger.info(f"  mesh_shape: {mesh_shape}")
@@ -1266,7 +1251,7 @@ def test_moe_compute(
         num_layers,
         experts,
         num_devices,
-        tokens_per_device,
+        total_tokens,
         hidden_size,
     )
 
