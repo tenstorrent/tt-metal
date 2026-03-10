@@ -22,6 +22,120 @@ optimal_topology = (
 )
 
 
+def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
+    if prompts is not None and index < len(prompts):
+        return prompts[index]
+    if random_weights:
+        return "[random-weights default prompt]"
+    return "[empty prompt]"
+
+
+def _build_output_data(
+    prompts: list[str] | None,
+    generations: list[dict],
+    statistics: dict,
+    random_weights: bool,
+) -> dict:
+    output_data = {
+        "prompts": prompts if prompts else [],
+        "generations": [],
+        "statistics": statistics,
+    }
+    for i, gen_result in enumerate(generations):
+        output_data["generations"].append(
+            {
+                "index": i + 1,
+                "prompt": _prompt_text_for_index(prompts, random_weights, i),
+                "text": gen_result.get("text"),
+            }
+        )
+    return output_data
+
+
+def _resolve_saved_output_path(prompts_file_path: Path | None, output_path_arg: str | None) -> Path | None:
+    if output_path_arg:
+        return Path(output_path_arg)
+    if prompts_file_path is not None:
+        return prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    return None
+
+
+def _write_json_output(path: Path, payload: dict, label: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        logger.info(f"{label} saved to '{path}'")
+        print(f"\n{label} saved to '{path}'\n")
+    except Exception as e:
+        raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
+
+
+def _build_compare_log(
+    baseline: dict,
+    baseline_path: Path,
+    current_prompts: list[str],
+    current_generations: list[dict],
+    current_output_path: Path,
+) -> dict:
+    baseline_prompts = baseline.get("prompts", [])
+    baseline_generations = baseline.get("generations", [])
+
+    mismatch_reason = None
+    if baseline_prompts and baseline_prompts != current_prompts:
+        mismatch_reason = "Output mismatch: baseline and current prompts differ."
+    if mismatch_reason is None and (
+        len(baseline_generations) != len(current_generations) or len(current_prompts) != len(current_generations)
+    ):
+        mismatch_reason = (
+            "Baseline/current generation counts do not match prompt count "
+            f"({len(baseline_generations)} baseline vs {len(current_generations)} current vs {len(current_prompts)} prompts)."
+        )
+
+    max_len = max(len(baseline_generations), len(current_generations), len(current_prompts))
+    compare_entries = []
+    for i in range(max_len):
+        base_gen = baseline_generations[i] if i < len(baseline_generations) else {}
+        cur_gen = current_generations[i] if i < len(current_generations) else {}
+        base_prompt = base_gen.get("prompt")
+        if base_prompt is None and i < len(baseline_prompts):
+            base_prompt = baseline_prompts[i]
+        cur_prompt = current_prompts[i] if i < len(current_prompts) else None
+        base_text = base_gen.get("text") if base_gen else None
+        cur_text = cur_gen.get("text") if cur_gen else None
+        prompt_match = None
+        text_match = None
+        if base_prompt is not None and cur_prompt is not None:
+            prompt_match = base_prompt == cur_prompt
+        if base_text is not None and cur_text is not None:
+            text_match = base_text == cur_text
+        if mismatch_reason is None:
+            if prompt_match is False:
+                mismatch_reason = f"Output mismatch at generation {i}: baseline and current prompts differ."
+            elif text_match is False:
+                mismatch_reason = f"Output mismatch at generation {i}: baseline and current text differ."
+        compare_entries.append(
+            {
+                "index": i + 1,
+                "baseline_prompt": base_prompt,
+                "current_prompt": cur_prompt,
+                "baseline_text": base_text,
+                "current_text": cur_text,
+                "prompt_match": prompt_match,
+                "text_match": text_match,
+            }
+        )
+
+    return {
+        "baseline_path": str(baseline_path),
+        "current_output_path": str(current_output_path),
+        "baseline_count": len(baseline_generations),
+        "current_count": len(current_generations),
+        "prompt_count": len(current_prompts),
+        "mismatch_reason": mismatch_reason,
+        "entries": compare_entries,
+    }
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -562,61 +676,24 @@ def main() -> None:
         mtp_skip_on_accept=args.mtp_skip_on_accept,
     )
 
+    saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
+
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
-    if prompts_file_path:
-        # Use provided output path, or generate default: input_name + "_output.json"
-        if args.output_path:
-            output_path = Path(args.output_path)
-        else:
-            output_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
-
-        # Prepare output data structure
-        output_data = {
-            "prompts": args.prompts if args.prompts else [],
-            "generations": [],
-            "statistics": results.get("statistics", {}),
-        }
-
-        # Add generation results
-        for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
-            output_data["generations"].append(
-                {
-                    "index": i + 1,
-                    "prompt": prompt_text if prompt_text else "[empty prompt]",
-                    "text": gen_result.get("text"),
-                }
-            )
-
-        # Write to JSON file
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Results saved to '{output_path}'")
-            print(f"\nResults saved to '{output_path}'\n")
-        except Exception as e:
-            raise SystemExit(f"Failed to write output file '{output_path}': {e}")
+    if prompts_file_path and saved_output_path is not None:
+        output_data = _build_output_data(
+            prompts=args.prompts,
+            generations=results["generations"],
+            statistics=results.get("statistics", {}),
+            random_weights=bool(args.random_weights),
+        )
+        _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before
         print("\n===== Generated =====\n")
 
         for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
             print("-" * 30)
-            if prompt_text:
-                print(f"Prompt[{i+1}]: {prompt_text}")
-            else:
-                print(f"Prompt[{i+1}]: [empty prompt]")
+            print(f"Prompt[{i+1}]: {_prompt_text_for_index(args.prompts, bool(args.random_weights), i)}")
             print(f"Generation[{i+1}]:")
             if gen_result.get("text") is not None:
                 print(gen_result["text"])  # type: ignore
@@ -642,84 +719,26 @@ def main() -> None:
                 baseline = json.load(f)
         except Exception as e:
             raise SystemExit(f"Failed to read baseline output '{baseline_path}': {e}")
-        baseline_prompts = baseline.get("prompts", [])
-        baseline_generations = baseline.get("generations", [])
         current_generations = results.get("generations", [])
         current_prompts = args.prompts or []
-        if args.output_path:
-            compare_base_path = Path(args.output_path)
-        elif prompts_file_path:
-            compare_base_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
-        else:
+        compare_base_path = saved_output_path
+        if compare_base_path is None:
             logs_dir = Path("logs")
             logs_dir.mkdir(parents=True, exist_ok=True)
             compare_base_path = logs_dir / f"deepseek_compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         compare_log_path = compare_base_path.parent / f"{compare_base_path.stem}_compare.json"
 
-        mismatch_reason = None
-        if baseline_prompts and baseline_prompts != current_prompts:
-            mismatch_reason = "Output mismatch: baseline and current prompts differ."
-        if mismatch_reason is None and (
-            len(baseline_generations) != len(current_generations) or len(current_prompts) != len(current_generations)
-        ):
-            mismatch_reason = (
-                "Baseline/current generation counts do not match prompt count "
-                f"({len(baseline_generations)} baseline vs {len(current_generations)} current vs {len(current_prompts)} prompts)."
-            )
+        compare_log = _build_compare_log(
+            baseline=baseline,
+            baseline_path=baseline_path,
+            current_prompts=current_prompts,
+            current_generations=current_generations,
+            current_output_path=compare_base_path,
+        )
+        _write_json_output(compare_log_path, compare_log, "Comparison log")
 
-        max_len = max(len(baseline_generations), len(current_generations), len(current_prompts))
-        compare_entries = []
-        for i in range(max_len):
-            base_gen = baseline_generations[i] if i < len(baseline_generations) else {}
-            cur_gen = current_generations[i] if i < len(current_generations) else {}
-            base_prompt = base_gen.get("prompt")
-            if base_prompt is None and i < len(baseline_prompts):
-                base_prompt = baseline_prompts[i]
-            cur_prompt = current_prompts[i] if i < len(current_prompts) else None
-            base_text = base_gen.get("text") if base_gen else None
-            cur_text = cur_gen.get("text") if cur_gen else None
-            prompt_match = None
-            text_match = None
-            if base_prompt is not None and cur_prompt is not None:
-                prompt_match = base_prompt == cur_prompt
-            if base_text is not None and cur_text is not None:
-                text_match = base_text == cur_text
-            if mismatch_reason is None:
-                if prompt_match is False:
-                    mismatch_reason = f"Output mismatch at generation {i}: baseline and current prompts differ."
-                elif text_match is False:
-                    mismatch_reason = f"Output mismatch at generation {i}: baseline and current text differ."
-            compare_entries.append(
-                {
-                    "index": i + 1,
-                    "baseline_prompt": base_prompt,
-                    "current_prompt": cur_prompt,
-                    "baseline_text": base_text,
-                    "current_text": cur_text,
-                    "prompt_match": prompt_match,
-                    "text_match": text_match,
-                }
-            )
-
-        compare_log = {
-            "baseline_path": str(baseline_path),
-            "current_output_path": str(compare_base_path),
-            "baseline_count": len(baseline_generations),
-            "current_count": len(current_generations),
-            "prompt_count": len(current_prompts),
-            "mismatch_reason": mismatch_reason,
-            "entries": compare_entries,
-        }
-        try:
-            with open(compare_log_path, "w", encoding="utf-8") as f:
-                json.dump(compare_log, f, indent=2, ensure_ascii=False)
-            logger.info(f"Comparison log saved to '{compare_log_path}'")
-            print(f"\nComparison log saved to '{compare_log_path}'\n")
-        except Exception as e:
-            raise SystemExit(f"Failed to write comparison log '{compare_log_path}': {e}")
-
-        if mismatch_reason is not None:
-            raise SystemExit(mismatch_reason)
+        if compare_log["mismatch_reason"] is not None:
+            raise SystemExit(compare_log["mismatch_reason"])
         logger.info("Output comparison passed: prompt+generated text content matches exactly.")
 
 

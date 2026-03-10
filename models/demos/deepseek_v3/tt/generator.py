@@ -86,6 +86,89 @@ def _build_verify_alias_page_table_host(
     return alias_page_table
 
 
+def _log_verify_alias_page_table(
+    *,
+    label: str,
+    base_page_table: torch.Tensor,
+    alias_page_table: torch.Tensor,
+    num_prompts: int,
+    verify_offset: int,
+    prompt_indices: List[int] | None,
+    interleaved: bool,
+) -> None:
+    logger.info(
+        "{} base page table (shape={}): {}",
+        label,
+        tuple(int(dim) for dim in base_page_table.shape),
+        base_page_table.tolist(),
+    )
+    num_rows = int(alias_page_table.shape[0])
+    if interleaved:
+        if prompt_indices is None:
+            for row in range(1, num_rows, 2):
+                logger.info("{} interleaved alias: row={} -> row={}", label, row, row - 1)
+        else:
+            for i in prompt_indices:
+                if i < 0:
+                    continue
+                src_row = (2 * i) % num_rows
+                dst_row = (src_row + 1) % num_rows
+                logger.info(
+                    "{} interleaved selective alias: prompt_idx={} row={} -> row={}", label, i, dst_row, src_row
+                )
+    else:
+        prompt_indices_to_log = prompt_indices if prompt_indices is not None else list(range(num_prompts))
+        for i in prompt_indices_to_log:
+            if i < 0 or i >= num_prompts:
+                continue
+            src_row = i % num_rows
+            dst_row = (verify_offset + i) % num_rows
+            logger.info(
+                "{} verify alias: prompt_idx={} src_row={} -> verify_row={} (verify_offset={})",
+                label,
+                i,
+                src_row,
+                dst_row,
+                verify_offset,
+            )
+    logger.info(
+        "{} aliased page table (shape={}): {}",
+        label,
+        tuple(int(dim) for dim in alias_page_table.shape),
+        alias_page_table.tolist(),
+    )
+
+
+def _summarize_live_accept_bins(
+    records: list[tuple[int, int, bool]],
+    *,
+    bin_size: int = 32,
+) -> list[dict[str, int | float]]:
+    bins: dict[int, dict[str, int | float]] = {}
+    for _prompt_idx, trajectory_step, accepted in records:
+        bin_idx = max(trajectory_step, 0) // bin_size
+        if bin_idx not in bins:
+            start = bin_idx * bin_size
+            bins[bin_idx] = {
+                "start": start,
+                "end": start + bin_size - 1,
+                "accepts": 0,
+                "total": 0,
+            }
+        bins[bin_idx]["total"] += 1
+        if accepted:
+            bins[bin_idx]["accepts"] += 1
+
+    out: list[dict[str, int | float]] = []
+    for bin_idx in sorted(bins):
+        entry = bins[bin_idx]
+        total = int(entry["total"])
+        accepts = int(entry["accepts"])
+        entry["rate"] = accepts / max(total, 1)
+        out.append(entry)
+    return out
+
+
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Return a copy of the HF state_dict with leading 'model.' stripped.
 
@@ -858,47 +941,15 @@ class DeepseekGenerator(WarmupForwardMixin):
             prompt_indices=prompt_indices,
             interleaved=interleaved,
         )
-        debug_page_table = _debug_mtp_enabled()
-        if debug_page_table:
-            logger.info(
-                "MTP base page table (shape={}): {}",
-                tuple(int(dim) for dim in base_page_table.shape),
-                base_page_table.tolist(),
-            )
-            num_rows = int(alias_page_table.shape[0])
-            if interleaved:
-                if prompt_indices is None:
-                    for row in range(1, num_rows, 2):
-                        logger.info("MTP interleaved alias: row={} -> row={}", row, row - 1)
-                else:
-                    for i in prompt_indices:
-                        if i < 0:
-                            continue
-                        src_row = (2 * i) % num_rows
-                        dst_row = (src_row + 1) % num_rows
-                        logger.info(
-                            "MTP interleaved selective alias: prompt_idx={} row={} -> row={}", i, dst_row, src_row
-                        )
-            else:
-                prompt_indices_to_log = prompt_indices if prompt_indices is not None else list(range(num_prompts))
-                for i in prompt_indices_to_log:
-                    if i < 0 or i >= num_prompts:
-                        continue
-                    src_row = i % num_rows
-                    dst_row = (verify_offset + i) % num_rows
-                    logger.info(
-                        "MTP verify alias: prompt_idx={} src_row={} -> verify_row={} (verify_offset={})",
-                        i,
-                        src_row,
-                        dst_row,
-                        verify_offset,
-                    )
-
-        if debug_page_table:
-            logger.info(
-                "MTP aliased page table (shape={}): {}",
-                tuple(int(dim) for dim in alias_page_table.shape),
-                alias_page_table.tolist(),
+        if _debug_mtp_enabled():
+            _log_verify_alias_page_table(
+                label="MTP",
+                base_page_table=base_page_table,
+                alias_page_table=alias_page_table,
+                num_prompts=num_prompts,
+                verify_offset=verify_offset,
+                prompt_indices=prompt_indices,
+                interleaved=interleaved,
             )
 
         aliased_tt = MLA2D.create_page_table(
@@ -933,50 +984,15 @@ class DeepseekGenerator(WarmupForwardMixin):
             prompt_indices=prompt_indices,
             interleaved=interleaved,
         )
-        debug_page_table = _debug_mtp_enabled()
-        if debug_page_table:
-            logger.info(
-                "MTP base MTP page table (shape={}): {}",
-                tuple(int(dim) for dim in base_page_table.shape),
-                base_page_table.tolist(),
-            )
-            num_rows = int(alias_page_table.shape[0])
-            if interleaved:
-                if prompt_indices is None:
-                    for row in range(1, num_rows, 2):
-                        logger.info("MTP interleaved MTP alias: row={} -> row={}", row, row - 1)
-                else:
-                    for i in prompt_indices:
-                        if i < 0:
-                            continue
-                        src_row = (2 * i) % num_rows
-                        dst_row = (src_row + 1) % num_rows
-                        logger.info(
-                            "MTP interleaved selective MTP alias: prompt_idx={} row={} -> row={}",
-                            i,
-                            dst_row,
-                            src_row,
-                        )
-            else:
-                prompt_indices_to_log = prompt_indices if prompt_indices is not None else list(range(num_prompts))
-                for i in prompt_indices_to_log:
-                    if i < 0 or i >= num_prompts:
-                        continue
-                    src_row = i % num_rows
-                    dst_row = (verify_offset + i) % num_rows
-                    logger.info(
-                        "MTP verify MTP alias: prompt_idx={} src_row={} -> verify_row={} (verify_offset={})",
-                        i,
-                        src_row,
-                        dst_row,
-                        verify_offset,
-                    )
-
-        if debug_page_table:
-            logger.info(
-                "MTP aliased MTP page table (shape={}): {}",
-                tuple(int(dim) for dim in alias_page_table.shape),
-                alias_page_table.tolist(),
+        if _debug_mtp_enabled():
+            _log_verify_alias_page_table(
+                label="MTP MTP",
+                base_page_table=base_page_table,
+                alias_page_table=alias_page_table,
+                num_prompts=num_prompts,
+                verify_offset=verify_offset,
+                prompt_indices=prompt_indices,
+                interleaved=interleaved,
             )
 
         return MLA2D.create_page_table(
@@ -1334,7 +1350,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 decode_step_user_tokens: List[List[int]] = []
                 mtp_accept_rate = None
                 mtp_accepts = None
-                debug_mtp = bool(int(os.getenv("DEBUG_MTP", "0")))
+                debug_mtp = _debug_mtp_enabled()
                 debug_mtp_steps = 3
                 debug_mtp_step_idx = 0
                 mtp_step_trace = debug_mtp
@@ -1765,35 +1781,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                             )
                         )
                         if debug_mtp and live_accept_progress_records:
-                            bin_size = 32
-
-                            def _summarize_live_accept_bins(
-                                records: list[tuple[int, int, bool]],
-                            ) -> list[dict[str, int | float]]:
-                                bins: dict[int, dict[str, int | float]] = {}
-                                for _prompt_idx, trajectory_step, accepted in records:
-                                    bin_idx = max(trajectory_step, 0) // bin_size
-                                    if bin_idx not in bins:
-                                        start = bin_idx * bin_size
-                                        bins[bin_idx] = {
-                                            "start": start,
-                                            "end": start + bin_size - 1,
-                                            "accepts": 0,
-                                            "total": 0,
-                                        }
-                                    bins[bin_idx]["total"] += 1
-                                    if accepted:
-                                        bins[bin_idx]["accepts"] += 1
-
-                                out: list[dict[str, int | float]] = []
-                                for bin_idx in sorted(bins):
-                                    entry = bins[bin_idx]
-                                    total = int(entry["total"])
-                                    accepts = int(entry["accepts"])
-                                    entry["rate"] = accepts / max(total, 1)
-                                    out.append(entry)
-                                return out
-
                             overall_bins = _summarize_live_accept_bins(live_accept_progress_records)
                             logger.info("MTP live accept bins overall: {}", overall_bins)
 

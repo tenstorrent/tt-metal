@@ -1284,14 +1284,6 @@ def test_mtp_verify_batching_aliasing(
             except Exception as exc:
                 logger.info("decode_page_tables[0] host alias debug failed: {}", exc)
 
-        # Helper: compute an aliased page table (odd rows alias previous even rows).
-        def _build_alias_page_table(base_page_table: torch.Tensor) -> torch.Tensor:
-            alias = base_page_table.clone()
-            num_rows = int(alias.shape[0])
-            for row in range(1, num_rows, 2):
-                alias[row] = alias[row - 1]
-            return alias
-
         # Helper: map a global lane index to device index and local lane within the shard.
         def _lane_to_device_and_local(lane: int) -> tuple[int, int]:
             batch_per_shard = int(gen.batch_size_per_row // gen.dp_factor)
@@ -1357,7 +1349,13 @@ def test_mtp_verify_batching_aliasing(
         if gen.base_page_table_host is None:
             _ = gen._get_page_tables()
         base_page_table = gen.base_page_table_host.to(torch.int32)
-        alias_page_table = _build_alias_page_table(base_page_table)
+        alias_page_table = _build_verify_alias_page_table_host(
+            base_page_table=base_page_table,
+            num_prompts=base_page_table.shape[0] // 2,
+            verify_offset=0,
+            prompt_indices=None,
+            interleaved=True,
+        )
         logger.info(
             "base_page_table_host shape={} values={}",
             tuple(int(dim) for dim in base_page_table.shape),
@@ -1474,8 +1472,6 @@ def test_mtp_verify_batching_aliasing(
         # For the single-prompt aliasing repro, the first observed prompt-lane
         # mismatch happens at verify step 7, so compare there instead of step 1.
         debug_compare_step = 7
-
-        # breakpoint()
 
         for step in range(steps_to_check):
             # Current token is reference next_tokens[step] at position step+1 (post-prefill alignment).
