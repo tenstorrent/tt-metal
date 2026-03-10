@@ -455,6 +455,9 @@ public:
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
+    bool has_programmable_core_type(HalProgrammableCoreType programmable_core_type) const {
+        return static_cast<uint32_t>(programmable_core_type) < get_programmable_core_type_count();
+    }
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;

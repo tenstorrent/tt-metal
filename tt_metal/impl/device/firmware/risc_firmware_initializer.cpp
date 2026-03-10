@@ -238,8 +238,7 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         cluster_.write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
     }
 
-    bool has_dram_fw =
-        hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
+    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
