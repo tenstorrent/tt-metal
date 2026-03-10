@@ -149,7 +149,8 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
     // Check if this is a connection manager variant (needed for second destination setup)
-    const bool is_conn_mgr_variant_early =
+    // This checks the test params enum before conversion to kernel enum
+    const bool is_conn_mgr_variant_from_params =
         (p.api_variant == AddrgenApiVariant::UnicastWriteConnMgr ||
          p.api_variant == AddrgenApiVariant::UnicastWriteWithStateConnMgr ||
          p.api_variant == AddrgenApiVariant::UnicastWriteSetStateConnMgr ||
@@ -166,7 +167,7 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     tt::tt_metal::IDevice* dst2_dev = nullptr;
     Dist::MeshCoordinate dst2_coord{0, 0};
     tt::tt_metal::CoreCoord rx2_xy = rx_xy;
-    if (is_conn_mgr_variant_early) {
+    if (is_conn_mgr_variant_from_params) {
         dst2_phys = cp.get_physical_chip_id_from_fabric_node_id(dst2);
         dst2_dev = tt::tt_metal::detail::GetActiveDevice(dst2_phys);
         if (dst2_dev) {
@@ -194,7 +195,7 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
     // For connection manager variants: initialize second destination buffer
-    if (is_conn_mgr_variant_early && dst2_dev) {
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
         Dist::WriteShard(mcq, dst_buf, zeros, dst2_coord, /*blocking=*/true);
     }
 
@@ -322,7 +323,7 @@ Notes:
 
     // For connection manager variants: set up second receiver program
     tt::tt_metal::Program receiver_prog2 = tt::tt_metal::CreateProgram();
-    if (is_conn_mgr_variant_early && dst2_dev) {
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
         auto rx_wait_k2 = tt::tt_metal::CreateKernel(
             receiver_prog2,
             KDIR + receiver_kernel_name,
@@ -442,7 +443,7 @@ Notes:
     Dist::MeshWorkload sender_workload;
     receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
     // For connection manager variants: add second receiver to workload
-    if (is_conn_mgr_variant_early && dst2_dev) {
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
         receiver_workload.add_program(Dist::MeshCoordinateRange(dst2_coord), std::move(receiver_prog2));
     }
     sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
@@ -457,7 +458,7 @@ Notes:
     verify_payload_words(rx, tx);
 
     // For connection manager variants: verify second destination
-    if (is_conn_mgr_variant_early && dst2_dev) {
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
         std::vector<uint32_t> rx2(n_words, 0u);
         Dist::ReadShard(mcq, rx2, dst_buf, dst2_coord, /*blocking=*/true);
         verify_payload_words(rx2, tx);
