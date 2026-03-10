@@ -1375,7 +1375,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("moe_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("moe_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("moe_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("moe_mcast_src_cb"),
@@ -1413,7 +1413,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("index_mcast_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("index_mcast_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("gate_output_indices_cb"),
@@ -1427,7 +1427,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("gate_output_cb"),
@@ -1469,7 +1469,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("down_proj_mcast_src_cb"),
@@ -1488,7 +1488,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
@@ -1567,7 +1567,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_down_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("shared_down_mcast_src_cb"),
@@ -1604,7 +1604,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_output_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                 get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_output_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("shared_output_mcast_src_cb"),
@@ -2657,10 +2657,6 @@ void kernel_main() {
         unified_kernels::reconfig_cb_interfaces(moe_cb_config);
         *pos_ptr += 1;
         setup_moe_sharded_buffers();
-        // TODO: moe mcast currently expects loopback, whereas MLA needs non-loopback
-        // Need to update moe setup code and get rid of this
-        mcast.teardown();
-        residual_mcast.init(moe.routed.residual_mcast_args);
         moe_body();
     }
 
@@ -2669,6 +2665,6 @@ void kernel_main() {
     // ====================================================================
     {
         DeviceZoneScopedN("MCAST_TEARDOWN");
-        residual_mcast.teardown();
+        mcast.teardown();
     }
 }

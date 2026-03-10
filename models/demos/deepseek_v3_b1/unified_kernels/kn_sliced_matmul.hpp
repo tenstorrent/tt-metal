@@ -111,9 +111,7 @@ struct KNSlicedMatmul {
             pack_reconfig_data_format<true>(args.out_cb);
 
             if (args.weights_address_override > 0) {
-                UNPACK(({ DPRINT << "ADDR" << args.weights_address_override << ENDL(); }));
                 UNPACK(({ unified_kernels::override_cb_rd_ptr(args.weights_cb, args.weights_address_override); }));
-                UNPACK(({ DPRINT << "OVERRIDDEN" << get_local_cb_interface(args.weights_cb).fifo_rd_ptr << ENDL(); }));
             } else {
                 cb_wait_front(args.weights_cb, args.k_per_core);
             }

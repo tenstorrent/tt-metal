@@ -133,6 +133,7 @@ class _MoeRoutedExpertContext:
     sender_core: Any
     input_core_grid: Any
     mcast_grid: Any
+    mcast_worker_grid: Any
     gate_proj_core_ranges: Any
     num_gate_proj_cores: int
 
@@ -810,6 +811,8 @@ class MoeRoutedExpertOp:
         gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
         mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+        sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+        mcast_worker_grid = mcast_grid.subtract(sender_core_grid)
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
         # Full device grid
@@ -1327,6 +1330,7 @@ class MoeRoutedExpertOp:
             sender_core=sender_core,
             input_core_grid=input_core_grid,
             mcast_grid=mcast_grid,
+            mcast_worker_grid=mcast_worker_grid,
             gate_proj_core_ranges=gate_proj_core_ranges,
             num_gate_proj_cores=num_gate_proj_cores,
             # Data format & tiles
@@ -1815,7 +1819,7 @@ class MoeRoutedExpertOp:
             ),
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_mcast_grid_core",
-                core_range=ctx.mcast_grid,
+                core_range=ctx.mcast_worker_grid,
                 value=1,
                 other_value=0,
             ),
