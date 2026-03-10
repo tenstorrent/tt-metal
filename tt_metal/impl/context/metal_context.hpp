@@ -121,7 +121,6 @@ public:
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    void set_default_fabric_topology();
     void set_fabric_config(
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode =

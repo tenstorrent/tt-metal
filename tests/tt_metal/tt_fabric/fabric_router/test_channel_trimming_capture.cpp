@@ -1980,9 +1980,7 @@ protected:
             return;
         }
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
-        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        rtoptions.set_fabric_trimming_override_path("");
+        tt::tt_metal::detail::ReleaseOwnership();
         if (std::filesystem::exists(override_dir_)) {
             std::filesystem::remove_all(override_dir_);
         }

@@ -558,25 +558,6 @@ void MetalContext::set_custom_fabric_topology(
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
-void MetalContext::set_default_fabric_topology() {
-    TT_FATAL(
-        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
-        "Modifying control plane requires no devices to be active");
-    // Reset the system mesh and control plane, since they were initialized with custom parameters.
-    system_mesh_.reset();
-    control_plane_.reset();
-    // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
-    // mapping.
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
-
-    if (rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions().get_custom_fabric_mesh_graph_desc_path();
-    } else {
-        custom_mesh_graph_desc_path_ = std::nullopt;
-    }
-    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-}
-
 void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);

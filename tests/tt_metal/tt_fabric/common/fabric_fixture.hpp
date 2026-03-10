@@ -320,7 +320,7 @@ private:
 
     void TearDown() override {
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+        tt::tt_metal::detail::ReleaseOwnership();
     }
 };
 
@@ -357,7 +357,7 @@ protected:
             return;
         }
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+        tt::tt_metal::detail::ReleaseOwnership();
     }
 
     void SetUp() override {
