@@ -465,15 +465,12 @@ struct WorkerToFabricEdmSenderImpl {
         }
         WAYPOINT("FCFD");
 
-        DPRINT << "wait for writ barrier" << ENDL();
         noc_async_write_barrier(get_fabric_worker_noc());
         *(this->worker_teardown_addr) = 0;
-        DPRINT << "done closing finish" << ENDL();
     }
 
     void close() {
         close_start();
-        DPRINT << "about to close finish" << ENDL();
         close_finish();
     }
 
