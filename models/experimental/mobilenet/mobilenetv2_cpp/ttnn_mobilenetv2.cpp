@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn_mobilenetv2.h"
+#include <cmath>
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -82,9 +83,12 @@ ttnn::Tensor TtMobileNetV2Conv2D::operator()(const ttnn::Tensor& x, int& h, int&
         batch_size,
         input_height,
         input_width,
-        /*kernel_size=*/std::array<uint32_t, 2>{static_cast<uint32_t>(input_params[0]), static_cast<uint32_t>(input_params[0])},
-        /*stride=*/std::array<uint32_t, 2>{static_cast<uint32_t>(input_params[1]), static_cast<uint32_t>(input_params[1])},
-        /*padding=*/std::array<uint32_t, 2>{static_cast<uint32_t>(input_params[2]), static_cast<uint32_t>(input_params[2])},
+        /*kernel_size=*/
+        std::array<uint32_t, 2>{static_cast<uint32_t>(input_params[0]), static_cast<uint32_t>(input_params[0])},
+        /*stride=*/
+        std::array<uint32_t, 2>{static_cast<uint32_t>(input_params[1]), static_cast<uint32_t>(input_params[1])},
+        /*padding=*/
+        std::array<uint32_t, 2>{static_cast<uint32_t>(input_params[2]), static_cast<uint32_t>(input_params[2])},
         /*dilation=*/std::array<uint32_t, 2>{static_cast<uint32_t>(dilation), static_cast<uint32_t>(dilation)},
         groups,
         /*dtype=*/activation_dtype,
@@ -371,14 +375,16 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
 
     output_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::ROW_MAJOR);
     auto tensor_shape = output_tensor.logical_shape();
-    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{static_cast<uint32_t>(batchsize), static_cast<uint32_t>(h), static_cast<uint32_t>(w), tensor_shape[3]});
+    output_tensor = ttnn::reshape(
+        output_tensor,
+        ttnn::Shape{
+            static_cast<uint32_t>(batchsize), static_cast<uint32_t>(h), static_cast<uint32_t>(w), tensor_shape[3]});
     if (output_tensor.is_sharded()) {
         output_tensor = ttnn::sharded_to_interleaved(output_tensor, ttnn::L1_MEMORY_CONFIG, std::nullopt);
     }
 
     output_tensor = ttnn::global_avg_pool2d(output_tensor);
-    output_tensor = ttnn::reshape(
-        output_tensor, std::vector<int32_t>{batchsize, -1});
+    output_tensor = ttnn::reshape(output_tensor, std::vector<int32_t>{batchsize, -1});
 
     auto compute_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),

@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef UTIL_PROFILER_HPP
-#define UTIL_PROFILER_HPP
+#ifndef MOBILENETV2_CPP_UTIL_PROFILER_HPP
+#define MOBILENETV2_CPP_UTIL_PROFILER_HPP
 
-#include <chrono>
-#include <unordered_map>
-#include <string>
-#include <stdexcept>
 #include <cassert>
+#include <chrono>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 class Profiler {
 public:
@@ -20,10 +20,7 @@ public:
 
     void stop(const std::string& name) {
         if (timings.find(name) == timings.end()) {
-            throw std::runtime_error(
-                "Profiler::stop() called for "
-                " + name + "
-                " without corresponding start()");
+            throw std::runtime_error("Profiler::stop() called for " + name + " without corresponding start()");
         }
         auto& start_time = timings[name];
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -48,4 +45,4 @@ private:
     std::unordered_map<std::string, double> results;
 };
 
-#endif  // UTIL_PROFILER_HPP
+#endif  // MOBILENETV2_CPP_UTIL_PROFILER_HPP

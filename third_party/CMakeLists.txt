@@ -433,7 +433,10 @@ if(BUILD_MOBILENET_LIBTORCH)
                     torch_cpu_lib
             )
         else()
-            message(WARNING "Could not find libc10 or torch_cpu in ${libtorch_SOURCE_DIR}/lib")
+            message(
+                WARNING
+                "Could not find c10 or torch_cpu (targets torch_c10 / torch_cpu_lib) in ${libtorch_SOURCE_DIR}/lib"
+            )
         endif()
     endif()
 endif()

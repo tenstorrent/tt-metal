@@ -8,16 +8,17 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include "mobilenetv2_infra.h"
 #include "ttnn/device.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/events.hpp"
 #include "ttnn/operations/trace.hpp"
-#include "mobilenetv2_infra.h"
+#include "ttnn/tensor/tensor.hpp"
 
 class MobileNetV2Trace2CQ {
 public:
     MobileNetV2Trace2CQ();
-    void initialize_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshDevice> &device, int device_batch_size, const std::string& model_path = "");
+    void initialize_mobilenetv2_trace_2cqs_inference(
+        const std::shared_ptr<ttnn::MeshDevice>& device, int device_batch_size, const std::string& model_path = "");
     void execute_mobilenetv2_trace_2cqs_inference(const ttnn::Tensor& tt_inputs_host);
     void release_mobilenetv2_trace_2cqs_inference();
     ttnn::Tensor get_output();

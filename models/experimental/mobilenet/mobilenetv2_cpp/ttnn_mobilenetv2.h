@@ -103,7 +103,7 @@ public:
         std::shared_ptr<ttnn::MeshDevice> device,
         int batchsize);
 
-    ~TtMobileNetV2() { blocks.clear(); }
+    ~TtMobileNetV2() = default;
 
     ttnn::Tensor operator()(const ttnn::Tensor& x);
 
