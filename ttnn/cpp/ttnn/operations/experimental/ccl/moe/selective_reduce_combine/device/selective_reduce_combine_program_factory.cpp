@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/work_split.hpp>
+#include <ranges>
 #include <vector>
+
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -374,7 +376,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
-        {"num_links", num_links},
         {"num_mux_workers_per_link", neighbors.size()}};
 
     std::vector<uint32_t> writer_compile_time_args;
