@@ -625,13 +625,10 @@ class TtTransformer(LightweightModule):
             broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
             unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
             converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-
-            # Build true/false tensors from converted_bitmask to keep shape/layout/memory config aligned.
-            where_zero = ttnn.full_like(converted_bitmask, 0.0, dtype=ttnn.float32)
-            where_neg_inf = ttnn.full_like(converted_bitmask, float("-inf"), dtype=ttnn.float32)
-            result = ttnn.where(converted_bitmask, where_zero, where_neg_inf, **op_kwargs)
-            where_zero.deallocate(True)
-            where_neg_inf.deallocate(True)
+            mask_blocked = ttnn.lez(converted_bitmask, **op_kwargs)
+            # Use a finite large negative penalty to avoid scalar -inf multiply edge cases.
+            result = ttnn.multiply(mask_blocked, -1e9, dtype=ttnn.float32, **op_kwargs)
+            mask_blocked.deallocate(True)
             return result
         finally:
             if mesh_device is not None and worker_sub_device_id is not None:
