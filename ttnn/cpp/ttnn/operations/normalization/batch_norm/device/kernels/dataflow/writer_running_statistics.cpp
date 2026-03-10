@@ -6,6 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);               // batch_var
@@ -48,6 +51,14 @@ void kernel_main() {
     const uint32_t old_running_var_tile_bytes = get_tile_size(cb_id_old_running_var);
     const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr, old_running_var_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
+    experimental::CircularBuffer cb_id_dst_obj(cb_id_dst);
+    experimental::CircularBuffer cb_id_old_running_mean_obj(cb_id_old_running_mean);
+    experimental::CircularBuffer cb_id_old_running_var_obj(cb_id_old_running_var);
+    experimental::CircularBuffer cb_id_updated_running_mean_obj(cb_id_updated_running_mean);
+    experimental::CircularBuffer cb_id_updated_running_var_obj(cb_id_updated_running_var);
+
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
     uint32_t start_remaining = start_tile_id % tiles_per_batch;
@@ -64,53 +75,72 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // read a tile from src
-                cb_reserve_back(cb_id_src, onetile);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-                noc_async_read_tile(tile_offset, src, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_src, onetile);
+                cb_id_src_obj.reserve_back(onetile);
+                noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb_id_src_obj.push_back(onetile);
 
                 if constexpr (old_running_mean_has_value) {
                     // read data
-                    cb_reserve_back(cb_id_old_running_mean, onetile);
-                    uint32_t l1_old_running_mean_write_addr = get_write_ptr(cb_id_old_running_mean);
-                    noc_async_read_tile(tile_offset, old_running_mean, l1_old_running_mean_write_addr);
-                    noc_async_read_barrier();
+                    cb_id_old_running_mean_obj.reserve_back(onetile);
+                    noc.async_read(
+                        old_running_mean,
+                        cb_id_old_running_mean_obj,
+                        old_running_mean_tile_bytes,
+                        {.page_id = tile_offset},
+                        {.offset_bytes = 0});
+                    noc.async_read_barrier();
                     FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_mean);
-                    cb_push_back(cb_id_old_running_mean, onetile);
+                    cb_id_old_running_mean_obj.push_back(onetile);
 
                     // write data
-                    cb_wait_front(cb_id_updated_running_mean, onetile);
-                    uint32_t l1_write_updated_mean_addr = get_read_ptr(cb_id_updated_running_mean);
-                    noc_async_write_tile(tile_offset, old_running_mean, l1_write_updated_mean_addr);
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_id_updated_running_mean, onetile);
+                    cb_id_updated_running_mean_obj.wait_front(onetile);
+                    noc.async_write(
+                        cb_id_updated_running_mean_obj,
+                        old_running_mean,
+                        old_running_mean_tile_bytes,
+                        {.offset_bytes = 0},
+                        {.page_id = tile_offset});
+                    noc.async_write_barrier();
+                    cb_id_updated_running_mean_obj.pop_front(onetile);
                 }
 
                 if constexpr (old_running_var_has_value) {
                     // read data
-                    cb_reserve_back(cb_id_old_running_var, onetile);
-                    uint32_t l1_old_running_var_write_addr = get_write_ptr(cb_id_old_running_var);
-                    noc_async_read_tile(tile_offset, old_running_var, l1_old_running_var_write_addr);
-                    noc_async_read_barrier();
+                    cb_id_old_running_var_obj.reserve_back(onetile);
+                    noc.async_read(
+                        old_running_var,
+                        cb_id_old_running_var_obj,
+                        old_running_var_tile_bytes,
+                        {.page_id = tile_offset},
+                        {.offset_bytes = 0});
+                    noc.async_read_barrier();
                     FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_var);
-                    cb_push_back(cb_id_old_running_var, onetile);
+                    cb_id_old_running_var_obj.push_back(onetile);
 
                     // write data
-                    cb_wait_front(cb_id_updated_running_var, onetile);
-                    uint32_t l1_write_updated_var_addr = get_read_ptr(cb_id_updated_running_var);
-                    noc_async_write_tile(tile_offset, old_running_var, l1_write_updated_var_addr);
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_id_updated_running_var, onetile);
+                    cb_id_updated_running_var_obj.wait_front(onetile);
+                    noc.async_write(
+                        cb_id_updated_running_var_obj,
+                        old_running_var,
+                        old_running_var_tile_bytes,
+                        {.offset_bytes = 0},
+                        {.page_id = tile_offset});
+                    noc.async_write_barrier();
+                    cb_id_updated_running_var_obj.pop_front(onetile);
                 }
                 ++tile_offset;
 
                 // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                cb_wait_front(cb_id_dst, onetile);
-                uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
-                noc_async_write_barrier();
-                cb_pop_front(cb_id_dst, onetile);
+                cb_id_dst_obj.wait_front(onetile);
+                noc.async_write(
+                    cb_id_dst_obj,
+                    dst,
+                    dst_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.page_id = start_tile_id + num_tiles_written});
+                noc.async_write_barrier();
+                cb_id_dst_obj.pop_front(onetile);
             }
             tile_offset += next_channel_shift;
         }

@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -28,23 +29,36 @@ void kernel_main() {
     constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
     constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
 
+    experimental::CircularBuffer cb_batch_mean_obj(cb_batch_mean);
+    experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
+    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    experimental::CircularBuffer cb_old_running_mean_obj(cb_old_running_mean);
+    experimental::CircularBuffer cb_old_running_var_obj(cb_old_running_var);
+    experimental::CircularBuffer cb_updated_running_mean_obj(cb_updated_running_mean);
+    experimental::CircularBuffer cb_updated_running_var_obj(cb_updated_running_var);
+    experimental::CircularBuffer cb_momentum_obj(cb_momentum);
+    experimental::CircularBuffer cb_one_obj(cb_one);
+    experimental::CircularBuffer cb_tmp1_obj(cb_tmp1);
+    experimental::CircularBuffer cb_tmp2_obj(cb_tmp2);
+    experimental::CircularBuffer cb_tmp3_obj(cb_tmp3);
+
     unary_op_init_common(cb_batch_mean, cb_out0);
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_momentum, 1);
-    cb_wait_front(cb_one, 1);
+    cb_momentum_obj.wait_front(1);
+    cb_one_obj.wait_front(1);
 
     // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         // cb tile index
         constexpr uint32_t tile_index = 0;
 
-        cb_wait_front(cb_batch_mean, onetile);
-        cb_reserve_back(cb_out0, 1);
+        cb_batch_mean_obj.wait_front(onetile);
+        cb_out0_obj.reserve_back(1);
 
         if constexpr (old_running_mean_has_value) {
             // 1 - momentum
-            cb_reserve_back(cb_tmp1, onetile);
+            cb_tmp1_obj.reserve_back(onetile);
             sub_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
@@ -58,10 +72,10 @@ void kernel_main() {
             tile_regs_commit();
             pack_tile(tile_index * 2, cb_tmp1);
             tile_regs_release();
-            cb_push_back(cb_tmp1, onetile);
+            cb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
-            cb_reserve_back(cb_tmp2, onetile);
+            cb_tmp2_obj.reserve_back(onetile);
             mul_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
@@ -75,12 +89,12 @@ void kernel_main() {
             tile_regs_commit();
             pack_tile(tile_index * 2, cb_tmp2);
             tile_regs_release();
-            cb_push_back(cb_tmp2, onetile);
+            cb_tmp2_obj.push_back(onetile);
 
             // cb_tmp1 * running stats --> (1 - momentum) * running stats
-            cb_wait_front(cb_tmp1, onetile);
-            cb_wait_front(cb_old_running_mean, onetile);
-            cb_reserve_back(cb_tmp3, onetile);
+            cb_tmp1_obj.wait_front(onetile);
+            cb_old_running_mean_obj.wait_front(onetile);
+            cb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
             tile_regs_wait();
 
@@ -93,15 +107,15 @@ void kernel_main() {
             tile_regs_commit();
             pack_tile(tile_index * 2, cb_tmp3);
             tile_regs_release();
-            cb_push_back(cb_tmp3, onetile);
+            cb_tmp3_obj.push_back(onetile);
 
-            cb_pop_front(cb_old_running_mean, onetile);
-            cb_pop_front(cb_tmp1, onetile);
+            cb_old_running_mean_obj.pop_front(onetile);
+            cb_tmp1_obj.pop_front(onetile);
 
             // cb_tmp2 + cb_tmp3 --> (momentum * batch stat) + ((1 - momentum) * running stats)
-            cb_wait_front(cb_tmp2, onetile);
-            cb_wait_front(cb_tmp3, onetile);
-            cb_reserve_back(cb_updated_running_mean, onetile);
+            cb_tmp2_obj.wait_front(onetile);
+            cb_tmp3_obj.wait_front(onetile);
+            cb_updated_running_mean_obj.reserve_back(onetile);
             add_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
@@ -119,17 +133,17 @@ void kernel_main() {
                 pack_tile(tile_index * 2, cb_out0);
             }
             tile_regs_release();
-            cb_push_back(cb_updated_running_mean, onetile);
+            cb_updated_running_mean_obj.push_back(onetile);
 
-            cb_pop_front(cb_tmp3, onetile);
-            cb_pop_front(cb_tmp2, onetile);
+            cb_tmp3_obj.pop_front(onetile);
+            cb_tmp2_obj.pop_front(onetile);
         }
 
-        cb_pop_front(cb_batch_mean, onetile);
+        cb_batch_mean_obj.pop_front(onetile);
 
         if constexpr (old_running_var_has_value) {
             // 1 - momentum
-            cb_reserve_back(cb_tmp1, onetile);
+            cb_tmp1_obj.reserve_back(onetile);
             sub_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
@@ -143,11 +157,11 @@ void kernel_main() {
             tile_regs_commit();
             pack_tile(tile_index * 2, cb_tmp1);
             tile_regs_release();
-            cb_push_back(cb_tmp1, onetile);
+            cb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
-            cb_wait_front(cb_batch_var, onetile);
-            cb_reserve_back(cb_tmp2, onetile);
+            cb_batch_var_obj.wait_front(onetile);
+            cb_tmp2_obj.reserve_back(onetile);
             mul_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
@@ -161,14 +175,14 @@ void kernel_main() {
             tile_regs_commit();
             pack_tile(tile_index * 2, cb_tmp2);
             tile_regs_release();
-            cb_push_back(cb_tmp2, onetile);
+            cb_tmp2_obj.push_back(onetile);
 
-            cb_pop_front(cb_batch_var, onetile);
+            cb_batch_var_obj.pop_front(onetile);
 
             // cb_tmp1 * running stats --> (1 - momentum) * running stats
-            cb_wait_front(cb_tmp1, onetile);
-            cb_wait_front(cb_old_running_var, onetile);
-            cb_reserve_back(cb_tmp3, onetile);
+            cb_tmp1_obj.wait_front(onetile);
+            cb_old_running_var_obj.wait_front(onetile);
+            cb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
             tile_regs_wait();
 
@@ -181,15 +195,15 @@ void kernel_main() {
             tile_regs_commit();
             pack_tile(tile_index * 2, cb_tmp3);
             tile_regs_release();
-            cb_push_back(cb_tmp3, onetile);
+            cb_tmp3_obj.push_back(onetile);
 
-            cb_pop_front(cb_old_running_var, onetile);
-            cb_pop_front(cb_tmp1, onetile);
+            cb_old_running_var_obj.pop_front(onetile);
+            cb_tmp1_obj.pop_front(onetile);
 
             // cb_tmp2 + cb_tmp3 --> (momentum * batch stat) + ((1 - momentum) * running stats)
-            cb_wait_front(cb_tmp2, onetile);
-            cb_wait_front(cb_tmp3, onetile);
-            cb_reserve_back(cb_updated_running_var, onetile);
+            cb_tmp2_obj.wait_front(onetile);
+            cb_tmp3_obj.wait_front(onetile);
+            cb_updated_running_var_obj.reserve_back(onetile);
             add_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
@@ -204,14 +218,14 @@ void kernel_main() {
             pack_tile(tile_index * 2, cb_updated_running_var);
             pack_tile(tile_index * 2, cb_out0);
             tile_regs_release();
-            cb_push_back(cb_updated_running_var, onetile);
+            cb_updated_running_var_obj.push_back(onetile);
 
-            cb_pop_front(cb_tmp3, onetile);
-            cb_pop_front(cb_tmp2, onetile);
+            cb_tmp3_obj.pop_front(onetile);
+            cb_tmp2_obj.pop_front(onetile);
         }
 
-        cb_push_back(cb_out0, 1);
+        cb_out0_obj.push_back(1);
     }
-    cb_pop_front(cb_momentum, 1);
-    cb_pop_front(cb_one, 1);
+    cb_momentum_obj.pop_front(1);
+    cb_one_obj.pop_front(1);
 }
