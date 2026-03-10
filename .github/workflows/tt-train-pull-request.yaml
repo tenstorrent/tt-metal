@@ -1,4 +1,4 @@
-name: tt-train Pull Request Validation
+name: "[tt-train] Pull Request Validation"
 
 on:
   pull_request:
