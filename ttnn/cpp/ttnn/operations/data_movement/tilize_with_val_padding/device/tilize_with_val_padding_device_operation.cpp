@@ -46,33 +46,17 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         const bool input_is_nd_sharded = input_tensor.memory_config().is_sharded() && !input_is_legacy_sharded;
         const bool output_is_nd_sharded =
             operation_attributes.output_mem_config.is_sharded() && !output_is_legacy_sharded;
-        log_warning(
-            tt::LogOp,
-            "tilize_with_val_padding: sharded dispatch: input_is_legacy_sharded={}, output_is_legacy_sharded={}, "
-            "input_is_nd_sharded={}, output_is_nd_sharded={}, input_layout={}, output_layout={}",
-            input_is_legacy_sharded,
-            output_is_legacy_sharded,
-            input_is_nd_sharded,
-            output_is_nd_sharded,
-            input_tensor.memory_config().memory_layout(),
-            operation_attributes.output_mem_config.memory_layout());
 
         if (input_is_nd_sharded || output_is_nd_sharded) {
             if (!operation_attributes.enough_space_height) {
-                log_warning(
-                    tt::LogOp,
-                    "tilize_with_val_padding: selecting TilizeWithValPaddingMultiCoreBlockInterleavedFactory");
                 return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
             }
             if (!operation_attributes.use_multicore) {
-                log_warning(tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingSingleCoreFactory");
                 return TilizeWithValPaddingSingleCoreFactory{};
             }
-            log_warning(tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingMultiCoreDefaultFactory");
             return TilizeWithValPaddingMultiCoreDefaultFactory{};
         }
         if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
-            log_warning(tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingMultiCoreShardedFactory");
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
 
@@ -80,22 +64,16 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
             auto memory_layout = input_tensor.memory_config().memory_layout();
             if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                 memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                log_warning(
-                    tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingSingleCoreShardedFactory");
                 return TilizeWithValPaddingSingleCoreShardedFactory{};
             }
         }
 
-        log_warning(tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingMultiCoreDefaultFactory");
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        log_warning(
-            tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingMultiCoreBlockInterleavedFactory");
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        log_warning(tt::LogOp, "tilize_with_val_padding: selecting TilizeWithValPaddingSingleCoreFactory");
         return TilizeWithValPaddingSingleCoreFactory{};
     }
     auto* device = input_tensor.device();
@@ -203,10 +181,6 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
         // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
         // tensor to be width-sharded.
-        log_warning(
-            tt::LogOp,
-            "ttnn::tilize_with_val_padding: Making the output tensor width-sharded because the optimized sharded "
-            "program factory is being used");
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
