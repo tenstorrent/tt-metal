@@ -55,7 +55,6 @@ from utils.kv_cache import (
     KVCache,
     _to_device_tiled,
     _causal_mask,
-    _step_attn_mask,
 )
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.tensor_utils import (
@@ -307,8 +306,8 @@ def generate_ttml(
             current_tokens, batch_size, max_seq_len, step, kv_cache, past_kv
         )
 
-        attn_mask = _step_attn_mask(
-            step, kv_cache, past_kv, prefill_len, causal_mask, device
+        attn_mask = (
+            past_kv.get_attn_mask(prefill_len) if past_kv is not None else causal_mask
         )
 
         if is_dp:

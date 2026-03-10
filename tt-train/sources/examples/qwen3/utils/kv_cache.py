@@ -8,7 +8,7 @@ import torch
 import ttnn
 import ttml
 
-from utils.tensor_utils import get_device as _get_device
+from utils.tensor_utils import get_device
 
 
 # =====================================================================
@@ -34,28 +34,15 @@ def _causal_mask(seq_len, device):
     return _to_device_tiled(mask, device)
 
 
-def _decode_mask(valid_kv_len, device):
-    """Create decode attention mask [1, 1, 1, padded_kv] for a single query token.
-
-    Width is rounded up to the next multiple of 32 (tile boundary) so the
-    shape only changes every 32 decode steps.  Positions beyond valid_kv_len
-    are set to 0 so zero-initialised cache slots are masked out.
-    """
-    _TILE = 32
-    padded_kv = ((valid_kv_len + _TILE - 1) // _TILE) * _TILE
-    mask = torch.zeros(1, 1, 1, padded_kv, dtype=torch.bfloat16)
-    mask[:, :, :, :valid_kv_len] = 1.0
-    return _to_device_tiled(mask, device)
-
-
-def _step_attn_mask(step, kv_cache, past_kv, prefill_seq_len, causal_mask, device):
+def _step_attn_mask(step, prefill_seq_len, device):
     """Return the attention mask for the current step."""
-    if not kv_cache:
-        return causal_mask
-    if step == 0:
+
+    # Prefil mask
+    if step == 0 and prefill_seq_len is not None:
         return _causal_mask(prefill_seq_len, device)
-    total_seq = past_kv.get_seq_length() + 1
-    return _decode_mask(total_seq, device)
+    # In decode mode we can run without mask since we attend to all tokens in the cache
+    # and the kv_cache is init with zeros - even with
+    return _causal_mask(prefill_seq_len + step, device)
 
 
 # =====================================================================
@@ -67,27 +54,28 @@ class KVCache:
     """Static pre-allocated KV cache for autoregressive inference.
 
     Pre-allocates fixed-size DRAM tensors [B, num_kv_heads, max_seq_len, head_dim]
-    on the first call and uses ttnn.slice_write for O(1) in-place updates.
-
-    With pre-allocated buffers:
-      - ttnn.slice_write writes only the new token(s) in-place (O(1) write)
-      - Fixed-size cache tensors avoid per-step DRAM allocation
-      - Returned slice shapes still change per step, but the heavy allocation is gone
+    on the first call and uses ttnn.experimental.slice_write for O(1) in-place updates.
+    Also pre-allocates a full [1, 1, max_seq_len, max_seq_len] causal mask and
+    returns slices of it via get_attn_mask() — no per-step mask creation.
 
     Not differentiable — use only with GradMode.DISABLED.
     """
 
-    def __init__(self, num_layers: int, max_seq_len: int):
+    _TILE = 32
+
+    def __init__(self, num_layers: int, max_seq_len: int, *, compressed: bool = False):
         self.num_layers = num_layers
         self.max_seq_len = max_seq_len
+        self.compressed = False
         self._cache_position: int = 0
         self._initialized: bool = False
         self.key_cache: list = [None] * num_layers
         self.value_cache: list = [None] * num_layers
+        self._full_mask = None
 
     def _lazy_init(self, batch_size: int, num_kv_heads: int, head_dim: int) -> None:
-        """Pre-allocate zeroed DRAM cache buffers on first update call."""
-        device = _get_device()
+        """Pre-allocate DRAM cache buffers and causal mask on first update call."""
+        device = get_device()
         dram_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM
         )
@@ -99,10 +87,57 @@ class KVCache:
             self.value_cache[i] = ttnn.zeros(
                 cache_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram_config
             )
+
         self._initialized = True
 
+    def _ensure_mask(self):
+        if self._full_mask is not None:
+            return
+        device = get_device()
+        mask_torch = torch.tril(
+            torch.ones(1, 1, self.max_seq_len, self.max_seq_len, dtype=torch.bfloat16)
+        )
+        host = ttnn.from_torch(mask_torch, dtype=ttnn.bfloat16)
+        dev = ttnn.to_device(host, device)
+        self._full_mask = ttnn.tilize_with_zero_padding(dev)
+
+    def _kv_seq_len(self):
+        """K/V sequence dimension that update() will return for the current decode step."""
+        if not self.compressed:
+            return self.max_seq_len
+        full_end = self._cache_position + 1
+        return min(
+            ((full_end + self._TILE - 1) // self._TILE) * self._TILE,
+            self.max_seq_len,
+        )
+
+    def get_attn_mask(self, seq_len=None):
+        """Return a slice of the pre-allocated causal mask for the current step.
+
+        During prefill (cache_position == 0): pass seq_len = prompt length.
+        Returns [1, 1, seq_len, seq_len] square causal mask.
+
+        During decode: returns [1, 1, 1, kv_len] where kv_len matches the K/V
+        tensors returned by update() — max_seq_len in full mode, tile-aligned
+        cache window in compressed mode.
+        """
+        self._ensure_mask()
+        if self._cache_position == 0 and seq_len is not None:
+            mask_slice = ttnn.slice(
+                self._full_mask, [0, 0, 0, 0], [1, 1, seq_len, seq_len]
+            )
+        else:
+            pos = self._cache_position
+            kv_len = self._kv_seq_len()
+            mask_slice = ttnn.slice(
+                self._full_mask,
+                [0, 0, pos, 0],
+                [1, 1, pos + 1, kv_len],
+            )
+        return ttml.autograd.create_tensor(mask_slice, requires_grad=False)
+
     def update(self, layer_idx: int, key_states, value_states):
-        """Write new K/V in-place via slice_write; return (full_k, full_v) ttml tensors.
+        """Write new K/V in-place via experimental.slice_write; return (full_k, full_v) ttml tensors.
 
         During prefill (_cache_position == 0 at entry): writes to cache and returns
         the original tensors directly — avoids a redundant read-back from DRAM.
@@ -127,8 +162,12 @@ class KVCache:
         begins = [0, 0, pos, 0]
         ends = [B, H, pos + new_seq, hdim]
 
-        ttnn.slice_write(k_val, self.key_cache[layer_idx], begins, ends, step)
-        ttnn.slice_write(v_val, self.value_cache[layer_idx], begins, ends, step)
+        ttnn.experimental.slice_write(
+            k_val, self.key_cache[layer_idx], begins, ends, step
+        )
+        ttnn.experimental.slice_write(
+            v_val, self.value_cache[layer_idx], begins, ends, step
+        )
 
         # Advance position only after the last layer so all layers in a single
         # forward pass write to the same cache offset.
@@ -139,26 +178,24 @@ class KVCache:
             # Return the original tensors — no need to read back what we just wrote.
             return key_states, value_states
 
-        # Decode: return the valid cache window rounded up to the next tile
-        # boundary (32).  This matches the C++ grouped_query_attention which
-        # slices to mask.logical_shape()[-1] — a value that is already
-        # tile-aligned.  Without rounding, full_end grows by 1 every step and
-        # every decode step gets a unique K/V tensor shape, forcing TTNN to
-        # recompile all downstream kernels on every token.
-        full_end = pos + new_seq
-        _TILE = 32
-        full_end_padded = min(
-            ((full_end + _TILE - 1) // _TILE) * _TILE, self.max_seq_len
-        )
-        k_full = ttnn.slice(
-            self.key_cache[layer_idx], [0, 0, 0, 0], [B, H, full_end_padded, hdim]
-        )
-        v_full = ttnn.slice(
-            self.value_cache[layer_idx], [0, 0, 0, 0], [B, H, full_end_padded, hdim]
-        )
+        if self.compressed:
+            full_end = pos + new_seq
+            full_end_padded = min(
+                ((full_end + self._TILE - 1) // self._TILE) * self._TILE,
+                self.max_seq_len,
+            )
+            k_out = ttnn.slice(
+                self.key_cache[layer_idx], [0, 0, 0, 0], [B, H, full_end_padded, hdim]
+            )
+            v_out = ttnn.slice(
+                self.value_cache[layer_idx], [0, 0, 0, 0], [B, H, full_end_padded, hdim]
+            )
+        else:
+            k_out = self.key_cache[layer_idx]
+            v_out = self.value_cache[layer_idx]
         return (
-            ttml.autograd.create_tensor(k_full, requires_grad=False),
-            ttml.autograd.create_tensor(v_full, requires_grad=False),
+            ttml.autograd.create_tensor(k_out, requires_grad=False),
+            ttml.autograd.create_tensor(v_out, requires_grad=False),
         )
 
     def get_seq_length(self) -> int:

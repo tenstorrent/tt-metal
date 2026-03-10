@@ -129,12 +129,7 @@ def constant_lr_schedule(step, warmup_steps, max_lr):
 # =====================================================================
 # Data loading — on-the-fly tokenization
 # =====================================================================
-from utils.dataset import (  # noqa: E402
-    TextDataset,
-    load_text_datasets,
-    SourceCodeDataset,
-    collect_source_files,
-)
+from utils.dataset import TextDataset, load_text_datasets  # noqa: E402
 
 
 # =====================================================================
@@ -270,7 +265,6 @@ def main():
         type=str,
         default="wikitext",
         help="Dataset: 'wikitext', a HF dataset name, path to .txt file, "
-        "or 'sourcecode:/path/to/dir' to train on C/C++ source files "
         "(tokenized on-the-fly, no cache)",
     )
 
@@ -503,42 +497,24 @@ def main():
     # ------------------------------------------------------------------
     # 2. Load dataset and pre-tokenize (with disk cache)
     # ------------------------------------------------------------------
-    if args.dataset.startswith("sourcecode:"):
-        source_dir = args.dataset[len("sourcecode:") :]
-        print(f"\nLoading source code dataset from: {source_dir}")
-        train_files, val_files = collect_source_files(
-            source_dir,
-            val_fraction=0.1,
-            seed=args.seed,
-        )
-        train_dataset = SourceCodeDataset(
-            train_files,
-            tokenizer,
-            args.max_seq_len,
-        )
-        val_dataset = SourceCodeDataset(
-            val_files,
-            tokenizer,
-            args.max_seq_len,
-        )
-    else:
-        train_texts, val_texts = load_text_datasets(args.dataset)
-        cache_dir = args.token_cache_dir or ".token_cache"
-        print("\nPre-tokenizing datasets...")
-        train_dataset = TextDataset(
-            train_texts,
-            tokenizer,
-            args.max_seq_len,
-            cache_dir=cache_dir,
-            split="train",
-        )
-        val_dataset = TextDataset(
-            val_texts,
-            tokenizer,
-            args.max_seq_len,
-            cache_dir=cache_dir,
-            split="val",
-        )
+
+    train_texts, val_texts = load_text_datasets(args.dataset)
+    cache_dir = args.token_cache_dir or ".token_cache"
+    print("\nPre-tokenizing datasets...")
+    train_dataset = TextDataset(
+        train_texts,
+        tokenizer,
+        args.max_seq_len,
+        cache_dir=cache_dir,
+        split="train",
+    )
+    val_dataset = TextDataset(
+        val_texts,
+        tokenizer,
+        args.max_seq_len,
+        cache_dir=cache_dir,
+        split="val",
+    )
 
     # ------------------------------------------------------------------
     # 3. Set up Tenstorrent device
