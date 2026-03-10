@@ -11,7 +11,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
-#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -503,13 +502,8 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const uint32_t qD = config.query_dim;
     const uint32_t kvD = config.key_value_dim;
     const float dropout_probability = config.dropout_prob;
-    float atol = config.atol;
-    float rtol = config.rtol;
-    // Relaxed tolerances for backward pass when LLK asserts enabled (small tensor path can differ slightly)
-    if (ttml::core::is_llk_assert_enabled()) {
-        atol = std::max(atol, 1e-1F);
-        rtol = std::max(rtol, 1e-1F);
-    }
+    const float atol = config.atol;
+    const float rtol = config.rtol;
     const ttml::metal::AttentionMaskType mask_type = config.mask_type;
     const float scale_factor = 1.0F / std::sqrt(static_cast<float>(qD));
 

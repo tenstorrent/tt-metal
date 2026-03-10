@@ -198,8 +198,8 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
-        (1, 1, 32, 37968, 3, 50),
-        (1, 1, 32, 64128, 3, 50),
+        (1, 1, 32, 151936, 3, 50),
+        (1, 1, 32, 128256, 3, 50),
     ),
 )
 @pytest.mark.parametrize(
