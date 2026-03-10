@@ -1166,6 +1166,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         num_of_users = tokens_batched.shape[0]
         token_trace = bool(int(os.getenv("DEEPSEEK_TOKEN_TRACE", "0")))
         use_mtp_path = self.enable_mtp and teacher_forcing is None and max_new_tokens > 1 and not self.profile_decode
+        if self.enable_trace and use_mtp_path:
+            raise RuntimeError(
+                "Decode trace is not supported with active MTP verify batching. "
+                "Disable --enable-trace or run with --mtp off."
+            )
         if use_mtp_path and 2 * num_of_prompts > num_of_users:
             logger.warning(
                 f"MTP verify batching needs 2x prompt lanes ({2 * num_of_prompts}) but only {num_of_users} are available; "

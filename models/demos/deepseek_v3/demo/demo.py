@@ -11,6 +11,7 @@ from glob import glob
 from pathlib import Path
 
 from loguru import logger
+from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
@@ -378,6 +379,33 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
             raise SystemExit("No .safetensors files found in the model directory. " f"Checked: '{mp}'.")
 
 
+def _trace_mtp_conflict_requested(
+    *,
+    enable_trace: bool,
+    token_accuracy: bool,
+    profile_decode: bool,
+    max_new_tokens: int,
+    random_weights: bool,
+    model_path: Path,
+    override_num_layers: int | None,
+    mtp: str,
+) -> bool:
+    if not enable_trace or token_accuracy or profile_decode or max_new_tokens <= 1 or random_weights:
+        return False
+
+    mtp_mode = (mtp or "auto").lower()
+    if mtp_mode == "off":
+        return False
+
+    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    num_hidden_layers = (
+        int(override_num_layers) if override_num_layers is not None else int(getattr(hf_config, "num_hidden_layers", 0))
+    )
+    requested_mtp_layers = int(getattr(hf_config, "num_nextn_predict_layers", 0))
+    has_mtp = requested_mtp_layers > 0 and num_hidden_layers >= 61
+    return mtp_mode == "on" or (mtp_mode == "auto" and has_mtp)
+
+
 def run_demo(
     prompts: list[str] | None = None,
     *,
@@ -423,6 +451,21 @@ def run_demo(
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
+
+    if _trace_mtp_conflict_requested(
+        enable_trace=enable_trace,
+        token_accuracy=token_accuracy,
+        profile_decode=profile_decode,
+        max_new_tokens=max_new_tokens,
+        random_weights=random_weights,
+        model_path=model_path,
+        override_num_layers=override_num_layers,
+        mtp=mtp,
+    ):
+        raise SystemExit(
+            "--enable-trace is not supported with active MTP decode in the DeepSeek demo. "
+            "Use --mtp off or disable --enable-trace."
+        )
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
