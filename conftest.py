@@ -1165,6 +1165,11 @@ def ttnn_graph_report():
 
     report_path = Path(report_path)
     ttnn.graph.enable_buffer_pages()
+    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
+
+    if enable_detailed_buffer_report:
+        ttnn.graph.enable_buffer_pages()
+
     try:
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         try:
@@ -1184,7 +1189,8 @@ def ttnn_graph_report():
                 config_path = report_path / "config.json"
                 ttnn.save_config_to_json_file(config_path)
     finally:
-        ttnn.graph.disable_buffer_pages()
+        if enable_detailed_buffer_report:
+            ttnn.graph.disable_buffer_pages()
 
 
 @pytest.fixture(scope="function", autouse=True)
