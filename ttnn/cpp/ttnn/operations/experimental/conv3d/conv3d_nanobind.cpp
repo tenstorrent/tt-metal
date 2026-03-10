@@ -50,7 +50,7 @@ void bind_conv3d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("input_tensor"),
         nb::arg("weight_tensor"),
-        nb::arg("device"),
+        nb::arg("device") = nb::none(),
         nb::arg("bias_tensor") = nb::none(),
         nb::arg("config") = nb::none(),
         nb::arg("dtype"),

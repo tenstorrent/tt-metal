@@ -18,13 +18,14 @@ static Tensor prepare_and_check_weight_tensor(
     const Tensor& weight_tensor,
     uint32_t groups_,
     const ttnn::experimental::prim::Conv3dConfig& config,
-    ttnn::MeshDevice* device) {
+    std::optional<ttnn::MeshDevice*> device) {
     Tensor prepared_weight_tensor = weight_tensor;
     switch (prepared_weight_tensor.logical_shape().rank()) {
         case 5:
             TT_FATAL(prepared_weight_tensor.device() == nullptr, "Unprepared weight tensor must be on host");
+            TT_FATAL(device.has_value(), "Device must be provided when weight tensor is unprepared (rank 5)");
             prepared_weight_tensor = ttnn::operations::experimental::conv3d::prepare_conv3d_weights(
-                prepared_weight_tensor, groups_, config.C_in_block, config.alignment, device);
+                prepared_weight_tensor, groups_, config.C_in_block, config.alignment, device.value());
             break;
         case 2: break;
         default: TT_THROW("Unsupported weight tensor rank: {}", prepared_weight_tensor.logical_shape().rank());
@@ -40,7 +41,7 @@ static Tensor prepare_and_check_weight_tensor(
 ttnn::Tensor conv3d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::MeshDevice* device,
+    std::optional<ttnn::MeshDevice*> device,
     const std::optional<ttnn::Tensor>& bias_tensor,
     const std::optional<ttnn::experimental::prim::Conv3dConfig>& config_opt,
     tt::tt_metal::DataType dtype_,
