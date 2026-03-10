@@ -724,8 +724,8 @@ class TtTransformer(LightweightModule):
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-        zero_tensor = ttnn.zeros_like(converted_bitmask)
-        neg_inf_tensor = ttnn.full_like(converted_bitmask, fill_value=float("-inf"))
+        zero_tensor = ttnn.zeros_like(converted_bitmask, dtype=ttnn.float32)
+        neg_inf_tensor = ttnn.full_like(converted_bitmask, fill_value=float("-inf"), dtype=ttnn.float32)
         result = ttnn.where(converted_bitmask, zero_tensor, neg_inf_tensor, **op_kwargs)
         return result
 
