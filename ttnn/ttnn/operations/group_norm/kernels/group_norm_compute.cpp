@@ -21,7 +21,6 @@
 #include "api/compute/untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     // ========== COMPILE-TIME ARGS ==========
@@ -111,13 +110,6 @@ void kernel_main() {
                     first_tile = false;
                 }
             }
-
-            // DEBUG: Print mean[g] from cb_sq_sum before moving to cb_mean
-            DPRINT_PACK({
-                DPRINT << "mean[" << g << "] = "
-                       << TSLICE(cb_sq_sum, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1})
-                       << ENDL();
-            });
 
             // Move final mean from cb_sq_sum to cb_mean
             copy_tile_to_dst_init_short(cb_sq_sum);

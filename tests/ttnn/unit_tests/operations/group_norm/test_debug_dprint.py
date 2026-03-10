@@ -6,17 +6,21 @@ from .group_norm import group_norm
 
 def test_debug_mean(device):
     """Run with: TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=TR2 scripts/tt-test.sh --dev <this_file>"""
-    shape = (1, 1, 32, 32)
-    G = 4
+    shape = (1, 1, 32, 64)
+    G = 2
     torch.manual_seed(42)
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
 
     N, _, HW, C = shape
-    # Print expected means per group
-    x_r = torch_input.reshape(N, G, C // G, HW)
+    # Print expected means per group - WRONG reshape (what tests use)
+    x_r_wrong = torch_input.reshape(N, G, C // G, HW)
     for g in range(G):
-        group_mean = x_r[:, g, :, :].mean().item()
-        print(f"PyTorch expected mean[{g}] = {group_mean:.6f}")
+        print(f"WRONG reshape mean[{g}] = {x_r_wrong[:, g, :, :].mean().item():.6f}")
+
+    # CORRECT reshape: split C into groups
+    x_r = torch_input[:, 0, :, :].reshape(N, HW, G, C // G).permute(0, 2, 3, 1)
+    for g in range(G):
+        print(f"CORRECT reshape mean[{g}] = {x_r[:, g, :, :].mean().item():.6f}")
 
     gamma = torch.ones(1, 1, 1, C, dtype=torch.bfloat16)
     beta = torch.zeros(1, 1, 1, C, dtype=torch.bfloat16)
