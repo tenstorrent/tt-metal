@@ -2193,9 +2193,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
-    size_t persistent_sender_amort_counter = 0;
-    auto execute_main_loop = [&](size_t& persistent_sender_amort_counter) {
-        uint32_t sender_amort_counter = persistent_sender_amort_counter;
+    static ActualSpeedySenderState persistent_speedy_sender_state;
+    static ActualSpeedyReceiverState persistent_speedy_receiver_state;
+    auto execute_main_loop = [&]() {
+        ActualSpeedySenderState local_speedy_sender_state;
+        ActualSpeedyReceiverState local_speedy_receiver_state;
+        speedy_state_copy_in(
+            local_speedy_sender_state,
+            local_speedy_receiver_state,
+            persistent_speedy_sender_state,
+            persistent_speedy_receiver_state);
         // while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/()) {
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
             did_something = false;
@@ -2240,7 +2247,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             sender_channel_from_receiver_credits[0],
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
-                            sender_amort_counter);
+                            local_speedy_sender_state);
                     }
 
                     if constexpr (is_receiver_channel_serviced[0]) {
@@ -2259,7 +2266,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
-                            local_fabric_telemetry);
+                            local_fabric_telemetry,
+                            local_speedy_receiver_state);
 #else
                         rx_progress |= run_receiver_channel_step_speedy<
                             0,
@@ -2275,7 +2283,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
-                            local_fabric_telemetry);
+                            local_fabric_telemetry,
+                            local_speedy_receiver_state);
 #endif
                     }
                 } else {  // non-speedy mode
@@ -2498,7 +2507,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
 
-        persistent_sender_amort_counter = sender_amort_counter;
+        speedy_state_copy_out(
+            persistent_speedy_sender_state,
+            persistent_speedy_receiver_state,
+            local_speedy_sender_state,
+            local_speedy_receiver_state);
     };
 
     uint64_t loop_start_cycles;
@@ -2508,7 +2521,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             switch (reinterpret_cast<volatile tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
                     state_manager_l1->state = RouterState::RUNNING;
-                    execute_main_loop(persistent_sender_amort_counter);
+                    execute_main_loop();
                     break;
                 case RouterCommand::PAUSE:
                     // Signal erisc1 to pause before entering pause command handling
@@ -2532,7 +2545,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it
         // is paused, draining, retraining, etc.), we will enter a busy wait loop in the main run loop
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-            execute_main_loop(persistent_sender_amort_counter);
+            execute_main_loop();
         }
     }
 }
