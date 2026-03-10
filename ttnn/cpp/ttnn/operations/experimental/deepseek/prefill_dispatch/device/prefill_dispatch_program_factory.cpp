@@ -217,13 +217,10 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    // Multi-core dispatch requires per-core offset partitioning to avoid
-    // race conditions on shared expert offset counters. Until that is
-    // implemented, limit to 1 core regardless of num_links.
-    uint32_t effective_num_links = 1u;
+    uint32_t effective_num_links = num_links >= 2 ? 2u : 1u;
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
-        "Not enough cores {} to send all links {}",
+        "Not enough cores {} for {} links",
         subdevice_cores.size(),
         effective_num_links);
 
@@ -232,16 +229,17 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
     auto hidden_size = input_tensor.logical_shape()[-1];
     auto tokens_per_device = logical_volume / hidden_size;
 
-    // effective_num_links already calculated above (when num_links=0, use 1 core for local dispatch)
-    uint32_t tokens_per_core = tt::div_up(tokens_per_device, effective_num_links);
-    uint32_t num_cores = std::min<uint32_t>(effective_num_links, tt::div_up(tokens_per_device, tokens_per_core));
+    // Each core processes all tokens; work is split by expert ranges, not tokens.
+    uint32_t num_cores = effective_num_links;
+    uint32_t experts_per_core_range = tt::div_up(operation_attributes.n_routed_experts, effective_num_links);
     log_debug(
         tt::LogOp,
-        "num_links{}: tokens_per_device: {}, tokens_per_core: {}, num_cores: {}",
+        "num_links: {}, effective_num_links: {}, tokens_per_device: {}, num_cores: {}, experts_per_core_range: {}",
         num_links,
+        effective_num_links,
         tokens_per_device,
-        tokens_per_core,
-        num_cores);
+        num_cores,
+        experts_per_core_range);
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
@@ -476,22 +474,28 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         (uint32_t)init_semaphore.address(),
         0,  // token_start_idx (set per core)
         0,  // token_end_idx (set per core)
+        0,  // expert_start_idx (set per core)
+        0,  // expert_end_idx (set per core)
     };
 
-    // Distribute work across cores — each core is assigned a dedicated fabric link
-    uint32_t tokens_per_core_start = 0;
+    // Distribute work across cores — each core handles a disjoint expert range and its own fabric link
     uint32_t core_idx = 0;
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = reader_runtime_args;  // Copy base args
 
-        // Set token range for this core
-        reader_runtime_args[9] = tokens_per_core_start;  // token_start_idx
-        reader_runtime_args[10] =
-            std::min(tokens_per_core_start + tokens_per_core, (uint32_t)tokens_per_device);  // token_end_idx
-        writer_runtime_args[9] = tokens_per_core_start;
-        writer_runtime_args[10] = reader_runtime_args[10];
+        // All cores process all tokens
+        reader_runtime_args[9] = 0;
+        reader_runtime_args[10] = (uint32_t)tokens_per_device;
+        writer_runtime_args[9] = 0;
+        writer_runtime_args[10] = (uint32_t)tokens_per_device;
 
-        tokens_per_core_start = reader_runtime_args[10];
+        // Expert range for this core
+        uint32_t expert_start = core_idx * experts_per_core_range;
+        uint32_t expert_end = std::min((core_idx + 1) * experts_per_core_range, operation_attributes.n_routed_experts);
+        reader_runtime_args[11] = expert_start;
+        reader_runtime_args[12] = expert_end;
+        writer_runtime_args[11] = expert_start;
+        writer_runtime_args[12] = expert_end;
 
         // Append fabric connection args for each neighbor (only if fabric is enabled)
         if (operation_attributes.num_links > 0) {
@@ -510,16 +514,16 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
                 log_debug(
                     tt::LogOp,
-                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {} and handles "
-                    "token indices from {} to {}",
+                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {} "
+                    "experts [{}, {})",
                     mesh_coordinate[0],
                     mesh_coordinate[1],
                     neighbor_coordinate[0],
                     neighbor_coordinate[1],
                     sender_core,
                     core_link,
-                    reader_runtime_args[9],
-                    reader_runtime_args[10]);
+                    expert_start,
+                    expert_end);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     src_fabric_node_id,
                     mesh_device->get_fabric_node_id(neighbor_coordinate),
@@ -587,7 +591,7 @@ void PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::override_run
             writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
 
-            // Note: token ranges (indices 9-10) and fabric args remain unchanged
+            // Note: token ranges (indices 9-10), expert ranges (indices 11-12), and fabric args remain unchanged
         }
     }
 }

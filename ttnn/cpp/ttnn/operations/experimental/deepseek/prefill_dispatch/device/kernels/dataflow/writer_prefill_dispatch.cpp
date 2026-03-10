@@ -108,17 +108,17 @@ void kernel_main() {
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Fabric connection args follow (appended by append_fabric_connection_rt_args)
-    // These will be read by fabric API calls
 
-    // Print key compile time args for debugging (using DPRINT_DATA0 - writer runs on RISCV_0)
     DPRINT_DISPATCH << "linearized_mesh_coord=" << linearized_mesh_coord << " src_mesh_id=" << src_mesh_id
                     << " src_chip_id=" << src_chip_id << " mesh_rows=" << mesh_rows << " mesh_cols=" << mesh_cols
                     << ENDL();
 
-    DPRINT_DISPATCH << "Writer kernel: CBs=" << cb_input_id << "," << cb_indices_id << "," << cb_weights_id << ","
-                    << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
+    DPRINT_DISPATCH << "Writer kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
+                    << " experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                     << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip << ENDL();
 
 #ifndef DEST_CHIP_ID
@@ -285,6 +285,9 @@ void kernel_main() {
             uint16_t* weights = (uint16_t*)(get_read_ptr(cb_weights_id));
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
                 auto routed_expert = indices[k];
+                if ((uint32_t)routed_expert < expert_start_idx || (uint32_t)routed_expert >= expert_end_idx) {
+                    continue;
+                }
                 auto expert_chip = routed_expert / experts_per_chip;
                 auto expert_index_within_chip = routed_expert % experts_per_chip;
 

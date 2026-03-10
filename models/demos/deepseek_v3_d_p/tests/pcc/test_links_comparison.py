@@ -1,8 +1,14 @@
 """
 Benchmark test comparing dispatch+combine performance with 1 vs 2 ethernet links.
 
-Runs the full dispatch→combine round-trip multiple times and reports per-iteration
-timing so that Tracy profiles and perf reports can be compared across link counts.
+Runs the full dispatch→combine round-trip multiple times and reports device kernel
+durations extracted from the device profiler.
+
+Usage:
+  TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 \
+      pytest models/demos/deepseek_v3_d_p/tests/pcc/test_links_comparison.py -v -s
+
+Without profiler env vars, falls back to wall-clock timing.
 """
 
 import time
@@ -10,7 +16,6 @@ import time
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
@@ -21,8 +26,85 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
-NUM_WARMUP = 2
-NUM_ITERATIONS = 5
+NUM_WARMUP = 10
+NUM_ITERATIONS = 100
+
+# Accumulate results across parametrized runs for side-by-side comparison
+_results: dict[int, dict[str, float]] = {}
+
+
+def _extract_profiler_durations(mesh_device):
+    """
+    Call ReadDeviceProfiler once, then extract per-program kernel durations.
+
+    Programs execute in order: dispatch, combine, dispatch, combine, ...
+    For each program we take the max duration across devices (the mesh op
+    finishes when the slowest device finishes).
+
+    Returns (dispatch_durations_ns, combine_durations_ns) or (None, None).
+    """
+    try:
+        ttnn.ReadDeviceProfiler(mesh_device)
+        latest = ttnn.get_latest_programs_perf_data()
+    except Exception:
+        return None, None
+    if not latest:
+        return None, None
+
+    device_ids = sorted(latest.keys())
+    if not device_ids:
+        return None, None
+
+    num_programs_per_device = min(len(latest[did]) for did in device_ids)
+    if num_programs_per_device == 0:
+        return None, None
+
+    per_program_durations = []
+    for prog_idx in range(num_programs_per_device):
+        max_dur = None
+        for did in device_ids:
+            p = latest[did][prog_idx]
+            for key in ("DEVICE KERNEL DURATION [ns]", "DEVICE FW DURATION [ns]"):
+                if key in p.program_analyses_results:
+                    d = p.program_analyses_results[key].duration
+                    if d is not None:
+                        max_dur = max(max_dur, d) if max_dur is not None else d
+                    break
+        if max_dur is not None:
+            per_program_durations.append(int(max_dur))
+
+    dispatch_durations = per_program_durations[0::2]
+    combine_durations = per_program_durations[1::2]
+    return dispatch_durations, combine_durations
+
+
+def _print_comparison():
+    """Print side-by-side comparison table if results for multiple link counts are available."""
+    if len(_results) < 2:
+        return
+
+    link_counts = sorted(_results.keys())
+    base = _results[link_counts[0]]
+
+    header = f"{'metric':<20}"
+    for nl in link_counts:
+        header += f"  {'%d link' % nl:>12s}"
+    header += f"  {'speedup':>10s}"
+
+    rows = []
+    for metric in ("dispatch_us", "combine_us", "total_us"):
+        label = metric.replace("_us", "").capitalize()
+        row = f"{label + ' (us)':<20}"
+        vals = [_results[nl][metric] for nl in link_counts]
+        for v in vals:
+            row += f"  {v:>12.2f}"
+        if vals[0] > 0:
+            row += f"  {vals[0] / vals[-1]:>9.2f}x"
+        rows.append(row)
+
+    sep = "=" * len(header)
+    table = "\n".join([sep, header, "-" * len(header)] + rows + [sep])
+    logger.info(f"\n{table}")
 
 
 @pytest.mark.parametrize(
@@ -126,19 +208,28 @@ def test_links_comparison(
         topology=topology,
     )
 
-    dispatch_times = []
-    combine_times = []
+    # Warmup
+    for _ in range(NUM_WARMUP):
+        tt_dispatched_buffer, tt_metadata, experts_tok_counter, offsets, cum_sum = tt_dispatch_module(
+            tt_x, tt_weights, tt_indices
+        )
+        tt_experts_tok_counter = ttnn.from_torch(
+            experts_tok_counter,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
+        )
+        tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_experts_tok_counter)
+    ttnn.synchronize_device(mesh_device)
 
-    for i in range(NUM_WARMUP + NUM_ITERATIONS):
-        label = "warmup" if i < NUM_WARMUP else f"iter-{i - NUM_WARMUP}"
-        signpost(f"dispatch+combine  links={num_links}  {label}")
-
-        t0 = time.perf_counter()
+    # Measured iterations — run all, then read profiler once
+    t_wall_start = time.perf_counter()
+    for i in range(NUM_ITERATIONS):
         tt_dispatched_buffer, tt_metadata, experts_tok_counter, offsets, cum_sum = tt_dispatch_module(
             tt_x, tt_weights, tt_indices
         )
         ttnn.synchronize_device(mesh_device)
-        t1 = time.perf_counter()
 
         tt_experts_tok_counter = ttnn.from_torch(
             experts_tok_counter,
@@ -148,29 +239,36 @@ def test_links_comparison(
             dtype=ttnn.int32,
         )
 
-        t2 = time.perf_counter()
         tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_experts_tok_counter)
         ttnn.synchronize_device(mesh_device)
-        t3 = time.perf_counter()
+    wall_total_ns = int((time.perf_counter() - t_wall_start) * 1e9)
 
-        if i >= NUM_WARMUP:
-            dispatch_times.append(t1 - t0)
-            combine_times.append(t3 - t2)
-            logger.info(
-                f"[{label}] dispatch={1000*(t1-t0):.2f}ms  combine={1000*(t3-t2):.2f}ms  "
-                f"total={1000*(t1-t0+t3-t2):.2f}ms"
-            )
+    dispatch_durations, combine_durations = _extract_profiler_durations(mesh_device)
 
-    avg_dispatch = 1000 * sum(dispatch_times) / len(dispatch_times)
-    avg_combine = 1000 * sum(combine_times) / len(combine_times)
+    if dispatch_durations and combine_durations:
+        avg_dispatch_us = sum(dispatch_durations) / len(dispatch_durations) / 1e3
+        avg_combine_us = sum(combine_durations) / len(combine_durations) / 1e3
+        source = "profiler"
+    else:
+        avg_dispatch_us = wall_total_ns / NUM_ITERATIONS / 1e3
+        avg_combine_us = 0
+        source = "wall"
+        logger.warning("Device profiler unavailable, reporting wall-clock total (dispatch+combine)")
+
+    avg_total_us = avg_dispatch_us + avg_combine_us
+
+    _results[num_links] = {
+        "dispatch_us": avg_dispatch_us,
+        "combine_us": avg_combine_us,
+        "total_us": avg_total_us,
+    }
+
     logger.info(
-        f"\n{'='*60}\n"
-        f"  num_links={num_links}  ({NUM_ITERATIONS} iters after {NUM_WARMUP} warmup)\n"
-        f"  avg dispatch : {avg_dispatch:.2f} ms\n"
-        f"  avg combine  : {avg_combine:.2f} ms\n"
-        f"  avg total    : {avg_dispatch + avg_combine:.2f} ms\n"
-        f"{'='*60}"
+        f"num_links={num_links}: dispatch={avg_dispatch_us:.2f} us  "
+        f"combine={avg_combine_us:.2f} us  total={avg_total_us:.2f} us  ({source})"
     )
+
+    _print_comparison()
 
     # Correctness check on last iteration
     mesh_composer = ttnn.create_mesh_composer(

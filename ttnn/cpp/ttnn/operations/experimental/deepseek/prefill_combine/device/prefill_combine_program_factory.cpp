@@ -171,26 +171,34 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     auto hidden_size = dispatched_shape[-1];
     auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
 
-    // Calculate work distribution
-    // For combine, we iterate over (chips, experts, tokens_per_expert)
-    // Start with single-core implementation, can parallelize later
+    // Calculate work distribution: split local experts across cores
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    TT_FATAL(!subdevice_cores.empty(), "Need at least one core for combine operation");
+    uint32_t effective_num_links = num_links >= 2 ? 2u : 1u;
+    TT_FATAL(
+        subdevice_cores.size() >= effective_num_links,
+        "Not enough cores {} for {} links",
+        subdevice_cores.size(),
+        effective_num_links);
 
-    // Use first available core for now (single-core implementation)
-    CoreCoord worker_core = subdevice_cores.at(0);
-    CoreRangeSet worker_core_grid = CoreRangeSet({CoreRange(worker_core, worker_core)});
+    uint32_t num_cores = effective_num_links;
+    uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, effective_num_links);
+
+    auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
+    std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     log_debug(
         tt::LogOp,
-        "Creating prefill combine program with hidden_size: {} on core: {}",
+        "Creating prefill combine program with hidden_size: {} num_cores: {} experts_per_core_range: {} cores: {}",
         hidden_size,
-        worker_core);
+        num_cores,
+        experts_per_core_range,
+        sender_cores);
 
     // Create input CBs (readers)
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         dispatched_buffer,
         /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_0,
@@ -198,7 +206,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
 
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         dispatched_metadata,
         /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_1,
@@ -206,7 +214,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
 
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         experts_tok_counter,
         /*buffering_factor=*/detail::get_num_pages(experts_tok_counter),  // Read entire counter
         /*cb_id=*/tt::CBIndex::c_2,
@@ -215,7 +223,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     // Create output CB (writer)
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         output_tensor,
         /*buffering_factor=*/2,
         /*cb_id=*/tt::CBIndex::c_3,
@@ -230,7 +238,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         tt::tt_metal::CircularBufferConfig packet_header_cb_config =
             tt::tt_metal::CircularBufferConfig(packet_header_cb_size, {{tt::CBIndex::c_4, tt::DataFormat::UInt8}})
                 .set_page_size(tt::CBIndex::c_4, packet_header_size_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, worker_core_grid, packet_header_cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
 
         log_debug(
             tt::LogOp,
@@ -309,8 +317,9 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
     // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/reader_prefill_combine.cpp",
-        worker_core_grid,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/"
+        "reader_prefill_combine.cpp",
+        sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
@@ -329,72 +338,91 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/writer_prefill_combine.cpp",
-        worker_core_grid,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/"
+        "writer_prefill_combine.cpp",
+        sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
-    // Set runtime args
-    std::vector<uint32_t> reader_runtime_args = {
-        dispatched_buffer.buffer()->address(),
-        dispatched_metadata.buffer()->address(),
-        experts_tok_counter.buffer()->address(),
-        output_tensor.buffer()->address(),
-    };
+    // Set runtime args — each core handles a disjoint local expert range and its own fabric link
+    uint32_t core_idx = 0;
+    for (const auto& sender_core : sender_cores) {
+        // Expert range for this core (local expert indices)
+        uint32_t expert_start = core_idx * experts_per_core_range;
+        uint32_t expert_end = std::min((core_idx + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
 
-    std::vector<uint32_t> writer_runtime_args = reader_runtime_args;  // Copy base args
+        std::vector<uint32_t> reader_runtime_args = {
+            dispatched_buffer.buffer()->address(),
+            dispatched_metadata.buffer()->address(),
+            experts_tok_counter.buffer()->address(),
+            output_tensor.buffer()->address(),
+            expert_start,
+            expert_end,
+        };
 
-    // Add semaphore addresses for fabric synchronization
-    writer_runtime_args.push_back((uint32_t)cross_device_semaphore.address());
-    writer_runtime_args.push_back((uint32_t)init_semaphore.address());
+        std::vector<uint32_t> writer_runtime_args = {
+            dispatched_buffer.buffer()->address(),
+            dispatched_metadata.buffer()->address(),
+            experts_tok_counter.buffer()->address(),
+            output_tensor.buffer()->address(),
+            (uint32_t)cross_device_semaphore.address(),
+            (uint32_t)init_semaphore.address(),
+            expert_start,
+            expert_end,
+        };
 
-    // Append fabric connection args (only if fabric is enabled)
-    if (num_links > 0) {
-        for (const auto& neighbor_coordinate : neighbors) {
-            // Skip self-connections
-            if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+        // Append fabric connection args (only if fabric is enabled)
+        if (num_links > 0) {
+            uint32_t core_link = core_idx % num_links;
+            for (const auto& neighbor_coordinate : neighbors) {
+                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+                    log_debug(
+                        tt::LogOp,
+                        "Skipping self-connection for mesh coord ({}, {}) at core {}",
+                        mesh_coordinate[0],
+                        mesh_coordinate[1],
+                        sender_core);
+                    continue;
+                }
+
                 log_debug(
                     tt::LogOp,
-                    "Skipping self-connection for mesh coord ({}, {}) at core {}",
+                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {} "
+                    "experts [{}, {})",
                     mesh_coordinate[0],
                     mesh_coordinate[1],
-                    worker_core);
-                continue;
+                    neighbor_coordinate[0],
+                    neighbor_coordinate[1],
+                    sender_core,
+                    core_link,
+                    expert_start,
+                    expert_end);
+
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    mesh_device->get_fabric_node_id(neighbor_coordinate),
+                    core_link,
+                    program,
+                    sender_core,
+                    writer_runtime_args);
             }
-
-            log_debug(
-                tt::LogOp,
-                "Connection between mesh coord ({}, {}) and ({}, {}) at core {}",
-                mesh_coordinate[0],
-                mesh_coordinate[1],
-                neighbor_coordinate[0],
-                neighbor_coordinate[1],
-                worker_core);
-
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                mesh_device->get_fabric_node_id(neighbor_coordinate),
-                0,
-                program,
-                worker_core,
-                writer_runtime_args);
         }
-    }
 
-    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, worker_core, reader_runtime_args);
-    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, worker_core, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, sender_core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, sender_core, writer_runtime_args);
+        core_idx++;
+    }
 
     return {
         std::move(program),
         {.reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = writer_kernel_id,
-         .worker_core = worker_core,
+         .cores = sender_cores,
          .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}
-    };
+         .cross_device_semaphore = cross_device_semaphore}};
 }
 
 void PrefillCombineDeviceOperation::PrefillCombineProgramFactory::override_runtime_arguments(
@@ -402,27 +430,27 @@ void PrefillCombineDeviceOperation::PrefillCombineProgramFactory::override_runti
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // Update buffer addresses in runtime args when tensors are reallocated (in-place to preserve fabric args)
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        auto& reader_runtime_args =
-            tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel_id, shared_variables.worker_core);
-        auto& writer_runtime_args =
-            tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel_id, shared_variables.worker_core);
+        for (const auto& core : shared_variables.cores) {
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
 
-        reader_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
-        reader_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
-        reader_runtime_args.at(2) = tensor_args.experts_tok_counter.buffer()->address();
-        reader_runtime_args.at(3) = tensor_return_value.buffer()->address();
+            // Update buffer addresses (indices 0-3)
+            reader_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.experts_tok_counter.buffer()->address();
+            reader_runtime_args.at(3) = tensor_return_value.buffer()->address();
 
-        writer_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
-        writer_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
-        writer_runtime_args.at(2) = tensor_args.experts_tok_counter.buffer()->address();
-        writer_runtime_args.at(3) = tensor_return_value.buffer()->address();
-        writer_runtime_args.at(4) = (uint32_t)shared_variables.cross_device_semaphore.address();
-        writer_runtime_args.at(5) = (uint32_t)shared_variables.init_semaphore.address();
-        // Fabric connection args (index 6+) remain unchanged
+            writer_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
+            writer_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
+            writer_runtime_args.at(2) = tensor_args.experts_tok_counter.buffer()->address();
+            writer_runtime_args.at(3) = tensor_return_value.buffer()->address();
+            writer_runtime_args.at(4) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(5) = (uint32_t)shared_variables.init_semaphore.address();
+            // Note: expert ranges (indices 6-7) and fabric args remain unchanged
+        }
     }
 }
 

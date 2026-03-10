@@ -83,12 +83,11 @@ void kernel_main() {
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args++);
+    uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
 
-    // Print key compile time args for debugging (RISCV_1)
-    DPRINT_COMBINE << "Combine Reader: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
-                   << cb_experts_tok_counter_id << "," << cb_output_id << " num_chips=" << num_chips
-                   << " experts_per_chip=" << experts_per_chip << " num_experts_per_tok=" << num_experts_per_tok
-                   << " seq_len_per_chip=" << seq_len_per_chip
+    DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
+                   << " experts_per_chip=" << experts_per_chip
                    << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert
                    << " hidden_size=" << hidden_size << ENDL();
 
@@ -126,7 +125,7 @@ void kernel_main() {
         const uint32_t meta_fifo_size = get_local_cb_interface(cb_dispatched_metadata_id).fifo_size;
 
         DeviceZoneScopedN("combine-read-expert-data");
-        for (uint32_t local_expert = 0; local_expert < experts_per_chip; local_expert++) {
+        for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
             DPRINT_COMBINE << "Local expert=" << local_expert << ENDL();
             uint32_t start_page = local_expert * expert_stride;
             uint32_t expert_tokens = experts_tok_counter_l1[local_expert];

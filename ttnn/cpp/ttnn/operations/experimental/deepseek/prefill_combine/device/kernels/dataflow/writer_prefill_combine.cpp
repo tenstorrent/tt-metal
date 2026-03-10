@@ -89,18 +89,16 @@ void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Fabric connection args follow (appended by append_fabric_connection_rt_args)
 
     // Print key compile time args for debugging (RISCV_0)
-    DPRINT_COMBINE << "Combine Writer: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
-                   << cb_experts_tok_counter_id << "," << cb_output_id << " num_chips=" << num_chips
-                   << " experts_per_chip=" << experts_per_chip << " num_experts_per_tok=" << num_experts_per_tok
-                   << " seq_len_per_chip=" << seq_len_per_chip
-                   << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert
-                   << " hidden_size=" << hidden_size << " linearized_mesh_coord" << linearized_mesh_coord
-                   << " src_mesh_id=" << src_mesh_id << " src_chip_id=" << src_chip_id << " mesh_rows=" << mesh_rows
-                   << " mesh_cols=" << mesh_cols << ENDL();
+    DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
+                   << " num_chips=" << num_chips << " experts_per_chip=" << experts_per_chip
+                   << " num_experts_per_tok=" << num_experts_per_tok << " hidden_size=" << hidden_size
+                   << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
 #ifdef DEST_CHIP_ID
     // Fabric is enabled - set up connections
@@ -186,7 +184,7 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("combine-expert-loop");
-        for (uint32_t expert_idx = 0; expert_idx < experts_per_chip; ++expert_idx) {
+        for (uint32_t expert_idx = expert_start_idx; expert_idx < expert_end_idx; ++expert_idx) {
             DPRINT_COMBINE << "Processing expert " << expert_idx << "/" << experts_per_chip << ENDL();
             for (uint32_t tok_idx = 0; tok_idx < experts_tok_counter[expert_idx]; ++tok_idx) {
                 {
