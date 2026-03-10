@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // layer_norm_rm - Compute Kernel
-// Stage 3 (normalize): tilize -> reduce_mean -> sub_mean -> square -> reduce_var
-//                       -> eps+rsqrt -> mul_rstd -> untilize
+// Stage 4 (affine_transform): Full layer norm with optional gamma/beta
+// tilize -> reduce_mean -> sub_mean -> square -> reduce_var
+// -> eps+rsqrt -> mul_rstd -> [mul_gamma] -> [add_beta] -> untilize
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -22,16 +23,28 @@ void kernel_main() {
 
     // CB indices
     constexpr uint32_t cb_input_rm = 0;     // c_0: RM sticks from reader
+    constexpr uint32_t cb_gamma = 5;        // c_5: tilized gamma (persistent)
+    constexpr uint32_t cb_beta = 6;         // c_6: tilized beta (persistent)
     constexpr uint32_t cb_scaler = 8;       // c_8: reduce scaler (1/W)
     constexpr uint32_t cb_eps = 9;          // c_9: epsilon constant
     constexpr uint32_t cb_tilized = 16;     // c_16: tilized data (multi-use)
     constexpr uint32_t cb_output_rm = 17;   // c_17: untilized output for writer
     constexpr uint32_t cb_reduce_out = 24;  // c_24: reduce output (mean/variance)
-    constexpr uint32_t cb_centered = 25;    // c_25: centered values
+    constexpr uint32_t cb_centered = 25;    // c_25: centered values / affine intermediates
     constexpr uint32_t cb_rstd = 27;        // c_27: rsqrt(var+eps)
 
     // Hardware init - must come first
     compute_kernel_hw_startup(cb_input_rm, cb_scaler, cb_tilized);
+
+    // --- Tilize gamma/beta at program start (before main loop) ---
+    // Reader has already pushed replicated gamma/beta sticks into c_0.
+    // We tilize them into persistent CBs c_5 and c_6.
+    if constexpr (has_gamma) {
+        compute_kernel_lib::tilize<cb_input_rm, cb_gamma>(Wt, 1);
+    }
+    if constexpr (has_beta) {
+        compute_kernel_lib::tilize<cb_input_rm, cb_beta>(Wt, 1);
+    }
 
     for (uint32_t block = 0; block < num_blocks_per_core; block++) {
         // Phase 1: Tilize (c_0 -> c_16)
@@ -90,7 +103,54 @@ void kernel_main() {
             compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd>(
             cb_centered, cb_rstd, cb_tilized, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
-        // Phase 10: Untilize (c_16 -> c_17) -- normalized output
-        compute_kernel_lib::untilize<Wt, cb_tilized, cb_output_rm>(1);
+        // After Phase 7: final_cb = cb_tilized (c_16)
+
+        // Phase 8 (optional): Multiply Gamma (c_16 * c_5 -> c_25)
+        if constexpr (has_gamma) {
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::NONE,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
+                cb_tilized, cb_gamma, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+            // After Phase 8: final_cb = cb_centered (c_25)
+        }
+
+        // Phase 9 (optional): Add Beta (c_25 + c_6 -> c_16)
+        if constexpr (has_beta) {
+            // Determine input CB based on whether gamma was applied
+            if constexpr (has_gamma) {
+                // Input is c_25 from Phase 8
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
+                    cb_centered, cb_beta, cb_tilized, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+                // After Phase 9: final_cb = cb_tilized (c_16)
+            } else {
+                // No gamma, input is c_16 from Phase 7
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
+                    cb_tilized, cb_beta, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+                // After Phase 9 (beta only): final_cb = cb_centered (c_25)
+            }
+        }
+
+        // Phase 10: Untilize (final_cb -> c_17)
+        // Determine which CB has the final result
+        if constexpr (has_gamma && has_beta) {
+            // gamma+beta: Phase 9 wrote to c_16
+            compute_kernel_lib::untilize<Wt, cb_tilized, cb_output_rm>(1);
+        } else if constexpr (has_gamma) {
+            // gamma only: Phase 8 wrote to c_25
+            compute_kernel_lib::untilize<Wt, cb_centered, cb_output_rm>(1);
+        } else if constexpr (has_beta) {
+            // beta only: Phase 9 wrote to c_25
+            compute_kernel_lib::untilize<Wt, cb_centered, cb_output_rm>(1);
+        } else {
+            // no affine: Phase 7 wrote to c_16
+            compute_kernel_lib::untilize<Wt, cb_tilized, cb_output_rm>(1);
+        }
     }
 }
