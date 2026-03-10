@@ -80,7 +80,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    const auto& input_shape = input_tensor.logical_shape();
+    auto input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -90,8 +90,6 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
             input_tensor.dtype() == DataType::UINT16,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
-
-    TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
