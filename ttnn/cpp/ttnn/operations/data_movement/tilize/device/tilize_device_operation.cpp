@@ -40,6 +40,9 @@ bool can_use_sharded_optimized_factories(
         if (operation_attributes.output_mem_config.shard_spec().value().shape[0] != tt::constants::TILE_HEIGHT) {
             return false;
         }
+        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+            return false;
+        }
     }
 
     if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
