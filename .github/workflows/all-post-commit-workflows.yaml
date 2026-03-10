@@ -1,4 +1,4 @@
-name: "All post-commit tests"
+name: "Sanity tests"
 
 on:
   workflow_call:
