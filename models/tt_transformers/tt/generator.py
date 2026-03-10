@@ -471,7 +471,7 @@ class Generator(WarmupForwardMixin):
         )
 
         all_users = [0] if use_batched_prefill else empty_slots
-        padded_batch = self.model_args[0].max_batch_size
+        padded_batch = self.model_args[0].max_batch_size if use_batched_prefill else batch_size
 
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
