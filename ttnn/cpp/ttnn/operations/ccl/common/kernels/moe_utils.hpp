@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <ranges>
 #include <tuple>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
