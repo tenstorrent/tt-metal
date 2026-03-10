@@ -522,7 +522,7 @@ struct WorkerToFabricEdmSenderImpl {
                     this->sync_noc_cmd_buf,
                     noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
+                noc_inline_dw_write_with_state<false, true, false, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
                     this->sync_noc_cmd_buf,
