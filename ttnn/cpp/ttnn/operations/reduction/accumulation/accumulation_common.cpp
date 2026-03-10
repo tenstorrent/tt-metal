@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_common.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::reduction::accumulation::common {
@@ -71,6 +72,7 @@ Tensor postprocess_output_tensor(
 }
 
 void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
+    TT_FATAL(is_device_tensor(output_tensor), "Preallocated output tensor must be on device");
     TT_FATAL(
         input_tensor.logical_shape() == output_tensor.logical_shape(),
         "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",
@@ -89,8 +91,21 @@ Tensor accumulation_invoke(
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 
+    if (optional_out.has_value()) {
+        validate_output_tensor(input_tensor, *optional_out);
+    }
+
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
-        return input_tensor;
+        if (!optional_out.has_value()) {
+            return input_tensor;
+        }
+
+        Tensor& preallocated_tensor = optional_out.value();
+        // It only makes sense to copy non-zero volume tensor.
+        if (input_tensor.logical_volume() > 0) {
+            ttnn::copy(input_tensor, preallocated_tensor);
+        }
+        return preallocated_tensor;
     }
 
     TT_FATAL(
@@ -102,10 +117,6 @@ Tensor accumulation_invoke(
 
     // Normalize negative dim
     const int32_t cum_axis = (dim < 0) ? (dim + input_rank) : dim;
-
-    if (optional_out.has_value()) {
-        validate_output_tensor(input_tensor, *optional_out);
-    }
 
     Tensor wip_tensor = input_tensor;
     ttnn::SmallVector<int64_t> permutation;
