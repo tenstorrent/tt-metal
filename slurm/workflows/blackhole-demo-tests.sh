@@ -29,4 +29,4 @@ else
     TEST_CMD="pytest models/demos/blackhole -x --timeout=600"
 fi
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

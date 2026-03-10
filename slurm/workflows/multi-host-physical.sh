@@ -13,8 +13,6 @@ source "${SCRIPT_DIR}/lib/cleanup.sh"
 source "${SCRIPT_DIR}/lib/ttop.sh"
 source "${SCRIPT_DIR}/workflows/_helpers/resolve_docker_image.sh"
 
-export BUILD_ARTIFACT=1
-
 parse_common_args "$@"
 resolve_docker_image dev
 setup_job
@@ -40,4 +38,4 @@ TEST_CMD="pytest tests/tt_metal/multihost/physical -x --timeout=1200 \
     --hostfile=${ALLOC_DIR}/hostfile.txt \
     --rankfile=${ALLOC_DIR}/rankfile.txt"
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

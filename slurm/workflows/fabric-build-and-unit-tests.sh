@@ -41,7 +41,7 @@ BUILD_JOB=$(sbatch --parsable \
         resolve_docker_image ci-build
         setup_job
         trap 'cleanup_job --exit-code \$?' EXIT
-        docker_run -- 'cmake --preset fabric && cmake --build --preset fabric'
+        docker_run \"\$DOCKER_IMAGE\" 'cmake --preset fabric && cmake --build --preset fabric'
     ")
 
 log_info "Build job submitted: ${BUILD_JOB}"
@@ -64,7 +64,7 @@ TEST_JOB=$(sbatch --parsable \
         resolve_docker_image dev
         setup_job
         trap 'cleanup_job --exit-code \$?' EXIT
-        docker_run -- 'pytest tests/tt_fabric/unit -x --timeout=600'
+        docker_run \"\$DOCKER_IMAGE\" 'pytest tests/tt_fabric/unit -x --timeout=600'
     ")
 
 log_info "Test job submitted: ${TEST_JOB} (depends on build ${BUILD_JOB})"

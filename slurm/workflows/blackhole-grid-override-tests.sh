@@ -22,4 +22,4 @@ trap 'cleanup_job --exit-code $?' EXIT
 
 TEST_CMD="pytest tests/tt_metal/blackhole/grid_override -x --timeout=600"
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

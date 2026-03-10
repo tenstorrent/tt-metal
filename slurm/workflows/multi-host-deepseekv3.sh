@@ -40,4 +40,4 @@ TEST_CMD="pytest models/demos/deepseek_v3/tests/test_multihost.py -x --timeout=1
     --hostfile=${ALLOC_DIR}/hostfile.txt \
     --rankfile=${ALLOC_DIR}/rankfile.txt"
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

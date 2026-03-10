@@ -40,4 +40,4 @@ TEST_CMD="pytest tests/tt_fabric/multihost -x --timeout=900 \
     --hostfile=${ALLOC_DIR}/hostfile.txt \
     --rankfile=${ALLOC_DIR}/rankfile.txt"
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

@@ -31,4 +31,4 @@ else
     TEST_CMD="./tests/scripts/run_cpp_fabric_perf_tests.sh"
 fi
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

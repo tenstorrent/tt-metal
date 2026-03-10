@@ -44,9 +44,15 @@ setup_job() {
 
     # -- Fetch build artifact --
     if [[ "${BUILD_ARTIFACT:-0}" == "1" ]]; then
-        log_info "Fetching build artifact..."
-        require_cmd tar
-        fetch_build_artifact "$PIPELINE_ID" "$workspace"
+        local tarball
+        tarball="$(get_artifact_dir "$PIPELINE_ID")/build/ttm_any.tar.zst"
+        if [[ -f "$tarball" ]]; then
+            log_info "Fetching build artifact..."
+            require_cmd tar
+            fetch_build_artifact "$PIPELINE_ID" "$workspace"
+        else
+            log_info "No build tarball found; running from existing workspace (${workspace})"
+        fi
     fi
 
     # -- Install wheel --

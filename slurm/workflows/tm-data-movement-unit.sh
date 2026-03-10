@@ -32,4 +32,4 @@ else
     TEST_CMD="./tests/scripts/run_cpp_data_movement_tests.sh"
 fi
 
-docker_run -- "${TEST_CMD}"
+docker_run "$DOCKER_IMAGE" "${TEST_CMD}"
