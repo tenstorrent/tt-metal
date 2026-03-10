@@ -30,6 +30,7 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -69,27 +70,74 @@ class LMHeadSampling:
         k: int = 1,
         p: float = 1.0,
         epsilon: float = 1e-6,
+        fuse_mtp: bool = False,
+        fuse_mtp_verification: bool = False,
+        reference_token: torch.Tensor | None = None,
+        embedding_tensor: torch.Tensor | None = None,
+        h_gamma_tensor: torch.Tensor | None = None,
+        e_gamma_tensor: torch.Tensor | None = None,
+        eh_projection_tensor: torch.Tensor | None = None,
     ):
         """
         PyTorch reference implementation for fused LM-head + sampling golden.
 
+        This function performs the following operations:
+        1. RMSNorm on input_tensor (hidden states) using gamma_tensor
+        2. Matmul with vocab_tensor to get logits/scores
+        3. Sample token index using argmax (greedy k=1)
+
+        When fuse_mtp=True, additionally performs MTP (Multi-Token Prediction) fusion:
+        4. Look up token embedding from embedding_tensor using sampled index
+        5. RMSNorm on hidden states using h_gamma_tensor
+        6. RMSNorm on token embedding using e_gamma_tensor
+        7. Concatenate normalized hidden states and embedding
+        8. Project through eh_projection_tensor to get MTP input
+
+        When fuse_mtp_verification=True, performs speculative decoding verification:
+        4v. Compare sampled token (T_spec) with reference_token (T_base)
+        5v. Return verification result (match=1, no_match=0)
+
+        fuse_mtp and fuse_mtp_verification are mutually exclusive post-argmax paths.
+
         Args:
-            input_tensor: Input tensor (torch.Tensor) [M, K]
-            gamma_tensor: RMSNorm gamma/weight tensor (torch.Tensor) [M, K]
-            vocab_tensor: Vocab tensor (torch.Tensor) [K, N]
+            input_tensor: Input hidden states tensor (torch.Tensor) [1, hidden_dim]
+            gamma_tensor: RMSNorm gamma/weight tensor for LM head (torch.Tensor) [hidden_dim]
+            vocab_tensor: Vocab projection tensor (torch.Tensor) [hidden_dim, vocab_size]
             indices: Optional indices tensor used by fused sampling. If provided,
                 golden returns sampled index tensor [1, 1]. If omitted, returns scores.
             k: Sampling k; currently only k=1 supported when indices is provided.
             p: Top-p threshold (unused for k=1 path).
             epsilon: Small value to avoid division by zero in RMS norm.
+            fuse_mtp: If True, perform MTP fusion after sampling.
+            fuse_mtp_verification: If True, perform verification against reference_token.
+            reference_token: Reference token (T_base) for verification [1, 1] uint32.
+            embedding_tensor: Token embedding table (torch.Tensor) [vocab_size, embedding_dim]
+            h_gamma_tensor: RMSNorm gamma for hidden states in MTP (torch.Tensor) [hidden_dim]
+            e_gamma_tensor: RMSNorm gamma for embeddings in MTP (torch.Tensor) [embedding_dim]
+            eh_projection_tensor: Projection matrix for concatenated [h, e] (torch.Tensor) [hidden_dim + embedding_dim, output_dim]
 
         Returns:
-            - If indices is None: output scores tensor [M, N]
-            - If indices is provided: sampled index tensor [1, 1] (uint32)
+            - If neither fuse_mtp nor fuse_mtp_verification: (sampled_index [1,1], None)
+            - If fuse_mtp: (sampled_index [1,1], mtp_projection_output [1, output_dim])
+            - If fuse_mtp_verification: (sampled_index [1,1], verification_result uint32 (1=match, 0=no_match))
         """
+        assert not (fuse_mtp and fuse_mtp_verification), "fuse_mtp and fuse_mtp_verification are mutually exclusive"
+
+        if fuse_mtp:
+            assert embedding_tensor is not None, "embedding_tensor is required for fused MTP"
+            assert h_gamma_tensor is not None, "h_gamma_tensor is required for fused MTP"
+            assert e_gamma_tensor is not None, "e_gamma_tensor is required for fused MTP"
+            assert eh_projection_tensor is not None, "eh_projection_tensor is required for fused MTP"
+
+        if fuse_mtp_verification:
+            assert reference_token is not None, "reference_token is required for MTP verification"
+
+        # Step 1: RMSNorm on input hidden states for LM head
         variance = input_tensor.pow(2).mean(-1, keepdim=True)
         normalized = input_tensor * torch.rsqrt(variance + epsilon)
         rmsnorm_out = normalized * gamma_tensor
+
+        # Step 2: Matmul with vocab tensor to get logits
         scores = rmsnorm_out @ vocab_tensor
 
         if k != 1:
@@ -98,6 +146,7 @@ class LMHeadSampling:
         # p is intentionally unused in k=1 path; keep for API compatibility.
         _ = p
 
+        # Step 3: Sample token using argmax (greedy)
         scores_f32 = scores.float().reshape(-1)
         indices_i64 = indices.to(torch.int64).reshape(-1)
         if scores_f32.numel() != indices_i64.numel():
@@ -108,7 +157,36 @@ class LMHeadSampling:
         max_score = torch.max(scores_f32)
         tied_mask = scores_f32 == max_score
         selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
-        return selected_index.reshape(1, 1)
+
+        if fuse_mtp_verification:
+            spec_token = selected_index.item()
+            ref_token = reference_token.reshape(-1)[0].item()
+            match = torch.tensor(1 if spec_token == ref_token else 0, dtype=torch.uint32).reshape(1, 1)
+            return selected_index.reshape(1, 1), match
+
+        if not fuse_mtp:
+            return selected_index.reshape(1, 1), None
+
+        # Step 4: Look up token embedding from embedding table
+        token_id = selected_index.to(torch.int64).item()
+        token_embedding = embedding_tensor[token_id, :].unsqueeze(0)  # [1, embedding_dim]
+
+        # Step 5: RMSNorm on hidden states using h_gamma_tensor
+        h_variance = input_tensor.pow(2).mean(-1, keepdim=True)
+        h_normalized = input_tensor * torch.rsqrt(h_variance + epsilon)
+        h_rmsnorm_out = h_normalized * h_gamma_tensor  # [1, hidden_dim]
+
+        # Step 6: RMSNorm on token embedding using e_gamma_tensor
+        e_variance = token_embedding.pow(2).mean(-1, keepdim=True)
+        e_normalized = token_embedding * torch.rsqrt(e_variance + epsilon)
+        e_rmsnorm_out = e_normalized * e_gamma_tensor  # [1, embedding_dim]
+
+        # Step 7: Concatenate normalized hidden states and embedding
+        concat_he = torch.cat([h_rmsnorm_out, e_rmsnorm_out], dim=-1)
+
+        # Step 8: Project through eh_projection_tensor
+        mtp_output = concat_he @ eh_projection_tensor
+        return selected_index.reshape(1, 1), mtp_output
 
     @staticmethod
     def op(
@@ -118,6 +196,12 @@ class LMHeadSampling:
         vocab_tensor,
         output_tensor,
         sender_coord,
+        output_mtp_tensor=None,
+        embedding_tensor=None,
+        h_gamma_tensor=None,
+        e_gamma_tensor=None,
+        eh_projection_tensor=None,
+        eh_proj_working_buf_tensor=None,
         indices_tensor=None,
         output_index_tensor=None,
         argmax_final_core_coord=None,
@@ -138,6 +222,16 @@ class LMHeadSampling:
         persistent_mode=False,
         termination_semaphore=None,
         persistent_next_iter_semaphore=None,
+        enable_mtp=False,
+        enable_mtp_verification=False,
+        reference_token_tensor=None,
+        verification_result_tensor=None,
+        speculative_tokens_tensor=None,
+        verify_ready_semaphore=None,
+        eh_subblock_k=None,
+        bypass_socket_output=None,
+        bypass_staging_tensor=None,
+        bypass_socket_input=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -151,6 +245,11 @@ class LMHeadSampling:
             input_tensor_mesh: Input tensor mesh [1, K] height-sharded in L1 on a single sender core
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
             gamma_tensor: RMSNorm gamma tensor [1, K], same tile/layout as input
+            output_mtp_tensor: Pre-allocated output for MTP [1, output_dim] width-sharded across matmul cores
+            embedding_tensor: Token embedding table [vocab_size, embedding_dim]
+            h_gamma_tensor: RMSNorm gamma tensor for hidden states [hidden_dim]
+            e_gamma_tensor: RMSNorm gamma tensor for embeddings [embedding_dim]
+            eh_projection_tensor: Projection matrix [hidden_dim + embedding_dim, output_dim]
             vocab_tensor: Vocab weights [K, N_total] width-sharded across matmul cores as [K, N_per_core]
             output_tensor: Pre-allocated output [1, N_total] width-sharded across matmul cores
             indices_tensor: Optional pre-cached global indices tensor, width-sharded like output scores
@@ -175,6 +274,25 @@ class LMHeadSampling:
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
 
         enable_argmax = True
+        # MTP fusion is enabled if all MTP tensors are provided
+        enable_mtp = (
+            enable_mtp
+            and output_mtp_tensor is not None
+            and embedding_tensor is not None
+            and h_gamma_tensor is not None
+            and e_gamma_tensor is not None
+            and eh_projection_tensor is not None
+        )
+        # MTP verification is enabled if the verification tensors are provided
+        enable_mtp_verification = (
+            enable_mtp_verification
+            and reference_token_tensor is not None
+            and verification_result_tensor is not None
+            and speculative_tokens_tensor is not None
+        )
+        assert not (
+            enable_mtp and enable_mtp_verification
+        ), "enable_mtp and enable_mtp_verification are mutually exclusive"
         socket_mode_none = 0
         socket_mode_d2h = 1
         socket_mode_d2d = 2
@@ -244,6 +362,11 @@ class LMHeadSampling:
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         indices_tensors_per_device = ttnn.get_device_tensors(indices_tensor) if enable_argmax else None
         output_index_tensors_per_device = ttnn.get_device_tensors(output_index_tensor) if enable_argmax else None
+        output_mtp_tensors_per_device = ttnn.get_device_tensors(output_mtp_tensor) if enable_mtp else None
+        embedding_tensors_per_device = ttnn.get_device_tensors(embedding_tensor) if enable_mtp else None
+        h_gamma_tensors_per_device = ttnn.get_device_tensors(h_gamma_tensor) if enable_mtp else None
+        e_gamma_tensors_per_device = ttnn.get_device_tensors(e_gamma_tensor) if enable_mtp else None
+        eh_proj_tensors_per_device = ttnn.get_device_tensors(eh_projection_tensor) if enable_mtp else None
         scratch_tensors_per_device = (
             ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
         )
@@ -319,9 +442,66 @@ class LMHeadSampling:
         weights_shard_spec = vocab_tensor_sample.memory_config().shard_spec
         n_per_core = weights_shard_spec.shape[1]
         out_w_per_core = n_per_core // out_tile.tile_shape[1]
-        # Input tile size for mcast data
+
+        # Input tile size for mcast data (must be defined before MTP block uses it)
+        # Everywhere that uses input_tile_size is wrong
         input_tile_size = in0_tile.get_tile_size(data_format)
         mcast_data_size_bytes = num_tiles_k * input_tile_size
+
+        # [MTP] Get eh projection matmul info (per-core output width)
+        if enable_mtp:
+            eh_projection_tensor_sample = eh_proj_tensors_per_device[0]
+            eh_weights_shard_spec = eh_projection_tensor_sample.memory_config().shard_spec
+            eh_n_per_core = eh_weights_shard_spec.shape[1]
+            eh_out_w_per_core = eh_n_per_core // eh_projection_tensor_sample.get_tile().tile_shape[1]
+
+            # Embedding CB size (single row from DRAM embedding table)
+            embedding_tensor_sample = embedding_tensors_per_device[0]
+            embedding_shape = embedding_tensor_sample.shape
+            embedding_dim = int(embedding_shape[-1])
+            e_num_tiles = rms_num_tiles  # embedding_dim // rms_tile_width  # tiles for e_rmsnorm
+
+            # EH matmul k dimension: concat [h_norm | e_norm] has shape [1, hidden_dim + embedding_dim]
+            # eh_concat_rms_tiles: packed (32x32) tile count for concat/mcast source CB
+            # eh_num_tiles_k: standard tile count for the matmul K dimension (must match weight tile-rows)
+            eh_concat_rms_tiles = rms_num_tiles * 2
+            eh_num_tiles_k = (int(input_shape[1]) + embedding_dim) // in0_tile.tile_shape[1]
+            eh_mcast_data_size_bytes = eh_concat_rms_tiles * rms_tile_size
+
+            # EH matmul DRAM streaming parameters
+            eh_projection_tensor_sample = eh_proj_tensors_per_device[0]
+            eh_dtype = eh_projection_tensor_sample.dtype
+            eh_proj_tile = eh_projection_tensor_sample.get_tile()
+            eh_proj_tile_size = eh_proj_tile.get_tile_size(eh_dtype)
+            eh_subblock_k = eh_subblock_k or eh_concat_rms_tiles
+            eh_num_subblocks_k = eh_num_tiles_k // eh_subblock_k
+            eh_out_num_tiles = eh_out_w_per_core  # M=1, so out tiles = per_core_n
+            # Compute subblock_w: max dest tiles that evenly divide per_core_n
+            # With fp32_dest_acc_en: max_dest=4 (half sync), else max_dest=8
+            _max_dest = 4 if fp32_dest_acc_en else 8
+            _max_subblock_w = min(_max_dest, eh_out_w_per_core)
+            eh_subblock_w = _max_subblock_w
+            while eh_subblock_w > 1 and eh_out_w_per_core % eh_subblock_w != 0:
+                eh_subblock_w -= 1
+            sample_device = eh_projection_tensor_sample.device()
+            eh_page_size, eh_num_pages = get_max_page_size_and_num_pages(
+                sample_device, eh_subblock_k, eh_proj_tile_size
+            )
+            eh_in1_block_size_bytes = eh_subblock_k * eh_proj_tile_size
+            eh_num_in1_buffers = 3  # Triple buffering
+            eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
+            eh_in1_CB_size = eh_in1_CB_tiles * eh_proj_tile_size
+
+            # Token ID buffer (8 bytes aligned: 4 bytes token_id + 4 bytes padding)
+            mtp_token_size_bytes = 8
+        else:
+            eh_out_w_per_core = 0
+            embedding_dim = 0
+            e_num_tiles = 0
+            eh_num_tiles_k = 0
+            eh_mcast_data_size_bytes = 0
+            mtp_token_size_bytes = 0
+
         # ====================================================================
         # CB indices
         # ====================================================================
@@ -330,11 +510,21 @@ class LMHeadSampling:
         matmul_in1_cb = 2  # vocab_tensor weights on matmul cores (tensor-backed)
         rmsnorm_gamma_cb = 7  # RMSNorm gamma weights on sender core (tensor-backed)
         mcast_src_cb = 8  # RMSNorm output on sender core (intermediate), consumed by mcast sender
+        matmul_eh_cb = 9  # [MTP] EH projection weights on matmul cores (tensor-backed)
+        embedding_cb = 10  # [MTP] Embedding row from DRAM on sender core (intermediate)
+        h_gamma_cb = 11  # [MTP] RMSNorm gamma weights for hidden states on sender core (tensor-backed)
+        e_gamma_cb = 12  # [MTP] RMSNorm gamma weights for embeddings on sender core (tensor-backed)
+        mcast_eh_src_cb = 15  # [MTP] Fused [h_norm|e_norm] on sender core, both RMSNorms write here directly
         argmax_winner_cb = 3
         argmax_gather_cb = 4
         argmax_indices_cb = 5
         argmax_socket_cb = 6
         matmul_out_cb = 16  # Matmul output on matmul cores (tensor-backed)
+        matmul_out_eh_cb = 17  # [MTP] EH matmul output on matmul cores (tensor-backed)
+        mcast_eh_dst_cb = (
+            18  # [MTP] Second mcast destination (concat [h_norm|e_norm]) on all mcast cores (intermediate)
+        )
+        # mtp_token_bcast_cb = 20  # [MTP] Token CCL broadcast CB, tensor-backed by intermediate_tensor
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = 30  # Packet buffer for CCL broadcast
@@ -346,6 +536,11 @@ class LMHeadSampling:
         mcast_data_receiver_semaphore_id = 1
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
+        # [MTP] Semaphore IDs for second mcast (EH projection matmul)
+        mtp_ready_semaphore_id = 4
+        mcast_eh_data_sender_semaphore_id = 5
+        mcast_eh_data_receiver_semaphore_id = 6
+
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for row in range(mesh_rows):
@@ -453,6 +648,25 @@ class LMHeadSampling:
 
                 mcast_grid_set = ttnn.CoreRangeSet([mcast_grid])
                 num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
+
+                # Compute per-core bank_id and vc for EH DRAM streaming matmul
+                if enable_mtp:
+                    eh_matmul_noc = ttnn.NOC.NOC_0
+                    eh_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(eh_matmul_noc)
+                    eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
+                    eh_bank_id_core_values = []
+                    eh_vc_core_values = []
+                    eh_bank_ids = []
+                    for idx, core in enumerate(eh_worker_cores):
+                        bank_id = idx % len(eh_worker_cores)
+                        vc = bank_id & 0x3
+                        for j in range(idx):
+                            if eh_worker_cores[j].y == core.y and (eh_bank_ids[j] & 0x3) == (bank_id & 0x3):
+                                vc = (vc + 1) & 0x3
+                                break
+                        eh_bank_ids.append(bank_id)
+                        eh_bank_id_core_values.append((core, bank_id))
+                        eh_vc_core_values.append((core, vc))
 
                 # Build mcast receiver grid = mcast grid minus sender core
                 mcast_receiver_ranges = []
@@ -632,6 +846,59 @@ class LMHeadSampling:
                 bcast_num_pages_to_read = bcast_num_pages
 
                 # ================================================================
+                # [MTP] Token CCL Broadcast configuration
+                # Broadcast token from argmax_final_mesh_coord device to all devices.
+                # Similar to input logits broadcast but from a different sender.
+                # ================================================================
+                mtp_bcast_is_sender = 0
+                mtp_bcast_is_secondary_sender = 0
+                mtp_bcast_is_receiver = 0
+                mtp_bcast_num_targets_forward = 0
+                mtp_bcast_num_targets_backward = 0
+                mtp_bcast_has_secondary_target = 0
+                mtp_bcast_start_distance_forward = 0
+                mtp_bcast_range_hops_forward = 0
+                mtp_bcast_start_distance_backward = 0
+                mtp_bcast_range_hops_backward = 0
+
+                if enable_mtp and not skip_ccl and argmax_final_mesh_coord is not None:
+                    mtp_sender_row = int(argmax_final_mesh_coord[0])
+                    mtp_sender_col = int(argmax_final_mesh_coord[1])
+
+                    # Determine role in MTP token broadcast (sender broadcasts to all other devices)
+                    mtp_bcast_is_sender = 1 if (row == mtp_sender_row and col == mtp_sender_col) else 0
+                    # Secondary sender: same row as sender, different column (for column broadcast)
+                    mtp_bcast_is_secondary_sender = (
+                        1
+                        if (secondary_cluster_axis is not None and row == mtp_sender_row and col != mtp_sender_col)
+                        else 0
+                    )
+                    mtp_bcast_is_receiver = 1 if not mtp_bcast_is_sender and not mtp_bcast_is_secondary_sender else 0
+
+                    # Calculate forward/backward targets from sender's perspective
+                    # Forward = devices with row > sender_row, Backward = devices with row < sender_row
+                    mtp_bcast_num_targets_forward = mesh_rows - mtp_sender_row - 1
+                    mtp_bcast_num_targets_backward = mtp_sender_row
+
+                    # Secondary target: sender broadcasts to secondary senders in other columns
+                    mtp_bcast_has_secondary_target = (
+                        1 if mtp_bcast_is_sender and mesh_cols > 1 and secondary_cluster_axis is not None else 0
+                    )
+
+                    # Distance calculations (from current device's perspective)
+                    if mtp_bcast_is_sender:
+                        mtp_bcast_start_distance_forward = 1 if mtp_bcast_num_targets_forward > 0 else 0
+                        mtp_bcast_range_hops_forward = mtp_bcast_num_targets_forward
+                        mtp_bcast_start_distance_backward = 1 if mtp_bcast_num_targets_backward > 0 else 0
+                        mtp_bcast_range_hops_backward = mtp_bcast_num_targets_backward
+                    elif mtp_bcast_is_secondary_sender:
+                        # Secondary sender broadcasts within its column
+                        mtp_bcast_start_distance_forward = 1 if mtp_bcast_num_targets_forward > 0 else 0
+                        mtp_bcast_range_hops_forward = mtp_bcast_num_targets_forward
+                        mtp_bcast_start_distance_backward = 1 if mtp_bcast_num_targets_backward > 0 else 0
+                        mtp_bcast_range_hops_backward = mtp_bcast_num_targets_backward
+
+                # ================================================================
                 # NCRISC compile-time args
                 # ================================================================
                 ncrisc_named_compile_time_args = [
@@ -697,6 +964,55 @@ class LMHeadSampling:
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("mesh_row", row),
                     ("mesh_col", col),
+                    # [MTP]
+                    ("enable_mtp", 1 if enable_mtp else 0),
+                    ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
+                    ("has_bypass_socket_output", 1 if bypass_socket_output is not None else 0),
+                    ("has_bypass_socket_input", 1 if bypass_socket_input is not None else 0),
+                    # MTP matmul, embedding, rmsnorm CBs
+                    ("matmul_eh_in0", mcast_eh_dst_cb),
+                    ("matmul_eh_in1", matmul_eh_cb),
+                    ("matmul_eh_out", matmul_out_eh_cb),
+                    ("matmul_eh_k_num_tiles", eh_num_tiles_k if enable_mtp else 0),
+                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp else 0),
+                    (
+                        "matmul_eh_dram_in1_tensor_addr",
+                        eh_proj_tensors_per_device[device_idx].buffer_address() if enable_mtp else 0,
+                    ),
+                    ("matmul_eh_dram_in1_page_size", eh_page_size if enable_mtp else 0),
+                    ("matmul_eh_dram_in1_num_pages", eh_num_pages if enable_mtp else 0),
+                    ("matmul_eh_dram_in1_block_size_bytes", eh_in1_block_size_bytes if enable_mtp else 0),
+                    ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp else 0),
+                    ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp else 0),
+                    ("matmul_eh_out_num_tiles", eh_out_num_tiles if enable_mtp else 0),
+                    (
+                        "eh_matmul_cb_in1_buf_addr",
+                        ttnn.get_device_tensors(eh_proj_working_buf_tensor)[device_idx].buffer_address()
+                        if (enable_mtp and eh_proj_working_buf_tensor is not None)
+                        else 0,
+                    ),
+                    ("embedding_cb", embedding_cb),
+                    ("h_gamma_cb", h_gamma_cb),
+                    ("e_gamma_cb", e_gamma_cb),
+                    ("mcast_eh_src_cb", mcast_eh_src_cb),
+                    ("mcast_eh_dst_cb", mcast_eh_dst_cb),
+                    ("rmsnorm_h_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_h_output_cb", mcast_eh_src_cb),
+                    ("rmsnorm_e_input_cb", embedding_cb),
+                    ("rmsnorm_e_output_cb", mcast_eh_src_cb),
+                    # [MTP] semaphores
+                    ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
+                    ("mcast_eh_data_sender_semaphore", mcast_eh_data_sender_semaphore_id if enable_mtp else 0),
+                    ("mcast_eh_data_receiver_semaphore", mcast_eh_data_receiver_semaphore_id),
+                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp else 0),
+                    ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp else 0),
+                    ("rmsnorm_h_num_tiles", rms_num_tiles),
+                    ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp else 0),
+                    ("mcast_eh_tile_size_bytes", 2048 if enable_mtp else 0),
+                    ("embedding_size_bytes", embedding_dim * element_size if enable_mtp else 0),
+                    # Sender core NOC for L1-to-L1 copy (embedding region in mcast_eh_src_cb -> embedding_cb)
+                    ("sender_noc_x", int(core_noc_x) if enable_mtp else 0),
+                    ("sender_noc_y", int(core_noc_y) if enable_mtp else 0),
                 ]
 
                 # ================================================================
@@ -732,6 +1048,22 @@ class LMHeadSampling:
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("mesh_row", row),
                     ("mesh_col", col),
+                    # [MTP] Second mcast (EH projection input)
+                    ("enable_mtp", 1 if enable_mtp else 0),
+                    ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
+                    ("has_bypass_socket_output", 1 if bypass_socket_output is not None else 0),
+                    ("has_bypass_socket_input", 1 if bypass_socket_input is not None else 0),
+                    ("mcast_eh_dest_noc_start_x", mcast_dest_noc_start.x if enable_mtp else 0),
+                    ("mcast_eh_dest_noc_start_y", mcast_dest_noc_start.y if enable_mtp else 0),
+                    ("mcast_eh_dest_noc_end_x", mcast_dest_noc_end.x if enable_mtp else 0),
+                    ("mcast_eh_dest_noc_end_y", mcast_dest_noc_end.y if enable_mtp else 0),
+                    ("mcast_eh_num_cores", num_mcast_cores if enable_mtp else 0),
+                    ("mcast_eh_data_sender_semaphore", mcast_eh_data_sender_semaphore_id if enable_mtp else 0),
+                    ("mcast_eh_data_receiver_semaphore", mcast_eh_data_receiver_semaphore_id if enable_mtp else 0),
+                    ("mcast_eh_src_cb", mcast_eh_src_cb if enable_mtp else 0),
+                    ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp else 0),
+                    ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp else 0),
+                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp else 0),
                 ]
 
                 # ================================================================
@@ -755,6 +1087,37 @@ class LMHeadSampling:
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("mesh_row", row),
                     ("mesh_col", col),
+                    # [MTP] h_rmsnorm and e_rmsnorm CTArgs
+                    # Both RMSNorms write directly to mcast_eh_src_cb to avoid concat copy:
+                    # h_rmsnorm writes first half (h_tiles), e_rmsnorm writes second half (e_tiles)
+                    ("enable_mtp", 1 if enable_mtp else 0),
+                    ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
+                    ("has_bypass_socket_output", 1 if bypass_socket_output is not None else 0),
+                    ("has_bypass_socket_input", 1 if bypass_socket_input is not None else 0),
+                    ("rmsnorm_h_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_h_gamma_cb", h_gamma_cb),
+                    ("rmsnorm_h_output_cb", mcast_eh_src_cb),
+                    ("rmsnorm_h_num_tiles", rms_num_tiles),
+                    ("rmsnorm_e_input_cb", embedding_cb),
+                    ("rmsnorm_e_gamma_cb", e_gamma_cb),
+                    ("rmsnorm_e_output_cb", mcast_eh_src_cb),
+                    ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp else 0),
+                    # [MTP] EH matmul CTArgs
+                    ("matmul_eh_in0", mcast_eh_dst_cb),
+                    ("matmul_eh_in1", matmul_eh_cb),
+                    ("matmul_eh_out", matmul_out_eh_cb),
+                    ("matmul_eh_k_num_tiles", eh_num_tiles_k if enable_mtp else 0),
+                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp else 0),
+                    # [MTP] EH matmul DRAM streaming CTArgs (TRISC compute)
+                    ("matmul_eh_subblock_w", eh_subblock_w if enable_mtp else 0),
+                    ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp else 0),
+                    ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp else 0),
+                    (
+                        "eh_matmul_cb_in1_buf_addr",
+                        ttnn.get_device_tensors(eh_proj_working_buf_tensor)[device_idx].buffer_address()
+                        if (enable_mtp and eh_proj_working_buf_tensor is not None)
+                        else 0,
+                    ),
                 ]
 
                 # ================================================================
@@ -771,6 +1134,39 @@ class LMHeadSampling:
                         0,
                         0,
                     ]
+                    # [MTP] All cores consume 3 alignment args + input_core gets embedding_base
+                    if enable_mtp:
+                        sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
+                        embedding_tensor_device = embedding_tensors_per_device[device_idx]
+                        mtp_token_addr = int(intermediate_tensor_device.buffer_address())
+                        ncrisc_bcast_common_args += [
+                            int(sender_core_phys.x),  # input_core_noc_x
+                            int(sender_core_phys.y),  # input_core_noc_y
+                            mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
+                            int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
+                        ]
+                    # [BYPASS SEND] bypass sender socket config + staging buffer addr
+                    if bypass_socket_output is not None:
+                        bypass_staging_devs = ttnn.get_device_tensors(bypass_staging_tensor)
+                        ncrisc_bcast_common_args += [
+                            int(bypass_socket_output.get_config_buffer_address()),
+                            int(bypass_staging_devs[device_idx].buffer_address()),
+                        ]
+                    # [MTP Verification] reference token addr, verification result addr, speculative token addr
+                    if enable_mtp_verification:
+                        ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
+                        verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
+                        spec_tokens_dev = ttnn.get_device_tensors(speculative_tokens_tensor)[device_idx]
+                        ncrisc_bcast_common_args += [
+                            int(ref_token_dev.buffer_address()),
+                            int(verify_result_dev.buffer_address()),
+                            int(spec_tokens_dev.buffer_address()),
+                        ]
+                    # [BYPASS RECV] bypass receiver socket config addr
+                    if bypass_socket_input is not None:
+                        ncrisc_bcast_common_args += [
+                            int(bypass_socket_input.get_config_buffer_address()),
+                        ]
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
@@ -839,6 +1235,39 @@ class LMHeadSampling:
                         global_sem_addr,
                         global_stage2_sem_addr,
                     ]
+                    # [MTP] All cores consume 3 alignment args + input_core gets embedding_base
+                    if enable_mtp:
+                        sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
+                        mtp_token_addr = int(intermediate_tensor_device.buffer_address())
+                        embedding_tensor_device = embedding_tensors_per_device[device_idx]
+                        ncrisc_bcast_common_args += [
+                            int(sender_core_phys.x),  # input_core_noc_x
+                            int(sender_core_phys.y),  # input_core_noc_y
+                            mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
+                            int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
+                        ]
+                    # [BYPASS SEND] bypass sender socket config + staging buffer addr
+                    if bypass_socket_output is not None:
+                        bypass_staging_devs = ttnn.get_device_tensors(bypass_staging_tensor)
+                        ncrisc_bcast_common_args += [
+                            int(bypass_socket_output.get_config_buffer_address()),
+                            int(bypass_staging_devs[device_idx].buffer_address()),
+                        ]
+                    # [MTP Verification] reference token addr, verification result addr, speculative token addr
+                    if enable_mtp_verification:
+                        ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
+                        verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
+                        spec_tokens_dev = ttnn.get_device_tensors(speculative_tokens_tensor)[device_idx]
+                        ncrisc_bcast_common_args += [
+                            int(ref_token_dev.buffer_address()),
+                            int(verify_result_dev.buffer_address()),
+                            int(spec_tokens_dev.buffer_address()),
+                        ]
+                    # [BYPASS RECV] bypass receiver socket config addr
+                    if bypass_socket_input is not None:
+                        ncrisc_bcast_common_args += [
+                            int(bypass_socket_input.get_config_buffer_address()),
+                        ]
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
@@ -890,7 +1319,9 @@ class LMHeadSampling:
                     format_descriptors=[rmsnorm_out_cb_format],
                 )
 
-                # CB 1: Mcast destination — intermediate buffer on all device grid cores
+                # CB 1: Mcast destination — intermediate buffer on all device grid cores (including sender so
+                # BRISC can pass get_write_ptr(mcast_dst_cb) as mcast_receiver_data_addr; excluding sender would
+                # save L1 but requires passing receiver's mcast_dst L1 address as a runtime common arg)
                 mcast_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
                 mcast_dst_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=mcast_dst_cb,
@@ -916,6 +1347,106 @@ class LMHeadSampling:
                 # CB 16: Matmul output — tensor-backed on matmul cores
                 matmul_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_out_cb, output_tensor_device)
 
+                # [MTP] CB descriptors (only if enable_mtp)
+                mtp_cb_descriptors = []
+                if enable_mtp:
+                    # CB 11: h_gamma - tensor-backed on sender core
+                    h_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        h_gamma_cb, h_gamma_tensors_per_device[device_idx]
+                    )
+                    h_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                    h_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
+                    # CB 12: e_gamma - tensor-backed on sender core
+                    e_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        e_gamma_cb, e_gamma_tensors_per_device[device_idx]
+                    )
+                    e_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                    e_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
+                    # CB 10: embedding row intermediate (filled by NCRISC DRAM read).
+                    embedding_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                    embedding_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=embedding_cb,
+                        data_format=data_format,
+                        page_size=rms_tile_size,
+                        tile=embedding_tile_descriptor,
+                    )
+                    embedding_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=e_num_tiles * rms_tile_size,
+                        core_ranges=mcast_sender_core_grid,
+                        format_descriptors=[embedding_cb_format],
+                    )
+
+                    # CB 15: mcast_eh_src - fused [h_norm|e_norm] on sender core
+                    # Both h_rmsnorm and e_rmsnorm write directly here (no separate e_norm_cb needed)
+                    # Uses packed RMS tile format (7+7=14 tiles of 32x32) matching RMSNorm output format
+                    mcast_eh_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                    mcast_eh_src_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=mcast_eh_src_cb,
+                        data_format=data_format,
+                        page_size=rms_tile_size,
+                        tile=mcast_eh_tile_descriptor,
+                    )
+                    mcast_eh_src_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=eh_concat_rms_tiles * rms_tile_size,
+                        core_ranges=mcast_sender_core_grid,
+                        format_descriptors=[mcast_eh_src_cb_format],
+                    )
+
+                    # CB 18: mcast_eh_dst - receives concat on all mcast cores (EH matmul in0)
+                    # Uses (1,32) tile format matching in0_tile so the matmul hardware
+                    # correctly pairs activation tiles with (32,32) weight tiles.
+                    # Total size is the same raw bytes as the concat: 448 * 64 = 28672.
+                    eh_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
+                    mcast_eh_dst_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=mcast_eh_dst_cb,
+                        data_format=data_format,
+                        page_size=input_tile_size,
+                        tile=eh_dst_tile_descriptor,
+                    )
+                    mcast_eh_dst_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=eh_num_tiles_k * input_tile_size,
+                        core_ranges=all_cores,
+                        format_descriptors=[mcast_eh_dst_cb_format],
+                    )
+
+                    # CB 9: EH projection weights - tensor-backed working buffer for DRAM streaming (triple-buffered)
+                    if eh_proj_working_buf_tensor is not None:
+                        # Use tensor-backed CB for working buffer
+                        matmul_eh_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            matmul_eh_cb, ttnn.get_device_tensors(eh_proj_working_buf_tensor)[device_idx]
+                        )
+                    else:
+                        # Fallback to regular CB (shouldn't happen if working buffer is provided)
+                        eh_cb_format = ttnn.CBFormatDescriptor(
+                            buffer_index=matmul_eh_cb,
+                            data_format=eh_dtype,
+                            page_size=eh_proj_tile_size,
+                            tile=ttnn.TileDescriptor(eh_proj_tile),
+                        )
+                        matmul_eh_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=eh_in1_CB_size,
+                            core_ranges=eh_matmul_core_grid,
+                            format_descriptors=[eh_cb_format],
+                        )
+
+                    # CB 17: EH matmul output - tensor-backed on matmul cores
+                    matmul_out_eh_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul_out_eh_cb, output_mtp_tensors_per_device[device_idx]
+                    )
+
+                    mtp_cb_descriptors = [
+                        h_gamma_cb_descriptor,
+                        e_gamma_cb_descriptor,
+                        embedding_cb_descriptor,
+                        mcast_eh_src_cb_descriptor,
+                        mcast_eh_dst_cb_descriptor,
+                        matmul_eh_cb_descriptor,
+                        matmul_out_eh_cb_descriptor,
+                        # mtp_token_bcast_cb_descriptor,
+                    ]
+
                 # CB list
                 cbs_list = [
                     rmsnorm_input_cb_descriptor,
@@ -925,6 +1456,8 @@ class LMHeadSampling:
                     rmsnorm_out_cb_descriptor,
                     matmul_out_cb_descriptor,
                 ]
+                if enable_mtp:
+                    cbs_list.extend(mtp_cb_descriptors)
                 if enable_argmax:
                     argmax_winner_cb_descriptor = ttnn.CBDescriptor(
                         total_size=argmax_winner_page_bytes,
@@ -1004,6 +1537,27 @@ class LMHeadSampling:
                             ),
                         ]
                     )
+                if enable_mtp:
+                    semaphore_descriptors.extend(
+                        [
+                            ttnn.SemaphoreDescriptor(
+                                id=mtp_ready_semaphore_id,
+                                core_ranges=mcast_sender_core_grid,
+                                initial_value=0,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=mcast_eh_data_sender_semaphore_id,
+                                core_ranges=all_cores,
+                                initial_value=0,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=mcast_eh_data_receiver_semaphore_id,
+                                core_ranges=all_cores,
+                                initial_value=0,
+                            ),
+                        ]
+                    )
+
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================
@@ -1025,6 +1579,7 @@ class LMHeadSampling:
                     trisc_common_runtime_args=[
                         epsilon_packed,
                         scalar_packed,
+                        float_to_uint32(1.0 / math.sqrt(float(embedding_dim))) if enable_mtp else 0,
                     ],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
@@ -1069,18 +1624,69 @@ class LMHeadSampling:
                             value=1 if is_argmax_mesh_sender_core else 0,
                             other_value=0,
                         ),
-                    ],
-                    per_core_compile_time_descriptors=(
-                        []
-                        if not enable_argmax
-                        else [
-                            PerCoreCompileTimeDescriptor(
-                                named_compile_time_arg="argmax_sender_idx",
-                                core_values=[
-                                    (core, argmax_sender_idx_lookup[(core.x, core.y)]) for core in argmax_cores_row_wise
-                                ],
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="enable_mtp",
+                            core_range=all_cores,
+                            value=1 if enable_mtp else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="enable_mtp_verification",
+                            core_range=all_cores,
+                            value=1 if enable_mtp_verification else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="has_bypass_socket_output",
+                            core_range=all_cores,
+                            value=1 if bypass_socket_output is not None else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="has_bypass_socket_input",
+                            core_range=all_cores,
+                            value=1 if bypass_socket_input is not None else 0,
+                            other_value=0,
+                        ),
+                    ]
+                    + (
+                        [
+                            UnifiedCompileTimeCoreDescriptor(
+                                named_compile_time_arg="is_eh_matmul_core",
+                                core_range=eh_matmul_core_grid,
+                                value=1,
                                 other_value=0,
-                            )
+                            ),
+                        ]
+                        if enable_mtp
+                        else []
+                    ),
+                    per_core_compile_time_descriptors=(
+                        (
+                            []
+                            if not enable_argmax
+                            else [
+                                PerCoreCompileTimeDescriptor(
+                                    named_compile_time_arg="argmax_sender_idx",
+                                    core_values=[
+                                        (core, argmax_sender_idx_lookup[(core.x, core.y)])
+                                        for core in argmax_cores_row_wise
+                                    ],
+                                    other_value=0,
+                                )
+                            ]
+                        )
+                        + [
+                            PerCoreCompileTimeDescriptor(
+                                named_compile_time_arg="matmul_eh_bank_id",
+                                core_values=eh_bank_id_core_values if enable_mtp else [],
+                                other_value=0,
+                            ),
+                            PerCoreCompileTimeDescriptor(
+                                named_compile_time_arg="matmul_eh_vc",
+                                core_values=eh_vc_core_values if enable_mtp else [],
+                                other_value=0,
+                            ),
                         ]
                     ),
                     # Per-core runtime args: mesh argmax senders get BRISC sender metadata.
@@ -1159,7 +1765,10 @@ class LMHeadSampling:
                 )
 
                 # Append CCL routing args to the broadcast writer kernel (NCRISC in current broadcast split).
-                if not skip_ccl and num_connections > 0:
+                # Find the is_input_core NCRISC kernel group (used for both input and MTP broadcasts)
+                writer_kernel_idx = None
+                writer_rt_args_ref = None
+                if not skip_ccl:
                     ccl_writer_group = None
                     for group in kernel_result.groups:
                         if group.compile_time_arg_values.get("is_input_core", 0) == 1 and group.core_range_set.contains(
@@ -1171,10 +1780,12 @@ class LMHeadSampling:
                         raise RuntimeError("Missing is_input_core kernel group for CCL writer fabric append")
                     writer_kernel_idx = ccl_writer_group.ncrisc_kernel_index
                     writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[worker_core.x][worker_core.y]
-                    fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, writer_kernel_idx, worker_core
-                    )
-                    writer_rt_args_ref.extend(fabric_args)
+
+                    if num_connections > 0:
+                        fabric_args = ttnn.setup_routing_plane_connection(
+                            fabric_node_id, dst_nodes, [0], program, writer_kernel_idx, worker_core
+                        )
+                        writer_rt_args_ref.extend(fabric_args)
 
                 if not skip_ccl and is_argmax_mesh_sender_core:
                     sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)
@@ -1211,6 +1822,16 @@ class LMHeadSampling:
         # Execute generic op
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
+        if enable_mtp:
+            io_tensors.extend(
+                [output_mtp_tensor, embedding_tensor, h_gamma_tensor, e_gamma_tensor, eh_projection_tensor]
+            )
+            if eh_proj_working_buf_tensor is not None:
+                io_tensors.append(eh_proj_working_buf_tensor)
+        if enable_mtp_verification:
+            io_tensors.extend([reference_token_tensor, verification_result_tensor, speculative_tokens_tensor])
+        if bypass_staging_tensor is not None:
+            io_tensors.append(bypass_staging_tensor)
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
