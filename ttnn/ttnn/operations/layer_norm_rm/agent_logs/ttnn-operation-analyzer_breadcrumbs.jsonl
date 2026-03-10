@@ -12,3 +12,4 @@
 {"event":"analysis_complete","details":"Wrote tilize_analysis.md with focus on reader kernel pattern, input CB sizing, stick-to-tile batching, and work distribution","ts":"2026-03-10T09:00:35+00:00"}
 {"event":"complete","final_status":"SUCCESS","details":"Analysis written to untilize_analysis.md. Covers output CB sizing, writer kernel pattern, untilize helper signature, TensorAccessor usage.","ts":"2026-03-10T09:01:00+00:00"}
 {"event":"action","type":"write_analysis","details":"Wrote batch_norm_analysis.md with compute_core focus: CB layout, multi-pass data reuse, scalar CB setup, binary dest reuse, affine transform, FPU vs SFPU variants","ts":"2026-03-10T09:01:55+00:00"}
+{"event":"complete","final_status":"SUCCESS","final_commit":"a371bdbd79a","details":"batch_norm analysis complete, committed as compute_core reference for layer_norm_rm","ts":"2026-03-10T09:02:12+00:00"}
