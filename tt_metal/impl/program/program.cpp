@@ -857,26 +857,44 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
         return core_ranges;
     }
 
-    // Ensure all returned CoreRanges are non-overlapping. During dispatch, each
-    // CoreRange's CB config payload is built from all CBs whose core_ranges intersect
-    // it. When a superset range (e.g. all_cores) overlaps with sub-ranges that carry
-    // different configs for the same CB index, the payload can only hold one config
-    // per index — the last one written wins, and the multicast sends the wrong config
-    // to cores that need the other. By making ranges non-overlapping, each range's
-    // intersects()-based CB lookup returns only CBs that fully cover it, so every
-    // core receives exactly the correct set of configs in a single multicast.
+    // Make ranges non-overlapping so that each core is targeted by exactly one
+    // multicast during CB config dispatch.
     //
-    // Algorithm: process ranges in order. For each new range, subtract all
-    // previously claimed regions (using CoreRangeSet::subtract) and keep only the
-    // uncovered pieces.
-    CoreRangeSet claimed;
-    std::vector<CoreRange> result;
-    for (const auto& cr : core_ranges) {
-        CoreRangeSet uncovered = CoreRangeSet(cr).subtract(claimed);
-        for (const auto& piece : uncovered.ranges()) {
-            result.push_back(piece);
+    // During dispatch, each CoreRange's payload is built from all CBs whose
+    // core_ranges intersect it. If a range intersects two CBs with the same
+    // buffer index but different configs (valid when their core_ranges don't
+    // overlap), the second CB overwrites the first in the payload and the
+    // multicast sends the wrong config to cores that need the other.
+    //
+    // Split every overlapping pair into three non-overlapping pieces (A\B, A∩B,
+    // B\A) and repeat until no overlaps remain. Each resulting piece's boundaries
+    // align with all original CB CoreRange edges, so it cannot straddle two
+    // different configs for the same buffer index.
+    std::vector<CoreRange> result = std::move(core_ranges);
+    size_t i = 0;
+    while (i < result.size()) {
+        // Find the first range that overlaps with result[i].
+        size_t j = i + 1;
+        for (; j < result.size(); ++j) {
+            if (result[i].intersects(result[j])) {
+                break;
+            }
         }
-        claimed = claimed.merge(CoreRangeSet(cr));
+        if (j == result.size()) {
+            ++i;  // No overlap, advance.
+            continue;
+        }
+        // Split the overlapping pair into non-overlapping pieces: A\B, A∩B, B\A.
+        CoreRangeSet a_set(result[i]), b_set(result[j]);
+        result.erase(result.begin() + j);
+        result.erase(result.begin() + i);
+        auto a_only = a_set.subtract(b_set);
+        auto b_only = b_set.subtract(a_set);
+        auto common = a_set.intersection(b_set);
+        result.insert(result.end(), a_only.ranges().begin(), a_only.ranges().end());
+        result.insert(result.end(), b_only.ranges().begin(), b_only.ranges().end());
+        result.insert(result.end(), common.ranges().begin(), common.ranges().end());
+        i = 0;  // Restart — new pieces may overlap with earlier ranges.
     }
     return result;
 }
