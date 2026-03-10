@@ -6,12 +6,11 @@ import os
 
 import pytest
 
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.refiner.tests.pcc.test_module_tt_unet import run_refiner_unet_model
 from models.demos.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.perf.device_perf_utils import run_model_device_perf_test
-
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
@@ -116,7 +115,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 119_138_750 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 91_053_421 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 89_300_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {

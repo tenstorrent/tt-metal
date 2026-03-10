@@ -503,6 +503,7 @@ jobs:
         run: |
           pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
           pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly sdxl tests (blackhole P150b)
         if: ${{ inputs.arch == 'blackhole' && inputs.runner-label == 'P150b' }}
         timeout-minutes: ${{ inputs.timeout }}
