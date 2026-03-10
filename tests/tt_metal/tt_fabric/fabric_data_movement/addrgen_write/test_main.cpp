@@ -123,7 +123,10 @@ TEST_P(AddrgenLinear1DTest, LinearUnicastWrite) {
     auto [api_variant, page_size, use_dram_dst] = GetParam();
 
     // Check if this is a multicast variant
-    bool is_linear_multicast = (api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite);
+    bool is_linear_multicast =
+        (api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState);
 
     // Calculate tensor_bytes based on page_size (8 pages total)
     uint32_t num_pages = 8;
@@ -220,6 +223,10 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
         case tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
             return "LinearFusedAtomicIncWriteSetState";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite: return "LinearMulticastWrite";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState:
+            return "LinearMulticastWriteWithState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState:
+            return "LinearMulticastWriteSetState";
         default: return "UnknownVariant";
     }
 }
@@ -295,7 +302,9 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWrite,
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState,
-            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite),
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),

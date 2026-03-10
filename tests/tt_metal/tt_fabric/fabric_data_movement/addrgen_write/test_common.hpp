@@ -70,7 +70,9 @@ enum class AddrgenApiVariant {
                                          // addrgen
     LinearFusedAtomicIncWriteSetState,   // linear fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state with
                                          // addrgen
-    LinearMulticastWrite                 // linear fabric_multicast_noc_unicast_write with addrgen
+    LinearMulticastWrite,                // linear fabric_multicast_noc_unicast_write with addrgen
+    LinearMulticastWriteWithState,       // linear fabric_multicast_noc_unicast_write_with_state with addrgen
+    LinearMulticastWriteSetState         // linear fabric_multicast_noc_unicast_write_set_state with addrgen
 };
 
 // ---- Reusable defaults for addrgen tests ----
