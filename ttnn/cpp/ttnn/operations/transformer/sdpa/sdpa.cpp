@@ -146,7 +146,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
         program_config,
         scale,
         compute_kernel_config);
-    return {output_tensors.output, output_tensors.joint_output};
+    return {output_tensors[prim::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::JOINT_SDPA_JOINT_OUTPUT_IDX]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
@@ -193,7 +193,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         subdevice_id,
         scale,
         compute_kernel_config);
-    return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
+    return {
+        output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_LSE_OUTPUT_IDX]};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(

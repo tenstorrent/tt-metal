@@ -99,9 +99,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors.output;
-    auto& joint_output_tensor = output_tensors.joint_output;
-    auto& lse_output_tensor = output_tensors.lse_output;
+    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
+    auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
+    auto& lse_output_tensor = output_tensors[RING_JOINT_SDPA_LSE_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -910,9 +910,9 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
         // Get addresses for output tensors
-        auto* out_buffer = output_tensors.output.buffer();
-        auto* joint_out_buffer = output_tensors.joint_output.buffer();
-        auto* lse_buffer = output_tensors.lse_output.buffer();
+        auto* out_buffer = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX].buffer();
+        auto* joint_out_buffer = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
+        auto* lse_buffer = output_tensors[RING_JOINT_SDPA_LSE_OUTPUT_IDX].buffer();
 
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();
