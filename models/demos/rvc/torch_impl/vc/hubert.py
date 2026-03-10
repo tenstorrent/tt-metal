@@ -430,43 +430,6 @@ class ConvFeatureExtractionModel(nn.Module):
         return x
 
 
-class FeedForwardModule(nn.Module):
-    """Positionwise feed forward layer used in conformer"""
-
-    def __init__(
-        self,
-        input_feat,
-        hidden_units,
-        activation_fn="swish",
-        bias=True,
-    ):
-        """
-        Args:
-            input_feat: Input feature dimension
-            hidden_units: Hidden unit dimension
-            activation_fn: Name of activation function
-            bias: If linear layers should have bias
-        """
-
-        super().__init__()
-        self.layer_norm = nn.LayerNorm(input_feat)
-        self.w_1 = nn.Linear(input_feat, hidden_units, bias=bias)
-        self.w_2 = nn.Linear(hidden_units, input_feat, bias=bias)
-        self.activation = get_activation_fn(activation_fn)(hidden_units)
-
-    def forward(self, x):
-        """
-        Args:
-            x: Input Tensor of shape  T X B X C
-        Returns:
-            Tensor of shape T X B X C
-        """
-        x = self.layer_norm(x)
-        x = self.w_1(x)
-        x = self.activation(x)
-        return self.w_2(x)
-
-
 class ConvolutionModule(nn.Module):
     """Convolution block used in the conformer block"""
 

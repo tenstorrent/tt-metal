@@ -57,13 +57,6 @@ def _interpolate_1d(
     return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
 
-def _to_nlc(x: ttnn.Tensor) -> ttnn.Tensor:
-    if len(x.shape) == 4:
-        b, _, t, c = x.shape
-        return ttnn.reshape(x, (b, t, c))
-    return x
-
-
 def _flip_last_dim(x: ttnn.Tensor) -> ttnn.Tensor:
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     channels = x.shape[-1]
@@ -111,7 +104,6 @@ class Encoder:
         kernel_size: int = 1,
         window_size: int = 10,
     ) -> None:
-        print(f"kernel_size: {kernel_size}, window_size: {window_size}")
         self.n_layers = int(n_layers)
         self.attn_layers = [
             MultiHeadAttention(
@@ -329,14 +321,14 @@ class Generator:
         self.conv_post.load_parameters(parameters, key="conv_post", prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        x = _to_nlc(self.conv_pre(x))
+        x = self.conv_pre(x)
         if g is not None and self.cond_linear is not None:
             x = x + self.cond_linear(g)
 
         for i in range(self.num_upsamples):
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
-            x = _to_nlc(self.ups[i](x))
+            x = self.ups[i](x)
             xs = self.resblocks[i * self.num_kernels](x)
             for j in range(1, self.num_kernels):
                 xs = xs + self.resblocks[i * self.num_kernels + j](x)
@@ -344,7 +336,7 @@ class Generator:
 
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
-        x = _to_nlc(self.conv_post(x))
+        x = self.conv_post(x)
         return x
 
 
@@ -520,8 +512,7 @@ class GeneratorNSF:
 
     def __call__(self, x: ttnn.Tensor, f0: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         har_source_tt = self.m_source(f0, self.upp)
-
-        x0 = _to_nlc(self.conv_pre(x))
+        x0 = self.conv_pre(x)
         if g is not None:
             x = x0 + self.cond_linear(g)
         else:
@@ -530,11 +521,8 @@ class GeneratorNSF:
             x0 = x
             x0 = ttnn.to_layout(x0, ttnn.TILE_LAYOUT)
             x1 = ttnn.leaky_relu(x0, negative_slope=self.lrelu_slope)
-            x = _to_nlc(ups(x1))
-            if isinstance(noise_convs, Linear):
-                x_source = noise_convs(har_source_tt)
-            else:
-                x_source = _to_nlc(noise_convs(har_source_tt))
+            x = ups(x1)
+            x_source = noise_convs(har_source_tt)
             x = x + x_source
             xs = self.resblocks[i * self.num_kernels](x)
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):
@@ -543,7 +531,7 @@ class GeneratorNSF:
 
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
-        x = _to_nlc(self.conv_post(x))
+        x = self.conv_post(x)
         return x
 
 

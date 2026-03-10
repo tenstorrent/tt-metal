@@ -203,4 +203,7 @@ class ConvTranspose1d:
             dtype=self.dtype,
             dram_slice_config=slice_config,
         )
-        return output
+        output_shape = output.shape
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(output, (batch_size, output_shape[2], output_shape[3]))
+        return x
