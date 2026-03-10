@@ -237,6 +237,7 @@ class AttentionBlock:
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         cb_id_context=None,
+        upstream_socket=None,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -263,7 +264,7 @@ class AttentionBlock:
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
             skip_ccl: If True, skip CCL broadcast (single-device mode)
             noc_mode: NOC mode for the kernel (dedicated or dynamic)
-
+            upstream_socket: Socket for upstream communication
         Returns:
             Tuple of (io_tensors, full_device_grid, per_device_contexts) where:
             - full_device_grid: CoreRangeSet covering the full device compute grid
@@ -3421,11 +3422,24 @@ class AttentionBlock:
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
+                # bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
+                # bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
+                device_kernel_defines += [("ENABLE_SOCKET_READER", "1") if upstream_socket is not None else None]
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
                     ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("bcast_use_socket", 1 if upstream_socket is not None else 0),
+                    (
+                        "bcast_socket_config_addr",
+                        upstream_socket.get_config_buffer_address() if upstream_socket is not None else 0,
+                    ),
+                    (
+                        "bcast_socket_page_size",
+                        input_shape[0] * input_shape[1] * element_size if upstream_socket is not None else 0,
+                    ),
+                    ("bcast_socket_num_pages", 1 if upstream_socket is not None else 0),
                 ]
 
                 bcast_ncrisc_named_compile_time_args = [
@@ -3820,6 +3834,7 @@ class AttentionBlock:
                 per_device_contexts.append(
                     {
                         "mesh_coord": mesh_coord,
+                        "device_kernel_defines": device_kernel_defines,
                         "ncrisc_compile_time_args": ncrisc_compile_time_args,
                         "brisc_compile_time_args": brisc_compile_time_args,
                         "brisc_named_compile_time_args": brisc_named_compile_time_args,
@@ -3894,6 +3909,7 @@ class AttentionBlock:
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
+        upstream_socket=None,
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
@@ -3941,6 +3957,7 @@ class AttentionBlock:
             skip_ccl,
             noc_mode,
             cb_id_context,
+            upstream_socket,
         )
 
         io_tensors = []
