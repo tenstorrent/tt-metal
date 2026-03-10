@@ -12,3 +12,4 @@
 {"event":"analysis_written","details":"Wrote tilize_analysis.md with full input_stage reference covering reader pattern, CB sizing, stick-to-tile batching, and core distribution","ts":"2026-03-10T12:01:35+00:00"}
 {"event":"committed","details":"Committed tilize analysis as c4ed56363c. Analysis complete.","ts":"2026-03-10T12:02:05+00:00"}
 {"event":"analysis_written","details":"Wrote batch_norm_analysis.md with compute-core focus including CB layout, FPU/SFPU kernel details, binary_dest_reuse pattern, reduce API reference, and multi-pass data reuse patterns","ts":"2026-03-10T12:03:15+00:00"}
+{"event":"analysis_committed","details":"Committed untilize_analysis.md as output_stage reference. Commit 2c566aa1fe.","ts":"2026-03-10T12:04:27+00:00"}
