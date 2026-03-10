@@ -574,3 +574,43 @@ def test_tilize_with_val_padding_interleaved_to_legacy_sharded(
     output_torch_tensor = ttnn_output_tensor.cpu().to_torch_with_padded_shape()
     expected_torch_tensor = pytorch_tilize_with_val_padding(input_torch_tensor, output_padded_shape, pad_value)
     assert_equal(expected_torch_tensor, output_torch_tensor)
+
+
+@pytest.mark.parametrize(
+    "dtype, scalar_val, pad_value",
+    [
+        (ttnn.bfloat16, 1.5, 0.0),
+        (ttnn.bfloat16, 1.5, 42.0),
+        (ttnn.bfloat16, 1.5, -32.5),
+        (ttnn.float32, 1.5, 0.0),
+        (ttnn.float32, 1.5, -0.0),
+        (ttnn.float32, 1.5, 42.0),
+        (ttnn.float32, 1.5, -32.5),
+        (ttnn.int32, 7, 0),
+        (ttnn.int32, 7, -32),
+        (ttnn.int32, 7, -0),
+        (ttnn.uint32, 7, 0),
+        (ttnn.uint32, 7, 42),
+    ],
+)
+def test_tilize_with_val_padding_scalar(device, dtype, scalar_val, pad_value):
+    """tilize_with_val_padding: scalar (rank-0) input."""
+    torch.manual_seed(0)
+    torch_dtype = {
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.float32: torch.float32,
+        ttnn.int32: torch.int32,
+        ttnn.uint32: torch.int32,
+    }[dtype]
+
+    input_torch_tensor = torch.tensor(scalar_val, dtype=torch_dtype)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output_padded_shape = [32, 32]
+    ttnn_output_tensor = ttnn.tilize_with_val_padding(input_ttnn_tensor, output_padded_shape, pad_value)
+    output_torch_tensor = ttnn_output_tensor.cpu().to_torch_with_padded_shape()
+
+    ref_input = input_torch_tensor.reshape(1, 1)
+    expected_torch_tensor = pytorch_tilize_with_val_padding(ref_input, output_padded_shape, pad_value)
+    expected_torch_tensor = expected_torch_tensor.to(output_torch_tensor.dtype)
+    assert_equal(expected_torch_tensor, output_torch_tensor)
