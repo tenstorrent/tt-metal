@@ -17,7 +17,10 @@ source "${SLURM_CI_LIB_DIR}/artifacts.sh"
 # ---------------------------------------------------------------------------
 # Controlled by environment variables:
 #   PIPELINE_ID               (required) Pipeline identifier
-#   JOB_WORKSPACE             Working directory (default: /work)
+#   JOB_WORKSPACE             Host-side working directory for build artifacts.
+#                             Defaults to ${ARTIFACT_DIR}/workspace (on NFS).
+#                             NOTE: this is NOT the Docker container workdir;
+#                             CONTAINER_WORKDIR is a separate Docker-only setting.
 #   BUILD_ARTIFACT            Set to 1 to fetch & extract build tarball
 #   INSTALL_WHEEL             Set to 1 to fetch & install Python wheel
 #   ENABLE_WATCHER            Set to 1 to enable TT Metal watcher
@@ -28,7 +31,7 @@ source "${SLURM_CI_LIB_DIR}/artifacts.sh"
 setup_job() {
     require_env PIPELINE_ID
 
-    local workspace="${JOB_WORKSPACE:-${CONTAINER_WORKDIR:-/work}}"
+    local workspace="${JOB_WORKSPACE:-${ARTIFACT_DIR:-/tmp/slurm-ci-${PIPELINE_ID}}/workspace}"
 
     log_info "=== Job setup starting ==="
     log_info "Pipeline:  ${PIPELINE_ID}"

@@ -12,7 +12,8 @@ export CI_STORAGE_BASE="${CI_STORAGE_BASE:-$(pwd)/.slurm-ci}"
 # MLPerf / model data mount point
 export MLPERF_BASE="${MLPERF_BASE:-/mnt/MLPerf}"
 
-# Container working directory (where the repo is mounted inside Docker)
+# Working directory INSIDE Docker containers (the mount target, not a host path).
+# The host-side workspace is derived from ARTIFACT_DIR; see lib/setup_job.sh.
 export CONTAINER_WORKDIR="${CONTAINER_WORKDIR:-/work}"
 
 # Device paths (only override if non-standard)
