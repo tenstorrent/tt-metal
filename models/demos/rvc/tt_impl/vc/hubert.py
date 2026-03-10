@@ -289,7 +289,6 @@ class ConvFeatureExtractionModel:
             x = conv(x)
             out_channels, kernel_size, stride = self.conv_layers_cfg[i]
             current_length = ((current_length - kernel_size) // stride) + 1
-            x = ttnn.reshape(x, (batch_size, current_length, out_channels))
 
             if self.mode == "layer_norm":
                 ln_w = self.ln_weights[i]

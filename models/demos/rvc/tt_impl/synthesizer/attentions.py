@@ -114,10 +114,7 @@ class MultiHeadAttention:
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
             output = output + ttnn.matmul(relative_weights, value_relative_embeddings)
 
-        output = ttnn.permute(output, (0, 2, 1, 3))
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-        batch_size, length, _, _ = output.shape
-        output = ttnn.reshape(output, (batch_size, length, self.n_heads * self.k_channels))
+        output = ttnn.transformer.concatenate_heads(output)
 
         out_tt = self.linear_o(output)
         return out_tt
