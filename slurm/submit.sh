@@ -42,6 +42,11 @@ COMMANDS
   --status <pipeline-id>    Show sacct status for every job in a pipeline.
 
 OPTIONS
+  --partition PARTITION      Slurm partition to submit the job to. Overrides
+                            any #SBATCH --partition directive in the workflow
+                            script. If omitted and scontrol reports exactly
+                            one UP partition, that partition is used
+                            automatically.
   --docker-image IMAGE      Override the Docker image used by the workflow.
                             Bypasses image resolution and Harbor mirror logic.
   --arch ARCH               Target architecture passed to the job as ARCH_NAME.
@@ -55,7 +60,7 @@ OPTIONS
   -h, --help                Show this help message and exit.
   --                        Stop option parsing. Everything after '--' is
                             forwarded verbatim as extra sbatch arguments
-                            (e.g. --partition=build --time=01:00:00).
+                            (e.g. --time=01:00:00).
 
 ENVIRONMENT VARIABLES
   The following variables can be exported before invocation to customise
@@ -99,6 +104,9 @@ EXAMPLES
 
   # Build only, targeting the main branch, on the build partition
   ./slurm/submit.sh build-artifact --ref main -- --partition=build
+
+  # Override the partition (ignores workflow #SBATCH --partition)
+  ./slurm/submit.sh multi-host-physical --partition debug
 
   # Dry-run to see what would be submitted
   ./slurm/submit.sh multi-host-physical --dry-run
@@ -206,11 +214,13 @@ OPT_DOCKER_IMAGE=""
 OPT_ARCH=""
 OPT_REF=""
 OPT_PIPELINE_ID=""
+OPT_PARTITION=""
 DRY_RUN=0
 EXTRA_SBATCH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --partition)     OPT_PARTITION="${2:?--partition requires a value}"; shift 2 ;;
         --docker-image)  OPT_DOCKER_IMAGE="${2:?--docker-image requires a value}"; shift 2 ;;
         --arch)          OPT_ARCH="${2:?--arch requires a value}"; shift 2 ;;
         --ref)           OPT_REF="${2:?--ref requires a value}"; shift 2 ;;
@@ -238,6 +248,56 @@ fi
 if [[ ! -x "${WORKFLOW_SCRIPT}" ]]; then
     log_warn "Workflow script is not executable — adding +x: ${WORKFLOW_SCRIPT}"
     chmod +x "${WORKFLOW_SCRIPT}"
+fi
+
+# ---------------------------------------------------------------------------
+# Partition resolution
+# ---------------------------------------------------------------------------
+
+resolve_partition() {
+    # 1. Explicit --partition flag
+    if [[ -n "${OPT_PARTITION}" ]]; then
+        echo "$OPT_PARTITION"
+        return 0
+    fi
+
+    # 2. SLURM_PARTITION env var (without the --partition= prefix if present)
+    if [[ -n "${SLURM_PARTITION:-}" ]]; then
+        echo "${SLURM_PARTITION#--partition=}"
+        return 0
+    fi
+
+    # 3. Auto-detect from scontrol
+    if ! command -v scontrol &>/dev/null; then
+        return 1
+    fi
+
+    local -a up_partitions=()
+    local line
+    while IFS= read -r line; do
+        up_partitions+=("$line")
+    done < <(scontrol show partitions 2>/dev/null \
+        | awk '/^PartitionName=/ { name=$1; sub(/PartitionName=/,"",name) }
+               /State=UP/        { print name }')
+
+    if [[ ${#up_partitions[@]} -eq 0 ]]; then
+        log_warn "No UP partitions found via scontrol"
+        return 1
+    fi
+
+    if [[ ${#up_partitions[@]} -eq 1 ]]; then
+        log_info "Auto-detected single UP partition: ${up_partitions[0]}"
+        echo "${up_partitions[0]}"
+        return 0
+    fi
+
+    log_warn "Multiple partitions available (${up_partitions[*]}); use --partition to select one"
+    return 1
+}
+
+RESOLVED_PARTITION=""
+if resolved="$(resolve_partition)"; then
+    RESOLVED_PARTITION="$resolved"
 fi
 
 # ---------------------------------------------------------------------------
@@ -270,6 +330,7 @@ log_info "  Slurm CI Pipeline Launcher"
 log_info "=============================================="
 log_info "  Workflow:    ${WORKFLOW_NAME}"
 log_info "  Pipeline ID: ${PIPELINE_ID}"
+log_info "  Partition:   ${RESOLVED_PARTITION:-<from workflow #SBATCH>}"
 log_info "  Git SHA:     ${GIT_SHORT_SHA}"
 log_info "  Git Ref:     ${GIT_REF}"
 log_info "  Arch:        ${ARCH_NAME:-default}"
@@ -286,6 +347,9 @@ if [[ $DRY_RUN -eq 1 ]]; then
     log_info "[DRY RUN] Would submit:"
     log_info "  sbatch --parsable \\"
     log_info "    --job-name=ci-${WORKFLOW_NAME}-${PIPELINE_ID} \\"
+    if [[ -n "${RESOLVED_PARTITION}" ]]; then
+        log_info "    --partition=${RESOLVED_PARTITION} \\"
+    fi
     log_info "    --output=${LOG_DIR}/%x-%j.out \\"
     log_info "    --error=${LOG_DIR}/%x-%j.err \\"
     if [[ ${#EXTRA_SBATCH_ARGS[@]} -gt 0 ]]; then
@@ -309,6 +373,10 @@ SBATCH_CMD=(
     "--error=${LOG_DIR}/%x-%j.err"
     "--export=ALL,PIPELINE_ID=${PIPELINE_ID},ARTIFACT_DIR=${ARTIFACT_DIR},LOG_DIR=${LOG_DIR}"
 )
+
+if [[ -n "${RESOLVED_PARTITION}" ]]; then
+    SBATCH_CMD+=("--partition=${RESOLVED_PARTITION}")
+fi
 
 if [[ ${#EXTRA_SBATCH_ARGS[@]} -gt 0 ]]; then
     SBATCH_CMD+=("${EXTRA_SBATCH_ARGS[@]}")
@@ -338,6 +406,7 @@ jq -n \
     --arg sha "$GIT_SHA" \
     --arg ref "$GIT_REF" \
     --arg arch "${ARCH_NAME:-}" \
+    --arg partition "${RESOLVED_PARTITION:-}" \
     --arg img "${DOCKER_IMAGE:-}" \
     --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --arg by "$(whoami)@$(hostname)" \
@@ -348,6 +417,7 @@ jq -n \
         git_sha: $sha,
         git_ref: $ref,
         arch: $arch,
+        partition: $partition,
         docker_image: $img,
         submitted_at: $ts,
         submitted_by: $by,
