@@ -754,24 +754,34 @@ void add_rank_binding_constraints(
                     unset_hosts.emplace_back(hostname, std::move(host_asics));
                 }
             }
-            std::vector<MeshHostRankId> unclaimed_ranks;
-            for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
-                if (!fn_set.empty() && !claimed_ranks.contains(r)) {
-                    unclaimed_ranks.push_back(r);
+            // Generic approach: explicitly bound host(s) get their rank. UNSET hosts form a shared
+            // pool of ASICs that all unclaimed-rank fabric nodes can map to. The solver auto-determines
+            // a valid 1:1 assignment satisfying connectivity (no pre-assignment of host->rank).
+            if (!unset_hosts.empty()) {
+                bool has_unclaimed = false;
+                for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
+                    if (!fn_set.empty() && !claimed_ranks.contains(r)) {
+                        has_unclaimed = true;
+                        break;
+                    }
                 }
-            }
-            if (!unset_hosts.empty() && unclaimed_ranks.empty()) {
-                TT_THROW(
-                    "Rank bindings: {} host(s) have no rank binding but all mesh ranks are already claimed. "
-                    "Either assign ranks to these hosts or ensure enough ranks exist.",
-                    unset_hosts.size());
-            }
-            for (size_t i = 0; i < unset_hosts.size(); ++i) {
-                const auto& [hostname, host_asics] = unset_hosts[i];
-                (void)hostname;
-                MeshHostRankId rank = unclaimed_ranks[i % unclaimed_ranks.size()];
-                for (const auto& asic_id : host_asics) {
-                    rank_to_asics[rank].insert(asic_id);
+                if (!has_unclaimed) {
+                    TT_THROW(
+                        "Rank bindings: {} host(s) have no rank binding but all mesh ranks are already claimed. "
+                        "Either assign ranks to these hosts or ensure enough ranks exist.",
+                        unset_hosts.size());
+                }
+                std::set<tt::tt_metal::AsicID> unset_asic_pool;
+                for (const auto& [hostname, host_asics] : unset_hosts) {
+                    (void)hostname;
+                    unset_asic_pool.insert(host_asics.begin(), host_asics.end());
+                }
+                for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
+                    if (!fn_set.empty() && !claimed_ranks.contains(r)) {
+                        for (const auto& asic_id : unset_asic_pool) {
+                            rank_to_asics[r].insert(asic_id);
+                        }
+                    }
                 }
             }
         }

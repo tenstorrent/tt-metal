@@ -271,6 +271,9 @@ echo -e "${BLUE}=== Generating Cluster Descriptors ===${NC}"
 echo "Rankfile: $RANKFILE"
 echo "Number of hosts: $NUM_HOSTS"
 echo "Total ranks: $TOTAL_RANKS"
+if [[ $NUM_HOSTS -gt 1 ]] && [[ "$OUTPUT_DIR" =~ ^\./ ]] || [[ "$OUTPUT_DIR" != /* ]]; then
+    echo -e "${YELLOW}Warning: Multi-host run with non-absolute output path ($OUTPUT_DIR). OUTPUT_DIR must be a shared filesystem (e.g. NFS path like /data/cluster_descs) so all hosts see the same files.${NC}" >&2
+fi
 echo "Topology tool: $TOPOLOGY_TOOL"
 echo "Output directory: $OUTPUT_DIR"
 echo "Base name: $BASE_NAME"
@@ -346,36 +349,13 @@ if rank_str in rank_envs:
 \" \"\$RANK_ENV_JSON\")
 fi
 
-# Determine hostname and slot from rankfile mapping or hostname command
-if [[ -n \"\$RANK_HOST_SLOT_JSON\" ]] && [[ -n \"\$PYTHON_CMD\" ]]; then
-    RANK_HOST_SLOT=\$(\"\$PYTHON_CMD\" -c \"
-import json
-import os
-import sys
-rank = int(os.environ.get('RANK', '0'))
-rank_host_slot = json.loads(sys.argv[1])
-rank_str = str(rank)
-if rank_str in rank_host_slot:
-    host = rank_host_slot[rank_str]['host']
-    slot = rank_host_slot[rank_str]['slot']
-    print(f'{host} {slot}')
-\" \"\$RANK_HOST_SLOT_JSON\")
-    if [[ -n \"\$RANK_HOST_SLOT\" ]]; then
-        CURRENT_HOST=\$(echo \"\$RANK_HOST_SLOT\" | awk '{print \$1}')
-        CURRENT_SLOT=\$(echo \"\$RANK_HOST_SLOT\" | awk '{print \$2}')
-    else
-        echo \"ERROR: Rank \$RANK not found in rankfile mapping\" >&2
-        exit 1
-    fi
-else
-    echo \"ERROR: Rankfile mapping not available\" >&2
-    exit 1
-fi
+# Get hostname from the actual host where this MPI process is running (not from rankfile)
+CURRENT_HOST=\$(hostname 2>/dev/null || echo \"localhost\")
 
-# Generate filename with hostname and slot
-OUTPUT_FILE=\"\${OUTPUT_DIR}/\${BASE_NAME}_\${CURRENT_HOST}_slot_\${CURRENT_SLOT}.yaml\"
+# Generate filename with actual hostname and rank - each host produces a file named for itself
+OUTPUT_FILE=\"\${OUTPUT_DIR}/\${BASE_NAME}_\${CURRENT_HOST}_rank_\${RANK}.yaml\"
 
-echo \"[Rank \$RANK] Generating cluster descriptor on \$CURRENT_HOST slot \$CURRENT_SLOT...\" >&2
+echo \"[Rank \$RANK] Generating cluster descriptor on \$CURRENT_HOST...\" >&2
 mkdir -p \"\$OUTPUT_DIR\"
 \"\$TOPOLOGY_TOOL\" --path \"\$OUTPUT_FILE\"
 
@@ -413,48 +393,13 @@ BASE_NAME='${BASE_NAME}'
 TOPOLOGY_TOOL='${TOPOLOGY_TOOL}'
 RANK_HOST_SLOT_JSON='${RANK_HOST_SLOT_JSON_ESCAPED}'
 
-# Determine hostname and slot from rankfile mapping or hostname command
-if [[ -n \"\$RANK_HOST_SLOT_JSON\" ]]; then
-    if command -v python3 &> /dev/null; then
-        PYTHON_CMD=python3
-    elif command -v python &> /dev/null; then
-        PYTHON_CMD=python
-    else
-        PYTHON_CMD=\"\"
-    fi
-    if [[ -n \"\$PYTHON_CMD\" ]]; then
-        RANK_HOST_SLOT=\$(\"\$PYTHON_CMD\" -c \"
-import json
-import os
-import sys
-rank = int(os.environ.get('RANK', '0'))
-rank_host_slot = json.loads(sys.argv[1])
-rank_str = str(rank)
-if rank_str in rank_host_slot:
-    host = rank_host_slot[rank_str]['host']
-    slot = rank_host_slot[rank_str]['slot']
-    print(f'{host} {slot}')
-\" \"\$RANK_HOST_SLOT_JSON\")
-        if [[ -n \"\$RANK_HOST_SLOT\" ]]; then
-            CURRENT_HOST=\$(echo \"\$RANK_HOST_SLOT\" | awk '{print \$1}')
-            CURRENT_SLOT=\$(echo \"\$RANK_HOST_SLOT\" | awk '{print \$2}')
-        else
-            echo \"ERROR: Rank \$RANK not found in rankfile mapping\" >&2
-            exit 1
-        fi
-    else
-        echo \"ERROR: Python not available for rankfile mapping\" >&2
-        exit 1
-    fi
-else
-    echo \"ERROR: Rankfile mapping not available\" >&2
-    exit 1
-fi
+# Get hostname from the actual host where this MPI process is running (not from rankfile)
+CURRENT_HOST=\$(hostname 2>/dev/null || echo \"localhost\")
 
-# Generate filename with hostname and slot from rankfile
-OUTPUT_FILE=\"\${OUTPUT_DIR}/\${BASE_NAME}_\${CURRENT_HOST}_slot_\${CURRENT_SLOT}.yaml\"
+# Generate filename with actual hostname and rank - each host produces a file named for itself
+OUTPUT_FILE=\"\${OUTPUT_DIR}/\${BASE_NAME}_\${CURRENT_HOST}_rank_\${RANK}.yaml\"
 
-echo \"[Rank \$RANK] Generating cluster descriptor on \$CURRENT_HOST slot \$CURRENT_SLOT...\" >&2
+echo \"[Rank \$RANK] Generating cluster descriptor on \$CURRENT_HOST...\" >&2
 mkdir -p \"\$OUTPUT_DIR\"
 \"\$TOPOLOGY_TOOL\" --path \"\$OUTPUT_FILE\"
 
@@ -469,6 +414,8 @@ fi
 
 # Build MPI command
 MPI_CMD=("$MPI_LAUNCHER")
+# Pass --host so MPI launches on all hosts from the rankfile (without this, MPI may only run on localhost)
+MPI_CMD+=("--host" "$(IFS=,; echo "${HOST_LIST[*]}")")
 # Use rankfile - it specifies rank-to-host mapping
 MPI_CMD+=("--rankfile" "$RANKFILE")
 MPI_CMD+=("--oversubscribe")
@@ -497,26 +444,26 @@ if [[ $MPI_EXIT_CODE -ne 0 ]]; then
     exit 1
 fi
 
-# Extract generated file paths
+# Extract generated file paths (for validation only - mapping is always derived from rankfile)
 declare -A RANK_TO_FILE
 if [[ -f /tmp/mpi_output_$$.log ]]; then
     while IFS= read -r line; do
         if [[ "$line" =~ RANK_([0-9]+)_FILE:(.+)$ ]]; then
             rank="${BASH_REMATCH[1]}"
             file="${BASH_REMATCH[2]}"
+            # Trim trailing whitespace from captured path
+            file="${file%"${file##*[![:space:]]}"}"
             RANK_TO_FILE["$rank"]="$file"
         fi
     done < /tmp/mpi_output_$$.log
     rm -f /tmp/mpi_output_$$.log
 fi
 
-# Also check for files that were created
+# Also check for files that were created locally (fallback when MPI output parsing missed some)
 for rank in $(seq 0 $((TOTAL_RANKS - 1))); do
-    # Check for files named with hostname and slot (from rankfile)
-    if [[ -n "${RANK_TO_HOST[$rank]:-}" ]] && [[ -n "${RANK_TO_SLOT[$rank]:-}" ]]; then
+    if [[ -n "${RANK_TO_HOST[$rank]:-}" ]]; then
         host="${RANK_TO_HOST[$rank]}"
-        slot="${RANK_TO_SLOT[$rank]}"
-        expected_file="${OUTPUT_DIR}/${BASE_NAME}_${host}_slot_${slot}.yaml"
+        expected_file="${OUTPUT_DIR}/${BASE_NAME}_${host}_rank_${rank}.yaml"
         if [[ -f "$expected_file" ]] && [[ -z "${RANK_TO_FILE[$rank]:-}" ]]; then
             RANK_TO_FILE["$rank"]="$expected_file"
         fi
@@ -524,6 +471,9 @@ for rank in $(seq 0 $((TOTAL_RANKS - 1))); do
 done
 
 # Generate mapping YAML file
+# IMPORTANT: Mapping is always derived from the rankfile. Each rank N must map to the cluster
+# descriptor for the host assigned to rank N in the rankfile. Filenames use actual hostname
+# (from hostname command) and rank number - when MPI runs correctly, actual hostname matches rankfile hostname.
 echo ""
 echo -e "${YELLOW}Generating mapping file: $MAPPING_FILE${NC}"
 
@@ -533,77 +483,46 @@ cat > "$MAPPING_FILE" << EOF
 rank_to_cluster_mock_cluster_desc:
 EOF
 
-# Verify all ranks from rank bindings have corresponding files
-MISSING_RANKS=()
+# Determine which rank count to use for mapping
+MAP_RANK_COUNT=$RANKFILE_RANK_COUNT
 if [[ $RANK_COUNT -gt 0 ]]; then
-    for rank in $(seq 0 $((RANK_COUNT - 1))); do
-        if [[ -z "${RANK_TO_FILE[$rank]:-}" ]]; then
-            MISSING_RANKS+=("$rank")
-        fi
-    done
-
-    if [[ ${#MISSING_RANKS[@]} -gt 0 ]]; then
-        echo -e "${RED}Warning: Missing cluster descriptors for ranks: ${MISSING_RANKS[*]}${NC}" >&2
-    fi
+    MAP_RANK_COUNT=$RANK_COUNT
 fi
 
-# Write mapping file - ensure ranks are in order matching rank bindings
-if [[ $RANK_COUNT -gt 0 ]]; then
-    # Use rank bindings order (0 to RANK_COUNT-1)
-    for rank in $(seq 0 $((RANK_COUNT - 1))); do
-        file="${RANK_TO_FILE[$rank]:-}"
-        if [[ -z "$file" ]]; then
-            # Try to generate expected filename from rankfile mapping
-            if [[ -n "${RANK_TO_HOST[$rank]:-}" ]] && [[ -n "${RANK_TO_SLOT[$rank]:-}" ]]; then
-                host="${RANK_TO_HOST[$rank]}"
-                slot="${RANK_TO_SLOT[$rank]}"
-                file="${OUTPUT_DIR}/${BASE_NAME}_${host}_slot_${slot}.yaml"
-                echo -e "${YELLOW}Warning: Rank $rank file not found, using expected path from rankfile: $file${NC}" >&2
-            else
-                echo -e "${RED}Error: Rank $rank file not found and no rankfile mapping available${NC}" >&2
-                exit 1
-            fi
-        fi
-        if [[ "$file" =~ ^$(pwd)/ ]]; then
-            rel_file="${file#$(pwd)/}"
-        else
-            rel_file="$file"
-        fi
-        echo "  $rank: \"$rel_file\"" >> "$MAPPING_FILE"
-    done
-else
-    # When rank bindings not provided, use rankfile to determine ranks
-    if [[ $RANKFILE_RANK_COUNT -gt 0 ]]; then
-        for rank in $(seq 0 $((RANKFILE_RANK_COUNT - 1))); do
-            file="${RANK_TO_FILE[$rank]:-}"
-            if [[ -z "$file" ]]; then
-                # Generate expected filename from rankfile mapping
-                if [[ -n "${RANK_TO_HOST[$rank]:-}" ]] && [[ -n "${RANK_TO_SLOT[$rank]:-}" ]]; then
-                    host="${RANK_TO_HOST[$rank]}"
-                    slot="${RANK_TO_SLOT[$rank]}"
-                    file="${OUTPUT_DIR}/${BASE_NAME}_${host}_slot_${slot}.yaml"
-                    echo -e "${YELLOW}Warning: Rank $rank file not found, using expected path from rankfile: $file${NC}" >&2
-                else
-                    echo -e "${RED}Error: Rank $rank not found in rankfile mapping${NC}" >&2
-                    exit 1
-                fi
-            fi
-            if [[ "$file" =~ ^$(pwd)/ ]]; then
-                rel_file="${file#$(pwd)/}"
-            else
-                rel_file="$file"
-            fi
-            echo "  $rank: \"$rel_file\"" >> "$MAPPING_FILE"
-        done
-    else
-        echo -e "${RED}Error: Cannot generate mapping file without rank bindings or rankfile${NC}" >&2
+# Verify all ranks from rankfile have corresponding files (for validation)
+MISSING_RANKS=()
+for rank in $(seq 0 $((MAP_RANK_COUNT - 1))); do
+    if [[ -z "${RANK_TO_FILE[$rank]:-}" ]]; then
+        MISSING_RANKS+=("$rank")
+    fi
+done
+
+if [[ ${#MISSING_RANKS[@]} -gt 0 ]]; then
+    echo -e "${YELLOW}Warning: Could not verify cluster descriptors for ranks: ${MISSING_RANKS[*]} (may have been created on remote hosts)${NC}" >&2
+fi
+
+# Write mapping file - ALWAYS use rankfile (RANK_TO_HOST) to determine
+# which cluster descriptor file belongs to each rank. Filenames use actual hostname and rank.
+for rank in $(seq 0 $((MAP_RANK_COUNT - 1))); do
+    if [[ -z "${RANK_TO_HOST[$rank]:-}" ]]; then
+        echo -e "${RED}Error: Rank $rank not found in rankfile mapping${NC}" >&2
         exit 1
     fi
-fi
+    host="${RANK_TO_HOST[$rank]}"
+    # Filename uses actual hostname (from hostname command) and rank number
+    # When MPI runs correctly, actual hostname matches rankfile hostname
+    file="${OUTPUT_DIR}/${BASE_NAME}_${host}_rank_${rank}.yaml"
+    if [[ "$file" =~ ^$(pwd)/ ]]; then
+        rel_file="${file#$(pwd)/}"
+    else
+        rel_file="$file"
+    fi
+    echo "  $rank: \"$rel_file\"" >> "$MAPPING_FILE"
+done
 
 echo -e "${GREEN}✓ Mapping file created: $MAPPING_FILE${NC}"
 echo ""
-echo "Generated ${#RANK_TO_FILE[@]} cluster descriptor file(s)"
+echo "Mapping file has $MAP_RANK_COUNT rank(s) (verified ${#RANK_TO_FILE[@]} file(s) from MPI output)"
 
 # Verify mapping matches rank bindings
 if [[ $RANK_COUNT -gt 0 ]] && [[ -n "$RANK_BINDINGS_FILE" ]]; then
