@@ -61,7 +61,7 @@ def test_group_norm(device):
     # While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1
     # Determine how many cores split the channel dimension.
     # For height sharding this is always 1; for block sharding it depends on the shard orientation.
-    num_cores_across_channel = get_group_norm_cores_across_channel(
+    num_cores_across_channel = ttnn.get_group_norm_cores_across_channel(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
         grid_size,
         ttnn.ShardOrientation.ROW_MAJOR,
