@@ -32,6 +32,7 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
+from models.demos.gpt_oss.tt.model_config import ModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
@@ -420,8 +421,17 @@ def test_gpt_oss_demo(
     run_in_ci,
     is_ci_env,
     request,
-    state_dict,
 ):
+    load_model = False
+    if load_model:
+        model_path = os.getenv("HF_MODEL", None)
+        if model_path is None:
+            state_dict = {}
+        else:
+            state_dict = ModelArgs.load_state_dict(model_path, dummy_weights=False)
+    else:
+        state_dict = {}
+
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:
         pytest.skip(
@@ -435,7 +445,7 @@ def test_gpt_oss_demo(
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=load_model)
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
@@ -459,6 +469,40 @@ def test_gpt_oss_demo(
 
     # GPT-OSS doesn't support any performance optimizations
     optimizations = None
+
+    # For long_context_mode, we only have 1 real user per row
+    # The rest are padding users with empty prompts
+    num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
+    users_per_row = global_batch_size // mesh_device.shape[0]
+
+    model_path = os.getenv("HF_MODEL", None)
+    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
+        real_prompts = input_prompts * num_real_users
+    elif isinstance(input_prompts, str):  # Inputs from file
+        real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
+    else:
+        raise ValueError(
+            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
+        )
+
+    if "120b" in model_path and mesh_device.shape[0] == 1:
+        if max([len(p) for p in real_prompts]) > 32 * 1024:
+            print([len(p) for p in real_prompts])
+            pytest.skip(
+                "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
+            )
+    if "120b" in model_path and mesh_device.shape[0] == 4:
+        if max([len(p) for p in real_prompts]) >= 32 * 1024:
+            print([len(p) for p in real_prompts])
+            pytest.skip(
+                "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
+            )
+    if "20b" in model_path and mesh_device.shape[0] == 4:
+        if max([len(p) for p in real_prompts]) > 32 * 1024:
+            print([len(p) for p in real_prompts])
+            pytest.skip(
+                "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
+            )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)
@@ -502,35 +546,6 @@ def test_gpt_oss_demo(
     # Prepare input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-
-    # For long_context_mode, we only have 1 real user per row
-    # The rest are padding users with empty prompts
-    num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
-    users_per_row = global_batch_size // mesh_device.shape[0]
-
-    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
-        real_prompts = input_prompts * num_real_users
-    elif isinstance(input_prompts, str):  # Inputs from file
-        real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
-    else:
-        raise ValueError(
-            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
-        )
-    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 1:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
-            pytest.skip(
-                "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
-            )
-    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) >= 32 * 1024:
-            pytest.skip(
-                "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
-            )
-    if model_args[0].model_name.split("-")[-1] == "20b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
-            pytest.skip(
-                "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
-            )
 
     if long_context_mode:
         # Expand to full batch: 1 real user + (users_per_row - 1) padding users per row
