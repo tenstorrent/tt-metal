@@ -107,90 +107,295 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and prefetcher_setup is not None:
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
+    def _debug_check_mlp(self, name, tensor):
+        """Check tensor for Inf/NaN and log stats."""
+        import os
+
+        if os.environ.get("DEBUG_DECODE", "0") != "1":
+            return
+        try:
+            import torch
+            from loguru import logger
+
+            torch_tensor = ttnn.to_torch(
+                tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            has_inf = torch.isinf(torch_tensor).any().item()
+            has_nan = torch.isnan(torch_tensor).any().item()
+            max_val = torch_tensor.float().abs().max().item()
+            status = "OK" if not (has_inf or has_nan) else "BAD"
+            logger.info(
+                f"    MLP [{status}] {name}: shape={list(torch_tensor.shape)}, max={max_val:.4e}, Inf={has_inf}, NaN={has_nan}"
+            )
+        except Exception as e:
+            from loguru import logger
+
+            logger.error(f"    MLP [ERROR] {name}: {e}")
+
     def forward(self, x: ttnn.Tensor, mode, batch_size=1) -> ttnn.Tensor:
         if mode == "prefill":
             return self.forward_prefill(x, batch_size=batch_size)
 
-        pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
-        pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
+        # Choose program config based on prefetcher status
+        # NO_PREFETCH configs have num_global_cb_receivers=1 (don't require global_cb)
+        if self.model_config["USE_PREFETCHER"]:
+            pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
+            pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
+        else:
+            pc_1_3 = self.model_config.get(
+                "FF1_3_TG_RING_PROGCFG_NO_PREFETCH", self.model_config["FF1_3_TG_RING_PROGCFG"]
+            )
+            pc_2 = self.model_config.get("FF2_TG_RING_PROGCFG_NO_PREFETCH", self.model_config["FF2_TG_RING_PROGCFG"])
 
-        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
-            x,
-            self.w1,
-            self.w3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1_3,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            use_noc1_only=False,
+        # OLMo decode: Use separate matmuls when prefetcher is disabled
+        # double_matmul_line_reduce_scatter requires global_cb for multi-tensor matmul
+        is_olmo = getattr(self.args, "is_olmo", False)
+        if not self.model_config["USE_PREFETCHER"]:
+            # OLMo and non-prefetcher path: Use sharded weights with program config
+            # The sharded weights (self.w1, self.w3) have correct K=dim/4=1280 for decode input
+            # Ring matmul requires sharded output, so use SHARDED_FF12_OUT_RING_MEMCFG
+            # OLMo uses host-side reduce_scatter due to L1/memory config constraints
+            if is_olmo:
+                # W1 matmul - use sharded weight with program config, output to DRAM
+                # (host-side reduce_scatter needs DRAM input)
+                w1_out = ttnn.linear(
+                    x,
+                    self.w1,  # Sharded weight has K=1280 matching decode input
+                    compute_kernel_config=self.args.compute_kernel_config_lofi
+                    if self.four_bit_mlp
+                    else self.args.compute_kernel_config_hifi2,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=pc_1_3,  # Ring matmul config
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],  # Ring matmul needs sharded output
+                )
+                self._debug_check_mlp("w1_out", w1_out)
+                # Reshard to DRAM for host-side reduce_scatter
+                w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(w1_out)
+                # Use host-side reduce_scatter for OLMo (avoids memory config mismatch)
+                w1_out_reduced = self.tt_ccl.line_reduce_scatter_host(
+                    w1_out_dram,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dim=3,
+                    cluster_axis=1,
+                    num_links=self.model_config["GALAXY_NUM_LINKS"],
+                )
+                ttnn.deallocate(w1_out_dram)
+                self._debug_check_mlp("w1_out_reduced", w1_out_reduced)
+
+                # W3 matmul - use sharded weight with program config
+                w3_out = ttnn.linear(
+                    x,
+                    self.w3,  # Sharded weight has K=1280 matching decode input
+                    compute_kernel_config=self.args.compute_kernel_config_lofi
+                    if self.four_bit_mlp
+                    else self.args.compute_kernel_config_hifi2,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=pc_1_3,  # Ring matmul config
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],  # Ring matmul needs sharded output
+                )
+                ttnn.deallocate(x)
+                self._debug_check_mlp("w3_out", w3_out)
+
+                # Reshard to DRAM for host-side reduce_scatter
+                w3_out_dram = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(w3_out)
+                # Use host-side reduce_scatter for OLMo
+                w3_out_reduced = self.tt_ccl.line_reduce_scatter_host(
+                    w3_out_dram,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dim=3,
+                    cluster_axis=1,
+                    num_links=self.model_config["GALAXY_NUM_LINKS"],
+                )
+                ttnn.deallocate(w3_out_dram)
+                self._debug_check_mlp("w3_out_reduced", w3_out_reduced)
+            else:
+                # W1 matmul
+                w1_out = ttnn.linear(
+                    x,
+                    self.w1,
+                    compute_kernel_config=self.args.compute_kernel_config_lofi
+                    if self.four_bit_mlp
+                    else self.args.compute_kernel_config_hifi2,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=pc_1_3,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                )
+                self._debug_check_mlp("w1_out", w1_out)
+                w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                    w1_out,
+                    cluster_axis=1,
+                    num_links=self.model_config["GALAXY_NUM_LINKS"],
+                    memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                    use_noc1_only=False,
+                )
+                ttnn.deallocate(w1_out)
+                self._debug_check_mlp("w1_out_reduced", w1_out_reduced)
+
+                # W3 matmul
+                w3_out = ttnn.linear(
+                    x,
+                    self.w3,
+                    compute_kernel_config=self.args.compute_kernel_config_lofi
+                    if self.four_bit_mlp
+                    else self.args.compute_kernel_config_hifi2,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=pc_1_3,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                )
+                ttnn.deallocate(x)
+                self._debug_check_mlp("w3_out", w3_out)
+
+                w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                    w3_out,
+                    cluster_axis=1,
+                    num_links=self.model_config["GALAXY_NUM_LINKS"],
+                    memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                    use_noc1_only=False,
+                )
+                ttnn.deallocate(w3_out)
+                self._debug_check_mlp("w3_out_reduced", w3_out_reduced)
+        else:
+            # Standard path: Use fused double_matmul_line_reduce_scatter with prefetcher
+            w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+                x,
+                self.w1,
+                self.w3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id
+                if (mode == "decode" and self.prefetcher_setup is not None)
+                else None,
+                use_noc1_only=False,
+            )
+
+            ttnn.deallocate(x)
+
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_out,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(w3_out)
+
+        # OLMo decode: Use DRAM for intermediate results due to L1 constraints
+        ff1ff3_mem_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if (is_olmo and mode == "decode")
+            else self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
         )
-
-        ttnn.deallocate(x)
-
-        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w3_out,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            use_noc1_only=False,
-        )
-        ttnn.deallocate(w3_out)
-
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            memory_config=ff1ff3_mem_config,
         )
+        self._debug_check_mlp("ff1ff3 (silu*gate)", ff1ff3)
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
-
-        w2_in = self.tt_ccl.line_all_gather(
-            ff1ff3,
-            dim=3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
-        )
+        if is_olmo and mode == "decode":
+            # OLMo decode: Use device-side CCL with OLMo-specific BINARY_MUL buffer (3840 width)
+            ff2_in_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
+            w2_in = self.tt_ccl.line_all_gather(
+                ff1ff3,
+                dim=3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=ff2_in_mem_config,
+                buffer_key="BINARY_MUL",
+                use_optimal_ccl_for_llama=True,
+            )
+        else:
+            ff2_in_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
+            w2_in = self.tt_ccl.line_all_gather(
+                ff1ff3,
+                dim=3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=ff2_in_mem_config,
+                buffer_key="BINARY_MUL",
+                use_optimal_ccl_for_llama=False if mode == "prefill" else True,
+            )
 
         ttnn.deallocate(ff1ff3)
 
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_2,
-            memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-        )
-        w2_out_reduced = self.tt_ccl.line_all_reduce(
-            w2_out,
-            cluster_axis=0,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            use_optimal_ccl_for_llama=True,
-        )
-        ttnn.deallocate(w2_out)
+        # OLMo: FF1/FF3 outputs are padded to 3840 but W2 expects 3456
+        # Slice off the padding before W2
+        if is_olmo and mode == "decode":
+            # Move to DRAM for slice operation (sharded tensors may have issues with slice)
+            w2_in_dram = ttnn.to_memory_config(w2_in, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(w2_in)
+            # Slice from [1, 1, 32, 3840] to [1, 1, 32, 3456]
+            w2_in_sliced = ttnn.slice(w2_in_dram, [0, 0, 0, 0], [1, 1, 32, 3456])
+            ttnn.deallocate(w2_in_dram)
+            # Use interleaved weight and default config for OLMo
+            # Keep output in DRAM - don't reshard to FF2_OUT_RING_MEMCFG (expects 1536 width, but W2 outputs 1280)
+            w2_out = ttnn.linear(
+                w2_in_sliced,
+                self.w2_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(w2_in_sliced)
+            self._debug_check_mlp("w2_out", w2_out)
+            # OLMo: Use host-side all_reduce to avoid WIDTH_SHARDED grid mismatch
+            w2_out_dram = self.tt_ccl.line_all_reduce_host(
+                w2_out,
+                cluster_axis=0,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(w2_out)
+            # Reshard to DECODE_RESIDUAL_MEMCFG for next layer's RMSNorm
+            w2_out_reduced = ttnn.to_memory_config(w2_out_dram, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            ttnn.deallocate(w2_out_dram)
+        else:
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_2,
+                memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
+                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id
+                if (mode == "decode" and self.prefetcher_setup is not None)
+                else None,
+            )
+            self._debug_check_mlp("w2_out", w2_out)
+            w2_out_reduced = self.tt_ccl.line_all_reduce(
+                w2_out,
+                cluster_axis=0,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                use_optimal_ccl_for_llama=True,
+            )
+            ttnn.deallocate(w2_out)
+        self._debug_check_mlp("w2_out_reduced", w2_out_reduced)
 
         return w2_out_reduced
 

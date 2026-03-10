@@ -43,17 +43,23 @@ class TT_CCL:
         self.num_cbs = 2
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
-        self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
-
-        self.ring_topology = self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
-        self.use_ring_prefill = self.ring_topology and mode == "prefill"
-        self.use_ring_ag_prefill = (self.ring_topology and not LINE_AG) and mode == "prefill"
-        self.use_ring_rs_prefill = (self.ring_topology and not LINE_RS) and mode == "prefill"
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
         self.is_qwen = is_qwen
         self.is_olmo = is_olmo
+        self.mode = mode
+        # Must be after is_olmo/max_batch_size are set (buffer size depends on them)
+        # Only create for decode mode - prefill doesn't use all_gather_concat
+        if mode == "decode":
+            self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
+        else:
+            self.all_gather_concat_inter_tensor = None
+
+        self.ring_topology = self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
+        self.use_ring_prefill = self.ring_topology and mode == "prefill"
+        self.use_ring_ag_prefill = (self.ring_topology and not LINE_AG) and mode == "prefill"
+        self.use_ring_rs_prefill = (self.ring_topology and not LINE_RS) and mode == "prefill"
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -131,28 +137,46 @@ class TT_CCL:
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
-        intermediate_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
-                ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
-            ]
-        )
+        # Buffer dimensions depend on batch size:
+        # - Llama: batch=128 -> per device [1, 32, 32, 128] = 32 cores
+        # - OLMo: batch=32 -> per device [1, 8, 32, 128] = 8 cores
+        batch_size = self.max_batch_size
+        batch_per_device = batch_size // 4  # 4 columns in 8x4 mesh
+
+        # Calculate cores needed: (batch_per_device * 32 * 128) / (32 * 128) = batch_per_device
+        num_cores_needed = batch_per_device
+
+        if self.is_olmo or batch_size <= 32:
+            # OLMo: 8 cores for batch=32 (per device: 8 * 32 * 128 = 32768 elements)
+            intermediate_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 3)),  # 2x4 = 8 cores
+                ]
+            )
+        else:
+            # Llama: 32 cores for batch=128 (per device: 32 * 32 * 128 = 131072 elements)
+            intermediate_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+                ]
+            )
         intermediate_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -162,7 +186,7 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        temp_shape = [8, 128, 32, 128]
+        temp_shape = [8, batch_size, 32, 128]
         intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
         tt_intermediate_tensor = ttnn.from_torch(
             intermediate_tensor,
@@ -302,24 +326,20 @@ class TT_CCL:
         persistent_buffers["LOGPROBS_LOGITS"] = tt_buffer
 
         # Binary Mult + Silu
-        tt_buffer = (
-            ttnn.from_torch(
-                torch.zeros((1, 1, self.max_batch_size, 3584)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            if not self.is_qwen
-            else ttnn.from_torch(
-                torch.zeros((1, 1, self.max_batch_size, 3200)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        # OLMo: 3840 (padded intermediate_dim_per_tp), Qwen: 3200, Llama: 3584
+        if self.is_olmo:
+            binary_mul_width = 3840  # intermediate_dim_per_tp_padded_24_cores
+        elif self.is_qwen:
+            binary_mul_width = 3200
+        else:
+            binary_mul_width = 3584  # Llama default
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, self.max_batch_size, binary_mul_width)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
@@ -341,9 +361,11 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 0
         cluster_axis = 0
-        N_per_shard = (
-            2048 // 16 * cluster_shape[cluster_axis] if not self.is_qwen else 1280 // 10 * cluster_shape[cluster_axis]
-        )  # FF2/DO
+        # OLMo/Qwen have dim_per_tp=1280, Llama has 2048
+        if self.is_olmo or self.is_qwen:
+            N_per_shard = 1280 // 10 * cluster_shape[cluster_axis]  # 128 * 8 = 1024
+        else:
+            N_per_shard = 2048 // 16 * cluster_shape[cluster_axis]  # 128 * 8 = 1024  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -1272,20 +1294,66 @@ class TT_CCL:
     def line_reduce_scatter_host(
         self, input_tensor_mesh, memory_config, dim, cluster_axis, num_links=1, math_op=ttnn.ReduceType.Sum
     ):
-        ##### Host side implementation #####
-        dims = [0, 1]
+        """
+        Host-side reduce-scatter implementation.
+        1. Get tensors from all devices
+        2. Sum partial results element-wise across cluster_axis (devices have same positions)
+        3. Scatter the summed result along dim - each device gets 1/N of that dimension
+        4. Pad output to tile-aligned size (30 cores * 32 = 960 for OLMo)
+        """
+        import torch.nn.functional as F
+
         dtype = input_tensor_mesh.get_dtype()
-        torch_tensor_mesh = ttnn.to_torch(
-            input_tensor_mesh, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=(8, 4))
+
+        # Number of devices in each axis
+        num_rows, num_cols = 8, 4
+        num_devices_in_axis = num_cols if cluster_axis == 1 else num_rows
+
+        # Use ConcatMesh2dToTensor to concatenate along both dimensions
+        # dims=(0, 1) gives shape [8, 4, H, W] - row devices concat on dim 0, col devices on dim 1
+        torch_tensor_concat = ttnn.to_torch(
+            input_tensor_mesh,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=(num_rows, num_cols)),
         )
 
-        torch_tensor_mesh = torch.sum(torch_tensor_mesh, dim=cluster_axis, keepdim=True)
+        # Sum across cluster_axis in the concatenated tensor
+        summed = torch.sum(torch_tensor_concat, dim=cluster_axis, keepdim=True)
 
-        dims[cluster_axis] = dim
+        # Scatter: split along 'dim' for each device in cluster_axis
+        if cluster_axis == 1:
+            # Shape is [8, 1, H, W], squeeze to [8, H, W]
+            summed = summed.squeeze(1)
+            scatter_dim = dim if dim <= cluster_axis else dim - 1
+            chunks = torch.chunk(summed, num_cols, dim=scatter_dim)
+
+            # Pad each chunk to tile-aligned size for OLMo
+            # OLMo needs 960 per device (30 cores * 32) instead of 864 (3456/4)
+            if self.is_olmo:
+                padded_chunks = []
+                for c in chunks:
+                    chunk_width = c.shape[-1]
+                    target_width = 960  # 30 cores * 32 tiles
+                    if chunk_width < target_width:
+                        pad_width = target_width - chunk_width
+                        c = F.pad(c, (0, pad_width), mode="constant", value=0)
+                    padded_chunks.append(c.unsqueeze(1))
+                chunks = padded_chunks
+            else:
+                chunks = [c.unsqueeze(1) for c in chunks]
+
+            output = torch.cat(chunks, dim=1)
+        else:  # cluster_axis == 0
+            summed = summed.squeeze(0)
+            scatter_dim = dim if dim <= cluster_axis else dim - 1
+            chunks = torch.chunk(summed, num_rows, dim=scatter_dim)
+            chunks = [c.unsqueeze(0) for c in chunks]
+            output = torch.cat(chunks, dim=0)
+
+        # Convert back to ttnn tensor on mesh
         ttnn_tensor_out = ttnn.from_torch(
-            torch_tensor_mesh,
+            output,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=(8, 4)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=(num_rows, num_cols)),
             dtype=dtype,
             memory_config=memory_config,
             layout=ttnn.TILE_LAYOUT,
@@ -1367,7 +1435,10 @@ def tt_sharded_distributed_rmsnorm(
     use_noc1_only=False,
     ccl_topology=None,
 ):
-    # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+    # Ensure input is in the expected sharded memory config
+    # This is needed for OLMo decode where input may be in DECODE_RESIDUAL_MEMCFG
+    if inp.memory_config() != ln_sharded_input_memcfg:
+        inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
     cluster_axis = 1
