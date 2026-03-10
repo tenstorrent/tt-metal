@@ -78,7 +78,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--weights",
         type=str,
         choices=("synthetic", "real"),
-        default="synthetic",
+        default="real",
         help="Use synthetic or real (cached) weights (default: synthetic)",
     )
     parser.add_argument(
