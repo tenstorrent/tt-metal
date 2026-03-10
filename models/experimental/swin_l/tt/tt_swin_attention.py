@@ -113,8 +113,8 @@ class TtSwinAttention:
         v = ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
 
         scale = head_dim**-0.5
-        q = ttnn.to_layout(q * scale, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.to_layout(q * scale, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.matmul(
             q,
             k,
@@ -139,7 +139,7 @@ class TtSwinAttention:
 
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.matmul(
             attn,
             v,
@@ -147,7 +147,7 @@ class TtSwinAttention:
                 math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(v)
         ttnn.deallocate(attn)

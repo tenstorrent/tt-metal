@@ -28,31 +28,27 @@ class TtSwinPatchMerge:
         x1 = input_tensor[..., 1::2, 0::2, :]
         x2 = input_tensor[..., 0::2, 1::2, :]
         x3 = input_tensor[..., 1::2, 1::2, :]
-        output = ttnn.concat([x0, x1, x2, x3], -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.concat([x0, x1, x2, x3], -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x0)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         ttnn.deallocate(x3)
 
         output = ttnn.layer_norm(
-            ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             weight=self.parameters["norm"]["weight"],
             bias=self.parameters["norm"]["bias"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.to_memory_config(
-            ttnn.linear(
-                output,
-                self.parameters["reduction"]["weight"],
-                dtype=ttnn.bfloat8_b,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.LoFi,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
-                ),
-                core_grid=ttnn.CoreGrid(y=8, x=8),
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            ),
-            ttnn.DRAM_MEMORY_CONFIG,
+        return ttnn.linear(
+            output,
+            self.parameters["reduction"]["weight"],
             dtype=ttnn.bfloat16,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            ),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
