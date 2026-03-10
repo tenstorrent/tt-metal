@@ -483,7 +483,7 @@ protected:
             should_skip_ = true;
             return;
         }
-        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+        if (tt::tt_metal::GetNumAvailableDevices() != 4) {
             should_skip_ = true;
             return;
         }
