@@ -143,7 +143,7 @@ class DecoderBlock:
         for dev_idx in range(moe_num_devices):
             shard_start = dev_idx * K_down_per_device
             shard_end = shard_start + K_down_per_device
-            _, _, dev_output = MoeOp.golden(
+            scores, indices, dev_output = MoeOp.golden(
                 attn_output,
                 shared_gate_weights=moe_shared_gate_weights[:, shard_start:shard_end],
                 shared_up_weights=moe_shared_up_weights[:, shard_start:shard_end],
