@@ -36,14 +36,19 @@ bool can_exec_ops_on_device(DataType type) {
 // Check if the tensor with the specified memory config and tiling can be
 // constructed and used on the device, ignoring details of the type conversion.
 bool can_construct_on_device(
-    ttnn::distributed::MeshDevice* device, const ttnn::Shape& tensor_shape, const std::optional<Tile>& optional_tile) {
+    ttnn::distributed::MeshDevice* device,
+    const ttnn::Shape& tensor_shape,
+    const std::optional<Tile>& optional_tile,
+    const TensorSpec& tensor_spec) {
     bool res = device != nullptr &&
                // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
                // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
                // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
                // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
                // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-               tensor_shape.rank() <= 4;
+               tensor_shape.rank() <= 4 &&
+               // Logical shape must match physical shape for the tensor to be constructed on the device.
+               tt::tt_metal::logical_matches_physical(tensor_spec);
 
     if (optional_tile.has_value()) {
         // on-device tiling operation expects tiles to be divisible by 32x32.
@@ -68,11 +73,11 @@ Tensor create_tt_tensor_from_host_data(
     bool preserve_nan_values) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
-        const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile);  // memory_config
-        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
-
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
+        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
+
+        const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, tensor_spec);
+        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
 
         const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
@@ -87,14 +92,15 @@ Tensor create_tt_tensor_from_host_data(
                 host_buffer.view_as<T>(),
                 tensor_shape,
                 host_buffer.pin(),
-                must_construct_on_host ? dst_tensor_layout : src_tensor_layout,
+                must_construct_on_host
+                    ? dst_tensor_layout
+                    : TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), memory_config),
                 *mesh_mapper,
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
                 static_cast<T>(pad_value));
         }
 
-        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
         if (preserve_nan_values) {
             return Tensor::from_span(
                 tt::stl::make_const_span(host_buffer.view_as<T>()),
