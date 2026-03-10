@@ -71,7 +71,8 @@ class DecoderBlock:
         When MoE weights are provided, chains AttentionBlock.golden -> MoeOp.golden.
 
         Returns:
-            (full_q, new_kv, output)
+            (full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output)
+            moe_scores/indices/output are None when MoE weights are not provided.
         """
         full_q, new_kv, attn_output = AttentionBlock.golden(
             input_tensor,
@@ -100,12 +101,12 @@ class DecoderBlock:
         )
 
         if moe_shared_gate_weights is None:
-            return full_q, new_kv, attn_output
+            return full_q, new_kv, attn_output, None, None, None
 
         if moe_rmsnorm_epsilon is None:
             moe_rmsnorm_epsilon = epsilon
 
-        _, _, moe_output = MoeOp.golden(
+        moe_scores, moe_indices, moe_output = MoeOp.golden(
             attn_output,
             shared_gate_weights=moe_shared_gate_weights,
             shared_up_weights=moe_shared_up_weights,
@@ -124,7 +125,7 @@ class DecoderBlock:
             hardcoded_expert_index=moe_hardcoded_expert_index,
         )
 
-        return full_q, new_kv, attn_output, moe_output
+        return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
 
     @staticmethod
     def get_num_semaphores():

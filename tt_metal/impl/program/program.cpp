@@ -959,11 +959,11 @@ void detail::ProgramImpl::init_semaphores(
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
-        if (device.id() == 0) {
-            std::cout << "Writing semaphore to device " << device.id() << " " << logical_core.str() << std::endl;
-            std::cout << "Semaphore address: " << addr + semaphore.get().offset() << std::endl;
-            std::cout << "Semaphore offset: " << semaphore.get().offset() << std::endl;
-        }
+        // if (device.id() == 0) {
+        //     std::cout << "Writing semaphore to device " << device.id() << " " << logical_core.str() << std::endl;
+        //     std::cout << "Semaphore address: " << addr + semaphore.get().offset() << std::endl;
+        //     std::cout << "Semaphore offset: " << semaphore.get().offset() << std::endl;
+        // }
         TT_FATAL(addr + semaphore.get().offset() != 0, "Semaphore address is 0");
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device.id(),

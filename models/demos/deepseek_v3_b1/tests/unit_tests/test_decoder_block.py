@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
     SharedExpert,
+    extract_routed_expert_output,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
@@ -209,6 +210,26 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
     gate_output_indices_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_output_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── Fresh gate output buffers for standalone MoeOp.op sanity check ──
+    moe_ref_gate_output_scores = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_output_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+    moe_ref_gate_output_indices = ttnn.from_torch(
         torch.zeros((1, 16), dtype=torch.uint16),
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
@@ -566,6 +587,26 @@ def create_decoder_block_tensors(
         mesh_mapper=reduce_mesh_mapper,
     )
 
+    # ── Fresh reduce tensors for standalone MoeOp.op sanity check ──
+    moe_ref_reduce_intermediate = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+    moe_ref_reduce_output = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=reduce_output_mem,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+
     # ── Shared expert mcast grid ──
     def _unwrap(t):
         return t.fused_tensor if isinstance(t, OverlappedTensor) else t
@@ -680,6 +721,13 @@ def create_decoder_block_tensors(
         "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,
         "reduce_root_coord": root_coord,
+        # Standalone MoE ref tensors
+        "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
+        "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
+        "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
+        "moe_ref_reduce_output": moe_ref_reduce_output,
+        "num_gate_proj_cores": num_gate_proj_cores,
+        "per_core_down_proj_N": per_core_down_proj_N,
         # MoE mcast grid (for shared expert)
         "mcast_grid": mcast_grid,
         # Golden model PyTorch tensors (attention / MLA)
@@ -756,6 +804,14 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize(
+    "enable_routing, use_hardcoded_expert_index, num_routed_experts",
+    [
+        (True, True, 8),
+        pytest.param(True, False, 256, marks=pytest.mark.skip_post_commit),
+    ],
+    ids=["hardcoded_experts", "full_routing"],
+)
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
@@ -773,6 +829,9 @@ def test_decoder(
     position_id,
     noc_mode,
     num_internal_iterations,
+    enable_routing,
+    use_hardcoded_expert_index,
+    num_routed_experts,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
@@ -785,7 +844,6 @@ def test_decoder(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    num_routed_experts = 1
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
@@ -961,6 +1019,70 @@ def test_decoder(
     # ttnn_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ========================================================================
+    # Run standalone MoeOp.op on MLA output (validate golden MoE path)
+    # ========================================================================
+    logger.info(
+        f"Running standalone MoeOp.op (enable_routing={enable_routing}, hardcoded={use_hardcoded_expert_index})..."
+    )
+    moe_ref_semaphores = MoeOp.create_semaphores(submesh)
+    moe_ref_reduce_sems = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    ttnn.synchronize_device(submesh)
+
+    moe_ref_result = MoeOp.op(
+        attention_block_output_tensor,
+        gate_mm_weights_tensor=d["gate_mm_overlapped"],
+        gate_bias_tensor=d["ttnn_gate_bias"],
+        gate_indices_tensor=d["ttnn_gate_indices"],
+        gate_output_scores_tensor=d["moe_ref_gate_output_scores"],
+        gate_output_indices_tensor=d["moe_ref_gate_output_indices"],
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        enable_routing=enable_routing,
+        use_hardcoded_expert_index=use_hardcoded_expert_index,
+        sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
+        sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
+        num_iterations=num_internal_iterations,
+        reduce_intermediate_tensors=d["moe_ref_reduce_intermediate"],
+        reduce_output_tensor=d["moe_ref_reduce_output"],
+        reduce_semaphores=moe_ref_reduce_sems,
+        reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+        semaphores=moe_ref_semaphores,
+        noc_mode=noc_mode,
+    )
+    ttnn.synchronize_device(submesh)
+    logger.info("Standalone MoeOp.op completed.")
+
+    if enable_routing:
+        moe_ref_scores_tensor, moe_ref_indices_tensor, moe_ref_result = moe_ref_result
+        moe_ref_scores_torch = ttnn.to_torch(
+            moe_ref_scores_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        moe_ref_indices_torch = ttnn.to_torch(
+            moe_ref_indices_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+    else:
+        moe_ref_scores_torch = None
+        moe_ref_indices_torch = None
+
+    moe_reduce_torch = ttnn.to_torch(moe_ref_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    root_coord_tuple = d["reduce_root_coord"]
+    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
+    moe_reduce_root = moe_reduce_torch[root_device_idx]
+    moe_device_output_valid = extract_routed_expert_output(
+        moe_reduce_root.unsqueeze(0),
+        d["num_gate_proj_cores"],
+        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+        d["per_core_down_proj_N"],
+    )
+
+    # ========================================================================
     # Compute golden reference
     # ========================================================================
     logger.info("Computing golden reference...")
@@ -975,7 +1097,7 @@ def test_decoder(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
-    full_q, golden_new_kv, mla_output, moe_output = DecoderBlock.golden(
+    full_q, golden_new_kv, mla_output, moe_scores, moe_indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
         d["golden_torch_gamma"],
         d["golden_torch_matmul_weights"],
@@ -1012,8 +1134,8 @@ def test_decoder(
         moe_bias=d["golden_moe_bias"],
         moe_gate_eps=RoutedExpert.GATE_EPS,
         moe_gate_scaling_factor=RoutedExpert.GATE_SCALING_FACTOR,
-        moe_enable_routing=True,
-        moe_use_hardcoded_expert_index=True,
+        moe_enable_routing=enable_routing,
+        moe_use_hardcoded_expert_index=use_hardcoded_expert_index,
         moe_hardcoded_expert_index=0,
     )
 
@@ -1181,7 +1303,29 @@ def test_decoder(
         logger.info(f"Golden MLA output: {mla_output}")
         logger.info(f"TTNN MLA output: {received}")
         logger.info(f"Pure MLA output: {pure_mla}")
-        # assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
+        assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
+
+    # ========================================================================
+    # Validate standalone MoE output vs DecoderBlock golden MoE output
+    # ========================================================================
+    # Reduce-to-one sums partial results from all 8 devices. Each device independently
+    # adds the residual (h1 = device MLA output), so the root gets: full_moe + 8*h1.
+    # Golden computes: full_moe + 1*h1.  Subtract the 7 extra copies using the actual
+    # device-side bfloat16 MLA output (not the golden float32 version).
+    device_h1 = ttnn_attn_ref_output_torch[0:1, :].float()
+    adjusted_reduce = moe_device_output_valid.float() - 7 * device_h1
+    _, pcc_moe = comp_pcc(moe_output.flatten(), adjusted_reduce.flatten(), 0.0)
+    logger.info(f"Standalone MoeOp PCC (adjusted reduce vs DecoderBlock golden): {pcc_moe}")
+    logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
+    logger.info(f"Adjusted device MoE output: {adjusted_reduce.flatten()[:8]}")
+    logger.info(f"Raw device MoE reduce output: {moe_device_output_valid.flatten()[:8]}")
+
+    if moe_scores is not None:
+        logger.info(f"Golden MoE scores: {moe_scores}")
+        logger.info(f"Golden MoE indices: {moe_indices}")
+    if moe_ref_scores_torch is not None:
+        logger.info(f"Device MoE scores: {moe_ref_scores_torch}")
+        logger.info(f"Device MoE indices: {moe_ref_indices_torch}")
 
     logger.info("✓ DecoderBlock mesh test passed!")
 
