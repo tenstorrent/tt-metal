@@ -17,7 +17,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
+from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -243,14 +243,10 @@ class WanCausalConv3d(Module):
         super().__init__()
 
         self.unpadded_in_channels = in_channels
-        self.unpadded_out_channels = out_channels
-        self.TILE_WIDTH = 32
         self.in_channels = aligned_channels(in_channels)
         if self.in_channels != self.unpadded_in_channels:
             logger.warning(f"Padding in_channels from {self.unpadded_in_channels} to {self.in_channels}")
-        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        self.out_channels = out_channels
 
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
@@ -294,23 +290,25 @@ class WanCausalConv3d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.weight = Parameter(
+            total_shape=[d, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        def maybe_pad_out_channels(weight, bias):
-            if self.out_channels != self.unpadded_out_channels:
-                weight = torch.nn.functional.pad(
-                    weight, (0, 0, 0, 0, 0, 0, 0, 0, 0, self.out_channels - self.unpadded_out_channels)
-                )
-                bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
-            return weight, bias
-
-        if "weight" in state and "bias" in state:
-            weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
-            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
+        if "weight" in state:
+            weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
+            prepared = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+            )
+            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -417,6 +415,7 @@ class WanCausalConv3d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -679,11 +678,7 @@ class WanConv2d(Module):
         super().__init__()
 
         self.in_channels = in_channels
-        self.unpadded_out_channels = out_channels
-        self.TILE_WIDTH = 32
-        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        self.out_channels = out_channels
 
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
@@ -728,16 +723,30 @@ class WanConv2d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
-        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.weight = Parameter(
+            total_shape=[d, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
+        self.bias = Parameter(
+            total_shape=[1, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "weight" in state and "bias" in state:
-            state["weight"], state["bias"] = prepare_conv3d_weights(
-                state["weight"].unsqueeze(2), state["bias"], self.conv_config
+        if "weight" in state:
+            weight_tt = ttnn.from_torch(state["weight"].unsqueeze(2), dtype=self.dtype, pad_value=0)
+            prepared = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
+            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -821,6 +830,7 @@ class WanConv2d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -1320,10 +1330,7 @@ class WanDecoder(Module):
             out_BTHWC, new_logical_h = self.decoder(
                 x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
             )
-            # Channels first
             out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-            # Trim padding on output channels
-            out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
             if output_BCTHW is None:
                 output_BCTHW = out_BCTHW
             else:
