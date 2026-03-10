@@ -616,12 +616,12 @@ class TtTransformer(LightweightModule):
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-        converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32)
+        converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32, **op_kwargs)
         padded_vocab_dim = 131072
         unpadded_vocab_dim = self.vocab_size
         padding_size = padded_vocab_dim - unpadded_vocab_dim
         full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0, **op_kwargs)
-        result = ttnn.where(full_mask, 0, float("-inf"))
+        result = ttnn.where(full_mask, 0, float("-inf"), **op_kwargs)
         return result
 
     def start_bitmask_to_device(self, bitmask):
