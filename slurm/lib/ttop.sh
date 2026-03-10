@@ -18,6 +18,10 @@ TTOP_SSH_SETUP="${TTOP_SSH_SETUP:-${HOME}/ttop/ssh-setup.sh}"
 TT_CARDS_PER_HOST="${TT_CARDS_PER_HOST:-8}"
 
 _kubectl() {
+    if ! command -v kubectl &>/dev/null; then
+        log_error "kubectl not found in PATH (required for TTOP operations)"
+        return 1
+    fi
     kubectl --kubeconfig="${TTOP_KUBECONFIG}" "$@"
 }
 

@@ -22,7 +22,13 @@ source "${SLURM_CI_LIB_DIR}/artifacts.sh"
 #   NOTIFY_ON_FAILURE       Set to 1 to send Slack notification on non-zero exit
 #   SLACK_WEBHOOK_URL       Slack webhook URL (required if NOTIFY_ON_FAILURE=1)
 cleanup_job() {
-    local exit_code="${1:-$?}"
+    local exit_code="$?"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --exit-code) exit_code="${2:-$exit_code}"; shift 2 ;;
+            *)           exit_code="$1"; shift ;;
+        esac
+    done
     local workspace="${JOB_WORKSPACE:-${ARTIFACT_DIR:-/tmp/slurm-ci-${PIPELINE_ID:-unknown}}/workspace}"
     local job_name="${SLURM_CI_JOB_NAME}"
 

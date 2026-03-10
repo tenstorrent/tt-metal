@@ -31,6 +31,7 @@ _log() {
 log_info()  { _log INFO  "$@"; }
 log_warn()  { _log WARN  "$@"; }
 log_error() { _log ERROR "$@"; }
+log_debug() { [[ "${SLURM_CI_DEBUG:-0}" == "1" ]] && _log DEBUG "$@" || true; }
 
 log_fatal() {
     _log FATAL "$@"
