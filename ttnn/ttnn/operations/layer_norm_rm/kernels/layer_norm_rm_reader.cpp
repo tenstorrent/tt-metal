@@ -3,11 +3,12 @@
 
 // layer_norm_rm - Reader Kernel
 // Reads RM sticks from DRAM into c_0 using TensorAccessor.
-// Fills c_8 (reduce scaler) and c_9 (epsilon) at program start.
+// Fills c_8 (1/W scaler via prepare_reduce_scaler) and c_9 (epsilon) at program start.
 // Optionally reads gamma/beta sticks into c_2/c_3.
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include <tt-metalium/constants.hpp>
 
 // CB indices
 constexpr uint32_t cb_input_rm = 0;  // c_0: RM sticks for tilize
@@ -51,11 +52,10 @@ void kernel_main() {
     // Setup input TensorAccessor
     const auto input_accessor = TensorAccessor(input_tensor_args, src_addr, stick_size);
 
-    // ===== 1. Fill c_8 with reduce scaler (1/W) =====
+    // ===== 1. Fill c_8 with 1/W scaler (for reduce) =====
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_f);
 
     // ===== 2. Fill c_9 with epsilon value =====
-    // Use prepare_reduce_scaler as a convenient way to fill a tile with a scalar
     dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_f);
 
     // ===== 3. Main loop: read RM sticks into c_0 =====

@@ -49,7 +49,8 @@ CB_INPUT_RM = 0  # c_0: RM sticks for tilize
 CB_TILIZED = 1  # c_1: Tilized input tiles
 CB_GAMMA_RM = 2  # c_2: Gamma RM stick (optional)
 CB_BETA_RM = 3  # c_3: Beta RM stick (optional)
-CB_SCALER = 8  # c_8: Reduce scaler (1/W)
+CB_MATMUL_ONES = 4  # c_4: Ones-column tile for matmul row reduce
+CB_SCALER = 8  # c_8: Mean scaler (1/W) for post-reduce multiply
 CB_EPS = 9  # c_9: Epsilon tile
 CB_OUTPUT_RM = 16  # c_16: Untilized RM output
 CB_MEAN = 24  # c_24: Row mean
@@ -135,6 +136,9 @@ def create_program_descriptor(
 
     # c_9: Epsilon tile (1 page)
     cbs.append(_make_cb(CB_EPS, 1 * tile_size, tile_size, input_tensor.dtype, core_grid))
+
+    # c_4: Ones-column tile for matmul row reduce (1 page)
+    cbs.append(_make_cb(CB_MATMUL_ONES, 1 * tile_size, tile_size, input_tensor.dtype, core_grid))
 
     # c_16: Untilized RM output (Wt pages of tile_size)
     cbs.append(_make_cb(CB_OUTPUT_RM, Wt * tile_size, tile_size, output_tensor.dtype, core_grid))
