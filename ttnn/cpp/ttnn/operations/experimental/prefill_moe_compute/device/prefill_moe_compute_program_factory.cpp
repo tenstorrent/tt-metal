@@ -201,18 +201,16 @@ PrefillMoeComputeMeshFactory::create_at(
     CreateCircularBuffer(program, combine_cores, cb5_config);
 
     if (enable_fabric_return) {
-        auto ret_cb0_config = CircularBufferConfig(BF16_TILE_BYTES, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
-                                  .set_page_size(tt::CBIndex::c_0, BF16_TILE_BYTES);
+        // CB0 on return core: batch tile buffer (D_tiles tiles for batch reads per expert)
+        auto ret_cb0_config =
+            CircularBufferConfig(D_tiles * BF16_TILE_BYTES, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::CBIndex::c_0, BF16_TILE_BYTES);
         CreateCircularBuffer(program, return_cores, ret_cb0_config);
 
+        // CB1 on return core: row extraction buffer (ROW_MAJOR, D_bytes)
         auto ret_cb1_config = CircularBufferConfig(3 * BF16_TILE_BYTES, {{tt::CBIndex::c_1, tt::DataFormat::Float16_b}})
                                   .set_page_size(tt::CBIndex::c_1, 3 * BF16_TILE_BYTES);
         CreateCircularBuffer(program, return_cores, ret_cb1_config);
-
-        // CB2 on return core: accum row for local read-modify-write (ROW_MAJOR, 3 tiles)
-        auto ret_cb2_config = CircularBufferConfig(3 * BF16_TILE_BYTES, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
-                                  .set_page_size(tt::CBIndex::c_2, 3 * BF16_TILE_BYTES);
-        CreateCircularBuffer(program, return_cores, ret_cb2_config);
 
         // CB3 on return core: L1 buffer for metadata read from DRAM
         if (tensor_args.return_metadata_tensor.has_value()) {
@@ -438,10 +436,10 @@ PrefillMoeComputeMeshFactory::create_at(
             }
         }
 
-        // Build dest_token_ids by scanning all source devices' metadata for tokens
-        // destined for this device. Per-token fields: [src_row, dest_device, dest_token,
-        // weight_bf16, recv_slot_id]. Sort by recv_slot_id to match staging buffer order.
-        std::vector<std::pair<uint32_t, uint32_t>> slot_to_dest;  // (recv_slot_id, dest_token)
+        // Build dest_page_ids by scanning all source devices' metadata for tokens
+        // destined for this device. Per-token fields: [src_row, dest_device, dest_page,
+        // recv_slot_id]. Sort by recv_slot_id to match staging buffer order.
+        std::vector<std::pair<uint32_t, uint32_t>> slot_to_dest;  // (recv_slot_id, dest_page)
         for (uint32_t src_dev = 0; src_dev < attributes.return_metadata.size(); ++src_dev) {
             if (src_dev == device_index) {
                 continue;
@@ -454,11 +452,10 @@ PrefillMoeComputeMeshFactory::create_at(
                 for (uint32_t t = 0; t < M_e; ++t) {
                     /* uint32_t src_row = */ idx++;
                     uint32_t dest_device = src_meta[idx++];
-                    uint32_t dest_token = src_meta[idx++];
-                    /* uint32_t weight = */ idx++;
+                    uint32_t dest_page = src_meta[idx++];
                     uint32_t recv_slot_id = src_meta[idx++];
                     if (dest_device == device_index) {
-                        slot_to_dest.push_back({recv_slot_id, dest_token});
+                        slot_to_dest.push_back({recv_slot_id, dest_page});
                     }
                 }
             }
@@ -476,8 +473,8 @@ PrefillMoeComputeMeshFactory::create_at(
             tensor_args.output.buffer()->address(),
             D_bytes,
         };
-        for (const auto& [slot, dest] : slot_to_dest) {
-            recv_args.push_back(dest);
+        for (const auto& [slot, dest_page] : slot_to_dest) {
+            recv_args.push_back(dest_page);
         }
         SetRuntimeArgs(program, recv_kernel_id.value(), combine_core_logical, recv_args);
     }

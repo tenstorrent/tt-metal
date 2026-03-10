@@ -1,20 +1,22 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Fabric return kernel: gathers result rows from TILE_LAYOUT out_bufs,
-// scales by routing weight, and accumulates into output (local) or
-// sends to remote staging buffer via fabric (remote).
+// Fabric return kernel: gathers result rows from TILE_LAYOUT out_bufs
+// and writes unscaled rows to output slots (local) or sends to remote
+// staging buffer via fabric (remote).
+//
+// This is a PURE DATA MOVEMENT kernel — no floating-point math.
+// Scaling and accumulation are done externally via ttnn.mul + ttnn.sum
+// on compute cores (matching the selective_reduce_combine pattern).
 //
 // Runs on return core (2, grid_y) as dm1 (RISCV_1).
 //
-// When ENABLE_FABRIC_SEND is defined, remote tokens are sent via fabric
-// unicast to the home device's recv_staging_buf. Direction (forward
-// or backward) and num_hops are computed from my_device_id vs dest_device.
+// Output layout: [NUM_EXPERTS, 1, P, D] ROW_MAJOR
+//   Page dest_page = e * P + dest_token (pre-computed by Python)
 //
-// Metadata is stored in a DRAM tensor and read into L1 (CB3) at startup.
-// Format (packed uint32 words):
+// Metadata format (packed uint32 words, stored in DRAM tensor):
 //   Per expert e:
-//     out_buf_addr, M_e, [src_row, dest_device, dest_token_index, weight_bf16, recv_slot_id] * M_e
+//     out_buf_addr, M_e, [src_row, dest_device, dest_page, recv_slot_id] * M_e
 //
 // Runtime args:
 //   [0] output_addr
@@ -34,6 +36,11 @@
 //   TensorAccessorArgs<1>: output accessor
 //   TensorAccessorArgs<2>: metadata tensor accessor
 //   TensorAccessorArgs<3>: staging accessor (if ENABLE_FABRIC_SEND)
+//
+// Circular buffers:
+//   CB0: tile batch buffer (D_tiles tiles for batch reads)
+//   CB1: row extraction buffer (D_bytes)
+//   CB3: metadata buffer
 //
 // Semaphores:
 //   SEM_EXPERT_READY (id=3): Incremented by reader leader after each expert's
@@ -72,41 +79,6 @@ inline void extract_row_from_tile(uint32_t tile_l1, uint32_t dst, uint32_t row) 
     }
 }
 
-inline void scale_row_bf16(uint32_t row_addr, uint16_t w_bf16, uint32_t n_values) {
-    union {
-        uint32_t u;
-        float f;
-    } wconv;
-    wconv.u = static_cast<uint32_t>(w_bf16) << 16;
-    float w = wconv.f;
-
-    uint16_t* row = reinterpret_cast<uint16_t*>(row_addr);
-    for (uint32_t i = 0; i < n_values; ++i) {
-        union {
-            uint32_t u;
-            float f;
-        } val, res;
-        val.u = static_cast<uint32_t>(row[i]) << 16;
-        res.f = val.f * w;
-        row[i] = static_cast<uint16_t>(res.u >> 16);
-    }
-}
-
-inline void bf16_add_rows(uint32_t dst_addr, uint32_t src_addr, uint32_t n_values) {
-    uint16_t* dst = reinterpret_cast<uint16_t*>(dst_addr);
-    uint16_t* src = reinterpret_cast<uint16_t*>(src_addr);
-    for (uint32_t i = 0; i < n_values; ++i) {
-        union {
-            uint32_t u;
-            float f;
-        } a, b, res;
-        a.u = static_cast<uint32_t>(dst[i]) << 16;
-        b.u = static_cast<uint32_t>(src[i]) << 16;
-        res.f = a.f + b.f;
-        dst[i] = static_cast<uint16_t>(res.u >> 16);
-    }
-}
-
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t D_tiles = get_arg_val<uint32_t>(1);
@@ -125,22 +97,18 @@ void kernel_main() {
 
     constexpr uint32_t cb_tile = 0;
     constexpr uint32_t cb_row = 1;
-    constexpr uint32_t cb_accum = 2;
     constexpr uint32_t cb_meta = 3;
     constexpr uint32_t SEM_EXPERT_READY = 3;
     constexpr uint32_t SEM_RECV = 4;
 
-    const uint32_t D = D_bytes >> 1;  // number of BF16 values
     const uint32_t tile_page_bytes = get_local_cb_interface(cb_tile).fifo_page_size;
     const auto output_accessor = TensorAccessor(output_args, output_addr, D_bytes);
 
-    // Reserve L1 buffers
-    cb_reserve_back(cb_tile, 1);
-    const uint32_t tile_l1 = get_write_ptr(cb_tile);
+    // Reserve L1 buffers — CB0 holds D_tiles tiles for batch reads
+    cb_reserve_back(cb_tile, D_tiles);
+    const uint32_t tile_buf = get_write_ptr(cb_tile);
     cb_reserve_back(cb_row, 1);
     const uint32_t row_l1 = get_write_ptr(cb_row);
-    cb_reserve_back(cb_accum, 1);
-    const uint32_t accum_l1 = get_write_ptr(cb_accum);
 
     // Read metadata from DRAM into L1
     cb_reserve_back(cb_meta, 1);
@@ -183,12 +151,11 @@ void kernel_main() {
 #endif
 
     // Process experts — metadata parsed from L1
+    // Format per expert: out_buf_addr, M_e, [src_row, dest_device, dest_page, recv_slot_id] * M_e
     uint32_t meta_idx = 0;
 
     for (uint32_t e = 0; e < num_experts; ++e) {
-        // Wait for this expert's output to be ready (pipelined with next expert's compute).
-        // Must use wait_min (>=) not wait (==), because the semaphore is monotonically
-        // incremented by the reader leader and may overshoot if return processing is slow.
+        // Wait for this expert's output to be ready (pipelined with next expert's compute)
         noc_semaphore_wait_min(ready_sem, e + 1);
 
         uint32_t out_buf_addr = meta[meta_idx++];
@@ -199,40 +166,38 @@ void kernel_main() {
         }
 
         const auto outbuf_accessor = TensorAccessor(outbuf_args, out_buf_addr, tile_page_bytes);
+
+        // Batch-read ALL D_tiles tiles for tile_row=0 into L1 (single barrier).
+        // Since P <= 32, all tokens fit in one tile row (tile_row = src_row >> 5 = 0).
+        // This replaces per-token tile reads: 4 experts * 90 tiles vs 128 tokens * 90 tiles.
+        for (uint32_t c = 0; c < D_tiles; ++c) {
+            noc_async_read_page(c, outbuf_accessor, tile_buf + c * tile_page_bytes);
+        }
+        noc_async_read_barrier();
+
         uint32_t tokens_base = meta_idx;
 
         for (uint32_t i = 0; i < M_e; ++i) {
-            uint32_t src_row = meta[tokens_base + i * 5 + 0];
-            uint32_t dest_device = meta[tokens_base + i * 5 + 1];
-            uint32_t dest_token = meta[tokens_base + i * 5 + 2];
-            uint16_t weight_bf16 = static_cast<uint16_t>(meta[tokens_base + i * 5 + 3]);
-            // recv_slot_id at tokens_base + i * 5 + 4 (used only for remote sends)
+            uint32_t src_row = meta[tokens_base + i * 4 + 0];
+            uint32_t dest_device = meta[tokens_base + i * 4 + 1];
+            uint32_t dest_page = meta[tokens_base + i * 4 + 2];
+            // recv_slot_id at tokens_base + i * 4 + 3 (used only for remote sends)
 
-            uint32_t tile_row = src_row >> 5;
             uint32_t row_in_tile = src_row & 0x1F;
 
-            // Gather row from TILE_LAYOUT to ROW_MAJOR
+            // Extract row from L1 tiles (no DRAM read — tiles already cached)
             for (uint32_t c = 0; c < D_tiles; ++c) {
-                uint32_t tile_id = tile_row * D_tiles + c;
-                noc_async_read_page(tile_id, outbuf_accessor, tile_l1);
-                noc_async_read_barrier();
-                extract_row_from_tile(tile_l1, row_l1 + c * 64, row_in_tile);
+                extract_row_from_tile(tile_buf + c * tile_page_bytes, row_l1 + c * 64, row_in_tile);
             }
 
-            // Scale row by routing weight
-            scale_row_bf16(row_l1, weight_bf16, D);
-
             if (dest_device == my_device_id) {
-                // Local accumulation: output[dest_token] += scaled_row
-                noc_async_read_page(dest_token, output_accessor, accum_l1);
-                noc_async_read_barrier();
-                bf16_add_rows(accum_l1, row_l1, D);
-                noc_async_write_page(dest_token, output_accessor, accum_l1);
+                // Simple write — no read, no scale, no accumulate
+                noc_async_write_page(dest_page, output_accessor, row_l1);
                 noc_async_write_barrier();
             }
 #ifdef ENABLE_FABRIC_SEND
             else {
-                uint32_t recv_slot_id = meta[tokens_base + i * 5 + 4];
+                uint32_t recv_slot_id = meta[tokens_base + i * 4 + 3];
 
                 // Compute direction and hops for 1xN linear mesh
                 uint8_t num_hops;
@@ -245,7 +210,7 @@ void kernel_main() {
                     sender = backward_sender;
                 }
 
-                // Write scaled row to remote staging buffer at recv_slot_id
+                // Write raw (unscaled) row to remote staging buffer at recv_slot_id
                 uint64_t dest_noc_addr =
                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(staging_accessor, recv_slot_id);
 
@@ -277,19 +242,17 @@ void kernel_main() {
             }
 #endif
         }
-        meta_idx += M_e * 5;
+        meta_idx += M_e * 4;
     }
 
 #ifdef ENABLE_FABRIC_SEND
     fabric_connection.close();
 #endif
 
-    cb_push_back(cb_tile, 1);
-    cb_pop_front(cb_tile, 1);
+    cb_push_back(cb_tile, D_tiles);
+    cb_pop_front(cb_tile, D_tiles);
     cb_push_back(cb_row, 1);
     cb_pop_front(cb_row, 1);
-    cb_push_back(cb_accum, 1);
-    cb_pop_front(cb_accum, 1);
     cb_push_back(cb_meta, 1);
     cb_pop_front(cb_meta, 1);
 }
