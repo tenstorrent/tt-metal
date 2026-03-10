@@ -103,6 +103,28 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+## Design Quality Issues
+
+### 12. Architect leaves unresolved alternatives in design documents
+**Status**: Proposed
+**Discovered**: 2026-03-10, layer_norm_rm self-reflection
+
+The architect sometimes presents multiple implementation alternatives in the design document without resolving to a single choice. Example from `layer_norm_rm/op_design.md` Note 4: three options for epsilon fill location ("compute fills via fill_with_val", "reader fills once", "compute fills locally each iteration") with phrases like "Better: ..." and "Alternative: ..." left in the text. The kernel writer must then make the choice, potentially picking the wrong one.
+
+**Proposal**: Add architect instruction: "Every design decision must resolve to exactly ONE approach. Deliberation text and alternatives must not appear in the main design sections. Move to a 'Design Rationale' appendix if documentation is desired."
+
+---
+
+### 13. Per-core-varying arguments placed in compile-time args section
+**Status**: Proposed
+**Discovered**: 2026-03-10, layer_norm_rm self-reflection
+
+The architect placed `nblocks_per_core` in the compile-time args table for the compute kernel, but this value varies between core groups (cliff core gets remainder rows). The `generic_op` ProgramDescriptor uses a single KernelDescriptor per kernel type, so compile-time args are shared across all cores. The kernel writer had to move it to runtime args.
+
+**Proposal**: Add architect design rule: "A kernel argument MUST be a runtime arg if it varies between cores or core groups. Compile-time args are only for values identical across all cores."
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +137,5 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | Unresolved design alternatives | Low | Small | MEDIUM |
+| 13 | Per-core args in compile-time section | Low | Small | LOW |
