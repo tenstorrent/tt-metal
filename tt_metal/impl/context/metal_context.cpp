@@ -580,9 +580,6 @@ void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
-    //     rtoptions_.set_erisc_iram_enabled(false);
-    // }
     // Stub control plane for mock devices will make this a no-op
     this->get_control_plane().clear_fabric_context();
 }
@@ -635,10 +632,6 @@ void MetalContext::set_fabric_config(
         this->teardown_fabric_config();
         return;
     }
-
-    bool enable_erisc_iram =
-        !rtoptions().get_erisc_iram_env_var_enabled() || !rtoptions().get_erisc_iram_env_var_disabled();
-    rtoptions().set_erisc_iram_enabled(enable_erisc_iram);
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         log_warning(
