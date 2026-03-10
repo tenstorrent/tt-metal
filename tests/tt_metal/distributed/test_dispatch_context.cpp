@@ -135,7 +135,11 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = true};
-    ReplicatedBufferConfig fd_global_config{.size = num_tiles * single_tile_size};
+    // Use ShardedBufferConfig to support multi-device mesh reads
+    ShardedBufferConfig fd_global_config{
+        .global_size = num_tiles * single_tile_size * system_shape.mesh_size(),
+        .global_buffer_shape = {system_shape[0], system_shape[1]},
+        .shard_shape = {1, 1}};
     auto fd_buf = MeshBuffer::create(fd_global_config, fd_buffer_config, mesh_device_.get());
 
     std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
@@ -157,7 +161,10 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
     // Write and verify interleaved L1 buffer in SD mode
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
-    ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
+    ShardedBufferConfig sd_global_config{
+        .global_size = num_tiles * single_tile_size * system_shape.mesh_size(),
+        .global_buffer_shape = {system_shape[0], system_shape[1]},
+        .shard_shape = {1, 1}};
     auto sd_buf = MeshBuffer::create(sd_global_config, sd_buffer_config, mesh_device_.get());
 
     std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
