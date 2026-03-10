@@ -115,3 +115,38 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+
+---
+
+## Precision & Tolerance Issues
+
+### 12. Architect tolerance specification lacks error propagation analysis for intermediate stages
+**Status**: Proposed — HIGH PRIORITY
+
+Discovered in layer_norm_rm v2 run2: the architect set `atol=0.1` for the `square_centered` intermediate stage. The bf16 reduce mean error (~0.06) was amplified through squaring by factor `|a+b| ~ 7`, giving theoretical max error ~0.42 -- exceeding the tolerance. The kernel writer spent 57 minutes (50% of pipeline time) and 8 hard attempts debugging a correct kernel against an infeasible tolerance.
+
+**Root cause**: The architect sets tolerances per stage without analyzing how bf16 rounding errors propagate through nonlinear operations (squaring, division, exponentiation). For linear operations, error is additive. For squaring, `|a^2 - b^2| = |a+b| * |a-b|`, so error is amplified by the signal magnitude.
+
+**Proposal**: Add a mandatory "Tolerance Analysis" step to the architect for intermediate TDD stages. For each stage: (1) compute expected bf16 rounding error, (2) analyze error propagation through nonlinear ops, (3) set tolerance >= 2x computed maximum error. Specific rule for squaring: if stage N tolerance is `e` and max magnitude is `M`, stage N+1 (squaring) tolerance must be >= `2 * M * e`.
+
+---
+
+### 13. fp32_dest_acc_en incompatibility with pack_untilize not documented
+**Status**: Proposed
+
+Discovered in layer_norm_rm v2 run2: the kernel writer attempted `fp32_dest_acc_en=True` four times to improve reduce precision. Each time, pack_untilize produced zeroed rows. This is a hardware limitation on Wormhole B0 that is not documented in any reference analysis, design document, or hardware constraints checklist.
+
+**Root cause**: The batch_norm reference analysis documents that batch_norm uses the SFPU kernel path when fp32 is enabled (which avoids pack_untilize), but does not explicitly flag the pack_untilize incompatibility as a constraint.
+
+**Proposal**: Add to the architect's Hardware Constraints Checklist: "fp32_dest_acc_en=True is incompatible with pack_untilize (produces zeroed rows). If fp32 accumulation is needed, avoid the untilize helper or use manual tile-by-tile pack." Analyzers should flag this when documenting untilize patterns.
+
+---
+
+### 14. Kernel writer lacks "consistent max_diff" pattern recognition heuristic
+**Status**: Proposed
+
+Discovered in layer_norm_rm v2 run2: the kernel writer tried 12 hypotheses over 57 minutes on `square_centered`. The same `max_diff=0.375` appeared across 3 structurally different approaches (reduce helper, matmul_tiles, separate SUM+multiply). This pattern strongly indicates a tolerance/spec issue rather than a kernel bug, but the writer did not recognize it until hypothesis H12.
+
+**Root cause**: The kernel writer's numerical debugging strategy does not include a heuristic for "consistent max_diff across different implementations."
+
+**Proposal**: Add debugging heuristic to kernel writer instructions: "If the same max_diff value (within 10%) appears across 3+ structurally different kernel implementations, the issue is almost certainly NOT in the kernel code. Perform mathematical error analysis and adjust tolerance if justified."
