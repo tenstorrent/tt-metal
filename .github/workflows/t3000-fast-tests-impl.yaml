@@ -47,20 +47,12 @@ on:
         description: "Run t3k ttnn ccl tests"
 
 jobs:
-  check-job-env:
-    name: Check job env (runner, before container)
-    runs-on:
-      - tt-ubuntu-2204-n300-llmbox-stable-yyz2
-    steps:
-      - name: Runner environment variables
-        run: env | sort
   t3000-fast-tests:
     name: T3000 fast tests
-    needs: check-job-env
     runs-on:
       - tt-ubuntu-2204-n300-llmbox-stable-yyz2
     container:
-      image: harbor.yyz2.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
