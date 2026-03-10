@@ -1,248 +1,156 @@
-# TTNN SFPU Operation Analysis: dropout
+# Dropout Implementation Analysis
 
-## Operation Overview
+## Overview
+The dropout operation performs element-wise stochastic regularization on a tensor: each element is either zeroed out with probability `prob` or scaled by a factor `scale = 1 / (1 - prob)` (inverted dropout). The operation uses a hardware PRNG on each SFPU lane to generate random numbers, compares them against the dropout probability, and conditionally zeros elements.
 
-**Operation Name**: dropout
-**Category**: experimental
-**Namespace**: `ttnn::experimental::prim`
-**SFPU Type**: Eltwise unary (element-wise with PRNG)
+**Program factory path**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp`
 
-**Mathematical Definition**:
-For each element x_i in the input tensor, dropout produces:
-- `output_i = x_i * scale` with probability `(1 - prob)`
-- `output_i = 0` with probability `prob`
+The operation supports two program factory variants:
+- `DropoutProgramFactory` -- single-device execution
+- `DropoutMeshWorkloadFactory` -- multi-device mesh execution with per-device seed offsets (seed += device_id)
 
-The `scale` factor is typically set to `1.0 / (1.0 - prob)` to maintain the expected value of the output during training (inverted dropout).
+This analysis covers `DropoutProgramFactory`.
 
-**Purpose**: Dropout is a regularization technique used during neural network training. It randomly zeroes out a fraction of elements and scales the remaining ones, preventing co-adaptation of neurons and reducing overfitting.
+## Work Unit Definition
 
----
+| Attribute | Value |
+|-----------|-------|
+| **Granularity** | tile |
+| **Unit size** | 1 tile (32x32 elements) |
+| **Total units** | `input.physical_volume() / TILE_HW` |
+| **Loop structure** | Outer loop over `per_core_block_cnt` blocks, inner loop over `per_core_block_dim` (always 1) tiles per block |
 
-## File Inventory
+Each tile is independently processed: loaded from DEST, scaled, subjected to random dropout masking, and stored back. The block dimension is hardcoded to 1, so the outer loop simply iterates over all tiles assigned to the core.
 
-| File | Role |
-|------|------|
-| `ttnn/cpp/ttnn/operations/experimental/dropout/dropout.hpp` | Public API header declaring `ttnn::experimental::dropout()` |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/dropout.cpp` | Public API implementation; delegates to `ttnn::prim::dropout()` |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/dropout_nanobind.hpp` | Python binding header |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp` | Python binding implementation (nanobind) |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation_types.hpp` | `DropoutParams` and `DropoutInputs` type definitions |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation.hpp` | `DropoutDeviceOperation` struct declaration |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation.cpp` | Device operation implementation (validation, output spec, program hash, factory selection) |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.hpp` | `DropoutProgramFactory` and `DropoutMeshWorkloadFactory` declarations |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp` | Program factory implementation (kernel creation, CB setup, runtime args) |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp` | Compute kernel source (SFPU dispatch) |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp` | Reader dataflow kernel |
-| `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp` | Writer dataflow kernel |
+## Tensor Format and Layout
 
-### SFPU Kernel Layer Files
+| Property | Input Tensor | Output Tensor |
+|----------|--------------|---------------|
+| **Logical shape** | Arbitrary (flattened to tiles) | Same as input |
+| **Dimension convention** | N/A (treated as flat tile stream) | N/A |
+| **Tensor layout** | TILE_LAYOUT | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED | INTERLEAVED |
+| **Buffer type** | DRAM (via TensorAccessor) | DRAM (via TensorAccessor) |
+| **Data type** | Determined by `input.dtype()` | Determined by `output_dtype` param |
 
-| File | Role |
-|------|------|
-| `tt_metal/hw/inc/api/compute/eltwise_unary/dropout.h` | Compute API: `dropout_tile()` and `dropout_kernel_init()` |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h` | Wormhole B0 LLK wrapper: `calculate_dropout<>()` and `dropout_init<>()` |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h` | Blackhole LLK wrapper: `calculate_dropout<>()` and `dropout_init<>()` |
-| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_dropout.h` | Wormhole B0 SFPU microcode: `_calculate_dropout_()` and `_init_dropout_()` |
-| `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_dropout.h` | Blackhole SFPU microcode: `_calculate_dropout_()` and `_init_dropout_()` |
-| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h` | `init_prng_seed()` definition (Wormhole) |
-| `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h` | `init_prng_seed()` definition (Blackhole) |
-| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` | `_llk_math_eltwise_unary_sfpu_params_()` LLK dispatch |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h` | SFPU macro definitions |
+### Layout Transformations
+No tilize/untilize or format conversions are performed. Input and output data formats may differ (e.g., BFLOAT16 input, BFLOAT16 output) but no explicit conversion logic is present in the program factory -- the hardware handles format conversion during SFPLOAD/SFPSTORE via the `data_format` configuration on circular buffers.
 
----
+## Data Flow Pattern
 
-## Call Chain
+| Stage | Kernel | Reads From | Writes To | CB Operations |
+|-------|--------|------------|-----------|---------------|
+| 1 | Reader | DRAM (src_buffer via TensorAccessor) | CB c_0 | `cb_reserve_back(c_0, 1)`, `noc_async_read_tile`, `noc_async_read_barrier`, `cb_push_back(c_0, 1)` |
+| 2 | Compute | CB c_0 | CB c_2 | `cb_wait_front(c_0, 1)`, `copy_tile`, `dropout_tile`, `pack_tile`, `cb_pop_front(c_0, 1)`, `cb_reserve_back(c_2, 1)`, `cb_push_back(c_2, 1)` |
+| 3 | Writer | CB c_2 | DRAM (dst_buffer via TensorAccessor) | `cb_wait_front(c_2, 1)`, `noc_async_write_tile`, `noc_async_write_barrier`, `cb_pop_front(c_2, 1)` |
 
-```
-ttnn::experimental::dropout()                        [dropout.cpp]
-  -> ttnn::prim::dropout()                           [dropout_device_operation.cpp]
-    -> ttnn::device_operation::launch<DropoutDeviceOperation>()
-      -> DropoutDeviceOperation::select_program_factory()
-        -> DropoutProgramFactory (single-device)
-        -> DropoutMeshWorkloadFactory (multi-device with per-device seed)
-      -> DropoutProgramFactory::create()             [dropout_program_factory.cpp]
-        -> CreateCircularBuffer() x2 (c_0 input, c_2 output)
-        -> CreateKernel() for reader, writer, compute (group_1 and group_2)
-        -> assign_per_core_runtime_args()
-```
-
-### Compute Kernel Dispatch Chain
-```
-dropout_kernel.cpp::kernel_main()
-  -> init_sfpu(c_0, c_2)
-  -> dropout_kernel_init(seed)                       [dropout.h]
-    -> SFPU_ONE_PARAM_KERNEL_INIT(dropout, sfpu::dropout_init, APPROX, seed)
-      -> llk_math_eltwise_unary_sfpu_init<SfpuType::dropout, APPROX>(dropout_init<APPROX>, seed)
-        -> _init_dropout_(seed)                      [sfpu/ckernel_sfpu_dropout.h]
-          -> init_prng_seed(seed)                    [ckernel.h]
-  -> dropout_tile(0, int_probability, int_scale_factor)  [dropout.h]
-    -> SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(calculate_dropout, RC, APPROX, 0, probability, scale_factor)
-      -> _llk_math_eltwise_unary_sfpu_params_<APPROX>(calculate_dropout<APPROX>, 0, RC, probability, scale_factor)
-        -> _calculate_dropout_<APPROX, 8>(8, probability, scale)  [sfpu/ckernel_sfpu_dropout.h]
-```
-
----
-
-## Operation Parameters
-
-### DropoutParams (operation_attributes_t)
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `output_dtype` | `DataType` | Output tensor data type (must match input; hardcoded to `BFLOAT16` in public API) |
-| `output_memory_config` | `MemoryConfig` | Output memory configuration |
-| `seed` | `uint32_t` | Seed for the hardware PRNG. Passed as a runtime argument so different invocations can use different seeds without cache invalidation. |
-| `use_per_device_seed` | `bool` | When `true`, each device in a mesh gets `seed + device_id` as its seed, ensuring different dropout masks per device. Default: `true`. |
-| `prob` | `float` | Dropout probability (0.0 to 1.0). Fraction of elements to zero out. |
-| `scale` | `float` | Scale factor applied to surviving elements. Typically `1.0 / (1.0 - prob)`. |
-
-### Compile-Time Arguments (Compute Kernel)
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | `per_core_block_cnt` | `uint32_t` | Number of tile blocks assigned to this core |
-| 1 | `per_core_block_dim` | `uint32_t` | Number of tiles per block (always 1 in this implementation) |
-| 2 | `int_probability` | `uint32_t` | `(uint32_t)(prob * (double)INT_MAX)` -- integer representation of dropout probability |
-| 3 | `int_scale_factor` | `uint32_t` | `std::bit_cast<uint32_t>(scale)` -- bitwise reinterpretation of float scale as uint32 |
-
-### Runtime Arguments (Compute Kernel)
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | `seed` | `uint32_t` | PRNG seed; passed at runtime so the program can be cached and reused with different seeds |
-
-### Runtime Arguments (Reader/Writer Kernels)
-
-| Index | Name | Description |
-|-------|------|-------------|
-| 0 | buffer address | Source/destination buffer address in DRAM |
-| 1 | num_tiles | Number of tiles to read/write |
-| 2 | start_id | Starting tile index offset |
-
----
+Data flows tile-by-tile through the pipeline: Reader fetches one tile from DRAM into CB c_0, Compute copies it to DEST registers, applies dropout (scale + random mask), packs to CB c_2, and Writer drains CB c_2 to DRAM.
 
 ## Circular Buffer Configuration
 
-| CB Index | Name | Data Format | Num Tiles | Role |
-|----------|------|-------------|-----------|------|
-| `c_0` | Input | Input tensor format | 2 | Double-buffered input: reader writes tiles here, compute reads from here |
-| `c_2` | Output | Output tensor format | 2 | Double-buffered output: compute writes results here, writer reads from here |
+| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
+|-------|------|---------|----------|------------|-----------|----------|----------|----------|
+| c_0 | cb_input | Input staging | 2 tiles | 1 tile | Double | Reader | Compute | Program |
+| c_2 | cb_output | Output staging | 2 tiles | 1 tile | Double | Compute | Writer | Program |
 
-**Design Notes**:
-- Only 2 circular buffers are used because dropout is a simple element-wise unary operation with no auxiliary inputs.
-- Double-buffering (2 tiles per CB) allows the reader to write the next tile while the compute kernel processes the current one, enabling pipeline overlap.
-- No intermediate CB is needed because the operation is applied in-place on the DST register (copy input -> apply dropout -> pack output).
+## Pipeline Pattern Summary
+Both circular buffers are double-buffered (capacity = 2 tiles, block size = 1 tile). This allows the reader to pre-fetch the next tile while compute processes the current one, and compute to produce the next output tile while the writer drains the current one. The pipeline supports overlap between all three kernel stages.
 
----
+## Index Calculations
+The program factory uses `TensorAccessor` for address computation. The reader and writer kernels receive a `start_id` (tile offset) and `num_tiles` count. Tile indices are sequential: `start_id` to `start_id + num_tiles - 1`. The `TensorAccessor` maps each linear tile index to the correct DRAM bank address via `noc_async_read_tile` / `noc_async_write_tile`.
 
-## Work Distribution
+No complex index transformations are needed because the tensor is treated as a flat stream of tiles with interleaved memory layout.
 
-The operation uses `split_work_to_cores()` to distribute tiles across the compute grid:
-- The compute grid is `compute_with_storage_grid_size` (e.g., 8x8 = 64 cores on Wormhole).
-- Tiles are divided evenly, with any remainder assigned to `core_group_1` (which gets one more tile per core than `core_group_2`).
-- Two compute kernel instances are created -- one for `core_group_1` and one for `core_group_2` -- because they have different `per_core_block_cnt` compile-time arguments.
-- Core iteration uses column-major ordering: `core = {i / num_cores_y, i % num_cores_y}`.
+## Memory Access Patterns
 
----
+### Read Pattern
+Sequential tile reads from DRAM. Each tile is read individually via `noc_async_read_tile(i, s, l1_write_addr)` with a barrier after each read. Tiles are accessed in ascending linear index order (or descending if `BACKWARDS` is defined, though the program factory does not define this).
+
+### Write Pattern
+Sequential tile writes to DRAM. Each tile is written individually via `noc_async_write_tile(i, s, l1_read_addr)` with a barrier after each write. Same ascending order as reader.
+
+## Core Distribution Strategy
+
+| Attribute | Value |
+|-----------|-------|
+| **Grid topology** | 2D (column-major traversal) |
+| **Grid dimensions** | `compute_with_storage_grid_size` (device-dependent, e.g., 8x8) |
+| **Total cores** | min(num_tiles, grid_size.x * grid_size.y) |
+| **Work per core** | `ceil(num_tiles / num_cores)` for group 1, `floor(num_tiles / num_cores)` for group 2 |
+| **Load balancing** | Two-group split via `split_work_to_cores` |
+
+Core iteration is column-major: `core = {i / num_cores_y, i % num_cores_y}`. Group 1 cores each handle `num_tiles_per_core_group_1` tiles (one more than group 2). Group 2 cores handle `num_tiles_per_core_group_2` tiles. If tiles divide evenly, group 2 is empty.
+
+Separate compute kernels are created for group 1 and group 2 because `per_core_block_cnt` (the tile count) is a compile-time argument.
+
+## Arguments
+
+### Compile-Time Arguments
+
+#### Reader Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | cb_id_in0 | uint32_t | Circular buffer index for input (c_0) |
+| 1+ | TensorAccessorArgs | uint32_t[] | Source buffer accessor parameters (appended by `TensorAccessorArgs`) |
+
+#### Writer Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | cb_id_out | uint32_t | Circular buffer index for output (c_2) |
+| 1+ | TensorAccessorArgs | uint32_t[] | Destination buffer accessor parameters |
+
+#### Compute Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | per_core_block_cnt | uint32_t | Number of tile blocks to process (differs between group 1 and group 2) |
+| 1 | per_core_block_dim | uint32_t | Tiles per block (always 1) |
+| 2 | prob_int | uint32_t | Dropout probability as integer: `(double)INT_MAX * prob` |
+| 3 | uscale | uint32_t | Scale factor as bit-cast uint32_t of float32 |
+
+### Runtime Arguments
+
+#### Reader Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | src_addr | uint32_t | Source buffer DRAM address |
+| 1 | num_tiles | uint32_t | Number of tiles this core processes |
+| 2 | start_id | uint32_t | Starting tile index offset for this core |
+
+#### Writer Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | dst_addr | uint32_t | Destination buffer DRAM address |
+| 1 | num_tiles | uint32_t | Number of tiles this core processes |
+| 2 | start_id | uint32_t | Starting tile index offset for this core |
+
+#### Compute Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | seed | uint32_t | PRNG seed for dropout random number generation |
 
 ## Kernel Implementations
 
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader | BRISC (RISCV_0) | NOC0 | DRAM (src) | CB c_0 | Read tiles via TensorAccessor |
+| compute | MATH (RISCV_2) | N/A | CB c_0 | CB c_2 | copy_tile, dropout_tile (SFPU), pack_tile |
+| writer | NCRISC (RISCV_1) | NOC1 | CB c_2 | DRAM (dst) | Write tiles via TensorAccessor |
+
 ### Reader Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp`
-
-Standard interleaved tile reader using `TensorAccessor`. Reads tiles one at a time from DRAM into CB `c_0` via NoC. Supports both forward (`start_id` to `start_id + num_tiles`) and backward (`start_id` down to `start_id - num_tiles`) iteration via the `BACKWARDS` preprocessor define.
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);   // DRAM buffer address
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);   // Total tiles this core processes
-    uint32_t start_id = get_arg_val<uint32_t>(2);    // Starting tile index (global offset)
-
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);  // CB index (c_0)
-    constexpr auto src_args = TensorAccessorArgs<1>();            // TensorAccessor compile-time config
-
-    constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
-
-// Iterate over tiles; BACKWARDS define reverses direction
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_tiles;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
-        cb_reserve_back(cb_id_in0, onetile);         // Wait for space in CB
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(i, s, l1_write_addr);    // DMA tile from DRAM to L1
-        noc_async_read_barrier();                     // Wait for DMA completion
-        cb_push_back(cb_id_in0, onetile);            // Signal tile is ready for compute
-    }
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp`
+- **Key Logic**: Standard single-tile interleaved reader. Uses `TensorAccessor` for DRAM addressing. Reads tiles sequentially from `start_id` to `start_id + num_tiles - 1`. Supports optional `BACKWARDS` mode (not used by this program factory). Each tile is read with a NoC barrier before pushing to CB.
 
 ### Writer Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp`
-
-Standard interleaved tile writer using `TensorAccessor`. Reads result tiles from CB `c_2` and writes them to DRAM via NoC. Also supports `OUT_SHARDED` mode (waits for all tiles in CB without individual write-back) and `BACKWARDS` iteration.
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);    // DRAM buffer address
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);    // Total tiles this core writes
-    uint32_t start_id = get_arg_val<uint32_t>(2);     // Starting tile index (global offset)
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);  // CB index (c_2)
-    constexpr auto dst_args = TensorAccessorArgs<1>();            // TensorAccessor compile-time config
-
-#ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, num_tiles);  // Sharded: just wait for all tiles, no write-back needed
-#else
-    constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
-
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_tiles;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
-        cb_wait_front(cb_id_out, onetile);            // Wait for compute to produce a tile
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(i, s, l1_read_addr);     // DMA tile from L1 to DRAM
-        noc_async_write_barrier();                     // Wait for DMA completion
-        cb_pop_front(cb_id_out, onetile);             // Free CB slot for compute
-    }
-#endif
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp`
+- **Key Logic**: Standard single-tile interleaved writer. Mirrors reader structure. Supports optional `OUT_SHARDED` mode (not used by this program factory) where it simply waits for all tiles in CB without writing to DRAM. In the interleaved path, drains tiles one at a time with NoC write barriers.
 
 ### Compute Kernel
+This section combines the full annotated source code of the compute kernel with architectural analysis.
 
-**File**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp`
-
-This kernel performs the core dropout logic on the SFPU. It initializes the PRNG once, then iterates over all assigned tile blocks. For each tile, it copies input data from CB `c_0` to DST registers, applies the dropout SFPU operation (scale + conditional zero), and packs the result to CB `c_2`.
+#### Compute Kernel File
+`ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp`
 
 #### Annotated Compute Kernel Source
-
 ```cpp
 // SPDX-FileCopyrightText: (c) 2024 Tenstorrent Inc.
 //
@@ -251,83 +159,55 @@ This kernel performs the core dropout logic on the SFPU. It initializes the PRNG
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/dropout.h"         // Provides dropout_tile() and dropout_kernel_init()
+#include "api/compute/eltwise_unary/dropout.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 void kernel_main() {
-    // Compile-time arguments baked into the kernel binary
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // Number of tile blocks to process
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // Tiles per block (always 1)
-    uint32_t int_probability = get_compile_time_arg_val(2);     // prob * INT_MAX as uint32
-    uint32_t int_scale_factor = get_compile_time_arg_val(3);    // bit_cast<uint32_t>(scale_float)
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);   // total number of tile-blocks this core processes
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);   // tiles per block; always 1 for this operation
+    uint32_t int_probability = get_compile_time_arg_val(2);      // dropout probability as integer (prob * INT_MAX)
+    uint32_t int_scale_factor = get_compile_time_arg_val(3);     // scale factor as bit-cast float32 -> uint32_t
 
-    // Runtime argument: seed can change per invocation without recompiling
-    uint32_t seed = get_arg_val<uint32_t>(0);
+    uint32_t seed = get_arg_val<uint32_t>(0);                    // PRNG seed, passed as runtime arg so it can change per invocation
 
-    // Initialize the SFPU for unary operation: configure unpack (c_0) and pack (c_2)
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
-
-    // Initialize the hardware PRNG with the provided seed. This writes to the
-    // PRNG_SEED config register and waits ~600 NOPs for the seed to propagate.
-    dropout_kernel_init(seed);
-
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);              // configures unpack (from c_0) and pack (to c_2) pipelines for SFPU mode
+    dropout_kernel_init(seed);                                    // seeds the hardware PRNG via init_prng_seed; includes 600 NOP wait for seed propagation
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        // Reserve output space for the entire block dimension before inner loop
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-
+        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);  // reserve space in output CB for one block (1 tile)
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            // Acquire exclusive access to the DST register file (half-sync mode)
-            tile_regs_acquire();
+            tile_regs_acquire();                                  // acquire exclusive access to DEST registers for math
 
-            // Wait for one input tile to be available in CB c_0
-            cb_wait_front(tt::CBIndex::c_0, 1);
+            // Pop tile after tile, copy to DST and pack
+            cb_wait_front(tt::CBIndex::c_0, 1);                 // block until reader has produced 1 tile in input CB
 
-            // Copy tile from CB c_0 (position 0) to DST register (position 0)
-            // This invokes the unpacker to move data from L1 to SrcA, then copies to DST
-            copy_tile(tt::CBIndex::c_0, 0, 0);
+            copy_tile(tt::CBIndex::c_0, 0, 0);                  // unpack tile 0 from c_0 into DEST register 0
 
-            // Apply dropout on DST[0]: scale surviving elements, zero dropped elements
-            // Uses hardware PRNG to generate random values per-element
-            dropout_tile(0, int_probability, int_scale_factor);
+            dropout_tile(0, int_probability, int_scale_factor);  // apply dropout SFPU operation on DEST[0]: scale then conditionally zero
 
-            // Release DST to the packer (signals that SFPU computation is done)
-            tile_regs_commit();
+            tile_regs_commit();                                   // signal that math is done, DEST is ready for packer
 
-            // Wait for packer to be ready (in half-sync, this waits for the other half)
-            tile_regs_wait();
+            tile_regs_wait();                                     // wait for packer to be ready to consume DEST
 
-            // Pack tile from DST[0] to CB c_2
-            pack_tile(0, tt::CBIndex::c_2);
+            pack_tile(0, tt::CBIndex::c_2);                      // pack DEST[0] into output CB c_2
 
-            // Free the input tile slot in CB c_0
-            cb_pop_front(tt::CBIndex::c_0, 1);
+            cb_pop_front(tt::CBIndex::c_0, 1);                  // free the consumed input tile from c_0
 
-            // Release the DST registers for the next iteration
-            tile_regs_release();
+            tile_regs_release();                                  // release DEST registers for next iteration
         }
-
-        // Push the entire block of output tiles to the writer
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
+        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);     // publish the produced block (1 tile) to writer
     }
 }
 ```
 
----
-
 ### SFPU Kernel Implementation
-
 This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
 #### SFPU Kernel File
-
-- **Wormhole B0**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_dropout.h`
-- **Blackhole**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_dropout.h`
-
-Both architectures have identical SFPU microcode for dropout.
+`tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_dropout.h`
+(Identical implementation for Blackhole: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_dropout.h`)
 
 #### Annotated SFPU Kernel Source
-
 ```cpp
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
@@ -345,88 +225,59 @@ namespace ckernel
 namespace sfpu
 {
 
-// probability: integer in range [0, INT_MAX], representing the dropout probability
-// scale: uint32_t bitwise representation of a float32 scale factor
+// probability should be between 0 - INT_MAX (signed)
+// scale should be binary representation of a float32
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_dropout_(const int iterations, std::uint32_t probability, std::uint32_t scale)
 {
-    // --- SFPU microcode begins ---
+    // SFPU microcode
 
-    // Load the 32-bit scale factor into LREG1 using two 16-bit halves.
-    // SFPLOADI with mode 10 loads the low 16 bits; mode 8 loads the high 16 bits.
-    // This reconstructs the full float32 scale value in LREG1 across all 32 SIMD lanes.
-    TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
+    // Load the 32-bit scale factor into LREG1 in two 16-bit halves
+    TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);       // load low 16 bits of scale into LREG1 (mode 10 = raw low half)
+    TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);            // load high 16 bits of scale into LREG1 (mode 8 = raw high half)
 
-    // Load the 32-bit probability threshold into LREG2 using the same two-half approach.
-    // This is an integer value used for comparison with the PRNG output.
-    TT_SFPLOADI(p_sfpu::LREG2, 10, probability & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG2, 8, probability >> 16);
+    // Load the 32-bit probability threshold into LREG2 in two 16-bit halves
+    TT_SFPLOADI(p_sfpu::LREG2, 10, probability & 0xFFFF);  // load low 16 bits of probability into LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, 8, probability >> 16);      // load high 16 bits of probability into LREG2
 
-    // Prevent the compiler from unrolling this loop. Each iteration processes one
-    // "row" of the current face (4 rows per face x 32 lanes = 128 elements per face).
-    // With ITERATIONS=8 and the outer _llk_math_eltwise_unary_sfpu_params_ calling
-    // this function 4 times (once per face in RC mode), the full 32x32 tile is covered.
-#pragma GCC unroll 0
+#pragma GCC unroll 0                                         // disable loop unrolling; process 8 iterations (one per tile face row-pair)
     for (int d = 0; d < iterations; d++)
     {
         ////////////////////////
-        // Step 1: Scale samples
-        // Load the current destination register value (the input element) into LREG0.
-        // SFPLOAD with Mod0=0, AddrMod=3 reads from DST into the LREG.
-        ////////////////////////
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
-
-        // Multiply the input value (LREG0) by the scale factor (LREG1).
-        // Result goes back to LREG0. This performs: LREG0 = LREG0 * LREG1
-        // The third operand LCONST_0 is unused (addend=0 since this is pure multiply).
+        // Scale samples
+        // dst_reg[0] = dst_reg[0] * s2vFloat16b(scale);
+        ///////////////////////
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);              // load 32 elements from current DEST row-pair into LREG0 (mode 0 = no conversion, addr_mod 3 = auto-increment)
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                                                             // LREG0 = LREG0 * LREG1 (element * scale_factor); result in LREG0
 
         ////////////////////////
-        // Step 2: Generate random number
-        // SFPMOV with instr_mod1=8 and lreg_c=9 triggers the hardware PRNG.
-        // It generates a uint32_t pseudorandom number (32-bit LFSR) per lane
-        // and stores it in LREG3.
+        // Instruction SFPMOV generates a uint32_t pseudorandom number
+        // when instr_mod1 = 8 and lreg_c = 9.
+        // Arguments: (imm12_math, lreg_c, lreg_dest, instr_mod1)
+        // Unset sign-bit for easy comparison with probability
         ////////////////////////
-        TTI_SFPMOV(0, 9, p_sfpu::LREG3, 8);
-
-        // Clear the sign bit of the random number so it is non-negative.
-        // This ensures clean unsigned comparison with the probability threshold.
-        // SFPSETSGN with instr_mod1=1 sets sign=0 (absolute value).
-        TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        TTI_SFPMOV(0, 9, p_sfpu::LREG3, 8);               // generate PRNG value into LREG3 (lreg_c=9 triggers PRNG advance, instr_mod1=8 enables PRNG mode)
+        TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);// clear sign bit of LREG3 (make non-negative for unsigned comparison with probability)
 
         ////////////////////////
-        // Step 3: Conditionally drop samples
-        // SFPIADD performs integer subtraction: LREG3 = LREG2 - LREG3 (probability - rand).
-        // Crucially, instr_mod1=10 means this instruction SETS THE LANE FLAGS
-        // based on the result: if LREG2 > LREG3 (i.e., rand < probability), the
-        // lane flag is set to true, meaning "this element should be dropped."
-        ////////////////////////
-        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
+        // Drop samples
+        // v_if (rand < probability)
+        //   dst_reg[0] = vConst0;
+        ///////////////////////
+        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10); // integer subtract: LREG2 - LREG3 (probability - rand); sets per-lane condition flags
+                                                             // instr_mod1=10: sets lane flags based on result sign (flag set if probability > rand, i.e., element should be KEPT)
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);// conditionally move 0.0 into LREG0 for lanes where flag is NOT set (rand >= probability => drop)
+        TTI_SFPENCC(0, 0, 0, 0);                            // disable conditional execution (clear lane flag predication)
+        TTI_SFPSTORE(0, 0, 3, 0);                           // store LREG0 back to DEST (mode 0, addr_mod 3 = auto-increment); contains either scaled value or 0.0
 
-        // SFPMOV with conditional execution: for lanes where the flag is set
-        // (rand < probability), move LCONST_0 (zero) into LREG0, zeroing out
-        // the scaled value. Lanes where rand >= probability keep their scaled value.
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-
-        // Disable conditional execution (clear UseLaneFlagsForLaneEnable).
-        // All subsequent instructions will execute on all lanes again.
-        TTI_SFPENCC(0, 0, 0, 0);
-
-        // Store LREG0 (either scaled value or zero) back to the DST register.
-        // SFPSTORE with Mod0=0, AddrMod=3 writes from LREG to DST.
-        TTI_SFPSTORE(0, 0, 3, 0);
-
-        // Advance the DST register pointer to the next row of 32 elements.
-        sfpi::dst_reg++;
+        sfpi::dst_reg++;                                     // advance DEST register pointer to next row-pair (32 elements)
     }
 }
 
-// Initialize the hardware PRNG with a seed value.
 inline void _init_dropout_(const std::uint32_t seed)
 {
-    // Writes the seed to the PRNG_SEED config register and waits for propagation.
-    init_prng_seed(seed);
+    init_prng_seed(seed);                                    // write seed to PRNG_SEED config register; waits 600 NOPs for propagation
 }
 
 } // namespace sfpu
@@ -435,155 +286,116 @@ inline void _init_dropout_(const std::uint32_t seed)
 
 #### SFPU Instructions Used
 
-| Instruction | Operands | Description |
-|-------------|----------|-------------|
-| `SFPLOADI` | `(LREG_dest, mode, imm16)` | Loads a 16-bit immediate into an LREG. Mode 10 loads low 16 bits; mode 8 loads high 16 bits. Used to reconstruct 32-bit values from two halves. |
-| `SFPLOAD` | `(LREG_dest, Mod0, AddrMod, imm10)` | Loads data from the DST register file into an LREG. Bridges the DST data format to LREG's 32-bit float format. |
-| `SFPMUL` | `(VA, VB, VC_addend, VD_dest, mod)` | Floating-point multiply: `VD = VA * VB`. The VC addend is LCONST_0 (zero), so this is a pure multiply. |
-| `SFPMOV` (PRNG) | `(imm12, lreg_c=9, LREG_dest, instr_mod1=8)` | When `lreg_c=9` and `instr_mod1=8`, generates a pseudorandom uint32 per lane using the hardware 32-bit LFSR PRNG and stores it in LREG_dest. |
-| `SFPMOV` (cond) | `(imm12, LCONST_0, LREG_dest, 0)` | Conditional move: only executes on lanes where the lane flag is set. Moves zero (LCONST_0) into LREG_dest to zero out dropped elements. |
-| `SFPSETSGN` | `(imm, LREG_src, LREG_dest, mod=1)` | Sets the sign bit. With `mod=1`, clears the sign bit (makes value non-negative / absolute value). Used to make the random number unsigned for comparison. |
-| `SFPIADD` | `(imm, LREG_A, LREG_B, instr_mod1=10)` | Integer addition/subtraction with flag setting. Computes `LREG_A - LREG_B` and sets per-lane flags based on the result. `instr_mod1=10` enables flag setting. |
-| `SFPENCC` | `(imm2, VD, mod1, ...)` | Enables/disables conditional execution. `SFPENCC(0,0,0,0)` clears `UseLaneFlagsForLaneEnable`, returning all lanes to unconditional execution. |
-| `SFPSTORE` | `(LREG_src, Mod0, AddrMod, imm10)` | Stores data from an LREG back to the DST register file, converting from LREG format to DST format. |
+| Instruction | Description |
+|-------------|-------------|
+| `SFPLOADI` | Loads a 16-bit immediate value into a specified half (high or low) of an LREG. Mode 10 = low 16 bits, mode 8 = high 16 bits. Used to construct 32-bit scale and probability values. |
+| `SFPLOAD` | Loads 32 datums from the current DEST register row-pair into an LREG. Mode 0 = no type conversion. addr_mod 3 = auto-increment addressing. |
+| `SFPMUL` | Floating-point multiply: `VD = VA * VB`. Multiplies each element by the scale factor. |
+| `SFPMOV` (PRNG mode) | With `lreg_c=9` and `instr_mod1=8`, advances the per-lane PRNG and writes the pseudorandom uint32 into the destination LREG. |
+| `SFPSETSGN` | Sets/clears the sign bit. With `instr_mod1=1`, clears the sign bit (absolute value), making the random number non-negative for comparison. |
+| `SFPIADD` | Integer add/subtract with flag setting. With `instr_mod1=10`, computes `LREG2 - LREG3` (probability - random) and sets per-lane condition flags based on the result sign. |
+| `SFPMOV` (conditional) | When lane flags are active, conditionally moves `LCONST_0` (0.0) into LREG0 for lanes where the condition is false (random >= probability, meaning the element is dropped). |
+| `SFPENCC` | Disables vector conditional execution by clearing the `UseLaneFlagsForLaneEnable` state. |
+| `SFPSTORE` | Stores 32 datums from an LREG back to the DEST register row-pair. Mode 0 = no type conversion. addr_mod 3 = auto-increment. |
+| `SFPNOP` | No-operation. Used 600 times in `init_prng_seed` to wait for seed propagation to the PRNG hardware. |
 
 #### SFPU Register Usage
 
 | Register | Usage |
 |----------|-------|
-| `LREG0` | Working register: holds the current input element, then the scaled value, then the final result (scaled or zero) |
-| `LREG1` | Holds the `scale` factor (float32 reconstructed from two 16-bit immediates). Loaded once before the loop. |
-| `LREG2` | Holds the `probability` threshold (uint32 reconstructed from two 16-bit immediates). Loaded once before the loop. |
-| `LREG3` | Holds the hardware-generated pseudorandom number (uint32). Regenerated each iteration. |
-| `LCONST_0` | Pre-defined constant register holding 0.0. Used as the "drop" value and as the zero addend in SFPMUL. |
-| `dst_reg` | DST register file pointer. Incremented each iteration to process the next row of 32 elements. |
-| `PRNG_SEED` | Config register written by `init_prng_seed()`. Seeds the hardware LFSR for random number generation. |
+| **LREG0** | Working register: holds the current 32 elements loaded from DEST, then the scaled (or zeroed) result |
+| **LREG1** | Holds the 32-bit float scale factor (loaded once before the loop, reused every iteration) |
+| **LREG2** | Holds the 32-bit integer probability threshold (loaded once before the loop, reused every iteration) |
+| **LREG3** | Holds the PRNG output; sign bit cleared for unsigned comparison |
+| **LCONST_0** | Hardware constant 0.0; used as the zero value for dropped elements |
+| **DEST** | Destination register file; holds tile data. Each iteration processes one row-pair (32 elements). Pointer auto-increments via addr_mod 3. |
+| **Lane Flags** | Per-lane boolean flags set by `SFPIADD`; used by subsequent `SFPMOV` for conditional execution |
+| **PRNG_SEED config reg** | Seeded once during `_init_dropout_` via `init_prng_seed` |
 
 #### SFPU Execution Flow
 
-1. **Initialization** (`dropout_kernel_init`):
-   - Calls `_init_dropout_(seed)`, which calls `init_prng_seed(seed)`.
-   - `init_prng_seed` writes the seed to the `PRNG_SEED` configuration register and executes 600 `SFPNOP` instructions to allow the seed to propagate through the LFSR hardware.
+1. **Initialization** (`_init_dropout_`): The PRNG seed is written to the `PRNG_SEED` configuration register. A 600-NOP wait ensures the seed has propagated to the PRNG hardware before any random numbers are generated.
 
-2. **Per-tile processing** (outer loop in compute kernel):
-   - `cb_wait_front(c_0, 1)`: Wait for reader to deliver one input tile.
-   - `copy_tile(c_0, 0, 0)`: Unpack tile from CB `c_0` into DST register slot 0.
-   - `dropout_tile(0, probability, scale_factor)`: Invoke the SFPU dropout operation.
+2. **Constant Loading**: Before the main loop, the scale factor and probability threshold are loaded into LREG1 and LREG2 respectively. Each 32-bit value is loaded in two 16-bit halves using `SFPLOADI`.
 
-3. **SFPU dispatch** (`_llk_math_eltwise_unary_sfpu_params_`):
-   - Sets the DST write address to tile index 0.
-   - Stalls until the math pipeline is idle (`STALL_SFPU, MATH`).
-   - In `VectorMode::RC` mode, calls `_calculate_dropout_` 4 times (once per face of the 32x32 tile).
-   - Between faces, advances the DST row counter via `SETRWC` instructions (2 advances of 8 rows each per face).
+3. **Per-iteration Processing** (8 iterations per tile, one per row-pair of 32 elements):
+   - **Load from DEST**: `SFPLOAD` reads 32 elements from the current DEST position into LREG0.
+   - **Scale**: `SFPMUL` multiplies LREG0 by LREG1 (scale factor). The result stays in LREG0.
+   - **Generate random number**: `SFPMOV` in PRNG mode generates a per-lane pseudorandom uint32 into LREG3.
+   - **Clear sign bit**: `SFPSETSGN` clears the sign bit of LREG3 so it can be compared as a non-negative integer against the probability.
+   - **Compare and set flags**: `SFPIADD` computes `probability - random`. If the result is non-negative (probability >= random), the lane flag is set, meaning the element is KEPT. If negative (random > probability), the flag is not set, meaning the element is DROPPED.
+   - **Conditional zero**: `SFPMOV` with lane flags active moves 0.0 into LREG0 for lanes where the flag is NOT set (dropped elements). Lanes where the flag IS set retain their scaled value in LREG0.
+   - **Disable conditional mode**: `SFPENCC` clears the lane flag predication so subsequent instructions execute unconditionally.
+   - **Store to DEST**: `SFPSTORE` writes LREG0 back to DEST. The auto-increment addressing moves the DEST pointer forward.
+   - **Advance**: `dst_reg++` increments the C++ abstraction's DEST pointer for the next iteration.
 
-4. **Per-face SFPU execution** (`_calculate_dropout_` with `ITERATIONS=8`):
-   - Loads `scale` into LREG1 and `probability` into LREG2 (4 SFPLOADI instructions, done once before the loop).
-   - For each of the 8 rows in the face:
-     a. `SFPLOAD`: Load current DST value into LREG0.
-     b. `SFPMUL`: Multiply LREG0 by LREG1 (scale the element).
-     c. `SFPMOV(PRNG)`: Generate random uint32 per lane into LREG3.
-     d. `SFPSETSGN`: Clear sign bit of LREG3 (make non-negative for comparison).
-     e. `SFPIADD`: Compute `probability - rand`, set lane flags (flag=true if rand < probability).
-     f. `SFPMOV(cond)`: For flagged lanes, overwrite LREG0 with zero.
-     g. `SFPENCC`: Disable conditional execution.
-     h. `SFPSTORE`: Write LREG0 back to DST.
-     i. `dst_reg++`: Advance to next row.
-
-5. **Post-SFPU** (back in compute kernel):
-   - `tile_regs_commit()`: Signal DST is ready for packing.
-   - `tile_regs_wait()`: Wait for packer readiness.
-   - `pack_tile(0, c_2)`: Pack DST[0] to CB `c_2`.
-   - `cb_pop_front(c_0, 1)`: Free the input CB slot.
-   - `tile_regs_release()`: Release DST for next iteration.
-
-6. **Block completion**:
-   - `cb_push_back(c_2, per_core_block_dim)`: Signal writer that output tiles are ready.
+4. **Tile lifecycle** (in the compute kernel):
+   - `cb_wait_front(c_0, 1)`: Wait for reader to produce a tile.
+   - `copy_tile(c_0, 0, 0)`: Unpack tile from CB c_0 into DEST[0].
+   - `dropout_tile(0, prob, scale)`: Execute the SFPU dropout microcode on DEST[0] (8 iterations covering all 32x32 elements as 8 row-pairs of 32).
+   - `pack_tile(0, c_2)`: Pack DEST[0] into output CB c_2.
+   - `cb_pop_front(c_0, 1)`: Free the input tile.
 
 #### SFPU Configuration
 
-| Setting | Value | Rationale |
-|---------|-------|-----------|
-| `MathFidelity` | `HiFi4` | Highest fidelity. Dropout does not benefit from reduced fidelity since the math is just multiply + conditional zero. |
-| `fp32_dest_acc_en` | `false` | 16-bit DST accumulation is sufficient; dropout operates on bfloat16 data. |
-| `math_approx_mode` | `false` | No approximation needed. The SFPU instructions used (multiply, compare, conditional move) are exact operations. The `APPROXIMATION_MODE` template parameter is passed through but not actually used in `_calculate_dropout_`. |
-| `VectorMode` | `RC` | Process all 4 faces of the 32x32 tile (full rows and columns). |
-| `ITERATIONS` | `8` | Default value. Each call to `_calculate_dropout_` processes 8 rows of 32 elements = 256 elements per face. With 4 faces, that covers the full 1024 elements (32x32 tile). |
-| `per_core_block_dim` | `1` | One tile per block. The outer loop in the compute kernel iterates `per_core_block_cnt` times, processing one tile per iteration. |
+| Setting | Value | Notes |
+|---------|-------|-------|
+| **Math Fidelity** | HiFi4 | Set in `ComputeConfig`; highest fidelity mode |
+| **FP32 Dest Acc** | false | DEST accumulation uses default (BF16/FP16) precision |
+| **Math Approx Mode** | false | No approximation; exact SFPU computation |
+| **SFPU Type** | `SfpuType::dropout` | Used in `SFPU_ONE_PARAM_KERNEL_INIT` macro for init dispatch |
+| **Vector Mode** | RC (Row-Column) | Processes all rows and columns of the tile face |
+| **ITERATIONS** | 8 (default) | 8 iterations per tile = 8 row-pairs x 32 elements = 256 elements per face; two faces per tile half |
 
 #### Hardware Compatibility Notes
+The Wormhole B0 and Blackhole implementations of `_calculate_dropout_` are **identical**. Both architectures:
+- Use the same SFPU instruction sequence
+- Use the same PRNG mechanism (`SFPMOV` with `lreg_c=9, instr_mod1=8`)
+- Have the same `init_prng_seed` function with 600-NOP wait
+- The only difference in the Blackhole header is the additional `#include "sfpi_fp16.h"`, which does not affect dropout behavior
 
-- **Wormhole B0 vs Blackhole**: The SFPU microcode for dropout is **identical** between both architectures. The `_calculate_dropout_` and `_init_dropout_` functions in `tt_llk_wormhole_b0` and `tt_llk_blackhole` are byte-for-byte the same.
-- **Blackhole includes** `sfpi_fp16.h` in addition to the common includes, but this header is not used by the dropout kernel.
-- The Wormhole B0 LLK wrapper (`ckernel_sfpu_dropout.h`) additionally includes `ckernel.h` and `ckernel_defs.h`, while the Blackhole version relies on indirect inclusion through `sfpu/ckernel_sfpu_dropout.h`.
-- The hardware PRNG (`SFPMOV` with `lreg_c=9, instr_mod1=8`) uses a 32-bit LFSR. DeepWiki notes this has "poor statistical properties" -- the randomness quality is sufficient for dropout regularization but not for cryptographic or high-quality statistical purposes.
-- The `init_prng_seed` function is identical on both architectures: it writes the seed to `PRNG_SEED_Seed_Val_ADDR32` and waits 600 NOP cycles for propagation.
+## Implementation Notes
 
----
+1. **Inverted Dropout**: The operation implements inverted dropout -- elements that survive are scaled by `1/(1-p)` rather than scaling at inference time. The scale factor is precomputed on the host and passed as a bit-cast float.
 
-## Program Factory Design
+2. **Probability Encoding**: The probability is converted from float to integer space as `(double)INT_MAX * prob`. This allows integer comparison in the SFPU (via `SFPIADD`) which is faster than floating-point comparison.
 
-### Single-Device vs Multi-Device
+3. **PRNG Quality**: The hardware PRNG has "poor statistical properties" (per ISA documentation). This is acceptable for dropout where exact randomness is not critical, only approximate independence.
 
-The operation supports two program factory variants:
+4. **Per-Device Seed**: The `DropoutMeshWorkloadFactory` variant offsets the seed by device ID (`seed += device->id()`) to ensure different dropout masks across mesh devices. This creates separate programs per device.
 
-1. **`DropoutProgramFactory`**: Used when `use_per_device_seed = false`. Creates a single program with the same seed on all devices.
-2. **`DropoutMeshWorkloadFactory`**: Used when `use_per_device_seed = true` (default). Creates a separate program per device in the mesh, with each device's seed offset by its device ID (`seed + device_id`). This ensures each device generates a different dropout mask, which is critical for correct distributed training.
+5. **Program Caching**: The `compute_program_hash` excludes the seed since it is a runtime argument. The probability and scale are compile-time arguments, so changing them invalidates the program cache.
 
-The factory selection happens in `DropoutDeviceOperation::select_program_factory()`.
+6. **Conditional Execution Pattern**: The SFPU uses a two-step conditional pattern: (a) `SFPIADD` sets lane flags, (b) `SFPMOV` conditionally writes zeros, (c) `SFPENCC` disables conditional mode. This avoids branches -- all lanes execute all instructions, but only flagged lanes have their results overwritten.
 
-### Program Cache Design
-
-The `compute_program_hash` function excludes the `seed` from the hash because the seed is a runtime argument that changes every forward pass. This allows the compiled program to be cached and reused across invocations with different seeds, avoiding recompilation overhead. The hash includes: `prob`, `scale`, `output_dtype`, `output_memory_config`, the program factory variant index, input dtype, memory config, and padded volume.
-
-### Shared Variables
-
-The `DropoutSharedVariables` struct caches kernel handles and core group information for use by `override_runtime_arguments`. On cache hits, only the seed and buffer addresses need updating -- the tile counts and core assignments remain stable.
-
----
-
-## Validation Rules
-
-From `validate_on_program_cache_miss`:
-
-1. Input and output data types must match.
-2. Input must be on device (`StorageType::DEVICE`) with a non-null buffer.
-3. Input and output memory layouts must match.
-4. For non-sharded inputs: tensor must be in `TILE` layout with `INTERLEAVED` memory.
-5. For preallocated output: shape must match computed output shape; if non-sharded, must be in `TILE` layout.
-
----
-
-## Python API
-
-```python
-ttnn.experimental.dropout(
-    input_tensor,       # ttnn.Tensor (BFLOAT16, TILE layout)
-    probability=0.2,    # float: dropout probability
-    scale=1.25,         # float: typically 1/(1-prob)
-    seed=42,            # uint32_t: PRNG seed
-    use_per_device_seed=True,   # bool: per-device seed offset
-    memory_config=None,         # optional ttnn.MemoryConfig
-    output_tensor=None          # optional preallocated output
-)
-```
-
-**Supported**: BFLOAT16 dtype, TILE layout, ranks 2/3/4.
-
----
+7. **No `BACKWARDS` or `OUT_SHARDED` defines**: The program factory does not define these preprocessor flags, so the reader and writer kernels always use the forward sequential interleaved path.
 
 ## External Knowledge Sources
 
-### DeepWiki References
+### DeepWiki Queries
 
-- **tenstorrent/tt-metal**: Dropout operation architecture, program factory pattern, `DropoutDeviceOperation` structure, compute kernel setup.
-- **tenstorrent/tt-llk**: `ckernel::sfpu::_calculate_dropout_` implementation details, PRNG via `SFPMOV`, LFSR characteristics, `init_prng_seed` function, LLK API dispatch pattern (`_llk_math_eltwise_unary_sfpu_params_`).
-- **tenstorrent/tt-isa-documentation**: SFPU instruction semantics for `SFPLOADI`, `SFPLOAD`, `SFPMUL`, `SFPMOV`, `SFPSETSGN`, `SFPIADD`, `SFPENCC`, `SFPSTORE`; lane flag mechanism; conditional execution model; PRNG LFSR details.
-- **tenstorrent/sfpi**: `dst_reg` abstraction, LREG registers, `LCONST_0` constant, `init_prng_seed` seed propagation.
+1. **Query**: "How does the dropout operation work in TTNN? What program factory does it use, what kernels does it invoke, and how is the SFPU compute kernel structured for dropout?"
+   **Reason**: Initial reconnaissance to understand the operation's architecture and locate all relevant files.
+   **Key Findings**: Identified two program factory variants (DropoutProgramFactory and DropoutMeshWorkloadFactory), the kernel file paths, and the high-level structure of the SFPU kernel (dropout_tile, dropout_kernel_init).
 
-### Confluence References
+2. **Query**: "Where is the dropout_tile SFPU function implemented? What file contains the actual SFPU kernel for dropout?"
+   **Reason**: Needed to trace from the compute API (`dropout.h`) through the LLK layer to the actual SFPU microcode.
+   **Key Findings**: Located the call chain: `dropout.h` -> `ckernel_sfpu_dropout.h` (arch-specific wrapper) -> `sfpu/ckernel_sfpu_dropout.h` (shared implementation in tt_llk submodule). The SFPU kernel uses `_calculate_dropout_` with raw TTI instructions.
 
-Not consulted. DeepWiki provided sufficient detail on all SFPU instructions used in the dropout kernel.
+3. **Query**: "What do these SFPU instructions do: SFPLOADI, SFPLOAD, SFPMUL, SFPMOV (PRNG), SFPSETSGN, SFPIADD, SFPENCC, SFPSTORE?"
+   **Reason**: Needed authoritative descriptions of each SFPU instruction used in the dropout kernel.
+   **Key Findings**: Obtained detailed descriptions of each instruction's operands, modes, and behavior. Confirmed SFPMOV with lreg_c=9/instr_mod1=8 triggers PRNG, SFPIADD with instr_mod1=10 sets lane flags for conditional execution, and SFPENCC controls the lane flag predication mask.
 
-### Glean References
+4. **Query**: "What does split_work_to_cores do in tt-metal?"
+   **Reason**: Needed to understand the core distribution strategy used by the program factory.
+   **Key Findings**: Returns a 6-tuple with num_cores, all_cores, core_group_1, core_group_2, and per-group tile counts. Group 1 gets ceil(tiles/cores), group 2 gets floor(tiles/cores).
 
-Not consulted. The dropout SFPU implementation is fully documented in open-source sources.
+### Documentation References
+
+1. **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h`
+   **Reason**: Needed to understand `init_prng_seed` implementation.
+   **Key Information**: Seeds the PRNG by writing to `PRNG_SEED_Seed_Val_ADDR32` config register, then waits 600 NOPs for propagation.
+
+2. **Source**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h`
+   **Reason**: Needed to understand the `SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS` and `SFPU_ONE_PARAM_KERNEL_INIT` macros.
+   **Key Information**: `SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS` dispatches to `_llk_math_eltwise_unary_sfpu_params_` with the `calculate_dropout` function pointer, DST index, vector mode, and extra args (probability, scale). `SFPU_ONE_PARAM_KERNEL_INIT` calls `llk_math_eltwise_unary_sfpu_init` with the init callback and seed parameter.

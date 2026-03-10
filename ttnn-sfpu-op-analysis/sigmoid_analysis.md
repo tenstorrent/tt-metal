@@ -1,214 +1,177 @@
-# SIGMOID Operation Analysis
+# Sigmoid Implementation Analysis
 
 ## Overview
+The sigmoid operation computes the element-wise sigmoid activation function: `sigmoid(x) = 1 / (1 + exp(-x))`. It is implemented as a unary SFPU operation using the shared `UnaryProgramFactory`, which orchestrates reader, compute, and writer kernels across Tensix cores. The SFPU kernel computes sigmoid by composing exponential and reciprocal primitives, with separate code paths for FP32 and BF16 precision modes.
 
-| Property | Value |
-|---|---|
-| **Operation Name** | SIGMOID |
-| **Operation Type** | Unary Eltwise (SFPU) |
-| **Program Factory** | `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` |
-| **Compute Kernel** | `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp` |
-| **Reader Kernel** | `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp` |
-| **Writer Kernel** | `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` |
-| **Math Formula** | `sigmoid(x) = 1 / (1 + exp(-x))` |
-| **Supports Approximation** | Yes (piecewise linear LUT-based) |
-| **Supports FP32 Accumulation** | Yes |
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
 
-## Program Factory Analysis
+## Work Unit Definition
 
-### Factory Structure
+| Attribute | Value |
+|-----------|-------|
+| **Granularity** | tile |
+| **Unit size** | 1 tile (32x32 elements) |
+| **Total units** | `input.buffer()->num_pages()` (total tiles in tensor) |
+| **Loop structure** | Outer loop over `per_core_block_cnt` blocks, inner loop over `per_core_block_dim` tiles (always 1 for sigmoid) |
 
-The SIGMOID operation uses `UnaryProgramFactory` (and the variant `UnarySubCoreGridProgramFactory` for sub-core-grid dispatch). Both factories are defined in `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` within namespace `ttnn::prim`.
+## Tensor Format and Layout
 
-The factory is a generic unary program factory shared by all unary SFPU operations. It does not contain SIGMOID-specific logic -- the specialization happens through preprocessor defines injected at compute kernel compile time.
+### Input Tensor
 
-### Factory Classes
+| Property | Input Tensor |
+|----------|--------------|
+| **Logical shape** | Arbitrary (any rank) |
+| **Dimension convention** | Last-dim-contiguous |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | BFLOAT16, FLOAT32 |
 
-```
-UnaryProgramFactory
-  - shared_variables_t: { unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y }
-  - create(): Builds the full program (CBs, kernels, runtime args)
-  - override_runtime_arguments(): Updates buffer addresses for cached program reuse
+### Output Tensor
 
-UnarySubCoreGridProgramFactory
-  - shared_variables_t: { unary_reader_kernel_id, unary_writer_kernel_id, cores_with_rtargs }
-  - create(): Same but distributes work across a user-specified sub-core grid
-  - override_runtime_arguments(): Updates buffer addresses per-core
-```
+| Property | Output Tensor |
+|----------|---------------|
+| **Logical shape** | Same as input |
+| **Dimension convention** | Same as input |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | Same as input (or specified output dtype) |
 
-### Circular Buffer Configuration
+### Layout Transformations
+No layout transformations are performed. Input and output must both be in TILE_LAYOUT. The program factory also supports ROW_MAJOR layout (page size comes from buffer rather than tile size), but the SFPU sigmoid path requires TILE_LAYOUT.
 
-| CB Index | Name | Size (pages) | Data Format | Purpose |
-|---|---|---|---|---|
-| `c_0` | Input | 2 | Input tensor dtype | Double-buffered input from DRAM |
-| `c_1` | Temp | 2 (conditional) | Input tensor dtype | Only allocated for HARDSHRINK/LOGIT ops -- NOT used by SIGMOID |
-| `c_2` | Output | 2 | Output tensor dtype | Double-buffered output to DRAM |
+## Data Flow Pattern
 
-For SIGMOID specifically, only CB `c_0` (input) and `c_2` (output) are allocated. Each is double-buffered (2 pages), allowing the reader/writer to overlap with compute.
+| Stage | Kernel | Reads From | Writes To | CB Operations |
+|-------|--------|------------|-----------|---------------|
+| 1 | Reader | DRAM/L1 (src buffer) | CB c_0 (input) | `cb_reserve_back(c_0, 1)`, `noc_async_read_page`, `cb_push_back(c_0, 1)` |
+| 2 | Compute | CB c_0 (input) | CB c_2 (output) | `cb_wait_front(c_0, 1)`, `copy_tile`, SFPU sigmoid, `pack_tile`, `cb_pop_front(c_0, 1)` |
+| 3 | Writer | CB c_2 (output) | DRAM/L1 (dst buffer) | `cb_wait_front(c_2, 1)`, `noc_async_write_page`, `cb_pop_front(c_2, 1)` |
 
-### Work Distribution
+The compute kernel reserves `per_core_block_dim` tiles (always 1) in CB c_2 at the start of each block iteration, then pushes them all at the end. This means each block iteration processes exactly 1 tile.
 
-The factory uses `split_work_to_cores()` to distribute tiles across the device's compute grid:
+## Circular Buffer Configuration
 
-1. Computes total number of pages (tiles for TILE layout, rows for ROW_MAJOR)
-2. Splits pages evenly across available cores, producing two core groups:
-   - `core_group_1`: cores that each process `num_pages_per_core_group_1` pages
-   - `core_group_2`: cores that each process `num_pages_per_core_group_2` pages (handles remainder)
-3. Each core group gets its own compute kernel instance with the appropriate tile count as a compile-time argument
+| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
+|-------|------|---------|----------|------------|-----------|----------|----------|----------|
+| c_0 | cb_src0 | Input tiles staging | 2 tiles | 1 tile | Double | Reader | Compute | Program |
+| c_2 | cb_output | Output tiles staging | 2 tiles | 1 tile | Double | Compute | Writer | Program |
 
-### Kernel Registration
+Notes:
+- CB c_1 (tmp0) is NOT allocated for sigmoid. It is only created for HARDSHRINK, CBRT, or LOGIT operations.
+- Both input and output CBs use double buffering (capacity = 2 * page_size), enabling overlap between reader/compute and compute/writer.
+- For BITCAST operations, the input CB uses the output data format. This does not apply to sigmoid.
 
-Three kernels are registered per core group:
+## Pipeline Pattern Summary
+- **Input CB (c_0)**: Double-buffered -- reader can fill one tile while compute processes another.
+- **Output CB (c_2)**: Double-buffered -- compute can produce one tile while writer drains another.
+- The double buffering on both sides enables a 3-stage pipeline where reader, compute, and writer can operate concurrently on different tiles.
 
-1. **Reader kernel** (`ReaderDataMovementConfig`): Reads pages from DRAM into CB `c_0`
-2. **Writer kernel** (`WriterDataMovementConfig`): Writes pages from CB `c_2` to DRAM
-3. **Compute kernel** (`ComputeConfig`): Executes the SFPU sigmoid operation
+## Index Calculations
+The reader and writer kernels use `TensorAccessor` for index-to-address mapping. The factory constructs `TensorAccessorArgs` from the source and destination buffers and passes them as compile-time arguments. At runtime, each core receives:
+- `src_addr` / `dst_addr`: base address of the buffer
+- `num_pages`: number of tiles this core processes
+- `start_id`: the global tile index where this core begins
 
-The compute kernel path is resolved via `utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype())`. For SIGMOID, this falls through to the default case and returns `"eltwise_sfpu.cpp"`.
+The reader/writer iterate sequentially from `start_id` to `start_id + num_pages`, calling `noc_async_read_page(i, accessor, l1_addr)` / `noc_async_write_page(i, accessor, l1_addr)`. The `TensorAccessor` internally maps the page index to the correct DRAM bank and address offset based on the interleaved memory layout.
 
-### Compute Configuration
+## Memory Access Patterns
 
-```cpp
-ComputeConfig{
-    .math_fidelity = MathFidelity::HiFi4,
-    .fp32_dest_acc_en = args.fp32_dest_acc_en,
-    .unpack_to_dest_mode = unpack_to_dest_mode,  // Default or UnpackToDestFp32
-    .bfp8_pack_precise = args.bfp8_pack_precise,
-    .math_approx_mode = math_approx_mode,         // false for SIGMOID by default
-    .compile_args = {num_pages_per_core, 1},       // {per_core_block_cnt, per_core_block_size}
-    .defines = unary_defines                       // Contains SFPU_OP_CHAIN_0 define
-}
-```
+### Read Pattern
+Sequential tile-by-tile reads. The reader iterates `i` from `start_id` to `start_id + num_pages`, reading one tile per iteration via `noc_async_read_page`. Each read is followed by `noc_async_read_barrier()` before pushing to the CB, so reads are non-pipelined within the reader (one outstanding read at a time).
 
-Key observations:
-- `math_approx_mode` is always `false` for SIGMOID unless explicitly overridden, because `get_op_approx_mode()` returns `false` for all ops by default.
-- `math_fidelity` is set to `HiFi4` (highest fidelity).
-- The `fast_and_approx` template parameter on `sigmoid_tile` is controlled by the second parameter passed to `UnaryWithParam(UnaryOpType::SIGMOID, {VecMode, approx_flag})`.
+### Write Pattern
+Sequential tile-by-tile writes. The writer iterates the same range, waiting for one tile in CB c_2, reading it, and writing via `noc_async_write_page`. Writes use `noc_async_writes_flushed()` per tile (not a full barrier), with a final `noc_async_write_barrier()` after the loop. This allows some write pipelining.
 
-### SFPU Op Chain Defines
+## Core Distribution Strategy
 
-The SIGMOID operation's preprocessor defines are generated by `get_block_defines()` which calls `get_op_init_and_func()`. For SIGMOID with parameters:
+| Attribute | Value |
+|-----------|-------|
+| **Grid topology** | 2D (logical 1D enumeration over 2D grid) |
+| **Grid dimensions** | `compute_with_storage_grid_size` (device-dependent, e.g., 8x8) |
+| **Total cores** | `num_cores` (determined by `split_work_to_cores`) |
+| **Work per core** | `num_pages / num_cores` tiles (with remainder handling) |
+| **Load balancing** | Two core groups: group 1 gets `ceil(num_pages / num_cores)` tiles, group 2 gets `floor(num_pages / num_cores)` tiles |
 
-**With parameters** (parametrized path -- e.g., from `ExecuteUnaryWithVectorAndFastAndApproximateMode`):
-```cpp
-// param0 = VecMode (C=2 or RC=4), param1 = fast_and_approx (0 or 1)
-SFPU_OP_INIT_0 = "sigmoid_tile_init<{param1}u>();"
-SFPU_OP_CHAIN_0 = "sigmoid_tile<{vec_mode}, {param1}u>(0);"
-```
+The `split_work_to_cores` utility divides the total tile count across all available compute cores. Cores are enumerated column-major: `core = {i / num_cores_y, i % num_cores_y}`. If the division is uneven, two separate compute kernels are created -- one for `core_group_1` (more tiles) and one for `core_group_2` (fewer tiles) -- with different `per_core_block_cnt` compile-time arguments.
 
-**Without parameters** (non-parametrized path -- fallback):
-```cpp
-SFPU_OP_INIT_0 = "sigmoid_tile_init();"
-SFPU_OP_CHAIN_0 = "sigmoid_tile(0);"
-```
+## Arguments
 
-The default template parameters for `sigmoid_tile` are `vec_mode = VectorMode::RC` and `fast_and_approx = false`.
+### Compile-Time Arguments
+
+#### Reader Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0+ | TensorAccessorArgs | uint32_t[] | Serialized tensor accessor parameters for source buffer (bank info, page size, etc.) |
+
+#### Writer Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | output_cb_index | uint32_t | CB index for output (c_2 = 2) |
+| 1+ | TensorAccessorArgs | uint32_t[] | Serialized tensor accessor parameters for destination buffer |
+
+#### Compute Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | per_core_block_cnt | uint32_t | Number of tile blocks this core processes |
+| 1 | per_core_block_dim | uint32_t | Tiles per block (always 1 for sigmoid) |
+
+#### Compute Kernel Defines
+| Define | Value | Description |
+|--------|-------|-------------|
+| `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` | `1` | Includes `compute_kernel_api.h` for sigmoid_tile |
+| `SFPU_OP_CHAIN_0` | `SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0` | Macro chain for init + func |
+| `SFPU_OP_CHAIN_0_INIT_0` | `sigmoid_tile_init<0u>();` | Init call (0u = not approximate) |
+| `SFPU_OP_CHAIN_0_FUNC_0` | `sigmoid_tile<4, 0u>(0);` | Func call (VecMode::RC=4, not approx, dst=0) |
+| `INP_FLOAT` or `INP_FLOAT32` | `1` | Input data type indicator |
+
+#### Compute Config
+| Setting | Value | Description |
+|---------|-------|-------------|
+| `math_fidelity` | `MathFidelity::HiFi4` | Highest math fidelity |
+| `fp32_dest_acc_en` | From `args.fp32_dest_acc_en` | FP32 accumulation in DEST registers |
+| `math_approx_mode` | `false` | Approximation mode disabled for sigmoid |
 
 ### Runtime Arguments
 
-| Kernel | Arg 0 | Arg 1 | Arg 2 |
-|---|---|---|---|
-| Reader | `src_buffer->address()` | `num_pages_per_core` | `num_pages_written` (start page ID) |
-| Writer | `dst_buffer->address()` | `num_pages_per_core` | `num_pages_written` (start page ID) |
-| Compute | `packed_scalar1` (0 for SIGMOID) | `packed_scalar2` (0 for SIGMOID) | -- |
+#### Reader Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | src_addr | uint32_t | Source buffer base address |
+| 1 | num_pages | uint32_t | Number of tiles this core reads |
+| 2 | start_id | uint32_t | Global starting tile index |
 
-SIGMOID does not use scalar parameters, so both packed scalars are 0.
+#### Writer Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | dst_addr | uint32_t | Destination buffer base address |
+| 1 | num_pages | uint32_t | Number of tiles this core writes |
+| 2 | start_id | uint32_t | Global starting tile index |
+
+#### Compute Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | packed_scalar1 | uint32_t | Unused for sigmoid (always 0) |
+| 1 | packed_scalar2 | uint32_t | Unused for sigmoid (always 0) |
 
 ## Kernel Implementations
 
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader_unary_interleaved_start_id | RISCV_0 | NOC0 | DRAM/L1 src buffer | CB c_0 | Sequential tile reads via TensorAccessor |
+| eltwise_sfpu (compute) | RISCV_2 (math) | N/A | CB c_0 | CB c_2 | copy_tile + sigmoid SFPU + pack_tile |
+| writer_unary_interleaved_start_id | RISCV_1 | NOC1 | CB c_2 | DRAM/L1 dst buffer | Sequential tile writes via TensorAccessor |
+
 ### Reader Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);   // DRAM buffer base address
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);   // Number of pages this core processes
-    const uint32_t start_id = get_arg_val<uint32_t>(2);    // Starting page index for this core
-
-    constexpr auto src_args = TensorAccessorArgs<0>();      // Compile-time tensor accessor config
-
-    constexpr uint32_t cb_id_in0 = 0;                      // CB index c_0 for input
-
-    // Page size is obtained from CB interface, abstracting TILE vs ROW_MAJOR differences
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
-
-    constexpr uint32_t onepage = 1;                         // Process one page at a time
-
-    const auto s = TensorAccessor(src_args, src_addr, page_bytes);  // Create accessor for NoC reads
-
-    // Read pages sequentially from DRAM into input circular buffer
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
-        cb_reserve_back(cb_id_in0, onepage);                // Wait for space in CB
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0); // Get L1 write pointer
-        noc_async_read_page(i, s, l1_write_addr);          // Initiate NoC read from DRAM
-        noc_async_read_barrier();                           // Wait for read to complete
-        cb_push_back(cb_id_in0, onepage);                   // Signal page is ready for compute
-    }
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
+- **Key Logic**: Reads tiles one at a time from interleaved DRAM/L1 using `TensorAccessor`. Supports both forward and backward iteration via `BACKWARDS` define (not used for sigmoid). The page size is obtained dynamically from the CB interface, making this kernel layout-agnostic (works for both TILE and ROW_MAJOR).
 
 ### Writer Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);    // DRAM output buffer base address
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);    // Number of pages this core writes
-    const uint32_t start_id = get_arg_val<uint32_t>(2);     // Starting page index for this core
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);  // Output CB index (c_2)
-    constexpr auto dst_args = TensorAccessorArgs<1>();            // Compile-time tensor accessor config
-
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
-
-#ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, num_pages);  // Sharded: wait for all pages, no DRAM write needed
-#else
-    constexpr uint32_t onepage = 1;
-
-    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
-
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
-        cb_wait_front(cb_id_out, onepage);                   // Wait for compute to produce a page
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);    // Get L1 read pointer
-        noc_async_write_page(i, s, l1_read_addr);           // Initiate NoC write to DRAM
-        noc_async_writes_flushed();                          // Ensure write is dispatched
-        cb_pop_front(cb_id_out, onepage);                    // Free CB slot for reuse
-    }
-    noc_async_write_barrier();                               // Wait for all writes to complete
-#endif
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+- **Key Logic**: Writes tiles one at a time to interleaved DRAM/L1. Supports sharded output via `OUT_SHARDED` define (not used in this factory). Uses `noc_async_writes_flushed()` per tile for partial pipelining, with a final barrier at the end.
 
 ### Compute Kernel
-
-This section combines the full annotated source code of the compute kernel with architectural analysis.
 
 #### Compute Kernel File
 `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
@@ -221,79 +184,61 @@ This section combines the full annotated source code of the compute kernel with 
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"                              // Common compute utilities
-#include "api/compute/tile_move_copy.h"                      // copy_tile API for moving tiles to DST register
-#include "api/compute/eltwise_unary/eltwise_unary.h"         // init_sfpu, unary_op_init_common
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"   // Conditional SFPU function includes based on defines
-#include "api/compute/eltwise_unary/trigonometry.h"          // Trigonometric SFPU functions
-#include "api/compute/mul_int_sfpu.h"                        // Integer multiply SFPU functions
-#include "api/compute/eltwise_unary/rpow.h"                  // Reverse power SFPU functions
-#include "api/compute/eltwise_unary/rdiv.h"                  // Reverse division SFPU functions
-#include "api/compute/eltwise_unary/fill.h"                  // Fill SFPU functions
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/trigonometry.h"
+#include "api/compute/mul_int_sfpu.h"
+#include "api/compute/eltwise_unary/rpow.h"
+#include "api/compute/eltwise_unary/rdiv.h"
+#include "api/compute/eltwise_unary/fill.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // Total number of tile blocks this core processes
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // Tiles per block (always 1 for SIGMOID)
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // Number of blocks (tiles) this core processes
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // Tiles per block, always 1 for sigmoid
 
-    // Initialize SFPU pipeline: configures unpack, math, and pack engines
-    // CB c_0 is the input source, CB c_2 is the output destination
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
-
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);  // Initialize SFPU pipeline: sets up unpack from c_0, pack to c_2
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        // Reserve output space in CB c_2 for one block of tiles
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-
+        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);  // Reserve space for 1 output tile in c_2
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            // Acquire exclusive access to DST register file for writing
-            tile_regs_acquire();
+            tile_regs_acquire();  // Acquire exclusive access to DEST registers for this tile
 
-            // Wait for reader to push a tile into CB c_0
-            cb_wait_front(tt::CBIndex::c_0, 1);
+            // Pop tile after tile, copy to DST and pack
+            cb_wait_front(tt::CBIndex::c_0, 1);  // Wait until reader has produced 1 tile in c_0
 
-            // Copy tile from CB c_0 slot 0 into DST register slot 0
-            // This invokes the unpacker to load the tile into DST
-            copy_tile(tt::CBIndex::c_0, 0, 0);
+            copy_tile(tt::CBIndex::c_0, 0, 0);  // Unpack tile 0 from c_0 into DEST register 0
 
-            // Execute the SFPU operation chain defined by preprocessor macro
-            // For SIGMOID, this expands to:
-            //   sigmoid_tile_init<fast_and_approx>();
-            //   sigmoid_tile<vec_mode, fast_and_approx>(0);
-            // The init call configures SFPU reciprocal tables (or LUT for approx mode)
-            // The tile call applies sigmoid to all elements in DST[0]
 #ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0  // Expands to: sigmoid_tile_init<0u>(); sigmoid_tile<4, 0u>(0);
+                             // This initializes the SFPU for sigmoid (sets up reciprocal LUT)
+                             // then executes sigmoid on the tile in DEST[0]
 #endif
 
-            // Signal that DST register writes are complete (math -> pack handoff)
-            tile_regs_commit();
+            tile_regs_commit();  // Signal that DEST registers are ready for packing
 
-            // Wait for pack engine to be ready to consume DST
-            tile_regs_wait();
+            tile_regs_wait();  // Wait for pack engine to be ready
 
-            // Pack the result tile from DST[0] into CB c_2
-            pack_tile(0, tt::CBIndex::c_2);
+            pack_tile(0, tt::CBIndex::c_2);  // Pack DEST[0] result into output CB c_2
 
-            // Release the input tile from CB c_0 (one page consumed)
-            cb_pop_front(tt::CBIndex::c_0, 1);
+            cb_pop_front(tt::CBIndex::c_0, 1);  // Free the consumed input tile from c_0
 
-            // Release DST register file for next iteration
-            tile_regs_release();
+            tile_regs_release();  // Release DEST registers for next iteration
         }
-        // Signal output tiles are ready for writer kernel
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
+        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);  // Publish 1 output tile to writer
     }
 }
 ```
 
 ### SFPU Kernel Implementation
 
-This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+#### SFPU Kernel File
+`tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h` (Blackhole)
+`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h` (Wormhole B0)
 
-#### SFPU Kernel File (Precise Mode)
-`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h`
-(Blackhole variant: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h`)
+Both architectures share the same source code for the sigmoid SFPU kernel (identical implementations).
 
-#### Annotated SFPU Kernel Source (Precise Mode -- Wormhole B0)
+#### Annotated SFPU Kernel Source
 
 ```cpp
 // SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
@@ -304,88 +249,73 @@ This section provides a dedicated deep dive into the underlying SFPU kernel func
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_sigmoid_appx.h"   // Approximate sigmoid via SFPLUT
-#include "ckernel_sfpu_recip.h"          // Newton-Raphson reciprocal function
+#include "ckernel_sfpu_sigmoid_appx.h"  // Provides calculate_sigmoid_appx() for approximation mode
+#include "ckernel_sfpu_recip.h"          // Provides _sfpu_reciprocal_() Newton-Raphson reciprocal
 
 namespace ckernel {
 namespace sfpu {
 
-// Core sigmoid computation: sigmoid(x) = 1 / (1 + exp(-x))
-// Template parameter controls precision of sub-operations (exp and reciprocal)
 template <bool is_fp32_acc_to_dest_mode = true>
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // Compute sigmoid as:
     // sigmoid(x) = 1 / (1 + exp(-x))
 
     sfpi::vFloat exp_neg_x;
-    // Select exp implementation based on destination accumulator precision:
-    // - FP32 mode: use _sfpu_exp_improved_ which dispatches to _sfpu_exp_f32_accurate_
-    //   (7th-order Taylor series with range reduction, ~24-bit accuracy)
-    // - BFloat16 mode: use _sfpu_exp_21f_ which is a fast 21-bit approximation
-    //   based on Moroz et al. 2022, sufficient for ~1 ULP on bfloat16
+    // If fp32 then use higher accuracy exp function (_sfpu_exp_f32_accurate_ with Cody-Waite range reduction)
+    // Otherwise, use exp_21f (~1 ULP on bfloat16, based on Moroz et al. 2022 algorithm)
     if constexpr (is_fp32_acc_to_dest_mode) {
-        exp_neg_x = _sfpu_exp_improved_<true>(-x);    // High-precision exp(-x) for FP32
+        exp_neg_x = _sfpu_exp_improved_<true>(-x);  // Dispatches to _sfpu_exp_f32_accurate_ for FP32
     } else {
-        exp_neg_x = _sfpu_exp_21f_<true>(-x);         // Fast exp(-x) for BFloat16
+        exp_neg_x = _sfpu_exp_21f_<true>(-x);  // Uses exp_21f algorithm: polynomial approx of 2^(x/ln2)
     }
 
-    // Add 1 to exp(-x) to form the denominator: (1 + exp(-x))
-    // sfpi::vConst1 is a hardware constant register holding 1.0f
-    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;  // denominator = 1.0 + exp(-x)
 
     sfpi::vFloat result;
-    // Compute reciprocal of denominator using Newton-Raphson method
-    // - FP32 mode: 2 Newton-Raphson iterations for full float32 precision
-    // - BFloat16 mode: 1 iteration is sufficient for bfloat16 precision
     if constexpr (is_fp32_acc_to_dest_mode) {
-        result = _sfpu_reciprocal_<2>(denominator);    // 2 N-R iterations for FP32
+        result = _sfpu_reciprocal_<2>(denominator);  // 2 Newton-Raphson iterations for FP32 precision
     } else {
-        result = _sfpu_reciprocal_<1>(denominator);    // 1 N-R iteration for BF16
+        result = _sfpu_reciprocal_<1>(denominator);  // 1 Newton-Raphson iteration for BF16 precision
     }
 
-    return result;
+    return result;  // result = 1 / (1 + exp(-x))
 }
 
-// Main sigmoid calculation function, processes ITERATIONS rows of the tile
-// Each "iteration" processes one row of the SFPU (32 elements per row on Wormhole)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
     if constexpr (!APPROXIMATION_MODE) {
-        // Precise mode: compute sigmoid analytically via exp + reciprocal
-#pragma GCC unroll 8                // Hint compiler to fully unroll the loop
-        for (int d = 0; d < ITERATIONS; d++) {
-            // Load current row from DST register into SFPU vector register
-            sfpi::vFloat val = sfpi::dst_reg[0];
+        // Precise mode: iterate over 8 rows of the tile face (32 elements per row)
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {  // ITERATIONS=8: one per row of a 16x16 face
+            sfpi::vFloat val = sfpi::dst_reg[0];  // Load current row from DEST register
 
-            // Compute sigmoid(val) using the analytical formula
-            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
+            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);  // Compute sigmoid
 
-            // If not in FP32 dest mode, convert result to FP16b format
-            // This avoids precision issues when packing back to a non-FP32 CB
             if constexpr (!is_fp32_dest_acc_en) {
+                // When DEST is BF16, explicitly convert to BF16 with round-to-nearest-even
+                // to avoid truncation artifacts from SFPSTORE
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
             }
 
-            // Write result back to the same DST register row
-            sfpi::dst_reg[0] = result;
-            // Advance to next row in DST register
-            sfpi::dst_reg++;
+            sfpi::dst_reg[0] = result;  // Write result back to DEST register
+            sfpi::dst_reg++;            // Advance to next row in the face
         }
     } else {
-        // Approximate mode: use piecewise linear LUT (SFPLUT instruction)
+        // Approximation mode: uses LUT-based sigmoid approximation
         calculate_sigmoid_appx<ITERATIONS>();
     }
 }
 
-// Initialization function called once before processing tiles
 template <bool APPROXIMATION_MODE>
 inline void sigmoid_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        // Precise mode: initialize reciprocal constants (for Newton-Raphson)
-        // Sets up programmable constant registers used by _sfpu_reciprocal_
-        _init_reciprocal_<false, false>();
+        // For precise mode on Blackhole: calls _init_sfpu_reciprocal_<false>() which sets vConstFloatPrgm0 = 2.0
+        // For precise mode on Wormhole: calls _init_reciprocal_<false, false>() which sets up
+        //   quadratic approximation constants for the reciprocal initial estimate
+        _init_sfpu_reciprocal_<false>();  // Blackhole version
+        // _init_reciprocal_<false, false>();  // Wormhole version
     } else {
-        // Approximate mode: load LUT coefficients into LRegs for SFPLUT
+        // For approx mode: loads LUT constants for sigmoid approximation
         sigmoid_appx_init();
     }
 }
@@ -394,284 +324,124 @@ inline void sigmoid_init() {
 }  // namespace ckernel
 ```
 
-#### Annotated SFPU Kernel Source (Approximate Mode)
-
-**File**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid_appx.h`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#pragma once
-
-#include "ckernel.h"
-#include "ckernel_defs.h"
-
-using namespace sfpi;
-
-namespace ckernel {
-namespace sfpu {
-
-// Approximate sigmoid using SFPLUT piecewise linear interpolation
-// The SFPLUT instruction computes: result = A * |val| + B
-// where A and B are 8-bit encoded coefficients selected by the exponent of |val|
-// The function computes an odd function centered at 0, so the final sigmoid is lut(x) + 0.5
-template <int ITERATIONS = 8>
-inline void calculate_sigmoid_appx() {
-    // Save LReg values to local variables before the loop
-    // This is necessary because the SFPLUT instruction reads from LRegs 0-2
-    // and the compiler may not preserve them across loop iterations
-    vUInt l0 = l_reg[LRegs::LReg0];   // Coefficients for |x| < 1.0 range
-    vUInt l1 = l_reg[LRegs::LReg1];   // Coefficients for 1.0 <= |x| < 2.0 range
-    vUInt l2 = l_reg[LRegs::LReg2];   // Coefficients for |x| >= 2.0 range
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];       // Load current row from DST register
-
-        // SFPLUT computes: lut(val) = A * |val| + B (with sign of val retained)
-        // Since sigmoid is symmetric around 0.5: sigmoid(x) = 0.5 + f(x)
-        // where f(x) is an odd function, the LUT approximates f(x)
-        // Adding 0.5 shifts the result to the [0,1] sigmoid range
-        dst_reg[0] = lut(val, l0, l1, l2) + 0.5f;
-
-        dst_reg++;                     // Advance to next row
-    }
-
-    // Restore LReg values after the loop
-    // The SFPLUT instruction may have modified LReg contents during execution
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
-}
-
-// Initialize LUT coefficients for approximate sigmoid
-// The three 16-bit immediates encode piecewise linear coefficients (A, B pairs)
-// packed into 8-bit format per the SFPLUT unpackCoeff algorithm:
-//   Coeff.Sgn = LutEntry[7]
-//   Coeff.Exp = 127 - LutEntry[6:4]
-//   Coeff.Man[22:19] = LutEntry[3:0]
-inline void sigmoid_appx_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    imm0 = 0x3DFF;   // LReg0: coefficients for |x| < 1.0 (A=0x3D, B=0xFF -> slope/intercept)
-    imm1 = 0x21D8;   // LReg1: coefficients for 1.0 <= |x| < 2.0
-    imm2 = 0xFF10;   // LReg2: coefficients for |x| >= 2.0 (approaches 0 or 1)
-    // SFPLOADI loads a 16-bit immediate into the specified LReg
-    // The mode=2 parameter indicates the immediate format (16-bit LUT coefficient format)
-    TTI_SFPLOADI(0, 2, imm0);   // Load coefficients into LReg0
-    TTI_SFPLOADI(1, 2, imm1);   // Load coefficients into LReg1
-    TTI_SFPLOADI(2, 2, imm2);   // Load coefficients into LReg2
-}
-
-}  // namespace sfpu
-}  // namespace ckernel
-```
-
-#### LLK API Layer
-
-**File**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sigmoid.h`
-
-```cpp
-#pragma once
-
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
-#include "ckernel_sfpu_sigmoid.h"
-
-namespace ckernel {
-
-// Initialization: configures SFPU address modifiers and calls sigmoid_init
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid, APPROXIMATE>(sfpu::sigmoid_init<APPROXIMATE>);
-}
-
-// Execution: dispatches calculate_sigmoid to the SFPU math engine
-// dst_index: which tile slot in DST to operate on
-// vector_mode: RC (row+column) processes all 8 rows; C processes only columns
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_eltwise_unary_sfpu_sigmoid(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_sigmoid<APPROXIMATE, is_fp32_dest_acc_en, 8>, dst_index, vector_mode);
-}
-
-}  // namespace ckernel
-```
-
-#### Compute API Layer
-
-**File**: `tt_metal/hw/inc/api/compute/compute_kernel_api.h` (lines 67-89)
-
-```cpp
-// sigmoid_tile_init: called once to set up SFPU state for sigmoid
-// fast_and_approx=false: uses analytical exp+reciprocal (precise)
-// fast_and_approx=true: uses SFPLUT piecewise linear (approximate)
-template <bool fast_and_approx = false>
-ALWI void sigmoid_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
-}
-
-// sigmoid_tile: computes sigmoid on a tile already loaded in DST[idst]
-// vec_mode: VectorMode::RC processes all rows and columns (default)
-// fast_and_approx: selects between precise and approximate implementations
-// DST_ACCUM_MODE: compile-time constant indicating FP32 vs BF16 destination accumulation
-template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
-ALWI void sigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
-}
-```
+**Note on init difference**: The Blackhole version calls `_init_sfpu_reciprocal_<false>()` which simply sets `vConstFloatPrgm0 = 2.0f`. The Wormhole version calls `_init_reciprocal_<false, false>()` which loads quadratic approximation coefficients into programmable constant registers for the reciprocal initial estimate.
 
 #### SFPU Instructions Used
 
-| Instruction / Intrinsic | Used In | Description |
-|---|---|---|
-| `sfpi::dst_reg[N]` | Both modes | Read/write access to DST register rows. Maps to SFPU LOAD/STORE destination register instructions. |
-| `sfpi::vConst1` | Precise mode | Hardware constant register holding 1.0f (Fixed Constant 2). Used in `1 + exp(-x)`. |
-| `_sfpu_exp_improved_<true>()` | Precise FP32 | High-accuracy exponential via 7th-order Taylor series with range reduction (`_sfpu_exp_f32_accurate_`). |
-| `_sfpu_exp_21f_<true>()` | Precise BF16 | Fast exponential approximation based on Moroz et al. 2022 algorithm. ~21-bit accuracy. |
-| `_sfpu_reciprocal_<N>()` | Precise mode | Newton-Raphson reciprocal with N iterations. Uses `sfpi::approx_recip()` for initial estimate. |
-| `sfpi::float_to_fp16b()` | Precise BF16 | Converts FP32 result to BFloat16 format for non-FP32 destination accumulators. |
-| `sfpi::lut()` | Approx mode | Maps to SFPLUT instruction (opcode 0x73). Piecewise linear interpolation: `A * |x| + B`. |
-| `TTI_SFPLOADI` | Approx init | Loads 16-bit immediate values into LRegs. Used to set LUT coefficients. |
+| Instruction/Intrinsic | Description |
+|----------------------|-------------|
+| `sfpi::dst_reg[0]` (read) | Load a vector of elements from DEST register row 0 |
+| `sfpi::dst_reg[0]` (write) | Store a vector of elements back to DEST register row 0 |
+| `sfpi::dst_reg++` | Advance the DEST register pointer to the next row |
+| `sfpi::vConst1` | Built-in constant 1.0f |
+| `sfpi::float_to_fp16b(val, 0)` | Convert FP32 to BF16 with round-to-nearest-even |
+| `sfpi::reinterpret<vFloat>(val)` | Reinterpret-cast between SFPU vector types |
+| `sfpi::approx_recip(x)` (via `_sfpu_reciprocal_`) | Hardware approximate reciprocal (SFPARECIP instruction) |
+| `sfpi::setman` (via reciprocal on WH) | Set mantissa field of float |
+| `sfpi::exexp` / `sfpi::exman8` / `sfpi::exman9` (via exp) | Extract exponent/mantissa fields |
+| `sfpi::setexp` (via exp) | Set exponent field of float |
+| `sfpi::shft` (via exp) | Barrel shift |
+| `sfpi::int32_to_float` (via exp) | Integer to float conversion |
+| `sfpi::addexp` (via exp_61f) | Add to exponent field |
+| `sfpi::vec_min_max` (via exp) | Vector min/max for clamping |
+| `sfpi::lut` (via sigmoid_appx) | LUT-based function evaluation (approximation mode only) |
+| `PolynomialEvaluator::eval` (via exp) | Polynomial evaluation using Horner's method |
 
 #### SFPU Register Usage
 
-**Precise Mode**:
-- **DST registers**: Input tile rows are read from `dst_reg[0]`, sigmoid result is written back to `dst_reg[0]`, then `dst_reg++` advances to next row
-- **Programmable Constants**: `vConstFloatPrgm0`, `vConstFloatPrgm1`, `vConstFloatPrgm2` are initialized by `_init_sfpu_reciprocal_` with Newton-Raphson seed constants
-- **Fixed Constants**: `vConst1` (1.0f) used in denominator computation `1 + exp(-x)`
-- **SFPU vector registers**: Intermediate values (exp_neg_x, denominator, result) are held in SFPU vector registers (vFloat type)
-
-**Approximate Mode**:
-- **DST registers**: Same read/write pattern as precise mode
-- **LReg[0]**: Piecewise linear coefficients for `|x| < 1.0` (loaded with 0x3DFF)
-- **LReg[1]**: Piecewise linear coefficients for `1.0 <= |x| < 2.0` (loaded with 0x21D8)
-- **LReg[2]**: Piecewise linear coefficients for `|x| >= 2.0` (loaded with 0xFF10)
-- **LReg[3]**: Used internally by SFPLUT as the input value register
+- **DEST registers (`dst_reg`)**: The primary I/O for the SFPU. Each tile face has 8 rows of 32 elements. The kernel reads from `dst_reg[0]`, computes sigmoid, writes back to `dst_reg[0]`, then advances with `dst_reg++`. In RC vector mode, all 4 faces (4 x 8 = 32 rows total) are processed.
+- **LREG registers (L-registers)**: Used internally by sub-functions:
+  - In approximation mode: `LReg0`, `LReg1`, `LReg2` hold the LUT coefficients loaded by `sigmoid_appx_init()`
+  - In the reciprocal function (Wormhole): `vConstFloatPrgm0`, `vConstFloatPrgm1`, `vConstFloatPrgm2` hold quadratic approximation constants
+  - In the reciprocal function (Blackhole): `vConstFloatPrgm0` holds 2.0f for Newton-Raphson
+- **Temporary vFloat variables**: `exp_neg_x`, `denominator`, `result` -- all map to SFPU local registers during execution
 
 #### SFPU Execution Flow
 
-**Precise Mode**:
-1. `sigmoid_tile_init<false>()` is called once, which initializes the Newton-Raphson reciprocal constants via `_init_reciprocal_<false, false>()`
-2. For each tile, `sigmoid_tile<VectorMode::RC, false>(0)` is called
-3. The LLK layer (`_llk_math_eltwise_unary_sfpu_params_`) sets the DST write address and iterates over tile rows
-4. For each of the 8 SFPU iterations (rows):
-   a. Load the current row from `dst_reg[0]` into a vFloat register
-   b. Negate the input: compute `-x`
-   c. Compute `exp(-x)` using either `_sfpu_exp_f32_accurate_` (FP32) or `_sfpu_exp_21f_` (BF16)
-   d. Add 1.0 to get the denominator: `1 + exp(-x)`
-   e. Compute reciprocal via Newton-Raphson: `1 / (1 + exp(-x))`
-   f. If BF16 mode: convert result to fp16b format
-   g. Write result back to `dst_reg[0]`
-   h. Advance DST pointer to next row
-5. After all rows processed, result tile is in DST ready for pack
+1. **Initialization** (`sigmoid_init`):
+   - In precise mode: initializes the reciprocal function by setting `vConstFloatPrgm0 = 2.0f` (Blackhole) or loading quadratic estimate constants (Wormhole).
+   - In approximation mode: loads 3 LUT constants (0x3DFF, 0x21D8, 0xFF10) into L-registers.
 
-**Approximate Mode**:
-1. `sigmoid_appx_init()` loads three 16-bit LUT coefficient immediates into LRegs 0, 1, 2 via `TTI_SFPLOADI`
-2. For each of the 8 iterations (rows):
-   a. Load current row from `dst_reg[0]`
-   b. Execute `lut(val, l0, l1, l2)` which maps to the SFPLUT instruction:
-      - Extracts exponent of `|val|` to select coefficient pair (l0, l1, or l2)
-      - Unpacks 8-bit coefficients A, B from selected LReg
-      - Computes `A * |val| + B` with sign of val retained
-   c. Add 0.5 to shift from odd-symmetric approximation to [0,1] sigmoid range
-   d. Write result back to `dst_reg[0]` and advance
+2. **Per-tile execution** (`calculate_sigmoid`, called via `_llk_math_eltwise_unary_sfpu_params_`):
+   - The LLK params wrapper iterates over all 4 faces of the tile (RC vector mode).
+   - For each face, `calculate_sigmoid` is called with `ITERATIONS=8` (one per row).
+   - For each row:
+     a. Read the vector from `dst_reg[0]`
+     b. Negate: compute `-x`
+     c. Compute `exp(-x)`:
+        - **FP32 mode** (`_sfpu_exp_f32_accurate_`): Cody-Waite range reduction + 7th-order Taylor polynomial
+        - **BF16 mode** (`_sfpu_exp_21f_`): Moroz et al. 2022 algorithm with 2nd-degree polynomial refinement
+     d. Compute `1 + exp(-x)`
+     e. Compute reciprocal of denominator:
+        - **FP32 mode**: `_sfpu_reciprocal_<2>` -- `approx_recip` + 2 Newton-Raphson iterations
+        - **BF16 mode**: `_sfpu_reciprocal_<1>` -- `approx_recip` + 1 Newton-Raphson iteration
+     f. If BF16 mode: explicitly convert result to BF16 with round-to-nearest-even
+     g. Write result back to `dst_reg[0]`
+     h. Advance `dst_reg++`
+
+3. **Post-execution**: The LLK wrapper calls `_llk_math_eltwise_unary_sfpu_done_()` to finalize.
 
 #### SFPU Configuration
 
-| Configuration | Value | Notes |
-|---|---|---|
-| `APPROXIMATION_MODE` | `false` (default) | Set to `true` only if `fast_and_approx` param is 1 |
-| `math_fidelity` | `MathFidelity::HiFi4` | Highest fidelity, used for all unary SFPU ops |
-| `fp32_dest_acc_en` | Configurable | Controls whether DST accumulator uses FP32 or BF16 |
-| `math_approx_mode` | `false` | `get_op_approx_mode()` returns false for SIGMOID |
-| `unpack_to_dest_mode` | `Default` or `UnpackToDestFp32` | FP32 when `preserve_fp32_precision` is set |
-| Vector mode | `VectorMode::RC` | Processes all rows and columns (full tile) |
-| Iterations | 8 | One per tile row (8 rows of 32 elements = 256 elements per half-tile) |
+| Setting | Value | Description |
+|---------|-------|-------------|
+| `APPROXIMATION_MODE` | `false` (default) | Uses precise exp + reciprocal; can be `true` for LUT-based approximation |
+| `is_fp32_dest_acc_en` | From `ComputeConfig.fp32_dest_acc_en` | Controls whether FP32 or BF16 code paths are used |
+| `math_fidelity` | `MathFidelity::HiFi4` | Highest fidelity (affects FPU, not directly SFPU) |
+| `math_approx_mode` | `false` | `get_op_approx_mode()` returns false for all ops |
+| `vector_mode` | `VectorMode::RC` (4) | Process all 4 faces of the tile |
+
+The `SFPU_OP_CHAIN_0` macro expands to:
+```
+sigmoid_tile_init<0u>(); sigmoid_tile<4, 0u>(0);
+```
+Where `0u` = not approximate, `4` = VectorMode::RC, `0` = dst_index.
 
 #### Hardware Compatibility Notes
 
-**Wormhole B0 vs Blackhole -- Precise Mode**:
-- The core `_sfpu_sigmoid_` function is **identical** between Wormhole B0 and Blackhole
-- Both use `_sfpu_exp_improved_` and `_sfpu_reciprocal_` with the same template parameters
-- The underlying implementations of `_sfpu_reciprocal_` differ:
-  - **Wormhole B0**: Uses a quadratic initial estimate with programmable constants, then Newton-Raphson refinement
-  - **Blackhole**: Uses `sfpi::approx_recip()` hardware intrinsic for initial estimate, then Newton-Raphson. Also uses `vConstFloatPrgm0 = 2.0f` for the N-R formula
-- Initialization differs:
-  - **Wormhole B0**: `_init_reciprocal_<false, false>()` calls `_init_sfpu_reciprocal_` which loads 3 programmable constants
-  - **Blackhole**: `_init_reciprocal_<false, false>()` calls `_init_reciprocal_fast_8b_3c_()` for non-FP32 mode, or `_init_reciprocal_fast_24b_5c_()` for FP32 mode
+- **Blackhole vs Wormhole reciprocal initialization**: Blackhole's `_init_sfpu_reciprocal_<false>()` sets `vConstFloatPrgm0 = 2.0f`. Wormhole's `_init_reciprocal_<false, false>()` loads 3 programmable constants for a quadratic initial reciprocal estimate.
+- **Reciprocal algorithm**: Both architectures use the same `_sfpu_reciprocal_` template, but the implementation differs. Blackhole uses `sfpi::approx_recip()` (SFPARECIP hardware instruction) as the starting point for Newton-Raphson. Wormhole uses a software quadratic approximation (`setman` + polynomial) followed by Newton-Raphson.
+- **Exp algorithm**: Both use the same `_sfpu_exp_21f_` for BF16 and `_sfpu_exp_f32_accurate_` for FP32 (with Cody-Waite range reduction and 7th-order Taylor series).
+- **Sigmoid init difference**: The Blackhole sigmoid_init calls `_init_sfpu_reciprocal_<false>()` while the Wormhole version calls `_init_reciprocal_<false, false>()`. This is because the reciprocal sub-functions have different initialization requirements on each architecture.
+- **BF16 conversion**: Both architectures require explicit `float_to_fp16b` conversion when DEST is in BF16 mode, because SFPSTORE would otherwise truncate rather than round.
+- **LLK params wrapper**: Wormhole's `llk_math_eltwise_unary_sfpu_sigmoid` uses `ITERATIONS = 8` explicitly, while Blackhole's version uses the default template parameter `ITERATIONS = 8`. The behavior is identical.
 
-**Wormhole B0 vs Blackhole -- Approximate Mode**:
-- The `ckernel_sfpu_sigmoid_appx.h` files are **identical** between Wormhole B0 and Blackhole
-- Same LUT coefficients (0x3DFF, 0x21D8, 0xFF10)
-- Both use the same SFPLUT instruction (opcode 0x73)
+## Implementation Notes
 
-**Key difference in precise sigmoid_init**:
-- Wormhole B0 calls `_init_reciprocal_<false, false>()` (two template params)
-- Blackhole calls `_init_sfpu_reciprocal_<false>()` (one template param)
-- This reflects different reciprocal initialization paths, but the end result (correctly initialized N-R constants) is equivalent
+1. **Op chain mechanism**: The compute kernel uses a macro-based op chain (`SFPU_OP_CHAIN_0`) that expands to init + function calls. This allows the same kernel source to serve all unary SFPU operations -- the specific operation is injected via preprocessor defines.
 
-## Data Flow Summary
+2. **Parametrized sigmoid**: When created via `string_to_unary_with_param("sigmoid")`, the op gets params `{VecMode::RC, false}`. The `false` means non-approximate. A `sigmoid_approx` variant exists with `{VecMode::RC, true}` that uses the LUT-based path.
 
-```
-DRAM --[NoC read]--> CB c_0 --[unpack/copy_tile]--> DST Register
-                                                        |
-                                                   SFPU sigmoid
-                                                   (exp + recip
-                                                    or SFPLUT)
-                                                        |
-                                                    DST Register --[pack_tile]--> CB c_2 --[NoC write]--> DRAM
-```
+3. **Approximation mode**: The LUT-based approximation (`calculate_sigmoid_appx`) uses 3 pre-loaded constants and the `lut()` SFPI intrinsic to evaluate `lut(val, l0, l1, l2) + 0.5`. This is significantly faster but less accurate than the precise path.
 
-1. **Reader** reads one tile at a time from DRAM into CB `c_0` via NoC
-2. **Compute** waits for tile in CB `c_0`, copies it to DST register, applies sigmoid SFPU, packs result to CB `c_2`
-3. **Writer** waits for tile in CB `c_2`, writes it to DRAM via NoC
-4. Double-buffering (2 pages per CB) allows reader/writer to overlap with compute
+4. **Precision trade-offs in precise mode**:
+   - FP32: Uses Cody-Waite exp with 7th-order Taylor + 2 Newton-Raphson reciprocal iterations (sub-ULP accuracy)
+   - BF16: Uses Moroz exp_21f with 2nd-degree polynomial + 1 Newton-Raphson reciprocal iteration (~1 ULP accuracy)
+
+5. **Runtime argument override**: The `override_runtime_arguments` method only updates buffer addresses (arg[0]) for reader and writer kernels, allowing efficient tensor reuse without recompilation.
+
+6. **SubCoreGrid variant**: The file also contains `UnarySubCoreGridProgramFactory` which supports running on a subset of cores. The sigmoid logic is identical; only the core allocation differs.
 
 ## External Knowledge Sources
 
-### DeepWiki References
-- `tenstorrent/tt-metal`: Located program factory structure, compute kernel path resolution, SFPU_OP_CHAIN define generation
-- `tenstorrent/tt-llk`: Identified sigmoid SFPU kernel location, `_sfpu_reciprocal_` implementation details (Newton-Raphson iterations, Wormhole vs Blackhole differences)
-- `tenstorrent/tt-isa-documentation`: SFPLUT instruction details, piecewise linear approximation mechanism
-- `tenstorrent/sfpi`: `lut()` function semantics, LReg coefficient encoding, 8-bit to FP32 unpacking
+### DeepWiki Queries
+1. **Query**: "How is the unary program factory implemented for SFPU operations like sigmoid?"
+   **Reason**: Needed to understand the overall structure of the program factory and identify kernel files.
+   **Key Findings**: Confirmed the three-kernel pattern (reader/compute/writer), the use of `split_work_to_cores`, and the `eltwise_sfpu.cpp` compute kernel with define-based op injection.
 
-### Confluence References
-- **Tensix SFPU Instruction Set Architecture** (Page ID: 1170505767): Retrieved detailed SFPLUT instruction specification including:
-  - Opcode 0x73, encoding MI, FP32 input/output
-  - Algorithmic implementation: `RG[VD] = A * abs(RG[3]) + C` with coefficient selection based on `|x| < 1.0`, `1.0 <= |x| < 2.0`, `|x| >= 2.0`
-  - `unpackCoeff` algorithm for converting 8-bit LUT entries to FP32
-  - Programmable constant register layout (LRegs 0-2 visible to SFPLUT)
-  - InstrMod[2] sign mode (retain sign of RG[3])
+2. **Query**: "Where is the SFPU sigmoid kernel implementation located? What LLK/ckernel functions does it call?"
+   **Reason**: Needed to locate the SFPU kernel source files and understand the call chain.
+   **Key Findings**: Located `ckernel_sfpu_sigmoid.h` for both architectures. Confirmed sigmoid uses `_sfpu_exp_improved_`/`_sfpu_exp_21f_` for exp and `_sfpu_reciprocal_` for the final division.
 
-### Glean References
-- Not consulted. DeepWiki and Confluence provided sufficient detail for this analysis.
+### Documentation References
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+   **Reason**: Needed to determine which compute kernel path sigmoid uses and what defines are generated.
+   **Key Information**: Sigmoid uses default `eltwise_sfpu.cpp` kernel, gets `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` macro, and the parametrized version generates `sigmoid_tile_init<approx>()` and `sigmoid_tile<vecmode, approx>(idst)`.
 
-## Files Referenced
+2. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+   **Reason**: Needed to understand how the LLK params wrapper orchestrates face iteration.
+   **Key Information**: In VectorMode::RC, the wrapper calls the SFPU function 4 times (once per face), advancing the DEST face address between calls. Each call processes 8 rows (ITERATIONS=8) of 32 elements.
 
-| File | Role |
-|---|---|
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` | Program factory (host-side program construction) |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.hpp` | Program factory header (shared_variables_t definitions) |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp` | SIGMOID define generation, approx mode, kernel path resolution |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp` | Utility function declarations |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp` | `UnaryOpType::SIGMOID` enum definition |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp` | Generic unary SFPU compute kernel |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp` | Reader kernel |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | Writer kernel |
-| `tt_metal/hw/inc/api/compute/compute_kernel_api.h` | `sigmoid_tile()` and `sigmoid_tile_init()` API |
-| `tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h` | `init_sfpu()` definition |
-| `tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h` | Conditional SFPU header includes |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h` | Precise sigmoid SFPU kernel (Wormhole) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h` | Precise sigmoid SFPU kernel (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid_appx.h` | Approximate sigmoid SFPU kernel (Wormhole) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid_appx.h` | Approximate sigmoid SFPU kernel (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sigmoid.h` | LLK API layer for sigmoid (Wormhole) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sigmoid.h` | LLK API layer for sigmoid (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sigmoid_appx.h` | LLK API for approximate sigmoid (Wormhole) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sigmoid_appx.h` | LLK API for approximate sigmoid (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h` | Exp implementations used by sigmoid |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h` | Reciprocal wrapper used by sigmoid |
+3. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_recip.h`
+   **Reason**: Needed to understand the reciprocal implementation used by sigmoid.
+   **Key Information**: `_sfpu_reciprocal_<N>` uses `approx_recip` (SFPARECIP) as initial estimate, then N iterations of Newton-Raphson refinement. The Blackhole version handles NaN edge cases (0*inf) via sign-based detection.

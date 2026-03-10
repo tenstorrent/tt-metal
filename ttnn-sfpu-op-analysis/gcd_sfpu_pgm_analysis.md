@@ -1,102 +1,176 @@
-# GCD (Greatest Common Divisor) -- SFPU Binary Operation Analysis
+# GCD (element_wise_multi_core_sfpu) Implementation Analysis
 
-## Operation Overview
+## Overview
 
-| Property | Value |
-|---|---|
-| **Operation Name** | GCD (Greatest Common Divisor) |
-| **Operation Type** | Binary element-wise SFPU |
-| **BinaryOpType Enum** | `BinaryOpType::GCD` |
-| **Program Factory** | `BinaryDeviceOperation::ElementWiseMultiCoreSfpu` |
-| **Program Factory File** | `ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp` |
-| **Supported Input Dtypes** | `INT32 x INT32`, `UINT32 x UINT32` |
-| **Output Dtype** | Same as input (INT32 or UINT32) |
-| **Compute Engine** | SFPU (vector unit) -- not FPU (matrix unit) |
-| **Algorithm** | Binary GCD (Stein's algorithm) implemented entirely in SFPU instructions |
+The GCD (Greatest Common Divisor) operation computes the element-wise greatest common divisor of two integer tensors: `output[i] = gcd(a[i], b[i])`. It is a binary SFPU operation that operates on Int32 data. The implementation uses the Binary GCD algorithm (also known as Stein's algorithm), which avoids division by using only subtraction, absolute value, leading-zero count, and bitwise operations -- all of which map efficiently to SFPU instructions.
 
-## Program Factory Selection
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp`
 
-The GCD operation is routed to the `ElementWiseMultiCoreSfpu` program factory through the following decision chain:
+## Work Unit Definition
 
-1. `BinaryDeviceOperation::select_program_factory()` in `binary_device_operation.cpp` checks if input tensors have matching height and width dimensions.
-2. If dimensions match, it calls `utils::is_binary_sfpu_op(op, dtype1, dtype2)`.
-3. For `BinaryOpType::GCD`, the function returns `true` when both inputs are `INT32` or both are `UINT32`.
-4. The factory returns `ElementWiseMultiCoreSfpu{}`.
+| Attribute | Value |
+|-----------|-------|
+| **Granularity** | tile (32x32 elements) |
+| **Unit size** | `block_size` tiles (dynamically computed; 1 tile for interleaved, up to `find_max_block_size(num_tiles_per_shard)` for sharded) |
+| **Total units** | `per_core_block_cnt` blocks per core, where `per_core_block_cnt * per_core_block_size = num_tiles_per_core` |
+| **Loop structure** | Outer loop over `per_core_block_cnt` blocks; inner loop over `per_core_block_size` tiles within each block |
 
-Relevant code from `binary_device_operation.cpp`:
-```cpp
-case BinaryOpType::GCD:
-case BinaryOpType::LCM:
-case BinaryOpType::LEFT_SHIFT:
-case BinaryOpType::RIGHT_SHIFT:
-case BinaryOpType::LOGICAL_RIGHT_SHIFT:
-    return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT32 && b == DataType::UINT32));
-```
+## Tensor Format and Layout
+
+### Input Tensors
+
+| Property | Input Tensor A | Input Tensor B |
+|----------|---------------|---------------|
+| **Logical shape** | Arbitrary (must match B) | Arbitrary (must match A) |
+| **Dimension convention** | NHWC | NHWC |
+| **Tensor layout** | TILE_LAYOUT | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED or SHARDED | INTERLEAVED or SHARDED |
+| **Buffer type** | DRAM or L1 | DRAM or L1 |
+| **Data type** | INT32 | INT32 |
+
+### Output Tensor
+
+| Property | Output Tensor |
+|----------|---------------|
+| **Logical shape** | Same as inputs |
+| **Dimension convention** | NHWC |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED or SHARDED |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | INT32 |
+
+### Layout Transformations
+
+No layout transformations (tilize/untilize) are performed within the program factory. Input and output tensors are expected to already be in TILE_LAYOUT. The `UnpackToDestMode::UnpackToDestFp32` mode is enabled for all input CBs (since GCD is not `BinaryOpType::POWER`), which ensures 32-bit precision is maintained in the DEST registers during SFPU computation.
+
+## Data Flow Pattern
+
+1. **Reader kernel** reads tiles from input tensor A into `cb_in0` (c_0) and from input tensor B into `cb_in1` (c_1), one tile at a time via NoC async reads. If inputs are sharded, the reader simply does `cb_reserve_back`/`cb_push_back` to make the pre-existing L1 shard data visible.
+2. **Compute kernel** waits for both `cb_in0` and `cb_in1` to have `per_core_block_size` tiles available. For each tile `i` in the block:
+   - Copies tile from `cb_in0` position `i` into DEST register `i*2` (even slot)
+   - Copies tile from `cb_in1` position `i` into DEST register `i*2+1` (odd slot)
+   - Calls `gcd_tile_init()` (via `BINOP_INIT` define) to set up the SFPU replay buffer
+   - Calls `gcd_tile(i*2, i*2+1, i*2)` (via `BINARY_SFPU_OP` define) to compute GCD and store the result back in DEST register `i*2`
+   - Packs the result from DEST `i*2` into `cb_out0` (c_2)
+3. **Writer kernel** waits for tiles in `cb_out0` and writes them to the output buffer in DRAM/L1 via NoC async writes. If output is sharded, the writer simply waits for data in the CB (which is backed by the output buffer directly).
 
 ## Circular Buffer Configuration
 
-| CB Index | Name | Purpose | Size (non-sharded) | Data Format |
-|---|---|---|---|---|
-| `c_0` | `cb_src0` | Input tensor A | `2 * max_block_size * tile_size` | Matches input A dtype |
-| `c_1` | `cb_src1` | Input tensor B | `2 * max_block_size * tile_size` | Matches input B dtype |
-| `c_2` | `cb_out0` | Output tensor | `2 * max_block_size * tile_size` | Matches output dtype |
-| `c_3` | (unused for GCD) | Pre-scaling input 0 | Not allocated | N/A |
-| `c_4` | (unused for GCD) | Pre-scaling input 1 | Not allocated | N/A |
+| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
+|-------|------|---------|----------|------------|-----------|----------|----------|----------|
+| c_0 | cb_src0 | Input A staging | 2 * max_block_size tiles (interleaved) or num_tiles_per_shard (sharded) | 1 tile (reader produces 1 at a time) | Double (interleaved) / Full-shard (sharded) | Reader | Compute | Block |
+| c_1 | cb_src1 | Input B staging | 2 * max_block_size tiles (interleaved) or num_tiles_per_shard (sharded) | 1 tile (reader produces 1 at a time) | Double (interleaved) / Full-shard (sharded) | Reader | Compute | Block |
+| c_2 | cb_output | Output staging | 2 * max_block_size tiles (interleaved) or num_tiles_per_shard (sharded) | 1 tile (writer consumes 1 at a time) | Double (interleaved) / Full-shard (sharded) | Compute | Writer | Block |
 
-For GCD, circular buffers `c_3` and `c_4` are NOT allocated because GCD does not define `SFPU_OP_INIT_PRE_IN0_0` or `SFPU_OP_INIT_PRE_IN1_0`. The GCD operation has no pre-scaling steps -- it operates directly on the raw integer inputs.
+**Note**: For GCD, the interim circular buffers c_3 and c_4 are NOT created because GCD does not define `SFPU_OP_INIT_PRE_IN0_0` or `SFPU_OP_INIT_PRE_IN1_0` (no input pre-scaling is needed).
 
-When sharded, the input CBs are backed by globally-allocated addresses from the tensor buffers, and their sizes are `num_tiles_per_shard * tile_size`.
+## Pipeline Pattern Summary
 
-## Compile-Time Defines
+- **Interleaved mode**: All CBs have capacity `2 * max_block_size` with block size `max_block_size`, enabling **double-buffering**. The reader can fill one buffer while the compute processes the other.
+- **Sharded mode**: CBs are backed by the tensor's L1 buffer directly (globally allocated), so the entire shard is available at once. This is effectively **single-buffered** since the data is already in place.
 
-The `get_defines_fp32()` function in `binary_op_utils.cpp` generates the following defines for GCD:
+## Index Calculations
 
-```cpp
-case BinaryOpType::GCD:
-    new_defines.insert({"BINOP_INIT", fmt::format("gcd_tile_init();")});
-    op_name = "gcd_tile";
-    break;
-```
+- **Interleaved**: The reader uses a simple linear tile ID starting from `start_id` (assigned per core) and increments sequentially. The writer does the same.
+- **Block/Width sharded**: The reader traverses tiles in a 2D pattern: outer loop over `block_height` rows, inner loop over `block_width` columns. The start tile ID is computed as: `start_id = (core_row * block_height * block_width * num_shards_per_width) + (core_col * block_width)`.
+- **TensorAccessor**: Used for DRAM address computation in both reader and writer kernels. Compile-time args encode the accessor configuration.
+- **DEST register mapping**: Input A tile `i` goes to DEST slot `i*2`, input B tile `i` goes to DEST slot `i*2+1`. Output is taken from DEST slot `i*2` (overwrites input A's slot).
 
-This produces the following define map entries:
+## Memory Access Patterns
 
-| Define Key | Value | Purpose |
-|---|---|---|
-| `BINOP_INIT` | `gcd_tile_init();` | Initializes the SFPU for GCD computation (records replay buffer) |
-| `BINARY_SFPU_OP` | `gcd_tile(i*2, i*2+1, i*2);` | Executes GCD on tile pair, result overwrites first input slot |
+### Read Pattern
+- **Interleaved**: Sequential tile reads from `start_id` to `start_id + num_tiles - 1`. Each tile read is a NoC async read followed by a barrier before pushing to CB.
+- **Sharded**: No reads required; data is already in L1. The reader just makes it visible via `cb_reserve_back`/`cb_push_back`.
 
-The `BINARY_SFPU_OP` define is constructed at the end of `get_defines_fp32()`:
-```cpp
-new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {}, {});", op_name, idst1, idst2, idst1)});
-```
-where `idst1 = "i*2"` (input A / output position), `idst2 = "i*2+1"` (input B position).
+### Write Pattern
+- **Interleaved**: Sequential tile writes from `start_id`. Each tile write waits for CB data, reads from CB, issues NoC async write, then pops.
+- **Sharded**: No writes required; output CB is backed by output buffer directly. Writer just waits for all tiles.
 
-## Compute Configuration
+## Core Distribution Strategy
 
-```cpp
-bool fp32_dest_acc_en = true;  // Always true for INT32/UINT32
-UnpackToDestMode = UnpackToDestFp32;  // For all CBs (since op_type != POWER)
-```
+| Attribute | Value |
+|-----------|-------|
+| **Grid topology** | 1D (interleaved) or 2D (sharded, matching shard grid) |
+| **Grid dimensions** | Determined by `operation_attributes.worker_grid` |
+| **Total cores** | Up to all available compute cores |
+| **Work per core** | `num_tiles_per_core_group_1` or `num_tiles_per_core_group_2` tiles |
+| **Load balancing** | Two-group split: group 1 gets `ceil(total_tiles / num_cores)` tiles, group 2 gets `floor(total_tiles / num_cores)` tiles. Uses `split_work_to_cores` for interleaved. |
 
-GCD always operates with `fp32_dest_acc_en = true` because its input types are INT32 or UINT32 (which map to `DataFormat::Int32` or `DataFormat::UInt32`). The `UnpackToDestMode::UnpackToDestFp32` is set for all circular buffers, which means data is unpacked directly into the 32-bit destination registers without format conversion.
+The runtime args function supports both a fast path (zero-start rectangular grid) and a general path (arbitrary CoreRangeSet). The fast path is used when the worker grid is a single rectangle starting at core (0,0) and any shard grid also starts at (0,0).
+
+## Arguments
+
+### Compile-Time Arguments
+
+#### Reader Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | block_or_width_sharded | uint32_t | 1 if block or width sharded, 0 otherwise |
+| 1+ | TensorAccessorArgs(src0) | uint32_t[] | Accessor config for input A (only if not IN0_SHARDED) |
+| N+ | TensorAccessorArgs(src1) | uint32_t[] | Accessor config for input B (only if not IN1_SHARDED) |
+
+#### Writer Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | output_cb_index | uint32_t | CB index for output (c_2) |
+| 1+ | TensorAccessorArgs(dst) | uint32_t[] | Accessor config for output buffer |
+
+#### Compute Kernel
+
+No explicit compile-time arguments. Configuration is done via preprocessor defines:
+- `BINOP_INIT` = `gcd_tile_init();`
+- `BINARY_SFPU_OP` = `gcd_tile(i*2, i*2+1, i*2);`
+- `fp32_dest_acc_en` = true (since output is Int32)
+- `UnpackToDestMode::UnpackToDestFp32` for all input CBs
+
+### Runtime Arguments
+
+#### Reader Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | src0_addr | uint32_t | Input tensor A buffer address |
+| 1 | src1_addr | uint32_t | Input tensor B buffer address |
+| 2 | num_tiles | uint32_t | Number of tiles this core processes |
+| 3 | start_id | uint32_t | Starting tile ID for this core |
+| 4 | block_height | uint32_t | Shard block height in tiles (0 if interleaved) |
+| 5 | block_width | uint32_t | Shard block width in tiles (0 if interleaved) |
+| 6 | num_cores_y | uint32_t | Number of shards per width (0 if interleaved) |
+
+#### Compute Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | per_core_block_cnt | uint32_t | Number of blocks to process |
+| 1 | per_core_block_size | uint32_t | Tiles per block |
+
+#### Writer Kernel (interleaved, non-block-sharded output)
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | dst_addr | uint32_t | Output buffer address |
+| 1 | num_pages | uint32_t | Number of tiles to write |
+| 2 | start_id | uint32_t | Starting tile ID |
 
 ## Kernel Implementations
 
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader_binary_interleaved_start_id | RISCV_0 | NOC0 | DRAM/L1 | CB c_0, c_1 | Read input tiles A and B |
+| eltwise_binary_sfpu_kernel | RISCV_2 (math) | N/A | CB c_0, c_1 | CB c_2 | copy_tile, gcd_tile, pack_tile |
+| writer_unary_interleaved_start_id | RISCV_1 | NOC1 | CB c_2 | DRAM/L1 | Write output tiles |
+
 ### Reader Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp`
-
-The reader kernel reads tiles from two input tensors (A and B) from DRAM into circular buffers `c_0` and `c_1`. It supports both interleaved and sharded memory layouts. For sharded inputs, it simply reserves and pushes back the pre-allocated pages. For interleaved inputs, it reads one tile at a time using `noc_async_read_tile()` and blocks on `noc_async_read_barrier()`.
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp`
+- **Key Logic**: Supports four modes via `#ifdef` directives: both sharded, src0-only sharded, src1-only sharded, or both interleaved. For interleaved, it iterates through tile IDs and uses `noc_async_read_tile` via TensorAccessor. For sharded, it just does `cb_reserve_back`/`cb_push_back` since data is already in L1. The `block_or_width_sharded` compile-time flag enables a 2D traversal pattern (row x column) vs. a simple linear traversal.
 
 ### Writer Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-
-The writer kernel writes output tiles from circular buffer `c_2` to DRAM. For sharded output, it simply waits on the front of the CB. For interleaved output, it writes one tile at a time using `noc_async_write_page()`.
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+- **Key Logic**: Standard unary writer pattern. Iterates over tiles linearly, waits for each tile in CB, writes via `noc_async_write_page` using TensorAccessor. For sharded output, just does `cb_wait_front` for all tiles (data is already in the output buffer).
 
 ### Compute Kernel
-
-This section combines the full annotated source code of the compute kernel with architectural analysis.
 
 #### Compute Kernel File
 `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp`
@@ -127,128 +201,115 @@ This section combines the full annotated source code of the compute kernel with 
 #include "api/compute/binary_fmod.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/xlogy.h"
-#include "api/compute/gcd.h"          // Provides gcd_tile() and gcd_tile_init() for this operation
+#include "api/compute/gcd.h"          // provides gcd_tile() and gcd_tile_init()
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"
 
-// PRE_SCALE is true if any pre-scaling defines are set. For GCD, neither is set, so PRE_SCALE is false.
+// PRE_SCALE is true if either input requires pre-processing (e.g. exp before add for logaddexp).
+// For GCD, neither SFPU_OP_INIT_PRE_IN0_0 nor SFPU_OP_INIT_PRE_IN1_0 is defined, so PRE_SCALE is false.
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 void kernel_main() {
-    // Runtime args: how many blocks of tiles to process, and how many tiles per block
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);   // runtime arg: number of blocks
+    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);   // runtime arg: tiles per block
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;   // Input A circular buffer
-    constexpr auto cb_in1 = tt::CBIndex::c_1;   // Input B circular buffer
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input A circular buffer
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input B circular buffer
 
-    // For GCD, SFPU_OP_INIT_PRE_IN0_0 is NOT defined, so cb_inp0 == cb_in0 (no pre-scaling intermediate buffer)
+    // For GCD, SFPU_OP_INIT_PRE_IN0_0 is not defined, so cb_inp0 == cb_in0
 #ifdef SFPU_OP_INIT_PRE_IN0_0
     constexpr auto cb_inp0 = tt::CBIndex::c_3;
 #else
-    constexpr auto cb_inp0 = cb_in0;            // GCD takes this path: reads directly from c_0
+    constexpr auto cb_inp0 = cb_in0;
 #endif
 
-    // For GCD, SFPU_OP_INIT_PRE_IN1_0 is NOT defined, so cb_inp1 == cb_in1
+    // For GCD, SFPU_OP_INIT_PRE_IN1_0 is not defined, so cb_inp1 == cb_in1
 #ifdef SFPU_OP_INIT_PRE_IN1_0
     constexpr auto cb_inp1 = tt::CBIndex::c_4;
 #else
-    constexpr auto cb_inp1 = cb_in1;            // GCD takes this path: reads directly from c_1
+    constexpr auto cb_inp1 = cb_in1;
 #endif
 
-    constexpr auto cb_out0 = tt::CBIndex::c_2;  // Output circular buffer
+    constexpr auto cb_out0 = tt::CBIndex::c_2;  // output circular buffer
 
-    // Initialize the unary op common infrastructure (configures tile copy, unpack, pack)
-    unary_op_init_common(cb_in0, cb_out0);
+    unary_op_init_common(cb_in0, cb_out0);  // initializes unpack/pack pipeline for the given CB pair
 
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
-    // Main processing loop: iterate over all tile blocks assigned to this core
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
-        // PRE_SCALE is false for GCD, so the entire pre-scaling sections (lines 59-105) are skipped.
-        // The #ifdef SFPU_OP_INIT_PRE_IN0_0 and #ifdef SFPU_OP_INIT_PRE_IN1_0 blocks are not compiled.
+        // --- PRE_SCALE sections are skipped for GCD (no input pre-processing) ---
 
-        // Wait for input tiles from both circular buffers to be available (written by reader kernel)
-        cb_wait_front(cb_inp0, per_core_block_size);    // Wait for input A tiles
-        cb_wait_front(cb_inp1, per_core_block_size);    // Wait for input B tiles
-        cb_reserve_back(cb_out0, per_core_block_size);  // Reserve space in output CB
+#if PRE_SCALE
+        copy_tile_to_dst_init_short(cb_in0);
+#endif
 
-        tile_regs_acquire();    // Acquire exclusive access to the DST register file
-        tile_regs_wait();       // Wait for DST registers to be available
+        // (SFPU_OP_INIT_PRE_IN0_0 and SFPU_OP_INIT_PRE_IN1_0 blocks not active for GCD)
 
-        // Configure tile copy for input B -> DST, using input A's data format as reference
+        // Wait for both inputs to have per_core_block_size tiles ready
+        cb_wait_front(cb_inp0, per_core_block_size);  // blocks until reader has produced tiles in cb_in0
+        cb_wait_front(cb_inp1, per_core_block_size);  // blocks until reader has produced tiles in cb_in1
+        cb_reserve_back(cb_out0, per_core_block_size); // reserve space in output CB for the block
+
+        tile_regs_acquire();  // acquire exclusive access to DEST registers
+        tile_regs_wait();     // wait for DEST registers to be ready (pack done)
+
+        // Initialize copy_tile for input B's data type, reading from cb_inp1
         copy_tile_to_dst_init_short_with_dt(cb_inp1, cb_inp0);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            // Copy input A tile i into DST at position i*2 (even slots hold input A)
+            // Copy tile i from cb_inp0 (input A) to DEST register slot i*2 (even)
             copy_tile(cb_inp0, i, i * 2);
         }
 
-        // Switch data format configuration for copying input B tiles
+        // Switch copy_tile config to input A's data type for reading from cb_inp1
         copy_tile_to_dst_init_short_with_dt(cb_inp0, cb_inp1);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            // Copy input B tile i into DST at position i*2+1 (odd slots hold input B)
+            // Copy tile i from cb_inp1 (input B) to DEST register slot i*2+1 (odd)
             copy_tile(cb_inp1, i, i * 2 + 1);
 
-            // For GCD, BINOP_INIT is defined as "gcd_tile_init();" -- this records the replay buffer
-            // containing the core GCD iteration loop (7 instructions x 4 iterations).
-            // This must be called before each gcd_tile() invocation to ensure the replay buffer is fresh.
+            // For GCD, the BINOP_INIT define expands to: gcd_tile_init();
+            // This records 4 iterations of the inner GCD loop body into the SFPU replay buffer.
 #ifdef BINOP_INIT
-            BINOP_INIT              // Expands to: gcd_tile_init();
+            BINOP_INIT   // gcd_tile_init();
 #endif
+            // (ADD_INT_INIT, SUB_INT_INIT, etc. are not defined for GCD)
 
-            // For GCD, BINARY_SFPU_OP is defined as "gcd_tile(i*2, i*2+1, i*2);"
-            // This computes gcd(DST[i*2], DST[i*2+1]) and stores result in DST[i*2].
+            // For GCD, BINARY_SFPU_OP expands to: gcd_tile(i*2, i*2+1, i*2);
+            // This executes the Binary GCD algorithm on DEST[i*2] and DEST[i*2+1],
+            // storing the result back in DEST[i*2].
 #ifdef BINARY_SFPU_OP
-            BINARY_SFPU_OP          // Expands to: gcd_tile(i*2, i*2+1, i*2);
+            BINARY_SFPU_OP   // gcd_tile(i*2, i*2+1, i*2);
 #endif
+            // (SFPU_OP_INIT_0 and SFPU_OP_CHAIN_0 are not defined for GCD)
 
-            // No SFPU_OP_INIT_0 or SFPU_OP_CHAIN_0 defines for GCD (no fused activations or typecast)
-
-            // Pack the result from DST[i*2] into the output circular buffer
+            // Pack the result from DEST register i*2 into the output CB
             pack_tile(i * 2, cb_out0);
         }
 
-        tile_regs_commit();     // Signal that DST register writes are complete
-        tile_regs_release();    // Release DST register file for other kernels
+        tile_regs_commit();   // signal that DEST register writes are complete
+        tile_regs_release();  // release DEST registers for next acquisition
 
-        // Free consumed input tiles and publish output tiles
-        cb_pop_front(cb_inp0, per_core_block_size);     // Release input A tiles
-        cb_pop_front(cb_inp1, per_core_block_size);     // Release input B tiles
-        cb_push_back(cb_out0, per_core_block_size);     // Publish output tiles to writer kernel
+        cb_pop_front(cb_inp0, per_core_block_size);  // free input A tiles
+        cb_pop_front(cb_inp1, per_core_block_size);  // free input B tiles
+        cb_push_back(cb_out0, per_core_block_size);  // publish output tiles for writer
     }
 }
 ```
 
 ### SFPU Kernel Implementation
 
-This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
-
 #### SFPU Kernel File
-`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h`
-(Identical implementation exists at `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h`)
+- **Wormhole B0**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h`
+- **Blackhole**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h`
 
-#### LLK Bridge File
+Both files are identical in implementation.
+
+#### LLK Wrapper File
 `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_gcd.h`
 
-#### API Header
-`tt_metal/hw/inc/api/compute/gcd.h`
-
-#### Call Chain
-
-```
-gcd_tile(idst0, idst1, odst)                                     [api/compute/gcd.h]
-  -> MATH(llk_math_eltwise_binary_sfpu_gcd<APPROX>(idst0, idst1, odst))
-    -> _llk_math_eltwise_binary_sfpu_params_<APPROX>(             [llk_math_eltwise_binary_sfpu_gcd.h]
-         sfpu::calculate_sfpu_gcd, dst_index0, dst_index1, odst, VectorMode::RC)
-
-gcd_tile_init()                                                    [api/compute/gcd.h]
-  -> MATH(llk_math_eltwise_binary_sfpu_gcd_init<APPROX>())
-    -> llk_math_eltwise_binary_sfpu_init<SfpuType::gcd, APPROX>(  [llk_math_eltwise_binary_sfpu_gcd.h]
-         sfpu::calculate_sfpu_gcd_init)
-```
+The LLK wrapper calls `_llk_math_eltwise_binary_sfpu_params_` which iterates over 4 tile faces (each 16x16) in `VectorMode::RC` mode, calling `calculate_sfpu_gcd` for each face. Between faces, it advances the DEST register read/write pointer via `TTI_SETRWC`.
 
 #### Annotated SFPU Kernel Source
 
@@ -268,150 +329,143 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// calculate_sfpu_gcd_body: The inner loop of the Binary GCD (Stein's) algorithm.
-// This function implements the core GCD reduction step that is replayed multiple times.
+// calculate_sfpu_gcd_body: Core of the Binary GCD algorithm for 31-bit signed integers.
+// Operates on LREG0 (a) and LREG1 (b) across all 32 SIMD lanes simultaneously.
+// On entry: LREG0 = a, LREG1 = b (both signed int32, loaded from DEST).
+// On exit: LREG1 = gcd(|a|, |b|).
 //
-// PRECONDITIONS when entering:
-//   LREG0 = a (one operand, sign varies during computation)
-//   LREG1 = b (other operand, always the "smaller" after swap)
-//   LREG3 = d (negated shared trailing-zero count, used for final shift)
-//
-// The algorithm works on signed 32-bit integers in the SFPU SIMD lanes.
-// It uses the Binary GCD property: if both a and b are odd, then |a - b| is even
-// and gcd(a, b) = gcd(|a - b| / 2^k, min(a, b)).
-//
-// Template parameter max_input_bits controls iteration count (default 31 for int32).
+// The algorithm:
+//   1. Compute trailing zeros of (a | b) to find the common factor of 2.
+//   2. Ensure b is odd (swap with a if needed).
+//   3. Take absolute values, negate a, negate the trailing-zero count.
+//   4. Loop 30 times (sufficient for 31-bit inputs):
+//      a. Strip factors of 2 from a (using abs, AND, clz, shift).
+//      b. Ensure b <= a via min/max swap.
+//      c. Compute a = b - a (making a even again for next iteration).
+//   5. Result is in LREG1 (b), which is the GCD divided by the common power of 2.
+//      The caller would need to shift back, but the algorithm as used here works on the
+//      full integer representation.
+
 template <int max_input_bits = 31>
 inline void calculate_sfpu_gcd_body() {
-    // --- PREAMBLE: Determine shared factor of 2 and ensure b is odd ---
+    // Step 1: Find the largest power of 2 dividing both a and b.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);   // LREG2 (c) = a
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);     // c = a | b (set all bits present in either)
 
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // c = a (copy a to LREG2 as temporary)
-    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);    // c = a | b (bitwise OR to find combined trailing zeros)
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);    // LREG3 (d) = c
+    // d = -d (two's complement negation: LREG3 = 0 - LREG3)
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
+    // d = d & c = (-c) & c, which isolates the lowest set bit of c (the common trailing-zero factor)
+    TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+    // d = clz(d): count leading zeros of the isolated LSB gives (31 - trailing_zeros) of (a|b)
+    TTI_SFPLZ(0, p_sfpu::LREG3, p_sfpu::LREG3, 0);
 
-    // Isolate the lowest set bit of (a | b) to find the shared power of 2.
-    // The shared factor of 2 in gcd(a, b) = 2^k where k = count_trailing_zeros(a | b).
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);   // d = c = (a | b)
-    // Negate d: d = -(a | b). This is used to isolate the lowest set bit via d & c.
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3,
-        SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d
-    TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);   // d = d & c = (-c) & c, isolates lowest set bit
-    TTI_SFPLZ(0, p_sfpu::LREG3, p_sfpu::LREG3, 0);    // d = clz(lowest_set_bit) = 31 - ctz(a | b)
+    // Step 2: Ensure b is odd by conditionally swapping a and b.
+    // c = b << d (left-shift b by the leading-zero count of the isolated LSB)
+    // If c == 0, then b is even and a is odd, so swap them.
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2, SFPSHFT2_MOD1_SHFT_LREG);
+    // Set condition code: lanes where c == 0 (b was even)
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);
+    // Conditional swap: in lanes where b was even, swap a and b so b becomes odd
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    // Disable conditional execution (clear lane flags)
+    TTI_SFPENCC(0, 0, 0, 0);
 
-    // Check if b is odd. If b is even, swap a and b so that the "b" register holds the odd value.
-    // We left-shift b by d (= clz of lowest set bit). If the result is 0, b had no bits above the
-    // shared trailing zeros, meaning b was even relative to the shared factor.
-    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2,
-        SFPSHFT2_MOD1_SHFT_LREG);                      // c = b << d (test if b is effectively even)
-    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);              // Set lane flags if c == 0 (b is even)
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // Conditional swap: if flag set, swap(a, b)
-    TTI_SFPENCC(0, 0, 0, 0);                            // Disable conditional execution (all lanes active again)
+    // Step 3: Take absolute values and prepare for iterative loop.
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);   // a = |a| (integer absolute value)
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);   // b = |b|
 
-    // Take absolute values of both operands to work with positive integers.
-    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);   // a = abs(a)
-    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);   // b = abs(b)
+    // Negate a (for the subtraction step in the loop: a = b - a is done as a = b + (-a))
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
+    // Negate d (the shift count), so we can use it as a right-shift amount
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
 
-    // Negate a (for subtraction in the main loop) and negate d (for right-shifting later).
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0,
-        SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = -a (for subtraction a = b - a)
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3,
-        SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d (negate for right-shift usage)
+    // Step 4: Main iteration loop.
+    // Each iteration is 7 instructions (recorded in the replay buffer by calculate_sfpu_gcd_init).
+    // We need 30 iterations total for 31-bit inputs.
+    // The #pragma unroll produces 7 iterations of 4 replays each = 28 iterations.
+    int iterations = max_input_bits - 1;  // 30
 
-    // --- MAIN LOOP: Replay the recorded GCD iteration ---
-    // The main iteration is recorded in the replay buffer by calculate_sfpu_gcd_init().
-    // Each iteration (7 instructions) performs:
-    //   1. abs(a) -> isolate LSB -> clz -> add d -> right-shift to make a odd
-    //   2. swap(a, b) to ensure b <= a
-    //   3. a = b - a (result is even since both are odd, loop continues)
-
-    int iterations = max_input_bits - 1;    // 30 iterations for 31-bit inputs
-
-    // Replay in batches of 4 iterations (7 instructions each = 28 instructions per replay)
     #pragma GCC unroll 7
     while (iterations / 4 > 0) {
-        TTI_REPLAY(0, 7 * 4, 0, 0);        // Replay 4 iterations (28 instructions) from buffer
+        // Replay 4 iterations (7 instructions each = 28 instructions) from the replay buffer
+        TTI_REPLAY(0, 7 * 4, 0, 0);  // start_idx=0, len=28, exec_while_loading=0, load_mode=0 (playback)
         iterations -= 4;
     }
 
-    // Replay remaining iterations. For 31-bit inputs: 30 - 28 = 2 remaining iterations.
-    // The worst case for 31-bit inputs needs 31 iterations, but we skip the final iteration
-    // because it only affects a (which is discarded). We also skip the last instruction of
-    // iteration 30 since it only modifies a.
-    TTI_REPLAY(0, 7 * iterations - 1, 0, 0);   // Replay remaining iterations minus last instruction
+    // Replay the remaining 2 iterations (30 - 28 = 2), minus 1 instruction.
+    // The last instruction of the final iteration only affects 'a', which we don't need.
+    TTI_REPLAY(0, 7 * iterations - 1, 0, 0);  // 7*2-1 = 13 instructions replayed
 
-    TTI_SFPENCC(0, 0, 0, 0);               // Ensure all lanes are active (disable conditional execution)
+    // Clear any remaining conditional execution flags
+    TTI_SFPENCC(0, 0, 0, 0);
 }
 
-// calculate_sfpu_gcd: Top-level function called by the LLK layer for each tile.
-// ITERATIONS=8 processes all 8 faces of a 32x32 tile (4 rows per face, 32 elements per row).
+// calculate_sfpu_gcd: Top-level SFPU function called per tile face.
+// Iterates over ITERATIONS (default 8) rows of 32 elements within one 16x16 face.
+// Each iteration processes one row pair from the DEST register.
 template <int ITERATIONS = 8>
 inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Binary GCD algorithm applied to each face of the tile.
+    // Binary GCD algorithm.
     for (int d = 0; d < ITERATIONS; d++) {
-        // Each tile occupies 64 rows in the destination register file.
-        // (32x32 tile = 1024 elements, stored as 64 rows of 16 elements in Dest,
-        //  but indexed as 64 "rows" with 32-bit SIMD width per row.)
+        // Each tile in DEST occupies 64 rows (4 faces of 16 rows each)
         constexpr uint dst_tile_size = 64;
 
-        // Load input A face from DST register at the tile's base offset
-        TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // LREG0 = a (input A face)
-        // Load input B face from DST register
-        TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // LREG1 = b (input B face)
+        // Load row 'd' of input A from DEST into LREG0.
+        // Mod0=4 selects int32 format, Mod1=3 selects LREG addressing mode.
+        TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a
+        // Load row 'd' of input B from DEST into LREG1.
+        TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
 
-        // Execute the binary GCD algorithm for 31-bit signed integers
+        // Execute the Binary GCD algorithm body (30 iterations for 31-bit integers)
         calculate_sfpu_gcd_body<31>();
 
-        // Store the result (in LREG1 = b, which holds gcd at convergence) back to DST
+        // Store the result (in LREG1 = gcd) back to DEST at the output tile position.
         TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
-
-        // Advance to the next face within the tile
+        // Advance the DEST row pointer for the next iteration within this face
         dst_reg++;
     }
 }
 
-// calculate_sfpu_gcd_init: Records the core GCD iteration into the SFPU replay buffer.
-// This function is called once before processing tiles (via gcd_tile_init()).
-// It records 7 instructions x 4 iterations = 28 instructions into the replay buffer.
-// These instructions implement one iteration of the binary GCD reduction:
-//   Given: a is even (or zero), b is odd
-//   1. SFPABS: compute |a|
-//   2. SFPAND: isolate lowest set bit of a (i.e., a & |a|)
-//   3. SFPLZ: count leading zeros of lowest set bit, with conditional disable for zero lanes
-//   4. SFPIADD: add d (trailing zero offset) to the CLZ result
-//   5. SFPSHFT2: right-shift |a| by the computed amount, making a odd
-//   6. SFPSWAP: ensure b <= a using min/max swap
-//   7. SFPIADD: a = b - a (result is even since both operands are now odd)
+// calculate_sfpu_gcd_init: Records 4 iterations of the inner GCD loop into the replay buffer.
+// This is called once before the main GCD computation.
+// The replay buffer stores 7*4 = 28 instructions, which represent 4 iterations of the loop body.
+// Each iteration:
+//   1. abs(a) -> LREG2 (positive a)
+//   2. LREG0 &= LREG2 (isolate LSB of a, since LREG0 = -a)
+//   3. clz(LREG0), skip if a==0 (handles the case where a is already 0, meaning GCD found)
+//   4. LREG0 += d (add the common trailing-zero offset)
+//   5. a = a >> -LREG0 (right-shift to strip all trailing zeros, making a odd)
+//   6. swap(a, b) with min/max (ensure b <= a)
+//   7. a = b - a (difference is even, ready for next iteration)
 inline void calculate_sfpu_gcd_init() {
-    // Start recording into the replay buffer. 7*4=28 instructions will be recorded.
-    // The "1" in the last argument means "start recording" mode.
+    // TTI_REPLAY with load_mode=1: record the next 28 instructions into the replay buffer
     TTI_REPLAY(0, 7 * 4, 0, 1);
-
     #pragma GCC unroll 4
     for (int i = 0; i < 4; ++i) {
-        // LREG0 holds -a (negated). LREG2 will hold +a via abs.
-        // The pair {-a, +a} in {LREG0, LREG2} is used to isolate the lowest set bit.
+        // LREG0 holds -a from previous iteration. LREG2 = |a| = abs(LREG0).
         TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            // LREG2 = |LREG0| = |a| (absolute value of a)
+        // Isolate LSB of a: LREG0 = (-a) & (|a|). Since -a and |a| share only the LSB pattern,
+        // this gives the lowest set bit of |a|.
         TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            // LREG0 = LREG0 & LREG2 = (-a) & |a| = lowest set bit of a
+        // Count leading zeros of the isolated LSB. The CC_NE0 flag disables lanes where a == 0
+        // (GCD has converged for those lanes; b already holds the result).
         TTI_SFPLZ(0, p_sfpu::LREG0, p_sfpu::LREG0, SFPLZ_MOD1_CC_NE0);
-            // LREG0 = clz(lowest_set_bit), also sets lane flags for non-zero lanes
-            // Lanes where a == 0 are disabled by the CC_NE0 flag
+        // Add the common trailing-zero count d to get the total right-shift amount.
         TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE);
-            // LREG0 = LREG0 + LREG3 = clz + d (d is negated shared trailing zero count)
-            // This computes the total right-shift needed: clz(lsb) + (-shared_tz)
+        // Right-shift |a| by the computed amount, stripping all trailing zeros.
+        // LREG0 = LREG2 >> (-LREG0). After this, a is guaranteed to be odd.
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, SFPSHFT2_MOD1_SHFT_LREG);
-            // LREG0 = |a| >> (-LREG0) = |a| right-shifted to remove all trailing zeros
-            // Now a is guaranteed to be odd (or zero if the lane was disabled)
+        // Min/max swap: LREG1 = min(a, b), LREG0 = max(a, b).
+        // This ensures b <= a for the subtraction step.
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX);
-            // Simultaneous min/max: LREG1 = min(a, b), LREG0 = max(a, b)
-            // This ensures b <= a for the subtraction step
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0,
-            SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
-            // LREG0 = LREG1 - LREG0 = b - a (since a >= b, result is non-positive)
-            // The ARG_2SCOMP_LREG_DST flag means "negate LREG0 (dst) before adding LREG1"
-            // Result is even (since both a and b are odd), ready for next iteration
+        // a = b - a (two's complement subtraction via negation of LREG_DST then add).
+        // Since both a and b are odd and a >= b, the result (b - a) is even and non-positive.
+        // The negation makes LREG0 = -(LREG0) + LREG1 = b - a.
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
     }
-    // Recording ends automatically after 28 instructions have been recorded.
+    // After this function returns, the replay buffer contains the 28-instruction sequence.
+    // Subsequent TTI_REPLAY(0, N, 0, 0) calls will play back portions of this sequence.
 }
 
 }  // namespace sfpu
@@ -420,175 +474,119 @@ inline void calculate_sfpu_gcd_init() {
 
 #### SFPU Instructions Used
 
-| Instruction | Mnemonic | Description |
-|---|---|---|
-| `TTI_SFPMOV` | SFPMOV | Register-to-register move: `VD = VC` |
-| `TTI_SFPOR` | SFPOR | Bitwise OR: `VD = VB \| VC` |
-| `TTI_SFPAND` | SFPAND | Bitwise AND: `VD = VB & VC` |
-| `TTI_SFPIADD` | SFPIADD | Integer add/subtract with modifier flags. Used for negation (`2SCOMP_LREG_DST`), addition, and subtraction |
-| `TTI_SFPLZ` | SFPLZ | Count leading zeros: `VD = clz(VC)`. With `CC_NE0` flag, also sets lane flags for non-zero values |
-| `TTI_SFPSHFT2` | SFPSHFT2 | Bitwise shift with register-specified shift amount: `VD = VB << VC` (or `>>` if VC is negative). `SHFT_LREG` mode |
-| `TTI_SFPSETCC` | SFPSETCC | Set per-lane condition codes based on register value (e.g., `== 0`) |
-| `TTI_SFPSWAP` | SFPSWAP | Simultaneous register swap. With `VEC_MIN_MAX` mode: `VD = min(VC, VD)`, `VC = max(VC, VD)` |
-| `TTI_SFPENCC` | SFPENCC | Enable/disable conditional execution based on per-lane flags. Called with all zeros to disable (make all lanes active) |
-| `TTI_SFPABS` | SFPABS | Absolute value (two's complement integer): `VD = \|VC\|` |
-| `TT_SFPLOAD` | SFPLOAD | Load a vector from the destination register file into an SFPU local register |
-| `TT_SFPSTORE` | SFPSTORE | Store a vector from an SFPU local register back to the destination register file |
-| `TTI_REPLAY` | REPLAY | Record or replay a sequence of SFPU instructions. Mode 1 = record, mode 0 = replay |
+| Instruction | Description |
+|-------------|-------------|
+| `TTI_SFPMOV` | Move/copy a value from one LREG to another across all 32 SIMD lanes |
+| `TTI_SFPOR` | Bitwise OR: `VD = VB \| VC` |
+| `TTI_SFPAND` | Bitwise AND: `VD = VB & VC` |
+| `TTI_SFPIADD` | Two's complement integer add/subtract. With `ARG_2SCOMP_LREG_DST` modifier, negates the destination before adding: `VD = VC - VD` or `VD = 0 - VD` |
+| `TTI_SFPLZ` | Count leading zeros. With `CC_NE0` modifier, also sets per-lane condition codes for lanes where input != 0 |
+| `TTI_SFPSHFT2` | Bitwise shift by register amount. With `SHFT_LREG` modifier: `VD = VB << VC` (left shift; negative VC means right shift) |
+| `TTI_SFPSETCC` | Set per-lane condition codes based on a comparison (here: `VC == 0`) |
+| `TTI_SFPSWAP` | Swap two registers. With `VEC_MIN_MAX` modifier: `VD = min(VC, VD)`, `VC = max(VC, VD)` |
+| `TTI_SFPENCC` | Enable/disable conditional execution. With all-zero args: clears conditional execution (all lanes active) |
+| `TTI_SFPABS` | Integer absolute value: `VD = \|VC\|` |
+| `TTI_REPLAY` | Instruction replay buffer control. With `load_mode=1`: record next N instructions. With `load_mode=0`: play back N recorded instructions |
+| `TT_SFPLOAD` | Load data from DEST register file into an LREG. Mod0=4 selects int32 format |
+| `TT_SFPSTORE` | Store data from an LREG back to DEST register file. Mod0=4 selects int32 format |
 
 #### SFPU Register Usage
 
-| Register | Role in GCD Algorithm |
-|---|---|
-| `LREG0` | Holds operand `a`. During iterations, holds `-a` (negated for subtraction). After iteration: `a = b - a` (even result) |
-| `LREG1` | Holds operand `b`. After the SFPSWAP min/max, holds the smaller value. At convergence, holds the GCD result |
-| `LREG2` | Temporary register: used for `\|a\|`, `a \| b`, and intermediate shift test results |
-| `LREG3` | Holds `d`: the negated count of shared trailing zeros (shared power-of-2 factor). Used throughout the iteration loop |
-| DST registers | Input tiles are loaded at `dst_index * 64` offsets. `dst_reg++` advances the face pointer by `SFP_DESTREG_STRIDE` |
+| Register | Usage |
+|----------|-------|
+| `LREG0` | Holds `a` (first operand). During the loop, holds `-a` (negated for efficient subtraction) |
+| `LREG1` | Holds `b` (second operand). At convergence, holds the GCD result |
+| `LREG2` | Temporary register `c`. Used for intermediate computations (OR, abs, shift results) |
+| `LREG3` | Holds `d`, the negated count of common trailing zeros (used as shift amount for stripping factors of 2) |
+| `DEST[idst0]` | Source tile for input A (loaded via `TT_SFPLOAD` into LREG0) |
+| `DEST[idst1]` | Source tile for input B (loaded via `TT_SFPLOAD` into LREG1) |
+| `DEST[odst]` | Destination tile for GCD result (stored from LREG1 via `TT_SFPSTORE`) |
+| Replay buffer | Stores 28 instructions (4 loop iterations of 7 instructions each) |
 
 #### SFPU Execution Flow
 
-1. **Tile acquisition**: The compute kernel waits for input tiles on `cb_in0` and `cb_in1` via `cb_wait_front()`, then reserves output space on `cb_out0` via `cb_reserve_back()`.
+1. **Tile acquisition**: The compute kernel calls `tile_regs_acquire()` / `tile_regs_wait()` to get exclusive access to DEST registers. Input tiles are copied from CBs to DEST using `copy_tile`.
 
-2. **DST register acquisition**: `tile_regs_acquire()` and `tile_regs_wait()` obtain exclusive access to the destination register file.
+2. **Initialization** (`gcd_tile_init()` -> `calculate_sfpu_gcd_init()`):
+   - Issues `TTI_REPLAY(0, 28, 0, 1)` to begin recording into the replay buffer.
+   - Executes 4 unrolled iterations of the inner loop body (7 instructions each). These are NOT executed on data -- they are captured into the replay buffer for later playback.
+   - The recorded sequence: abs -> isolate LSB -> clz -> add shift offset -> right-shift -> min/max swap -> subtract.
 
-3. **Unpack to DST**: Input A tiles are copied to even DST slots (`i*2`) and input B tiles to odd DST slots (`i*2+1`) using `copy_tile()`. This uses the unpack engine to move data from circular buffers into the 32-bit destination registers. `copy_tile_to_dst_init_short_with_dt()` configures the data format for each copy direction.
+3. **Per-face execution** (`gcd_tile()` -> `_llk_math_eltwise_binary_sfpu_params_` -> `calculate_sfpu_gcd()`):
+   - The LLK params wrapper iterates over 4 faces (VectorMode::RC). For each face:
+     - `calculate_sfpu_gcd` loops over 8 row-pairs within the face.
+     - For each row: loads `a` and `b` from DEST into LREG0 and LREG1.
+     - Executes `calculate_sfpu_gcd_body<31>()`:
+       - **Preamble** (12 instructions): Computes common trailing zeros, ensures b is odd, takes absolute values, negates a and d.
+       - **Main loop** (30 iterations via replay): Plays back the 7-instruction sequence from the replay buffer. Uses `TTI_REPLAY(0, 28, 0, 0)` for groups of 4 iterations, then `TTI_REPLAY(0, 13, 0, 0)` for the final 2 iterations (minus the last instruction which only affects `a`).
+       - **Cleanup**: `TTI_SFPENCC` clears conditional execution.
+     - Stores result from LREG1 to DEST.
+     - Advances `dst_reg++` to the next row.
 
-4. **SFPU initialization** (`gcd_tile_init()` -> `calculate_sfpu_gcd_init()`):
-   - Records 28 SFPU instructions (4 unrolled iterations of the 7-instruction GCD reduction step) into the hardware replay buffer.
-   - Each iteration: `abs -> and -> clz -> add -> shift -> min/max swap -> subtract`.
+4. **Pack**: After all tiles in the block are processed, `pack_tile(i*2, cb_out0)` moves results from DEST to the output CB.
 
-5. **SFPU execution** (`gcd_tile(i*2, i*2+1, i*2)` -> `calculate_sfpu_gcd()`):
-   - For each of the 8 faces in a tile:
-     a. `SFPLOAD` loads one face of input A into `LREG0` and one face of input B into `LREG1`.
-     b. `calculate_sfpu_gcd_body<31>()` runs the preamble (determine shared power of 2, ensure b is odd, take absolute values, negate a and d).
-     c. The main loop replays the recorded 7-instruction iteration 30 times total (7 batches of 4 via `TTI_REPLAY`, plus 2 trailing iterations minus 1 instruction).
-     d. At convergence, `LREG1` holds the GCD (the odd part), which still needs to be multiplied by the shared power of 2. However, looking at the algorithm more carefully: the shared trailing zero factor `d` is incorporated into each iteration's shift, so the result in `LREG1` is already the full GCD.
-     e. `SFPSTORE` writes `LREG1` back to the output DST slot.
-     f. `dst_reg++` advances to the next face.
-
-6. **Pack to output**: `pack_tile(i*2, cb_out0)` moves the result from DST back to the output circular buffer.
-
-7. **Release and publish**: `tile_regs_commit()` and `tile_regs_release()` free the DST registers. `cb_pop_front()` releases consumed input tiles. `cb_push_back()` makes output tiles available to the writer kernel.
+5. **Release**: `tile_regs_commit()` / `tile_regs_release()` free the DEST registers.
 
 #### SFPU Configuration
 
-- **`fp32_dest_acc_en = true`**: Required for INT32/UINT32 operations, ensures full 32-bit precision in destination registers.
-- **`UnpackToDestMode::UnpackToDestFp32`**: All input CBs use this mode, bypassing float format conversion and preserving the raw 32-bit integer bit patterns.
-- **`APPROX` template parameter**: Passed through from the compute config but not meaningfully used by the GCD kernel (the GCD algorithm is exact, not approximate).
-- **`SfpuType::gcd`**: Enum value used during `llk_math_eltwise_binary_sfpu_init` to configure SFPU address modifiers and state.
-- **`VectorMode::RC`**: Default vector mode, processes all rows and columns (all 8 faces of the tile).
-- **Replay buffer**: The `TTI_REPLAY` mechanism avoids instruction cache pressure by recording the 7-instruction iteration body once and replaying it 30 times. This is critical for the GCD algorithm which needs many iterations.
+- **`fp32_dest_acc_en`**: Set to `true` because the output data type is Int32 (which requires 32-bit DEST accumulation).
+- **`UnpackToDestMode::UnpackToDestFp32`**: Enabled for all input CBs (c_0, c_1, c_3, c_4). Since GCD is not `POWER` type, all CBs get FP32 unpack-to-dest mode, ensuring full 32-bit integer values are preserved in DEST.
+- **`APPROX` template parameter**: Passed through from the LLK layer but not meaningfully used by the GCD algorithm (the algorithm is exact for integers).
+- **Defines passed to compute kernel**:
+  - `BINOP_INIT` = `"gcd_tile_init();"`
+  - `BINARY_SFPU_OP` = `"gcd_tile(i*2, i*2+1, i*2);"`
 
 #### Hardware Compatibility Notes
 
-The Wormhole B0 and Blackhole implementations of `ckernel_sfpu_gcd.h` are **identical**. This is because:
+The Wormhole B0 and Blackhole implementations of `ckernel_sfpu_gcd.h` are **identical**. The GCD algorithm uses only fundamental SFPU instructions (integer arithmetic, bitwise ops, shifts, abs, clz, swap) that are available and behave identically on both architectures. The `TTI_REPLAY` instruction is supported on both architectures with the same semantics.
 
-1. The GCD kernel uses only integer SFPU instructions (bitwise ops, integer add, shift, abs, clz, swap) which have the same behavior on both architectures.
-2. No floating-point instructions or architecture-specific intrinsics are used.
-3. The `TT_SFPLOAD` and `TT_SFPSTORE` macros resolve to architecture-specific builtins (`__builtin_rvtt_wh_sfpload` vs `__builtin_rvtt_bh_sfpload`) at compile time, but the kernel source code is the same.
+## Implementation Notes
 
-The LLK bridge files (`llk_math_eltwise_binary_sfpu_gcd.h`) are also identical between architectures.
+1. **Binary GCD algorithm choice**: The implementation avoids division entirely, using only subtraction, absolute value, shifts, and bitwise operations. This is well-suited to the SFPU, which has efficient integer shift and bitwise instructions but no integer division.
 
-## Runtime Arguments
+2. **Replay buffer optimization**: The inner loop body (7 instructions) is recorded once into the replay buffer and replayed 30 times. This significantly reduces instruction fetch overhead. The replay buffer can store up to 28 instructions (4 iterations), so the 30 iterations are executed as 7 groups of 4 (via replay) plus a final partial replay of 2 iterations.
 
-### Reader Kernel Runtime Args
-| Arg Index | Name | Description |
-|---|---|---|
-| 0 | `src0_addr` | DRAM address of input tensor A |
-| 1 | `src1_addr` | DRAM address of input tensor B |
-| 2 | `num_tiles` | Total tiles to read for this core |
-| 3 | `start_id` | Starting tile ID for this core |
-| 4 | `block_height` | Shard block height (tiles) |
-| 5 | `block_width` | Shard block width (tiles) |
-| 6 | `num_cores_y` | Number of cores in Y dimension for stride calculation |
+3. **Convergence handling**: The `SFPLZ_MOD1_CC_NE0` flag on the leading-zero count instruction disables lanes where `a == 0` (GCD has converged). Once a lane converges, `b` holds the GCD for that lane, and subsequent operations on that lane are effectively no-ops due to conditional execution.
 
-### Compute Kernel Runtime Args
-| Arg Index | Name | Description |
-|---|---|---|
-| 0 | `per_core_block_cnt` | Number of tile blocks to process |
-| 1 | `per_core_block_size` | Number of tiles per block |
+4. **Worst case iterations**: For 31-bit signed integers, the worst case requires at most 31 iterations of the inner loop. The implementation runs 30 full iterations plus handles the edge case by noting the 31st iteration only affects `a` (not the output `b`), so it can be skipped.
 
-### Writer Kernel Runtime Args
-| Arg Index | Name | Description |
-|---|---|---|
-| 0 | `dst_addr` | DRAM address of output tensor |
-| 1 | `num_pages` | Number of tiles to write |
-| 2 | `start_id` | Starting tile ID for output |
-
-## Work Distribution
-
-The program factory uses `split_work_to_cores()` for interleaved tensors and shard-spec-based distribution for sharded tensors. Key logic:
-
-- For non-sharded: tiles are evenly distributed across available cores with remainder tiles going to the first N cores (two-group split).
-- For sharded: each core processes exactly its shard's tiles, with `num_tiles_per_shard = shard_height * shard_width / TILE_HW`.
-- `max_block_size` is computed via `find_max_block_size()` to optimize CB utilization -- this finds the largest power-of-2 that evenly divides the per-core tile count.
-
-## Sharding Support
-
-| Sharding Config | Supported | Notes |
-|---|---|---|
-| Height sharded | Yes | Single column of shards |
-| Width sharded | Yes | Single row of shards |
-| Block sharded | Yes | 2D grid of shards |
-| Input A sharded | Yes | CB backed by tensor buffer |
-| Input B sharded | Yes | CB backed by tensor buffer |
-| Output sharded | Yes | CB backed by tensor buffer |
-| Mixed (some sharded, some interleaved) | Yes | Each tensor independently configured |
-
-## Program Caching
-
-The `override_runtime_arguments()` method enables program caching. When the program factory is reused for tensors with the same shapes and dtypes but different addresses:
-- Only runtime arguments (buffer addresses, tile counts, start IDs) are updated.
-- Kernel binaries, compile-time defines, and CB configurations are reused.
-- This is implemented via `set_eltwise_binary_runtime_args<false>()` which updates existing args in-place.
-
-## Algorithm Analysis: Binary GCD (Stein's Algorithm)
-
-The SFPU implementation uses the Binary GCD algorithm, which avoids division and modulus operations -- neither of which are available as single SFPU instructions. Instead, it relies on:
-
-1. **Shared trailing zeros**: The GCD shares a power-of-2 factor equal to `2^ctz(a | b)`. This factor is extracted once in the preamble and tracked in `LREG3` (as `-d`).
-2. **Odd reduction**: After removing the shared power of 2, the algorithm ensures one operand (b) is odd.
-3. **Iterative reduction**: Each iteration:
-   - Makes `a` odd by right-shifting to remove trailing zeros.
-   - Ensures `b <= a` via min/max swap.
-   - Computes `a = b - a` (even result, since both are odd).
-4. **Convergence**: After at most 31 iterations (for 31-bit inputs), `a` becomes 0 and `b` holds the odd part of the GCD. The shared power-of-2 factor is already accounted for in the shift operations.
-
-The total iteration count is 30 (not 31) because:
-- The worst case needs 31 iterations, but the final iteration only modifies `a` (which is discarded).
-- The last instruction of iteration 30 is also skipped since it only affects `a`.
-
-**Instruction count per tile face**: approximately 12 (preamble) + 28 (7 batches x 4) + 13 (2 remaining iterations - 1) = ~53 SFPU instructions per face, times 8 faces = ~424 SFPU instructions per tile.
+5. **DEST register interleaving**: Input A tiles are placed in even DEST slots (`i*2`) and input B in odd slots (`i*2+1`). The GCD result overwrites the even slot, which is then packed to the output CB.
 
 ## External Knowledge Sources
 
-### DeepWiki References
-- `tenstorrent/tt-metal`: Binary SFPU program factory architecture, GCD kernel file locations, define map generation
-- `tenstorrent/tt-llk`: LLK binary SFPU dispatch mechanism (`_llk_math_eltwise_binary_sfpu_params_`), ckernel namespace organization
-- `tenstorrent/tt-isa-documentation`: SFPU instruction semantics for SFPMOV, SFPOR, SFPAND, SFPIADD, SFPLZ, SFPSHFT2, SFPSETCC, SFPSWAP, SFPENCC, SFPABS, modifier flags
-- `tenstorrent/sfpi`: SFPU local registers (LREG0-LREG7), dst_reg, TT_SFPLOAD/TT_SFPSTORE, TTI_REPLAY recording/replay mechanism, face processing model
+### DeepWiki Queries
+
+1. **Query**: "How does the element_wise_multi_core_sfpu program factory work for binary eltwise operations?"
+   **Reason**: Needed to understand the overall program factory structure, kernel selection, and CB configuration patterns.
+   **Key Findings**: Confirmed the three-kernel architecture (reader/compute/writer), CB configuration patterns for sharded vs interleaved, and the SPMD work distribution model.
+
+2. **Query**: "How is the GCD SFPU operation implemented in tt-metal?"
+   **Reason**: Needed to locate the specific kernel files and understand the call chain from TTNN to SFPU.
+   **Key Findings**: Identified the call chain: `ttnn.gcd` -> `BinaryOpType::GCD` -> `gcd_tile()` (in `api/compute/gcd.h`) -> `llk_math_eltwise_binary_sfpu_gcd` -> `calculate_sfpu_gcd` (in `ckernel_sfpu_gcd.h`).
+
+3. **Query**: "What does _llk_math_eltwise_binary_sfpu_params_ do?" (tt-llk repo)
+   **Reason**: Needed to understand how the LLK wrapper iterates over tile faces when calling the SFPU function.
+   **Key Findings**: The function iterates over 4 tile faces in VectorMode::RC mode, advancing DEST pointers via `TTI_SETRWC` between faces. Each face call processes 8 row-pairs.
+
+4. **Query**: "Explain SFPU instructions used in GCD" (tt-isa-documentation repo)
+   **Reason**: Needed detailed semantics of each SFPU instruction and modifier flag.
+   **Key Findings**: Detailed descriptions of SFPMOV, SFPOR, SFPAND, SFPIADD, SFPLZ, SFPSHFT2, SFPSETCC, SFPSWAP, SFPENCC, SFPABS, SFPLOAD, SFPSTORE with modifier flag semantics.
+
+5. **Query**: "What is TTI_REPLAY?" (tt-llk repo)
+   **Reason**: The GCD kernel uses TTI_REPLAY extensively but it was not found in the local codebase (defined in the tt_llk submodule).
+   **Key Findings**: TTI_REPLAY is an instruction replay buffer mechanism. Parameters: `(start_idx, len, exec_while_loading, load_mode)`. `load_mode=1` records instructions, `load_mode=0` plays them back.
 
 ### Confluence References
-Not consulted -- DeepWiki provided sufficient SFPU instruction detail for the integer-only instructions used by GCD.
 
-### Glean References
-Not consulted -- no confidential hardware specifications were needed beyond what DeepWiki provided.
+- **Page**: Tensix SFPU Instruction Set Architecture (page ID 1170505767)
+- **Section consulted**: LOADMACRO/Replay section. Confirmed replay buffer exists but the Confluence page focused on SFPLOADMACRO replay sequences rather than the TTI_REPLAY instruction. The DeepWiki query on tt-llk was more informative for TTI_REPLAY specifics.
 
-## File Inventory
+### Documentation References
 
-| File | Role |
-|---|---|
-| `ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp` | Program factory: creates program, CBs, kernels |
-| `ttnn/cpp/ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp` | Runtime args helper (`set_eltwise_binary_runtime_args`) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary/device/binary_device_operation.cpp` | Factory selection logic (`is_binary_sfpu_op`) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_utils.cpp` | Compile-time define generation (`get_defines_fp32`) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp` | `BinaryOpType` enum |
-| `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp` | Compute kernel |
-| `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp` | Reader kernel |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | Writer kernel |
-| `tt_metal/hw/inc/api/compute/gcd.h` | API header: `gcd_tile()`, `gcd_tile_init()` |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_gcd.h` | LLK bridge (Wormhole) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_gcd.h` | LLK bridge (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h` | SFPU kernel implementation (Wormhole) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h` | SFPU kernel implementation (Blackhole) |
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_utils.cpp` (lines 358-361)
+   **Reason**: Needed to confirm what preprocessor defines are generated for GCD.
+   **Key Information**: GCD generates `BINOP_INIT` = `"gcd_tile_init();"` and `BINARY_SFPU_OP` = `"gcd_tile(i*2, i*2+1, i*2);"` via the `get_defines_fp32` function.
+
+2. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp`
+   **Reason**: Needed to understand how runtime args are set for each core.
+   **Key Information**: Contains the `set_eltwise_binary_runtime_args` template function that handles work splitting, shard index computation, and per-core runtime arg assignment for reader/compute/writer kernels.

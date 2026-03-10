@@ -1,105 +1,202 @@
-# MAXIMUM (binary_ng) -- SFPU Operation Analysis
+# MAXIMUM (binary_ng) Implementation Analysis
 
-## Operation Overview
+## Overview
 
-**Operation**: `MAXIMUM` (elementwise binary maximum)
-**Variant**: `binary_ng` (next-generation binary framework)
-**Mathematical Definition**: `C[i] = max(A[i], B[i])` for each element
-**SFPU-Only**: Yes -- MAXIMUM always routes through the SFPU path; there is no FPU fallback. The function `is_binary_sfpu_op()` unconditionally returns `true` for `BinaryOpType::MAXIMUM`.
+The MAXIMUM operation computes the element-wise maximum of two input tensors: `c[i] = max(a[i], b[i])`. It is an SFPU-only binary operation implemented through the `binary_ng` program factory framework. The operation supports float (bfloat16/float16_b), float32, int32, and uint32 data types, with dedicated SFPU kernel variants for each. It supports full N-dimensional broadcasting between input tensors.
 
-**Supported Data Types**:
-- Float (bfloat16, float32) -- uses `binary_max_tile` / `binary_max_tile_init`
-- INT32 -- uses `binary_max_int32_tile` / `binary_max_int32_tile_init`
-- UINT32 -- uses `binary_max_uint32_tile` / `binary_max_uint32_tile_init`
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
 
-**Namespace**: `ttnn::operations::binary_ng`
+## Work Unit Definition
 
----
+One work unit is a single 32x32 tile. The compute kernel processes one tile per read-compute-write cycle (`num_tiles_per_cycle = 1`). Each cycle loads one tile from each input (LHS, RHS), performs the SFPU max operation, and writes one output tile.
 
-## Program Factory
+## Tensor Format and Layout
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
+### Input Tensor(s)
 
-### Factory Structure
+| Property | Input A (LHS) | Input B (RHS) |
+|---|---|---|
+| Dimension Convention | [..., D, N, C, H, W] (up to N-D, dims >5 collapsed) |  [..., D, N, C, H, W] (broadcastable against A) |
+| Tensor Layout | TILE (32x32) | TILE (32x32) |
+| Memory Layout | Interleaved or Sharded (Height/Width/Block) | Interleaved or Sharded |
+| Buffer Type | DRAM or L1 | DRAM or L1 |
+| Data Type | bfloat16, float32, int32, uint32 | Same as A (must match) |
 
-The `BinaryNgDeviceOperation::ProgramFactory::create` function creates a complete TT-Metal program with three kernel types (reader, compute, writer) and associated circular buffers. For MAXIMUM, the key decision points are:
+### Output Tensor(s)
 
-1. **SFPU detection**: `operation_attributes.is_sfpu` is `true` (set by `is_binary_sfpu_op()` in the device operation layer).
-2. **OpConfig construction**: `OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)` maps `BinaryOpType::MAXIMUM` to `SfpuBinaryOp::MAXIMUM`.
-3. **Kernel define generation**: `OpConfig::as_defines()` calls `get_sfpu_init_fn(SfpuBinaryOp::MAXIMUM, dtype)` which produces:
-   - `BINARY_SFPU_INIT` = `"binary_max_tile_init();"` (or int32/uint32 variant)
-   - `BINARY_SFPU_OP` = `"binary_max_tile"` (or int32/uint32 variant)
-4. **Kernel file selection**: `get_kernel_file_path(kernel_name, is_sfpu=true, is_where_op=false)` selects `eltwise_binary_sfpu_*.cpp` kernels.
+| Property | Output C |
+|---|---|
+| Dimension Convention | Broadcast-expanded shape of A and B |
+| Tensor Layout | TILE (32x32) |
+| Memory Layout | Interleaved or Sharded |
+| Buffer Type | DRAM or L1 |
+| Data Type | Same as input dtype |
 
-### Circular Buffers
+### Layout Transformations
 
-| CB Index | Name | Purpose | Size (tiles) |
-|----------|------|---------|--------------|
-| c_0 | cb_src_a | Input tensor A | `a_num_tiles_per_shard` or 2 (double buffer) |
-| c_1 | cb_src_b | Input tensor B (or scalar tile) | `b_num_tiles_per_shard` or 2 (1 if scalar) |
-| c_2 | cb_out | Output tensor C | `c_num_tiles_per_shard` or 2 (double buffer) |
-| c_3 | cb_lhs_intermediate | LHS post-activation intermediate | 1 tile (only if LHS activations present) |
-| c_4 | cb_rhs_intermediate | RHS post-activation intermediate | 1 tile (only if RHS activations present) |
-| c_5 | cb_row_bcast_a | Row broadcast buffer for A | 2 tiles (only for ROW_A/ROW_A_COL_B broadcast) |
-| c_6 | cb_row_bcast_b | Row broadcast buffer for B | 2 tiles (only for ROW_B/ROW_B_COL_A broadcast) |
+No tilize/untilize is performed. Inputs and outputs must already be in tiled layout. When sharding is used, the program factory computes per-core shard shapes and adjusts tile offsets accordingly. If native L1 sharding conditions are not met (e.g., uneven shards, different grids), the operation falls back to interleaved tensor accessor mode.
 
-### SFPU-Specific Configuration
+## Data Flow Pattern
 
-For SFPU operations (including MAXIMUM), the program factory configures:
+1. **Reader kernel** reads one tile from input A into CB c_0 and one tile from input B into CB c_1 (per iteration). For sharded inputs, the reader simply reserves and pushes the entire shard at once.
+2. **Compute kernel** waits for tiles in CB c_0 and CB c_1, acquires DST registers, copies LHS tile to DEST[0] and RHS tile to DEST[1] using `copy_tile`, then invokes `BINARY_SFPU_OP(0, 1, 0)` which dispatches `binary_max_tile(0, 1, 0)`. The result overwrites DEST[0]. The result is packed into CB c_2.
+3. **Writer kernel** waits for a tile in CB c_2 and writes it to the output buffer via NoC.
 
-- **`fp32_dest_acc_en`**: Enabled when output is UInt32/Int32/Float32, or when both inputs are Float32, Int32, or UInt32.
-- **`UnpackToDestMode`**: For all SFPU ops except POWER, all source CBs (c_0, c_1, c_3, c_4) use `UnpackToDestFp32`. This is because the SFPU operates on data in the DST register in FP32 format.
-- **No pre/post activations by default**: MAXIMUM has no `process_lhs`, `process_rhs`, or `postprocess` in its `OpConfig`, so `PROCESS_LHS_ACTIVATIONS`, `PROCESS_RHS_ACTIVATIONS`, and `PROCESS_POST_ACTIVATIONS` macros expand to empty.
+## Circular Buffer Configuration
 
-### Broadcast Modes
+| CB ID | Name | Purpose | Data Format | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
+|---|---|---|---|---|---|---|---|---|
+| c_0 | cb_src_a / cb_pre_lhs | Input tensor A | a_data_format | 2 (interleaved) or shard volume | 1 | Double (interleaved) / Single (sharded) | Reader | Compute |
+| c_1 | cb_src_b / cb_pre_rhs | Input tensor B | b_data_format | 2 (interleaved) or shard volume | 1 | Double (interleaved) / Single (sharded) | Reader | Compute |
+| c_2 | cb_out | Output tensor C | c_data_format | 2 (interleaved) or shard volume | 1 | Double (interleaved) / Single (sharded) | Compute | Writer |
+| c_3 | cb_post_lhs | LHS after pre-activation | a_data_format | 1 | 1 | Single | Compute (preprocess) | Compute (main) |
+| c_4 | cb_post_rhs | RHS after pre-activation | b_data_format | 1 | 1 | Single | Compute (preprocess) | Compute (main) |
 
-The `SubtileBroadcastType` determines which compute kernel variant is used:
+For MAXIMUM, there are no LHS/RHS pre-activations (`process_lhs` and `process_rhs` are `std::nullopt`), so CB c_3 and c_4 are not created. The compute kernel uses `cb_post_lhs = cb_pre_lhs = c_0` and `cb_post_rhs = cb_pre_rhs = c_1` directly.
 
-| Broadcast Type | Compute Kernel | Description |
-|----------------|---------------|-------------|
-| NONE | `eltwise_binary_sfpu_no_bcast.cpp` | Both tensors have equal tile dimensions |
-| SCALAR_A, COL_A, COL_B, ROW_B_COL_A, ROW_A_COL_B | `eltwise_binary_sfpu.cpp` | One operand is broadcast (col or scalar) |
-| SCALAR_B (b is scalar value) | `eltwise_binary_sfpu_scalar.cpp` | B is a scalar, filled into a single tile |
-| ROW_A, ROW_B | `eltwise_binary_sfpu_row_bcast.cpp` (ng variant) | Row broadcast with LLK bcast support |
-| ROW_A_COL_B, ROW_B_COL_A | `eltwise_binary_sfpu_row_col_bcast.cpp` (ng variant) | Mixed row/col broadcast |
+Similarly, CB c_5 and c_6 (used for row broadcast) are not created for the NONE broadcast case.
 
-### Work Distribution
+## Pipeline Pattern Summary
 
-Work is distributed across cores based on the output tile count:
-- For **interleaved** memory: `split_work_to_cores()` divides output tiles evenly, creating two core groups (group 1 with `num_tiles_per_core_group_1` tiles, group 2 with potentially fewer).
-- For **sharded** memory: Each core processes its own shard. The `ShardShapeGenerator` handles edge cases where the last core in a dimension may have a smaller shard.
-- Runtime arguments include `{c_num_tiles, freq, counter, 0}` for compute, where `freq` and `counter` handle broadcast cycling.
+- **Interleaved mode**: CB c_0 and c_1 have capacity=2, enabling double-buffering between reader and compute. CB c_2 has capacity=2, enabling double-buffering between compute and writer.
+- **Sharded mode**: CBs are sized to the full shard volume, functioning as single-buffered storage since the reader pushes all tiles at once.
 
----
+## Index Calculations
+
+The reader kernel computes a multi-dimensional tile offset from the flat `start_tile_id` by decomposing it into (nd, d, n, c, th, tw) coordinates. For each input tensor, stride values are computed that account for broadcasting: when a dimension has size 1 in the input but >1 in the output, the stride for that dimension is 0 (via the `(dim > 1)` multiplier pattern in the program factory).
+
+The output tile offset is computed as:
+```
+tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * Wt + tw
+```
+
+For sharded mode, the start tile ID for each core is calculated from core position:
+```
+c_start_id = (core_index / num_shards_per_width) * (c_shard_height * cWt) + (core_index % num_shards_per_width) * c_shard_width
+```
+
+## Memory Access Patterns
+
+### Read Pattern
+
+For interleaved mode, tiles are read one at a time from both A and B in the nested loop order: nD -> D -> N -> C -> H -> W (innermost). Both inputs are read with the same outer loop structure but potentially different stride values (to handle broadcasting). Each tile read is followed by a `noc_async_read_barrier()`.
+
+For sharded mode, data is already in L1, so the reader just performs `cb_reserve_back`/`cb_push_back` to make tiles available.
+
+### Write Pattern
+
+The writer iterates with the same nested dimension order as the reader. Each output tile is written via `noc_async_write_page` followed by a barrier. For sharded output, the writer section is compiled out entirely.
+
+## Core Distribution Strategy
+
+| Property | Value |
+|---|---|
+| Grid Topology | Worker grid from `operation_attributes.worker_grid` |
+| Work Splitting | `split_work_to_cores` divides total output tiles across cores |
+| Core Group 1 | Cores with `num_tiles_per_core_group_1` tiles (ceiling division) |
+| Core Group 2 | Remaining cores with `num_tiles_per_core_group_2` tiles (one fewer) |
+| Load Balancing | Difference of at most 1 tile between groups |
+| Remainder Handling | Cores outside both groups get zero-filled runtime args (NOOP) |
+| Sharded Mode | Grid comes from shard spec; each core processes its own shard |
+
+When `zero_start_grid` is true (single rectangular grid starting at (0,0)), an optimized path is used. Otherwise, a generic `CoreRangeSet`-based distribution handles arbitrary grids.
+
+## Arguments
+
+### Compile-Time Arguments
+
+**Compute Kernel:**
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | num_tiles_per_cycle | uint32_t | Always 1. Number of output tiles produced per compute cycle |
+
+The compute kernel also receives preprocessor defines:
+- `BINARY_SFPU_INIT` = `binary_max_tile_init();` (or int32/uint32 variant)
+- `BINARY_SFPU_OP` = `binary_max_tile` (or `binary_max_int32_tile` / `binary_max_uint32_tile`)
+- `BCAST_INPUT` = `""` (no broadcast for NONE mode)
+- `PROCESS_LHS_ACTIVATIONS(i)` = empty (no pre-activation)
+- `PROCESS_RHS_ACTIVATIONS(i)` = empty
+- `PROCESS_POST_ACTIVATIONS(i)` = empty (no post-activation)
+
+**Reader Kernel:**
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0..K | TensorAccessorArgs for A | uint32_t[] | Compile-time accessor config for input A |
+| K+1..M | TensorAccessorArgs for B | uint32_t[] | Compile-time accessor config for input B |
+| M+1 | has_sharding | uint32_t | 1 if native L1 sharding is active |
+
+**Writer Kernel:**
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0..K | TensorAccessorArgs for C | uint32_t[] | Compile-time accessor config for output C |
+| K+1 | has_sharding | uint32_t | 1 if native L1 sharding is active |
+
+### Runtime Arguments
+
+**Compute Kernel (per-core):**
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | c_num_tiles | uint32_t | Number of output tiles this core must process |
+| 1 | freq | uint32_t | Broadcast frequency (1 for NONE mode) |
+| 2 | counter | uint32_t | Broadcast counter start (0 for NONE mode) |
+| 3 | compute_scalar_value | uint32_t | Unused for MAXIMUM (set to 0) |
+
+**Reader Kernel (per-core):**
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | src_addr | uint32_t | DRAM/L1 address of input A buffer |
+| 1 | start_tile_id | uint32_t | Starting output tile ID for this core |
+| 2 | src_num_tiles | uint32_t | Number of A tiles (sharded) or 0 |
+| 3 | dst_num_tiles | uint32_t | Number of output tiles this core processes |
+| 4 | dst_shard_width | uint32_t | Shard width in tiles (sharded) or 0 |
+| 5 | nD_stride | uint32_t | A's stride for collapsed dims >5 |
+| 6 | d_stride | uint32_t | A's stride for D dimension |
+| 7 | n_stride | uint32_t | A's stride for N dimension |
+| 8 | c_stride | uint32_t | A's stride for C dimension |
+| 9-14 | D, N, C, Ht, Wt, cND | uint32_t | Output shape dimensions |
+| 15 | src_addr_b | uint32_t | DRAM/L1 address of input B buffer |
+| 16 | nD_stride_b | uint32_t | B's stride for collapsed dims >5 |
+| 17 | d_stride_b | uint32_t | B's stride for D dimension |
+| 18 | n_stride_b | uint32_t | B's stride for N dimension |
+| 19 | c_stride_b | uint32_t | B's stride for C dimension |
+| 20 | src_num_tiles_b | uint32_t | Number of B tiles (sharded) or 0 |
+
+**Writer Kernel (per-core, tensor-tensor mode):**
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | dst_addr | uint32_t | DRAM/L1 address of output C buffer |
+| 1 | start_tile_id | uint32_t | Starting output tile ID for this core |
+| 2 | dst_num_tiles | uint32_t | Number of tiles to write |
+| 3 | dst_shard_width | uint32_t | Shard width (sharded) or 0 |
+| 4-10 | D, N, C, Ht, Wt, cND, 0 | uint32_t | Output shape + padding |
 
 ## Kernel Implementations
 
 ### Reader Kernel
 
-**Two-tensor path** (both A and B are tensors): `kernels_ng/dataflow/reader_interleaved_no_bcast.cpp`
-
-The reader kernel reads tiles from both input tensor A (into CB c_0) and input tensor B (into CB c_1). It iterates through the output tile space using a 6-nested loop over dimensions (ND, D, N, C, Ht, Wt), computing independent tile offsets for A and B using per-dimension strides. This stride-based addressing enables implicit broadcasting: if a dimension has size 1 in A or B, its stride is 0, so the same data is re-read for every iteration of that dimension.
-
-**Scalar path** (B is a scalar): `kernels/dataflow/writer_interleaved_scalar.cpp` handles filling a single tile with the scalar value into CB c_1. The reader kernel `kernels/dataflow/reader_interleaved_no_bcast.cpp` reads only tensor A into CB c_0.
-
-Both kernels support sharded and interleaved memory layouts via compile-time `SRC_SHARDED` / `SRC_SHARDED_B` defines.
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp` (for NONE broadcast mode)
+- **Key Logic**: Reads both A and B tiles in a nested 6D loop (nD, D, N, C, Ht, Wt). Uses stride-based offsets to handle broadcasting: when an input dimension is 1 but the output dimension is >1, the corresponding stride is 0, causing repeated reads of the same tile. For sharded inputs, the kernel simply does `cb_reserve_back`/`cb_push_back` to expose the pre-existing L1 data to the compute kernel.
 
 ### Writer Kernel
 
-**Two-tensor path**: `kernels_ng/dataflow/writer_interleaved_no_bcast.cpp`
-
-The writer kernel reads computed tiles from CB c_2 and writes them to the output buffer using the same dimension-nested loop pattern. For sharded outputs (`DST_SHARDED` defined), the CB is pre-allocated in the shard region and no explicit writes are needed.
-
-**Scalar path**: `kernels/dataflow/writer_interleaved_scalar.cpp` -- doubles as both the scalar fill kernel and the output writer.
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp`
+- **Key Logic**: Writes output tiles using the same nested 6D loop. Uses `TensorAccessor` for address computation. For sharded outputs, the entire writer body is compiled out.
 
 ### Compute Kernel
 
 This section combines the full annotated source code of the compute kernel with architectural analysis.
 
-#### Compute Kernel File (no-broadcast variant)
+#### Compute Kernel File
+
 `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp`
 
-#### Annotated Compute Kernel Source (no-broadcast)
+#### Annotated Compute Kernel Source
 
 ```cpp
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
@@ -108,11 +205,9 @@ This section combines the full annotated source code of the compute kernel with 
 
 #include <cstdint>
 
-// SFPU unary split includes for activation support
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
-// SFPU binary operation APIs -- each header provides tile-level init + compute functions
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_bitwise_sfpu.h"
 #include "api/compute/binary_shift.h"
@@ -124,358 +219,270 @@ This section combines the full annotated source code of the compute kernel with 
 #include "api/compute/remainder_int32.h"
 #include "api/compute/binary_fmod.h"
 #include "api/compute/quantization.h"
-#include "api/compute/binary_max_min.h"   // Provides binary_max_tile, binary_max_tile_init, etc.
+#include "api/compute/binary_max_min.h"          // provides binary_max_tile, binary_max_tile_init, etc.
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/binary_comp.h"
 
-// Macro infrastructure for preprocessing activations and broadcast handling
-#include "eltwise_utils_common.hpp"
-#include "eltwise_utils_sfpu.hpp"
+#include "eltwise_utils_common.hpp"               // macro infrastructure: HAS_ACTIVATIONS, BCAST_OP, etc.
+#include "eltwise_utils_sfpu.hpp"                  // PREPROCESS macro for pre-activations
 
 void kernel_main() {
-    // Runtime argument 0: total number of tiles this core must process
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(0); // runtime arg: total tiles this core must process
 
-    // Compile-time argument 0: number of tiles produced per read-compute-write cycle (always 1)
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0); // always 1 for this kernel
 
-    // Circular buffer assignments:
-    // c_0 = input A (pre-activation), c_1 = input B (pre-activation), c_2 = output
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;  // input A circular buffer
+    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;  // input B circular buffer
+    constexpr auto cb_out = tt::CBIndex::c_2;       // output circular buffer
 
-    // If LHS/RHS activations are defined (via defines), use intermediate CBs c_3/c_4;
-    // otherwise, read directly from c_0/c_1. For MAXIMUM, no activations are defined,
-    // so cb_post_lhs == cb_pre_lhs and cb_post_rhs == cb_pre_rhs.
+    // For MAXIMUM: HAS_ACTIVATIONS(LHS)=0, HAS_ACTIVATIONS(RHS)=0, so cb_post_lhs=cb_pre_lhs=c_0
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
-    // Initialize the unary op common state (sets up pack/unpack config)
-    unary_op_init_common(cb_post_lhs, cb_out);
+    unary_op_init_common(cb_post_lhs, cb_out);     // initializes unpack/pack configuration
 #ifdef PACK_RELU
-    // Optional ReLU fusing in the pack stage -- not used for MAXIMUM
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU))); // not used for MAXIMUM
 #endif
 
-    // For MAXIMUM with no pre/post activations, BINARY_SFPU_INIT is called once here.
-    // This expands to binary_max_tile_init() which configures:
-    //   - SFPU address modifiers for the max/min swap pattern
-    //   - SFPLOADMACRO instruction templates and macro sequences
-    //   - SFPCONFIG misc register for store behavior
+    // For MAXIMUM with no activations: BINARY_SFPU_INIT is called once here
+    // Expands to: binary_max_tile_init();
+    // This configures the SFPU pipeline, sets up SFPLOADMACRO instruction templates and macros
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-    BINARY_SFPU_INIT  // Expands to: binary_max_tile_init();
+    BINARY_SFPU_INIT
 #endif
 
-    // Main tile processing loop: one tile per iteration
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // PREPROCESS macros expand to nothing for MAXIMUM (no pre-activations)
+        // PREPROCESS(LHS, ...) is a no-op for MAXIMUM (no LHS activations)
         PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
-        // Wait for the reader kernel to push a tile of A into CB c_0
-        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
+        cb_wait_front(cb_post_lhs, num_tiles_per_cycle); // wait for reader to produce 1 LHS tile in c_0
 
+        // PREPROCESS(RHS, ...) is a no-op for MAXIMUM (no RHS activations)
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
-        // Wait for the reader kernel to push a tile of B into CB c_1
-        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
+        cb_wait_front(cb_post_rhs, num_tiles_per_cycle); // wait for reader to produce 1 RHS tile in c_1
 
-        // Reserve space in the output CB for one tile
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        cb_reserve_back(cb_out, num_tiles_per_cycle);    // reserve space for 1 output tile in c_2
 
-        // Re-init SFPU if activations present (not the case for MAXIMUM)
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-        BINARY_SFPU_INIT
+        BINARY_SFPU_INIT  // re-init after activation changed SFPU state (not taken for MAXIMUM)
 #endif
-        // Acquire DST register bank -- blocks until DST is available
-        tile_regs_acquire();
+        tile_regs_acquire();  // acquire DST register file for math operations
 
-        // Copy tile A from CB c_0 into DST register at index 0 (i*2 = 0)
-        // The init_short_with_dt call reconfigures the unpacker for A's data format
+        // Configure unpack for RHS->DST copy, then copy LHS tiles
         copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_lhs, i, i * 2);  // A -> DST[0]
+            copy_tile(cb_post_lhs, i, i * 2);     // unpack LHS tile 0 from c_0 into DEST[0]
         }
 
-        // Copy tile B from CB c_1 into DST register at index 1 (i*2+1 = 1)
-        // Reconfigure unpacker for B's data format
+        // Reconfigure unpack for LHS->DST, then copy RHS tiles and perform SFPU op
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_rhs, i, i * 2 + 1);  // B -> DST[1]
+            copy_tile(cb_post_rhs, i, i * 2 + 1); // unpack RHS tile 0 from c_1 into DEST[1]
 
-            // Re-init per-tile if post-activations present (not for MAXIMUM)
 #if HAS_ACTIVATIONS(POST)
-            BINARY_SFPU_INIT
+            BINARY_SFPU_INIT  // not taken for MAXIMUM
 #endif
-            // Execute the SFPU max operation:
-            // BINARY_SFPU_OP(0, 1, 0) expands to binary_max_tile(0, 1, 0)
-            // This reads DST[0] (A) and DST[1] (B), computes max, writes to DST[0]
+            // Core SFPU operation: binary_max_tile(0, 1, 0)
+            // Reads DEST[0] (LHS) and DEST[1] (RHS), computes max, writes result to DEST[0]
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
 
-            // Post-activation processing (empty for MAXIMUM)
+            // PROCESS_POST_ACTIVATIONS(0) is empty for MAXIMUM (no postprocess)
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
-        // Signal that DST registers are ready for packing
-        tile_regs_commit();
+        tile_regs_commit();   // signal that DST registers are ready for packing
 
-        // Wait for commit to complete, then pack result from DST[0] into output CB
-        tile_regs_wait();
+        tile_regs_wait();     // wait for commit to complete
+
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out);  // DST[0] -> CB c_2
+            pack_tile(i * 2, cb_out);  // pack DEST[0] result into output CB c_2
         }
-        // Release DST registers for next iteration
-        tile_regs_release();
+        tile_regs_release();  // release DST register file
 
-        // Signal to writer that output tile is ready
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        // Signal to reader that input tiles have been consumed
-        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
-        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
+        cb_push_back(cb_out, num_tiles_per_cycle);   // notify writer that 1 tile is ready
+        cb_pop_front(cb_post_lhs, num_tiles_per_cycle); // free consumed LHS tile
+        cb_pop_front(cb_post_rhs, num_tiles_per_cycle); // free consumed RHS tile
     }
 }
 ```
 
-#### Compute Kernel File (broadcast variant)
-`ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu.cpp`
-
-The broadcast variant adds a `process_tile` function that handles the case where one operand is broadcast (e.g., column broadcast). The broadcast operand's CB is held open (waited once, popped once at the end), while the non-broadcast operand cycles through `freq` tiles per broadcast tile. The core SFPU dispatch is identical: `copy_tile` both operands into DST, call `BINARY_SFPU_OP`, pack result.
-
-#### Compute Kernel File (scalar variant)
-`ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp`
-
-The scalar variant pre-loads the scalar tile from CB c_1 once (waited at start), then iterates over all tiles of A, applying `BINARY_SFPU_OP(0, 1, 0)` for each. The scalar tile remains resident in CB c_1 and is popped only after all tiles are processed.
-
----
-
-## SFPU Kernel Implementation
+### SFPU Kernel Implementation
 
 This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
-### SFPU Kernel File (Blackhole)
+#### SFPU Kernel File
+
 `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h`
+(identical structure for `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h`)
 
-### SFPU Kernel File (Wormhole B0)
-`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h`
-
-Both architectures share the same source code (identical implementation). The implementations are shown below.
-
-### Annotated SFPU Kernel Source (Float path -- `calculate_binary_max_min`)
+#### Annotated SFPU Kernel Source
 
 ```cpp
-// Template parameters:
-//   IS_MAX_OP: true for max, false for min (controls which register is stored)
-//   ITERATIONS: 8 = number of 4-element rows in a 32x32 tile face (32 rows / 4 faces = 8 rows per face)
-template <bool IS_MAX_OP = true, int ITERATIONS = 8>
-inline void calculate_binary_max_min(
-    const uint dst_index_in0,   // DST register index for input A
-    const uint dst_index_in1,   // DST register index for input B
-    const uint dst_index_out) { // DST register index for output (typically same as in0)
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Jason Davies <jason@jasondavies.com>
+//
+// SPDX-License-Identifier: Apache-2.0
 
-    // Compute byte offsets into the DST register file.
-    // Each tile occupies 32 rows, each row is 2 bytes wide (16-bit in DST address space),
-    // hence the << 1 shift.
-    uint offset0 = (dst_index_in0 * 32) << 1;
-    uint offset1 = (dst_index_in1 * 32) << 1;
-    uint offset2 = (dst_index_out * 32) << 1;
+#pragma once
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "lltt.h"
+
+using namespace sfpi;
+
+namespace ckernel {
+namespace sfpu {
+
+// Floating-point max/min: uses SFPSWAP with VEC_MIN_MAX mode
+// IS_MAX_OP=true selects maximum, false selects minimum
+// ITERATIONS=8 processes all 8 rows of a tile face (each row is 32 elements)
+template <bool IS_MAX_OP = true, int ITERATIONS = 8>
+inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Compute byte offsets into DEST register. Each tile position occupies 32 rows,
+    // and each row is 2 bytes wide in the SFPU view, hence the <<1 shift.
+    uint offset0 = (dst_index_in0 * 32) << 1;  // DEST offset for input 0 (LHS)
+    uint offset1 = (dst_index_in1 * 32) << 1;  // DEST offset for input 1 (RHS)
+    uint offset2 = (dst_index_out * 32) << 1;   // DEST offset for output
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Fallback path: simple sequential load-swap-store pattern.
-    // Throughput: ~4 cycles per row (1 load + 1 load + 1 swap + 1 store).
+    // Fallback path: simple but slower (4 cycles per row instead of 3)
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        // Load row from input A into LREG0
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0);
-        // Load row from input B into LREG1
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
-        // SFPSWAP with VEC_MIN_MAX mode: after execution,
-        //   LREG1 = max(LREG0, LREG1) per element
-        //   LREG0 = min(LREG0, LREG1) per element
+        // Load two values from DEST into SFPU local registers
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0);  // LREG0 = LHS row
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);  // LREG1 = RHS row
+        // SFPSWAP with VEC_MIN_MAX mode: after swap, LREG1 = max(LREG0,LREG1), LREG0 = min
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        // Store the appropriate register: LREG1 for max, LREG0 for min.
-        // ADDR_MOD_6 auto-increments the offset for the next iteration.
-        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0,
-                     InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2);
+        // Store maximum (LREG1) or minimum (LREG0) depending on IS_MAX_OP
+        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2);
     }
 #else
-    // Optimized path using SFPLOADMACRO for instruction-level parallelism.
-    // Achieves 3 cycles per input row by overlapping load, swap, round, and store
-    // across the SFPU's 5 sub-units (load, simple, MAD, round, store).
+    // Optimized path using SFPLOADMACRO: achieves 3 cycles per row throughput.
+    // SFPLOADMACRO pipelines load/simple/round/store stages across iterations.
     //
-    // Pipeline schedule (per row):
-    //   Cycle 0: SFPLOADMACRO loads A into LREG[a] (alternating LREG0/LREG1)
-    //   Cycle 1: Regular SFPLOAD loads B into LREG2
-    //   Cycle 2: SFPLOADMACRO triggers:
-    //            - Simple sub-unit: SFPSWAP(min_max) on [a] and LREG2
-    //            - Round sub-unit: copies swap result to L16 register
-    //            - Store sub-unit: writes L16 to output DST offset
-    //
-    // The alternation between LREG0 and LREG1 for 'a' avoids read-after-write
-    // hazards by ensuring the register being written is not read in the same cycle.
+    // Pipeline schedule per row:
+    // t=0: Load [a] from input0            (via SFPLOADMACRO macro 0)
+    // t=1: Load b from input1              (standard SFPLOAD)
+    // t=2: Load [c] + swap_minmax([a], b)  (via SFPLOADMACRO macro 1, simple stage runs SFPSWAP)
+    // ... pipelined: round stage converts [a] result, store stage writes [c] to output
 
-    constexpr int b = p_sfpu::LREG2;  // Always use LREG2 for input B
-    constexpr int c = p_sfpu::LREG3;  // Always use LREG3 for store staging
+    constexpr int b = p_sfpu::LREG2;   // scratch register for RHS load
+    constexpr int c = p_sfpu::LREG3;   // scratch register for output store
 
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
-        int a = i & 1;  // Alternate: even iterations use LREG0, odd use LREG1
-        // Macro 0: Load A, schedule swap+round+store via SFPLOADMACRO
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7,
-                         offset0 | (a >> 2));
-        // Regular load: B into LREG2
+        int a = i & 1;  // alternate LREG0/LREG1 to avoid pipeline stalls
+        // SFPLOADMACRO macro 0: loads input0 row into register 'a', triggers simple-stage SFPSWAP
+        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a >> 2));
+        // Standard load of input1 row into LREG2
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
-        // Macro 1: triggers store pipeline, using LREG3 as staging
-        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6,
-                         offset2 | (c >> 2));
+        // SFPLOADMACRO macro 1: triggers round (L16 conversion) and store to output
+        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
     }
 
-    // Drain the pipeline: 3 NOPs to let the last scheduled instructions complete
+    // Pipeline drain: 3 NOPs to flush the pipeline after the last iteration
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
 #endif
 }
-```
 
-### Annotated SFPU Kernel Source (INT32/UINT32 path -- `calculate_binary_max_min_int32`)
-
-```cpp
-// Template parameters:
-//   IS_MAX_OP: true for max, false for min
-//   IS_UNSIGNED: true for uint32 comparison, false for int32
-//   ITERATIONS: 8 rows per tile face
+// Integer max/min: uses SFPSWAP + SFPSETCC for correct signed/unsigned handling
+// IS_MAX_OP=true selects maximum, IS_UNSIGNED=true for uint32 comparison
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, int ITERATIONS = 8>
 inline void calculate_binary_max_min_int32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-
     uint offset0 = (dst_index_in0 * 32) << 1;
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Fallback path for INT32 max/min.
-    // The SFPSWAP VEC_MIN_MAX instruction operates on signed-magnitude floats,
-    // which gives incorrect results for 2's complement integers in certain cases.
-    // A corrective conditional swap is needed after the initial SFPSWAP.
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        // Load A and B as INT32 into LREG0 and LREG1
+        // Load as INT32 format
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset0);
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, offset1);
+        // SFPSWAP with min/max mode; for unsigned, mod1=9 inverts the comparison sense
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
-        // Initial min/max swap. For unsigned, mod1=9 reverses the comparison
-        // direction because SFPSWAP treats values as signed-magnitude.
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0,
-                     IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-
-        // Corrective phase: SFPSWAP may get the wrong result for negative
-        // integers (signed) or large values (unsigned) because it compares
-        // in signed-magnitude format. The correction uses condition codes:
-        //   - For signed (IS_UNSIGNED=false): check if LREG < 0 (SFPSETCC_MOD1_LREG_LT0)
-        //   - For unsigned (IS_UNSIGNED=true): check if LREG >= 0 (SFPSETCC_MOD1_LREG_GTE0)
-        // If the condition is met, a conditional SWAP corrects the order.
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0,
-                      IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0
-                                  : sfpi::SFPSETCC_MOD1_LREG_LT0);
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0,
-                      IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0
-                                  : sfpi::SFPSETCC_MOD1_LREG_LT0);
-        // Conditional swap: only swaps lanes where the condition code is set
+        // SFPSWAP operates on the float representation, so for integers the result
+        // can be incorrect when signs differ. Fix with conditional swap:
+        // Set condition code based on sign of each register
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        // Conditionally swap to correct ordering for elements where SFPSWAP was wrong
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_SWAP);
-        // Clear condition codes
-        TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);  // clear condition codes
 
-        // Store the correct result
-        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0,
-                     InstrModLoadStore::INT32, ADDR_MOD_6, offset2);
+        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, offset2);
     }
 #else
-    // Optimized SFPLOADMACRO path for INT32 max/min.
-    // Achieves 5 cycles per row by pipelining load, swap, setcc, encc, and store.
-    // Uses double-buffering with (a0, b0) and (a1, b1) register pairs.
-    // A replay buffer records 10 instructions (2 iterations) and replays them.
+    // Optimized SFPLOADMACRO path for int32: 5 cycles per row throughput
+    // Uses replay buffer for the 10-instruction sequence (2 rows per replay)
 
     constexpr int a0 = p_sfpu::LREG0;
     constexpr int b0 = p_sfpu::LREG1;
     constexpr int a1 = p_sfpu::LREG2;
     constexpr int b1 = p_sfpu::LREG3;
-    constexpr int c = p_sfpu::LREG7;  // Store staging register
+    constexpr int c = p_sfpu::LREG7;
 
-    // Record 10 instructions into replay buffer slot 0
-    // (Wormhole uses load_replay_buf, Blackhole uses lltt::record<lltt::NoExec>)
-    // The replay buffer stores the instruction sequence for 2 iterations,
-    // then replays it ITERATIONS/2 times for the remaining rows.
+    // Record 10 instructions into replay buffer starting at slot 0
+    // (Blackhole uses load_replay_buf; Wormhole uses lltt::record<lltt::NoExec>)
+    load_replay_buf(0, 10, [offset0, offset1, offset2] {
+        // First iteration pair: process a0,b0
+        TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset0 | (a0 >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset1 | (b0 >> 2));
+        TTI_SFPSETCC(0, a1, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPENCC(0, 0, 0, 0);
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset2 | (c >> 2));
 
-    // First iteration: process with a0, b0
-    TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_7,
-                     offset0 | (a0 >> 2));           // Load A -> a0
-    TT_SFPLOADMACRO((2 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_7,
-                     offset1 | (b0 >> 2));           // Load B -> b0, triggers swap
-    TTI_SFPSETCC(0, a1, 0,                           // Set CC on a1 (from prev iter)
-                 IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0
-                             : sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPENCC(0, 0, 0, 0);                         // Clear CC
-    TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6,
-                     offset2 | (c >> 2));            // Store result
+        // Second iteration pair: process a1,b1
+        TT_SFPLOADMACRO((1 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset0 | (a1 >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset1 | (b1 >> 2));
+        TTI_SFPSETCC(0, a0, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPENCC(0, 0, 0, 0);
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset2 | (c >> 2));
+    });
 
-    // Second iteration: process with a1, b1 (double-buffered)
-    TT_SFPLOADMACRO((1 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7,
-                     offset0 | (a1 >> 2));
-    TT_SFPLOADMACRO((2 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7,
-                     offset1 | (b1 >> 2));
-    TTI_SFPSETCC(0, a0, 0,
-                 IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0
-                             : sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPENCC(0, 0, 0, 0);
-    TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6,
-                     offset2 | (c >> 2));
-
-    // Replay the 10-instruction sequence for all remaining row pairs
+    // Replay the 10-instruction block ITERATIONS/2 times (4 replays for 8 iterations)
 #pragma GCC unroll 4
     for (int i = 0; i < ITERATIONS / 2; ++i) {
         lltt::replay(0, 10);
     }
 
-    // Handle odd iteration count and drain the pipeline
+    // Handle odd iteration count and drain pipeline
     if constexpr (ITERATIONS & 1) {
-        lltt::replay(0, 5);   // Replay first half only
+        lltt::replay(0, 5);
         TTI_SFPNOP;
         TTI_SFPNOP;
-        lltt::replay(5 + 2, 2);  // Replay the setcc+encc correction
+        lltt::replay(5 + 2, 2);
     } else {
         TTI_SFPNOP;
         TTI_SFPNOP;
-        lltt::replay(2, 2);  // Final correction for last iteration
+        lltt::replay(2, 2);  // drain: replay SETCC+ENCC to finish last pair
     }
-    TTI_SFPNOP;  // Final drain
+
+    TTI_SFPNOP;  // final pipeline drain
 #endif
 }
-```
 
-### Annotated SFPU Init Source (Float path -- `binary_max_min_init`)
-
-```cpp
-// Configures SFPLOADMACRO instruction templates and macro sequences for the
-// pipelined max/min operation.
+// Initialization for floating-point max/min: configures SFPLOADMACRO templates and macros
 template <bool IS_MAX_OP = true>
 inline void binary_max_min_init() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int b = p_sfpu::LREG2;
 
-    // InstructionTemplate[0]: The SFPSWAP instruction to be scheduled by SFPLOADMACRO.
-    // mod1=9 when IS_MAX_OP=true: sets VD=max, VC=min (swapped from default).
-    // mod1=SFPSWAP_MOD1_VEC_MIN_MAX (=1) when IS_MAX_OP=false: VD=min, VC=max.
-    // Register 12 is the template slot for the "simple" sub-unit instruction.
+    // InstructionTemplate[0]: SFPSWAP that will be triggered by SFPLOADMACRO's simple stage
+    // mod1=9 for IS_MAX_OP=true: VD gets max, VC gets min
+    // SFPSWAP_MOD1_VEC_MIN_MAX for IS_MAX_OP=false: VD gets min, VC gets max
     TTI_SFPSWAP(0, b, 12, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
-    // InstructionTemplate[1]: SFPSHFT2 for the "round" sub-unit -- copies result to L16.
-    // Register 13 is the template slot. mod1=6 is SFPSHFT2_MOD1_SHFT_IMM.
-    TTI_SFPSHFT2(0, 0, 13, 6);
+    // InstructionTemplate[1]: SFPSHFT2 used as a no-op/identity for round stage
+    TTI_SFPSHFT2(0, 0, 13, 6);  // SFPSHFT2_MOD1_SHFT_IMM
 
-    // Macro 0: Defines the scheduling for the first SFPLOADMACRO call per iteration.
-    // Bit fields encode which sub-unit instructions fire and their timing:
-    //   simple_bits: 0x80 (enable) | (1 << 3) (template index 1??) | 4 (delay)
-    //   round_bits: 0x80 (enable) | 0x40 (use L16) | (3 << 3) | 5
-    // These are loaded into SFPCONFIG macro slot 0.
+    // Macro 0 configuration: triggers template[0] (SFPSWAP) in simple stage,
+    // and template[1] (SFPSHFT2 identity) in round stage for format conversion
     {
         constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 4;
         constexpr uint mad_bits = 0;
@@ -483,11 +490,10 @@ inline void binary_max_min_init() {
         constexpr uint store_bits = 0;
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);  // Write to macro slot 0
+        TTI_SFPCONFIG(0, 4 + 0, 0);  // install as Macro 0
     }
 
-    // Macro 1: Defines the scheduling for the second SFPLOADMACRO call (store phase).
-    // Only the store sub-unit fires, writing the L16 value to DST.
+    // Macro 1 configuration: store stage writes result to DEST
     {
         constexpr uint simple_bits = 0;
         constexpr uint mad_bits = 0;
@@ -495,140 +501,194 @@ inline void binary_max_min_init() {
         constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);  // Write to macro slot 1
+        TTI_SFPCONFIG(0, 4 + 1, 0);  // install as Macro 1
     }
 
-    // Misc configuration:
-    //   StoreMod0: DEFAULT (store uses default load modifier)
-    //   UsesLoadMod0ForStore: {1,1} -- both macros use load mod 0 for store
-    //   UnitDelayKind: {1,1} -- WaitForElapsedInstructions=1
+    // Configure misc settings: StoreMod0=DEFAULT, delay kind for pipeline timing
     TTI_SFPCONFIG(0x330, 8, 1);
 #endif
 }
+
+// Initialization for int32/uint32 max/min: more complex due to conditional swap correction
+template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
+inline void binary_max_min_int32_init() {
+#ifndef DISABLE_SFPLOADMACRO
+    constexpr int b0 = p_sfpu::LREG1;
+    constexpr int b1 = p_sfpu::LREG3;
+
+    // Template[0]: SFPSWAP for first pair (a0, b0)
+    TTI_SFPSWAP(0, b0, 12, IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    // Template[1]: SFPSWAP for second pair (a1, b1)
+    TTI_SFPSWAP(0, b1, 13, IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    // Template[2]: SFPSETCC for sign-based conditional correction
+    TTI_SFPSETCC(0, 0, 14, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+    // Template[3]: SFPSHFT2 identity for round stage
+    TTI_SFPSHFT2(0, 0, 15, 6);
+
+    // Macro 0: load a0, trigger swap in simple stage, setcc+round in later stages
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (3 << 3) | 4;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0x80 | 0x40 | (5 << 3) | 7;
+        constexpr uint store_bits = 0;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+    }
+
+    // Macro 1: load b0, similar pipeline
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (3 << 3) | 5;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0x80 | 0x40 | (5 << 3) | 7;
+        constexpr uint store_bits = 0;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
+    }
+
+    // Macro 2: SETCC correction stage
+    {
+        constexpr uint simple_bits = 0x00 | 0x00 | (4 << 3) | 6;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0x80 | 0x40 | (6 << 3) | 7;
+        constexpr uint store_bits = 0;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 2, 0);
+    }
+
+    // Macro 3: store result
+    {
+        constexpr uint simple_bits = 0;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x40 | (4 << 3) | 3;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 3, 0);
+    }
+
+    TTI_SFPCONFIG(0xff0, 8, 1);  // misc config for all 4 macros
+#endif
+}
+
+}  // namespace sfpu
+}  // namespace ckernel
 ```
 
-### SFPU Instructions Used
+#### SFPU Instructions Used
 
 | Instruction | Description |
-|-------------|-------------|
-| **SFPLOAD** | Loads a 4-element vector from DST register file into an SFPU local register (LREG). Supports DEFAULT (float) and INT32 load modes. |
-| **SFPSTORE** | Stores a 4-element vector from an LREG back to the DST register file. |
-| **SFPSWAP** | With `VEC_MIN_MAX` mode (mod1=1): simultaneously computes `VD = min(VC, VD)` and `VC = max(VC, VD)` per element. With mod1=9 (inverted): `VD = max(VC, VD)` and `VC = min(VC, VD)`. With `SWAP` mode: conditional swap based on condition codes. Latency: 2 cycles. |
-| **SFPLOADMACRO** | Combines an SFPLOAD with up to 4 scheduled sub-unit instructions (simple, MAD, round, store). Enables instruction-level parallelism by overlapping load, compute, and store across the SFPU's 5 sub-units. |
-| **SFPSETCC** | Sets per-lane condition codes based on register comparison. Used in INT32 path to detect when SFPSWAP gave incorrect results (due to signed-magnitude vs 2's complement mismatch). |
-| **SFPENCC** | Clears (disables) condition codes. |
-| **SFPNOP** | No-operation; used to drain the pipeline after SFPLOADMACRO sequences. |
-| **SFPLOADI** | Loads immediate values into SFPU configuration registers. Used to program SFPLOADMACRO macro bit fields. |
-| **SFPCONFIG** | Writes to SFPU configuration registers (macro slots, misc settings). |
-| **SFPSHFT2** | Shift instruction used as a template instruction for the "round" sub-unit in SFPLOADMACRO -- copies data to L16 staging register. |
+|---|---|
+| `SFPLOAD` | Loads a row of data from DEST register into an SFPU local register (LREG). Supports DEFAULT (float) and INT32 load modes. |
+| `SFPSTORE` | Stores a row from an SFPU local register back to DEST. Supports DEFAULT and INT32 modes. |
+| `SFPSWAP` | Core comparison instruction. In `VEC_MIN_MAX` mode (mod1=8): places minimum in VC and maximum in VD. In mode `9`: inverts so VD=max, VC=min. In `SWAP` mode: conditionally swaps based on condition codes. |
+| `SFPSETCC` | Sets condition codes based on register values. `LREG_LT0` sets CC for elements < 0; `LREG_GTE0` sets CC for elements >= 0. Used for integer sign correction. |
+| `SFPENCC` | Clears (ends) condition code state, returning to unconditional execution. |
+| `SFPLOADMACRO` | Advanced pipelined instruction that combines load with scheduled execution of pre-configured instruction templates across pipeline stages (simple, MAD, round, store). |
+| `SFPCONFIG` | Configures SFPLOADMACRO macros and misc settings (store mode, delay kind). |
+| `SFPLOADI` | Loads immediate values into SFPU config registers, used to configure SFPLOADMACRO macro bit fields. |
+| `SFPSHFT2` | Shift instruction used here in identity mode for pipeline round-stage scheduling. |
+| `SFPNOP` | No-operation; used for pipeline drainage after the last iteration. |
+| `load_replay_buf` / `lltt::replay` | Records and replays instruction sequences from the replay buffer (Blackhole: `load_replay_buf`; Wormhole: `lltt::record`/`lltt::replay`). |
 
-### SFPU Register Usage
+#### SFPU Register Usage
 
 | Register | Usage |
-|----------|-------|
-| **LREG0** | Input A row (alternates with LREG1 in optimized path) |
-| **LREG1** | Input A row (alternates with LREG0 in optimized path); also used for B in fallback path |
-| **LREG2** | Input B row (float path); b0 register (int32 path, first iteration pair) |
-| **LREG3** | Store staging register 'c' (float path); b1 register (int32 path, second iteration pair) |
-| **LREG7** | Store staging register 'c' (int32 path only) |
-| **L16** | Internal staging register used by the "round" sub-unit to pass data to the "store" sub-unit |
-| **DST[idst0]** | Source tile A (typically DST index 0) |
-| **DST[idst1]** | Source tile B (typically DST index 1) |
-| **DST[odst]** | Output tile (typically DST index 0, overwriting A) |
+|---|---|
+| `LREG0` | Input 0 (LHS) row data. In SFPLOADMACRO path, alternates with LREG1 across iterations. |
+| `LREG1` | Input 1 (RHS) row data (simple path). In SFPLOADMACRO float path, alternates with LREG0. |
+| `LREG2` | RHS row in SFPLOADMACRO float path (`b`). In int32 path, second-pair input (`a1`). |
+| `LREG3` | Output staging in SFPLOADMACRO float path (`c`). In int32 path, second-pair RHS (`b1`). |
+| `LREG7` | Output staging in int32 SFPLOADMACRO path (`c`). |
+| DEST[idst0*32..] | Source tile face rows for input 0 |
+| DEST[idst1*32..] | Source tile face rows for input 1 |
+| DEST[odst*32..] | Destination for output (overwrites input 0 position when odst=idst0) |
 
-### SFPU Execution Flow
+#### SFPU Execution Flow
 
-1. **Tile acquisition**: The compute kernel calls `tile_regs_acquire()` to claim the DST register bank.
+1. **Initialization** (`binary_max_tile_init` -> `binary_max_min_init<true>`):
+   - Configures two SFPLOADMACRO instruction templates: template[0] is an SFPSWAP in VEC_MIN_MAX mode (mod1=9 for max), template[1] is an identity SFPSHFT2 for the round stage.
+   - Configures two SFPLOADMACRO macros: Macro 0 pipelines load+swap+round; Macro 1 pipelines store.
+   - Sets misc configuration for pipeline timing.
 
-2. **Unpack to DST**: Two `copy_tile()` calls unpack tiles from CB c_0 and CB c_1 into DST[0] and DST[1] respectively. For SFPU operations, `UnpackToDestFp32` mode is used, ensuring data arrives in FP32 format in DST (except for POWER op).
+2. **Per-tile execution** (`binary_max_tile` -> `_llk_math_eltwise_binary_sfpu_params_` -> `calculate_binary_max_min<true>`):
+   - The LLK params function iterates over all 4 faces of the tile (RC vector mode), calling `calculate_binary_max_min` once per face, advancing DEST by 8 rows between calls via `SETRWC`.
+   - Each face call processes 8 rows (ITERATIONS=8).
 
-3. **SFPU initialization** (`binary_max_tile_init`): Called once (or per-tile if activations are present). Configures:
-   - Instruction templates for SFPSWAP and SFPSHFT2
-   - Macro 0 and Macro 1 bit fields (which sub-units fire and when)
-   - Misc configuration (store behavior, delay kinds)
+3. **Per-row computation** (within `calculate_binary_max_min`):
+   - **SFPLOADMACRO path (default)**: For each row, three instructions execute:
+     - `SFPLOADMACRO` macro 0: loads LHS row from DEST into alternating LREG0/LREG1, and in the simple stage triggers SFPSWAP on the previously loaded pair.
+     - `SFPLOAD`: loads RHS row from DEST into LREG2.
+     - `SFPLOADMACRO` macro 1: in the store stage, writes the max result back to DEST.
+   - The pipeline achieves 3 cycles/row throughput by overlapping load/compute/store.
+   - After 8 iterations, 3 NOPs drain the pipeline.
 
-4. **SFPU computation** (`binary_max_tile` -> `calculate_binary_max_min<true>`):
-   - Computes byte offsets into DST for both inputs and output
-   - Iterates 8 times (one per row in a tile face; the LLK framework calls this function once per face)
-   - **Float path (optimized)**: Uses SFPLOADMACRO to pipeline load-swap-store at 3 cycles/row:
-     - SFPLOADMACRO loads A into alternating LREG0/LREG1 and schedules the SFPSWAP
-     - Regular SFPLOAD loads B into LREG2
-     - Second SFPLOADMACRO triggers the store pipeline
-   - **INT32 path (optimized)**: Uses SFPLOADMACRO with replay buffers at 5 cycles/row:
-     - Adds corrective SFPSETCC + conditional SFPSWAP after initial VEC_MIN_MAX because SFPSWAP compares in signed-magnitude format, which is incorrect for 2's complement integers
-     - Double-buffers with (a0,b0) and (a1,b1) register pairs
-     - Records 10 instructions into a replay buffer and replays for each pair of rows
-   - 3 SFPNOP instructions drain the pipeline at the end
+4. **Integer path** (`calculate_binary_max_min_int32`):
+   - More complex because SFPSWAP's VEC_MIN_MAX mode operates on IEEE 754 float representation, which does not correctly order signed integers when signs differ.
+   - After SFPSWAP, a conditional correction is applied: SFPSETCC checks the sign of each register, then a conditional SFPSWAP fixes misordered elements.
+   - Uses replay buffer (10 instructions per 2-row pair) for efficiency, achieving 5 cycles/row.
 
-5. **Pack to output CB**: `tile_regs_commit()` signals that DST is ready. `pack_tile(0, cb_out)` packs DST[0] into CB c_2 in the output data format. `tile_regs_release()` frees DST.
+#### SFPU Configuration
 
-6. **CB synchronization**: `cb_push_back(cb_out, 1)` signals the writer kernel. `cb_pop_front()` on both input CBs signals the reader kernel.
+- **Unpack-to-DEST mode**: For non-POWER SFPU ops, `UnpackToDestMode::UnpackToDestFp32` is used for all input CBs. This unpacks input data directly to DEST registers in FP32 format, bypassing the SRC registers.
+- **FP32 DEST accumulation**: Enabled when output or both inputs are Float32, Int32, or UInt32.
+- **APPROX template parameter**: Passed through but not used by max/min (no approximation needed -- the operation is exact).
+- **VectorMode::RC**: The default, processing all 4 faces of a 32x32 tile (each face is 16x16).
+- **SFPLOADMACRO**: When not disabled via `DISABLE_SFPLOADMACRO`, the optimized pipelined path is used. This is the default for both Wormhole and Blackhole.
 
-### SFPU Configuration
+#### Hardware Compatibility Notes
 
-- **Compile-time defines**:
-  - `BINARY_SFPU_INIT` = `binary_max_tile_init();` (float), `binary_max_int32_tile_init();` (int32), `binary_max_uint32_tile_init();` (uint32)
-  - `BINARY_SFPU_OP` = `binary_max_tile` / `binary_max_int32_tile` / `binary_max_uint32_tile`
-  - `APPROX` = compile-time template parameter from `ComputeConfig`; not behaviorally significant for max/min (no approximation involved)
+- The Wormhole B0 and Blackhole implementations are structurally identical, sharing the same `ckernel_sfpu_binary_max_min.h` source. The only differences are in address modifier constants (`ADDR_MOD_7`/`ADDR_MOD_6` on Blackhole vs `ADDR_MOD_3`/`ADDR_MOD_2` on Wormhole) and the replay buffer API (`load_replay_buf` lambda on Blackhole vs `lltt::record<lltt::NoExec>` followed by explicit instructions on Wormhole).
+- SFPSWAP's VEC_MIN_MAX mode operates on the IEEE 754 float bit representation. This works correctly for floats but requires the sign-correction path for integers, which adds 2 extra cycles per row in the int32 variant.
+- Both architectures support the SFPLOADMACRO optimization that pipelines the load/swap/store stages.
 
-- **Math fidelity**: Not applicable -- MAXIMUM uses SFPSWAP which is an exact comparison, not a polynomial approximation. The `APPROX` template parameter is passed through but has no effect on the max/min logic.
+## Implementation Notes
 
-- **fp32_dest_acc_en**: Enabled based on input/output data types. Controls whether DST operates in full FP32 or reduced precision.
+1. **No pre/post activations for MAXIMUM**: Unlike operations like LOGADDEXP (which uses EXP as pre-activation and LOG as post-activation), MAXIMUM has no `process_lhs`, `process_rhs`, or `postprocess` set in its `OpConfig`. This means all the activation machinery (CB c_3, c_4, PREPROCESS macros) compiles away to nothing.
 
-- **UnpackToDestMode**: `UnpackToDestFp32` for all source CBs (except POWER op). Ensures tiles are in FP32 in DST before SFPU processes them.
+2. **Three dtype variants**: The operation dispatches to different SFPU functions based on input dtype:
+   - `binary_max_tile` for bfloat16/float16_b/float32 (uses float SFPSWAP)
+   - `binary_max_int32_tile` for int32 (adds sign correction)
+   - `binary_max_uint32_tile` for uint32 (uses unsigned comparison correction)
 
-- **`DISABLE_SFPLOADMACRO`**: A compile-time escape hatch that disables the optimized SFPLOADMACRO pipeline and falls back to sequential load-swap-store. This may be needed for debugging or on platforms that do not support SFPLOADMACRO.
+3. **SFPLOADMACRO optimization**: The default (non-`DISABLE_SFPLOADMACRO`) path achieves 3 cycles per row for float and 5 cycles per row for int32, compared to 4 and ~8 cycles respectively in the fallback path. This is a significant throughput improvement.
 
-### Hardware Compatibility Notes
+4. **Broadcast handling**: While MAXIMUM itself is a pure elementwise op, the binary_ng framework handles broadcasting transparently. The `SubtileBroadcastType` determines which reader/compute kernel variants are used. For NONE (same shape), it uses the no-broadcast variants. For other broadcast modes (SCALAR, ROW, COL), different reader/compute kernels handle tile replication.
 
-- **Wormhole B0 vs Blackhole**: The SFPU kernel source code is **identical** for both architectures. The only difference is in address modifier constants used by SFPLOAD/SFPSTORE (`ADDR_MOD_7` and `ADDR_MOD_6` on Blackhole; `ADDR_MOD_3` and `ADDR_MOD_2` on Wormhole). These are architecture-specific register addressing schemes that control auto-increment behavior during tile row iteration.
-
-- **Replay buffer API**: Wormhole uses `load_replay_buf(slot, count, lambda)` while Blackhole uses `lltt::record<lltt::NoExec>(slot, count)` followed by inline instructions. The `lltt::replay(slot, count)` call is used on both to execute the recorded sequence.
-
-- **SFPSWAP signed-magnitude issue**: Both architectures share the same limitation where SFPSWAP's VEC_MIN_MAX mode operates on signed-magnitude representation. For INT32 data (2's complement), a corrective conditional swap is required. This is an RTL-level hardware behavior, not a software bug.
-
----
+5. **SFPU-only operation**: MAXIMUM cannot be implemented on the FPU (matrix unit) since it is not one of the three FPU binary operations (ADD, SUB, MUL). Attempting to create an FPU OpConfig for MAXIMUM will throw a `TT_THROW`.
 
 ## External Knowledge Sources
 
-### DeepWiki References
+### DeepWiki Queries
 
-- **tenstorrent/tt-metal**: Binary_ng program factory architecture, kernel dispatch logic, SFPU op selection via `OpConfig` and `get_sfpu_init_fn`.
-- **tenstorrent/tt-llk**: LLK binary SFPU API (`_llk_math_eltwise_binary_sfpu_init_`, `_llk_math_eltwise_binary_sfpu_params_`), SFPU type enumeration, address modifier configuration.
-- **tenstorrent/tt-isa-documentation**: SFPSWAP instruction semantics (VEC_MIN_MAX mode, 2-cycle latency, signed-magnitude comparison), SFPLOADMACRO instruction-level parallelism across 5 sub-units, LaneConfig bits for min/max control.
-- **tenstorrent/sfpi**: SFPSWAP_MOD1_VEC_MIN_MAX constant (value = 1), SFPSWAP_MOD1_SWAP for conditional swap, SFPSETCC modes, SFPCONFIG macro register layout.
+1. **Query**: "How does the binary_ng program factory work? What are the different subtile broadcast modes and how do they affect kernel selection?"
+   **Reason**: Needed to understand the overall framework before diving into MAXIMUM-specific details.
+   **Key Findings**: Documented the SubtileBroadcastType enum, kernel selection logic, and CB configuration patterns.
 
-### Confluence References
+2. **Query**: "How does OpConfig work for binary_ng SFPU operations? Specifically, how is the MAXIMUM binary op type configured?"
+   **Reason**: Needed to trace from BinaryOpType::MAXIMUM to the actual SFPU function names.
+   **Key Findings**: MAXIMUM maps to `SfpuBinaryOp::MAXIMUM`, which produces defines `binary_max_tile_init()` and `binary_max_tile` (with int32/uint32 variants).
 
-Not consulted for this analysis. The DeepWiki and source code provided sufficient detail on the SFPSWAP and SFPLOADMACRO instructions used by the MAXIMUM operation.
+3. **Query**: "What does _llk_math_eltwise_binary_sfpu_params_ do in tt-llk?"
+   **Reason**: Needed to understand how the SFPU function is dispatched across tile faces.
+   **Key Findings**: It iterates 4 faces in VectorMode::RC, calling the SFPU function per face with SETRWC advancing DEST by 8 rows between faces.
 
-### Glean References
+### Documentation References
 
-Not consulted for this analysis. The Wormhole/Blackhole SFPU kernel implementations were directly readable from the codebase and the signed-magnitude correction logic was self-documented in the source.
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.cpp`
+   **Reason**: Contains OpConfig constructor and get_sfpu_init_fn mapping for MAXIMUM
+   **Key Information**: MAXIMUM maps to `binary_max_tile` / `binary_max_int32_tile` / `binary_max_uint32_tile` based on dtype
 
----
+2. **Source**: `tt_metal/hw/inc/api/compute/binary_max_min.h`
+   **Reason**: Top-level compute API header for max/min operations
+   **Key Information**: Documents the ALWI wrapper functions and their parameters (idst0, idst1, odst)
 
-## File Index
+3. **Source**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h`
+   **Reason**: Core SFPU kernel implementation
+   **Key Information**: Contains both float and int32 SFPSWAP-based max/min implementations with SFPLOADMACRO optimization
 
-| File | Role |
-|------|------|
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp` | Program factory -- creates kernels, CBs, runtime args |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp` | OpConfig, KernelName enum, utility declarations |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.cpp` | OpConfig::as_defines, get_sfpu_init_fn, kernel path resolution |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp` | Device operation struct, SubtileBroadcastType enum |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.cpp` | is_binary_sfpu_op, validate, compute_output_specs |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp` | Compute kernel (no broadcast, SFPU) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu.cpp` | Compute kernel (with broadcast, SFPU) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp` | Compute kernel (scalar B, SFPU) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp` | PREPROCESS macro for activation preprocessing |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp` | HAS_ACTIVATIONS, BCAST_OP macros |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp` | Reader kernel (two-tensor, ng variant) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp` | Writer kernel (ng variant) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp` | Reader kernel (single-tensor + scalar) |
-| `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_scalar.cpp` | Writer kernel (scalar path) |
-| `tt_metal/hw/inc/api/compute/binary_max_min.h` | Compute API: binary_max_tile, binary_max_tile_init |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_max_min.h` | LLK wrapper (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_max_min.h` | LLK wrapper (Wormhole B0) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h` | SFPU kernel impl (Blackhole) |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h` | SFPU kernel impl (Wormhole B0) |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_init.h` | LLK binary SFPU init framework |
+4. **Source**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_max_min.h`
+   **Reason**: LLK glue layer connecting compute API to SFPU kernel
+   **Key Information**: Routes through `_llk_math_eltwise_binary_sfpu_params_` with the calculate function and SfpuType enum

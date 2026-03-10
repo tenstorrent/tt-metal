@@ -1,220 +1,179 @@
-# SILU Operation Analysis
+# SILU (SiLU / Swish) Implementation Analysis
 
-## Operation Overview
+## Overview
 
-| Property | Value |
-|---|---|
-| **Operation Name** | SILU (Sigmoid Linear Unit) |
-| **TTNN API** | `ttnn::silu` |
-| **Aliases** | `ttnn::swish` (Swish is mathematically identical to SiLU) |
-| **UnaryOpType** | `UnaryOpType::SILU` |
-| **Category** | Eltwise Unary / Activation Function |
-| **Mathematical Definition** | `silu(x) = x * sigmoid(x) = x * (1 / (1 + exp(-x)))` |
-| **Program Factory** | `UnaryProgramFactory` (also `UnarySubCoreGridProgramFactory` for sub-core-grid variant) |
-| **Compute Kernel** | `eltwise_sfpu.cpp` (shared generic SFPU kernel) |
-| **SFPU Kernel** | `ckernel_sfpu_silu.h` (delegates to `ckernel_sfpu_sigmoid.h`) |
-| **Parameters** | None (no scalar parameters) |
-| **Approximation Mode** | Always `false` (no approximation mode for SILU) |
+SiLU (Sigmoid Linear Unit), also known as Swish, computes `silu(x) = x * sigmoid(x)` element-wise on a tensor. It is a smooth, non-monotonic activation function commonly used in modern neural network architectures. The operation is implemented as a unary SFPU operation through the shared unary program factory.
 
-## TTNN API Registration
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
 
-SILU is registered as a simple unary operation with no parameters:
+## Work Unit Definition
 
-```cpp
-// In ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp
-REGISTER_UNARY_OPERATION(silu, SILU);
-```
+| Attribute | Value |
+|-----------|-------|
+| **Granularity** | tile |
+| **Unit size** | 1 tile (32x32 elements) |
+| **Total units** | `num_pages` = total number of tiles in the input tensor |
+| **Loop structure** | Outer loop over `per_core_block_cnt` blocks, inner loop over `per_core_block_dim` tiles per block (always 1 for this factory) |
 
-This expands to:
-```cpp
-constexpr auto silu = ttnn::register_operation<
-    "ttnn::silu",
-    ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::SILU>>();
-```
+## Tensor Format and Layout
 
-The `ExecuteUnary` template provides the signature:
-```cpp
-static Tensor invoke(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-```
+### Input Tensor
 
-Swish is separately registered as a distinct struct but dispatches `UnaryOpType::SILU` internally:
-```cpp
-constexpr auto swish = ttnn::register_operation<"ttnn::swish", ttnn::operations::unary::Swish>();
-```
+| Property | Input Tensor |
+|----------|--------------|
+| **Logical shape** | Any shape (flattened to total tile count) |
+| **Dimension convention** | N/A (shape-agnostic, operates on flat tile stream) |
+| **Tensor layout** | TILE_LAYOUT (32x32 tiles) |
+| **Memory layout** | INTERLEAVED |
+| **Buffer type** | DRAM (or L1) |
+| **Data type** | BFLOAT16, FLOAT32 supported |
 
-## Program Factory
+### Output Tensor
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+| Property | Output Tensor |
+|----------|---------------|
+| **Logical shape** | Same as input |
+| **Dimension convention** | Same as input |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED |
+| **Buffer type** | DRAM (or L1) |
+| **Data type** | Same as input (or as specified by output tensor) |
 
-The program factory is shared across all unary operations. SILU uses the default `UnaryProgramFactory` (interleaved layout). A `UnarySubCoreGridProgramFactory` variant exists for sub-core-grid scheduling.
+### Layout Transformations
 
-### Program Factory Selection
+None. The operation is a pure element-wise unary; input and output share the same layout and shape.
 
-The `UnaryDeviceOperation::select_program_factory` method picks the factory based on tensor layout and attributes. For standard interleaved tensors, `UnaryProgramFactory` is selected. For sharded tensors, `UnaryShardedProgramFactory` is used.
+## Data Flow Pattern
 
-### Circular Buffer Configuration
+| Stage | Kernel | Reads From | Writes To | CB Operations |
+|-------|--------|------------|-----------|---------------|
+| 1 | Reader | DRAM (src_buffer) | CB c_0 | `cb_reserve_back(c_0, 1)`, `noc_async_read_page`, `cb_push_back(c_0, 1)` |
+| 2 | Compute | CB c_0 | CB c_2 | `cb_wait_front(c_0, 1)`, `copy_tile`, SFPU ops, `pack_tile(0, c_2)`, `cb_pop_front(c_0, 1)` |
+| 3 | Writer | CB c_2 | DRAM (dst_buffer) | `cb_wait_front(c_2, 1)`, `noc_async_write_page`, `cb_pop_front(c_2, 1)` |
 
-| CB Index | Name | Double-Buffered | Size | Purpose |
-|---|---|---|---|---|
-| `c_0` | Input | Yes (2 pages) | `2 * tile_size(input_format)` | Holds input tiles from DRAM |
-| `c_2` | Output | Yes (2 pages) | `2 * tile_size(output_format)` | Holds output tiles for write-back |
+The reader fetches one tile at a time from DRAM into CB c_0. The compute kernel waits for a tile in c_0, unpacks it into DEST registers, applies the SFPU silu operation (x * sigmoid(x)), packs the result into CB c_2, then frees c_0. The writer waits for a tile in c_2, writes it to DRAM, and frees c_2.
 
-SILU does not require the temporary buffer `c_1` (that is reserved for HARDSHRINK and LOGIT only).
+## Circular Buffer Configuration
 
-### Compile-Time Defines
+| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
+|-------|------|---------|----------|------------|-----------|----------|----------|----------|
+| c_0 | cb_src0 | Input staging | 2 tiles | 1 tile | Double | Reader | Compute | Program |
+| c_2 | cb_output | Output staging | 2 tiles | 1 tile | Double | Compute | Writer | Program |
 
-The program factory generates these compile-time defines for SILU:
+**Notes**:
+- CB c_1 (tmp0) is NOT created for SILU. It is only created for HARDSHRINK, CBRT, and LOGIT operations.
+- Both CBs use double-buffering (capacity = 2 * page_size), enabling overlap between the producer and consumer of each buffer.
+- Page size is `single_tile_size` for TILE_LAYOUT (determined by `tt::tile_size(cb_data_format)`).
 
-| Define | Value | Purpose |
-|---|---|---|
-| `SFPU_OP_INIT_0` | `silu_tile_init();` | Initialization macro inserted into the compute kernel |
-| `SFPU_OP_FUNC_0` | `silu_tile(0);` | Per-tile SFPU operation macro inserted into the compute kernel |
-| `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` | `1` | Triggers `#include "api/compute/compute_kernel_api.h"` in the split-include header |
+## Pipeline Pattern Summary
 
-The define `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` is the **fallback** -- SILU does not have a dedicated split-include macro. Instead, it relies on the full `compute_kernel_api.h` header which includes `silu_tile` and `silu_tile_init` declarations.
+Both circular buffers (c_0 and c_2) are double-buffered, allowing the reader to fill one tile slot while the compute kernel processes another, and similarly for compute/writer overlap. This enables a 3-stage pipelined execution across reader, compute, and writer.
 
-### Work Distribution
+## Index Calculations
 
-The factory uses `split_work_to_cores` to distribute tiles across the compute grid:
-- Tiles are divided as evenly as possible across all available cores
-- Two core groups handle remainder: `core_group_1` gets `num_pages_per_core_group_1` tiles, `core_group_2` gets `num_pages_per_core_group_2`
-- Each core processes tiles sequentially, one at a time (`per_core_block_size = 1`)
+Index mapping uses the `TensorAccessor` abstraction. The reader and writer kernels receive:
+- `src_addr` / `dst_addr`: Base address of the buffer in DRAM
+- `start_id`: The first page (tile) index this core should process
+- `num_pages`: How many pages this core processes
 
-### Compute Configuration
+Page indices are sequential starting from `start_id`. The `TensorAccessor` translates a linear page index into the correct DRAM bank and offset, handling the interleaved memory layout where tiles are distributed round-robin across DRAM banks.
 
-```cpp
-tt::tt_metal::ComputeConfig{
-    .math_fidelity = MathFidelity::HiFi4,
-    .fp32_dest_acc_en = args.fp32_dest_acc_en,
-    .unpack_to_dest_mode = unpack_to_dest_mode,
-    .bfp8_pack_precise = args.bfp8_pack_precise,
-    .math_approx_mode = false,  // SILU always returns false from get_op_approx_mode
-    .compile_args = {num_pages_per_core, 1},
-    .defines = unary_defines
-}
-```
+## Memory Access Patterns
 
-Key points:
-- **Math fidelity** is always `HiFi4` (highest accuracy)
-- **math_approx_mode** is always `false` because `get_op_approx_mode` returns `false` for all ops by default (the switch statement has only a `default: return false` case)
-- **fp32_dest_acc_en** is passed through from operation attributes, controlling whether DEST registers operate in FP32 mode
+### Read Pattern
+Sequential tile reads. Each core reads a contiguous range of tile indices `[start_id, start_id + num_pages)`. Within that range, tiles are read one at a time in order. Each `noc_async_read_page` fetches a single tile from its interleaved DRAM bank location into L1 CB c_0.
+
+### Write Pattern
+Sequential tile writes. Mirrors the read pattern. Each core writes tiles in the same order they were computed, one at a time via `noc_async_write_page` from CB c_2 to the output buffer's interleaved DRAM banks.
+
+## Core Distribution Strategy
+
+| Attribute | Value |
+|-----------|-------|
+| **Grid topology** | 2D (linearized as 1D) |
+| **Grid dimensions** | `compute_with_storage_grid_size` (device-dependent, e.g., 8x8) |
+| **Total cores** | Determined by `split_work_to_cores` based on total tile count |
+| **Work per core** | `num_pages_per_core_group_1` or `num_pages_per_core_group_2` tiles |
+| **Load balancing** | Two-group split with remainder handling |
+
+The `split_work_to_cores` utility divides `num_pages` tiles across available cores. If tiles divide evenly, all cores get the same count (core_group_1 only). If not, `core_group_1` gets `ceil(num_pages / num_cores)` tiles per core and `core_group_2` gets one fewer tile per core. Separate compute kernels are created for each group with different `per_core_block_cnt` compile-time arguments.
+
+Core linearization: Core index `i` maps to `CoreCoord{i / num_cores_y, i % num_cores_y}`, filling columns first (column-major order within the grid).
+
+## Arguments
+
+### Compile-Time Arguments
+
+#### Reader Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0+ | TensorAccessorArgs | uint32_t[] | Tensor accessor parameters for the source buffer (encodes memory layout, bank mapping, page size) |
+
+#### Compute Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | per_core_block_cnt | uint32_t | Number of tile blocks to process on this core (equals number of tiles since block_size=1) |
+| 1 | per_core_block_dim | uint32_t | Number of tiles per block, always 1 |
+
+#### Writer Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | cb_id_out | uint32_t | Output circular buffer index (c_2 = 2) |
+| 1+ | TensorAccessorArgs | uint32_t[] | Tensor accessor parameters for the destination buffer |
 
 ### Runtime Arguments
 
-| Kernel | Arg 0 | Arg 1 | Arg 2 |
-|---|---|---|---|
-| Reader | `src_buffer->address()` | `num_pages_per_core` | `start_tile_id` |
-| Writer | `dst_buffer->address()` | `num_pages_per_core` | `start_tile_id` |
-| Compute | `packed_scalar1 = 0` | `packed_scalar2 = 0` | -- |
+#### Reader Kernel
 
-SILU does not use scalar runtime arguments (both are zero). The scalar packing switch statement does not have a `SILU` case.
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | src_addr | uint32_t | Source buffer base address in DRAM |
+| 1 | num_pages | uint32_t | Number of pages (tiles) for this core to read |
+| 2 | start_id | uint32_t | First page index for this core |
+
+#### Compute Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | packed_scalar1 | uint32_t | Unused for SILU (always 0) |
+| 1 | packed_scalar2 | uint32_t | Unused for SILU (always 0) |
+
+#### Writer Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | dst_addr | uint32_t | Destination buffer base address in DRAM |
+| 1 | num_pages | uint32_t | Number of pages (tiles) for this core to write |
+| 2 | start_id | uint32_t | First page index for this core |
 
 ## Kernel Implementations
 
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader | RISCV_0 | NOC0 | DRAM | CB c_0 | Read tiles via `noc_async_read_page` |
+| compute | RISCV_2 (MATH) | N/A | CB c_0 | CB c_2 | `copy_tile` (unpack to DEST), `silu_tile` (SFPU silu), `pack_tile` (DEST to CB) |
+| writer | RISCV_1 | NOC1 | CB c_2 | DRAM | Write tiles via `noc_async_write_page` |
+
 ### Reader Kernel
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);   // DRAM address of the input tensor buffer
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);   // Number of tiles this core must read
-    const uint32_t start_id = get_arg_val<uint32_t>(2);    // Global tile index offset for this core
-
-    constexpr auto src_args = TensorAccessorArgs<0>();      // Compile-time tensor accessor config (interleaved layout info)
-
-    constexpr uint32_t cb_id_in0 = 0;                      // CB index 0 = input circular buffer
-
-    // Page size is determined by the CB interface, which was configured by the host
-    // For TILE layout this equals tile_size(data_format), for ROW_MAJOR it equals buffer page_size
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
-
-    constexpr uint32_t onepage = 1;                         // Process one page (tile) at a time
-
-    const auto s = TensorAccessor(src_args, src_addr, page_bytes);  // Construct accessor with DRAM base address
-
-// Read tiles one by one from DRAM into the input CB
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {         // Forward iteration is the default path for SILU
-#endif
-        cb_reserve_back(cb_id_in0, onepage);                // Block until CB has space for one tile
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0); // Get the L1 write pointer for the CB slot
-        noc_async_read_page(i, s, l1_write_addr);          // Issue async NoC read of tile i from DRAM to L1
-        noc_async_read_barrier();                           // Wait for the read to complete
-        cb_push_back(cb_id_in0, onepage);                   // Signal to compute kernel: one tile is available
-    }
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
+- **Key Logic**: Simple sequential page reader. Creates a `TensorAccessor` from compile-time args and the runtime source address. Loops through `[start_id, start_id + num_pages)`, reading one page at a time into CB c_0. Uses `noc_async_read_barrier()` after each page to ensure the read completes before publishing.
 
 ### Writer Kernel
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);     // DRAM address of the output tensor buffer
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);     // Number of tiles this core must write
-    const uint32_t start_id = get_arg_val<uint32_t>(2);      // Global tile index offset for this core
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);  // Output CB index (c_2 = 2)
-    constexpr auto dst_args = TensorAccessorArgs<1>();            // Compile-time tensor accessor config for output
-
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
-
-#ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, num_pages);    // Sharded path: wait for all pages, no DRAM write needed
-#else
-
-    constexpr uint32_t onepage = 1;
-
-    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
-
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {          // Forward iteration for standard SILU
-#endif
-        cb_wait_front(cb_id_out, onepage);                   // Block until compute kernel has produced a tile
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);    // Get L1 address of the completed tile
-        noc_async_write_page(i, s, l1_read_addr);           // Issue async NoC write of tile i from L1 to DRAM
-        noc_async_writes_flushed();                          // Ensure write is flushed (not necessarily completed)
-        cb_pop_front(cb_id_out, onepage);                    // Free the CB slot for reuse by compute
-    }
-    noc_async_write_barrier();                               // Final barrier: all writes must complete before exit
-#endif
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+- **Key Logic**: Sequential page writer. Creates a `TensorAccessor` from compile-time args. Loops through `[start_id, start_id + num_pages)`, waiting for one tile in CB c_2, writing it to DRAM via `noc_async_write_page`, flushing, then popping. Final `noc_async_write_barrier()` ensures all writes complete.
 
 ### Compute Kernel
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
+This section combines the full annotated source code of the compute kernel with architectural analysis.
 
-This is the generic SFPU compute kernel shared by most unary SFPU operations. The operation-specific behavior is injected via preprocessor macros (`SFPU_OP_INIT_0`, `SFPU_OP_FUNC_0`, etc.) that are defined by the host program factory through the `unary_defines` map.
+#### Compute Kernel File
 
-For SILU, `SFPU_OP_CHAIN_0` expands to: `silu_tile_init(); silu_tile(0);`
-(Actually, `SFPU_OP_CHAIN_0` expands to the concatenation of `SFPU_OP_INIT_0` and `SFPU_OP_FUNC_0` as generated by `get_block_defines`.)
+`ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
 
 #### Annotated Compute Kernel Source
 
@@ -224,195 +183,92 @@ For SILU, `SFPU_OP_CHAIN_0` expands to: `silu_tile_init(); silu_tile(0);`
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"                              // Common compute API (tile_regs_acquire, etc.)
-#include "api/compute/tile_move_copy.h"                      // copy_tile API
-#include "api/compute/eltwise_unary/eltwise_unary.h"         // init_sfpu, pack_tile APIs
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"   // Conditional includes based on SFPU_OP_*_INCLUDE defines
-                                                              // For SILU: SFPU_OP_COMPUTE_KERNEL_API_INCLUDE=1
-                                                              //   -> includes compute_kernel_api.h
-                                                              //   -> provides silu_tile_init() and silu_tile()
-#include "api/compute/eltwise_unary/trigonometry.h"           // Trig functions (not used by SILU but always included)
-#include "api/compute/mul_int_sfpu.h"                         // Integer multiply SFPU (not used by SILU)
-#include "api/compute/eltwise_unary/rpow.h"                   // Reverse power (not used by SILU)
-#include "api/compute/eltwise_unary/rdiv.h"                   // Reverse division (not used by SILU)
-#include "api/compute/eltwise_unary/fill.h"                   // Fill operation (not used by SILU)
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/trigonometry.h"
+#include "api/compute/mul_int_sfpu.h"
+#include "api/compute/eltwise_unary/rpow.h"
+#include "api/compute/eltwise_unary/rdiv.h"
+#include "api/compute/eltwise_unary/fill.h"
+// For SILU, the define SFPU_OP_COMPUTE_KERNEL_API_INCLUDE=1 is set,
+// which causes sfpu_split_includes.h to include compute_kernel_api.h,
+// providing silu_tile() and silu_tile_init().
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // Number of tile blocks this core processes
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // Tiles per block (always 1 for SILU)
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    // per_core_block_cnt: number of blocks (= number of tiles for SILU, since block_dim=1)
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    // per_core_block_dim: tiles per block, always 1 for standard unary factory
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);             // Initialize SFPU: configure unpack from CB0, pack to CB2
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    // Initializes the SFPU pipeline: configures unpack for CB c_0 as input,
+    // and pack for CB c_2 as output. Also calls the SFPU_OP_CHAIN_0_INIT_0
+    // macro which expands to silu_tile_init() for SILU.
+    // silu_tile_init() -> llk_math_eltwise_unary_sfpu_silu_init<APPROX>()
+    //   -> sigmoid_init<false>() on Blackhole (non-approx path)
+    //   -> _init_sfpu_reciprocal_<false>() which sets vConstFloatPrgm0 = 2.0f
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim); // Reserve output CB space for one block of tiles
+        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
+        // Reserve space in output CB for per_core_block_dim tiles (1 tile)
 
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();                                // Acquire exclusive access to DEST registers
+            tile_regs_acquire();
+            // Acquire exclusive access to DEST registers for the math engine
 
-            cb_wait_front(tt::CBIndex::c_0, 1);                // Wait for reader to provide one input tile
+            cb_wait_front(tt::CBIndex::c_0, 1);
+            // Block until reader has pushed at least 1 tile into CB c_0
 
-            copy_tile(tt::CBIndex::c_0, 0, 0);                 // Unpack tile from CB0 slot 0 into DEST register 0
-                                                                // This moves data from L1 (CB) to DEST via the unpacker
+            copy_tile(tt::CBIndex::c_0, 0, 0);
+            // Unpack tile 0 from CB c_0 into DEST register 0
+            // This triggers the unpacker to convert from the CB data format
+            // (e.g., bfloat16) into the DEST register format (float32 if fp32_dest_acc_en)
 
-// The SFPU_OP_CHAIN_0 macro expands to the init + func calls for the configured operation.
-// For SILU, this expands to:
-//   silu_tile_init();   -- Initialize SFPU for SiLU (sets up reciprocal LUT)
-//   silu_tile(0);       -- Apply SiLU to tile in DEST register 0
 #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
+            // This macro expands to:
+            //   SFPU_OP_CHAIN_0_INIT_0  ->  silu_tile_init();
+            //   SFPU_OP_CHAIN_0_FUNC_0  ->  silu_tile(0);
+            // silu_tile(0) calls llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(0)
+            // which dispatches calculate_silu<is_fp32_dest_acc_en, 8>() across all 4 faces
+            // of the tile via _llk_math_eltwise_unary_sfpu_params_
 #endif
 
-            tile_regs_commit();                                 // Signal that DEST registers are ready for packing
+            tile_regs_commit();
+            // Signal that math engine is done writing to DEST; hand off to packer
 
-            tile_regs_wait();                                   // Wait for packer to be ready
+            tile_regs_wait();
+            // Wait for packer to be ready to read from DEST
 
-            pack_tile(0, tt::CBIndex::c_2);                     // Pack tile from DEST register 0 into output CB2
+            pack_tile(0, tt::CBIndex::c_2);
+            // Pack DEST register 0 into CB c_2, converting from DEST format
+            // back to the output data format
 
-            cb_pop_front(tt::CBIndex::c_0, 1);                  // Free the input tile slot in CB0
+            cb_pop_front(tt::CBIndex::c_0, 1);
+            // Free the consumed tile in CB c_0, allowing reader to write more
 
-            tile_regs_release();                                // Release DEST registers
+            tile_regs_release();
+            // Release DEST registers for the next iteration
         }
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);    // Signal to writer: block of tiles is ready
+        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
+        // Publish per_core_block_dim tiles (1) in CB c_2 for the writer to consume
     }
 }
 ```
 
 ### SFPU Kernel Implementation
 
-This section provides a deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
-#### Compute API Layer
+#### SFPU Kernel File
 
-**File**: `tt_metal/hw/inc/api/compute/compute_kernel_api.h`
+`tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h`
 
-The compute API provides the user-facing `silu_tile` and `silu_tile_init` functions:
+(Wormhole version: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h`)
 
-```cpp
-ALWI void silu_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst)));
-}
-
-ALWI void silu_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>()));
-}
-```
-
-- `APPROX` is the global approximation mode template parameter (always `false` for SILU since `get_op_approx_mode` returns `false`)
-- `DST_ACCUM_MODE` is the FP32 destination accumulation mode (controlled by `fp32_dest_acc_en`)
-- `MATH(...)` ensures the code only runs on the math RISC-V processor
-
-#### LLK API Layer
-
-**File (Blackhole)**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_silu.h`
-**File (Wormhole)**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_silu.h`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#pragma once
-
-#include "llk_math_eltwise_unary_sfpu_init.h"    // Generic SFPU init infrastructure
-#include "llk_math_eltwise_unary_sfpu_params.h"   // Generic SFPU per-tile dispatch (iterates over tile faces)
-#include "ckernel_sfpu_silu.h"                     // The actual SFPU microcode for SiLU
-
-namespace ckernel {
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_silu_init() {
-    // Initialize the SFPU for SiLU. The init function is passed as a callback
-    // to the generic SFPU init infrastructure, which handles register setup,
-    // address modifier configuration, and counter resets.
-    llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROXIMATE>(sfpu::silu_init<APPROXIMATE>);
-}
-
-// Blackhole variant has template parameter ITERATIONS defaulted to 8
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    // Dispatch the SiLU calculation across all faces of the tile at dst_index.
-    // _llk_math_eltwise_unary_sfpu_params_ handles:
-    //   1. Computing the DEST register offset for the given dst_index
-    //   2. Iterating over the 4 faces (16x16 sub-tiles) of the 32x32 tile
-    //   3. Calling calculate_silu for each face with ITERATIONS=8 (one row of 16 elements per iteration)
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
-}
-
-}  // namespace ckernel
-```
-
-Note: The Wormhole variant is nearly identical but hardcodes `ITERATIONS` to 8 in the template call rather than using a defaulted template parameter:
-```cpp
-// Wormhole variant
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, 8>, dst_index, vector_mode);
-}
-```
-
-#### SFPU Kernel File (Blackhole)
-
-**File**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#pragma once
-
-#include "ckernel_sfpu_sigmoid.h"    // Provides _sfpu_sigmoid_ helper used by SiLU
-
-namespace ckernel::sfpu {
-
-// calculate_silu: Core SFPU microcode for SiLU activation
-// Template parameters:
-//   is_fp32_dest_acc_en: Whether DEST registers are in FP32 mode (affects sigmoid precision path)
-//   ITERATIONS: Number of elements to process per invocation (default 8, one per row in a 16x16 face)
-template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_silu() {
-#pragma GCC unroll 8                     // Hint to unroll the loop for performance (avoid branch overhead)
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];   // Load the current element from DEST register into SFPU vFloat register
-                                              // dst_reg[0] refers to the current row being processed
-
-        // SiLU(x) = x * sigmoid(x)
-        // _sfpu_sigmoid_ computes sigmoid(x) = 1 / (1 + exp(-x))
-        // The template parameter controls precision:
-        //   - FP32 mode: uses _sfpu_exp_improved_ and _sfpu_reciprocal_<2> (2 Newton-Raphson iterations)
-        //   - BF16 mode: uses _sfpu_exp_21f_ and _sfpu_reciprocal_<1> (1 Newton-Raphson iteration)
-        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
-
-        // If not in FP32 accumulation mode, round the result back to bfloat16
-        // float_to_fp16b truncates/rounds the FP32 intermediate to BF16 precision
-        // reinterpret casts the result back to vFloat without changing bits
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-        }
-
-        sfpi::dst_reg[0] = result;           // Store the result back to the current DEST register row
-        sfpi::dst_reg++;                     // Advance to the next row in the DEST register
-    }
-}
-
-// silu_init: Initialize SFPU state for SiLU computation
-// On Blackhole: delegates to sigmoid_init<false> which calls _init_sfpu_reciprocal_<false>()
-// This sets up the reciprocal lookup table needed by the Newton-Raphson reciprocal approximation
-template <bool APPROXIMATION_MODE>
-inline void silu_init() {
-    // SiLU always uses the non-approximate sigmoid path (the _sfpu_sigmoid_ function),
-    // so initialization must match: sigmoid_init<false> sets up for exact sigmoid
-    sigmoid_init<false>();
-}
-
-}  // namespace ckernel::sfpu
-```
-
-#### SFPU Kernel File (Wormhole B0)
-
-**File**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h`
+#### Annotated SFPU Kernel Source
 
 ```cpp
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
@@ -422,253 +278,217 @@ inline void silu_init() {
 #pragma once
 
 #include "ckernel_sfpu_sigmoid.h"
+// Includes the sigmoid helper _sfpu_sigmoid_ which computes 1/(1+exp(-x))
 
 namespace ckernel::sfpu {
 
-// calculate_silu is identical between Blackhole and Wormhole
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {
 #pragma GCC unroll 8
+    // Unroll hint: process up to 8 row-pairs per face.
+    // ITERATIONS is 8 by default, corresponding to 8 row-pairs in a 16-row face.
+    // Each iteration processes one row-pair (2 rows of 16 elements = 32 elements)
+    // via the SFPU's SIMD-32 datapath.
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+        // Load the current row-pair from DEST register into SFPU local register.
+        // dst_reg[0] accesses the current DEST row-pair (32 elements).
 
         // silu(x) = x * sigmoid(x)
         sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
+        // _sfpu_sigmoid_ computes sigmoid(x) = 1/(1+exp(-x)):
+        //   1. Computes exp(-x) using either _sfpu_exp_improved_ (fp32 mode)
+        //      or _sfpu_exp_21f_ (bfloat16 mode)
+        //   2. Adds 1.0 to get denominator = 1 + exp(-x)
+        //   3. Computes reciprocal using _sfpu_reciprocal_ with Newton-Raphson
+        //      (2 iterations for fp32, 1 for bfloat16)
+        // The result sigmoid(x) is then multiplied by x.
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            // Convert float32 result to bfloat16 using round-to-nearest-even.
+            // This is necessary because SFPU local registers are always float32,
+            // but if DEST is bfloat16, we must round before storing back to avoid
+            // truncation errors when SFPSTORE writes to DEST.
         }
 
         sfpi::dst_reg[0] = result;
+        // Write the silu result back to the current DEST row-pair.
+
         sfpi::dst_reg++;
+        // Advance the DEST register pointer to the next row-pair.
     }
 }
 
-// silu_init on Wormhole: delegates to _init_sfpu_reciprocal_ (or approximate variant)
-// This differs from Blackhole which uses sigmoid_init<false>()
 template <bool APPROXIMATION_MODE>
 inline void silu_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();     // Non-approximate: initialize reciprocal LUT for Newton-Raphson
-    } else {
-        _init_sfpu_reciprocal_<true>();      // Approximate: initialize with approximate reciprocal
-    }
+    // Blackhole version: always calls sigmoid_init<false>() regardless of APPROXIMATION_MODE.
+    // This is because calculate_silu uses _sfpu_sigmoid_ which always takes the non-approx path.
+    sigmoid_init<false>();
+    // sigmoid_init<false>() calls _init_sfpu_reciprocal_<false>()
+    // which sets vConstFloatPrgm0 = 2.0f (used by Newton-Raphson reciprocal).
 }
 
 }  // namespace ckernel::sfpu
 ```
 
-#### Sigmoid Helper (Shared by Both Architectures)
-
-**File**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h`
-(Wormhole version is identical in structure)
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#pragma once
-
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "ckernel_sfpu_sigmoid_appx.h"    // Approximate sigmoid (LUT-based, not used by SiLU)
-#include "ckernel_sfpu_recip.h"            // Reciprocal helpers
-
-namespace ckernel {
-namespace sfpu {
-
-// _sfpu_sigmoid_: Computes sigmoid(x) = 1 / (1 + exp(-x))
-// This is the core function that SiLU depends on.
-template <bool is_fp32_acc_to_dest_mode = true>
-sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
-    sfpi::vFloat exp_neg_x;
-
-    // Step 1: Compute exp(-x)
-    // FP32 mode uses a higher-accuracy exp implementation (_sfpu_exp_improved_)
-    // BF16 mode uses a faster but less accurate exp (_sfpu_exp_21f_, ~1 ULP on bfloat16)
-    if constexpr (is_fp32_acc_to_dest_mode) {
-        exp_neg_x = _sfpu_exp_improved_<true>(-x);       // Negate x, then compute exp
-    } else {
-        exp_neg_x = _sfpu_exp_21f_<true>(-x);            // Fast exp for BF16 precision
-    }
-
-    // Step 2: Compute denominator = 1 + exp(-x)
-    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;  // vConst1 is the SFPI constant 1.0f
-
-    // Step 3: Compute reciprocal of denominator = 1 / (1 + exp(-x))
-    // FP32 mode uses 2 Newton-Raphson iterations for higher precision
-    // BF16 mode uses 1 Newton-Raphson iteration (sufficient for BF16 accuracy)
-    sfpi::vFloat result;
-    if constexpr (is_fp32_acc_to_dest_mode) {
-        result = _sfpu_reciprocal_<2>(denominator);       // 2 Newton-Raphson iterations
-    } else {
-        result = _sfpu_reciprocal_<1>(denominator);       // 1 Newton-Raphson iteration
-    }
-
-    return result;
-}
-
-// Sigmoid init: sets up reciprocal LUT
-template <bool APPROXIMATION_MODE>
-inline void sigmoid_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();    // Blackhole version
-        // Wormhole uses: _init_reciprocal_<false, false>();
-    } else {
-        sigmoid_appx_init();                // LUT-based approximate init (not used by SiLU)
-    }
-}
-
-}  // namespace sfpu
-}  // namespace ckernel
-```
-
 #### SFPU Instructions Used
 
-| Instruction / Intrinsic | Description |
-|---|---|
-| `sfpi::dst_reg[0]` (SFPLOAD) | Load a vector element from the DEST register file into an SFPU local register |
-| `sfpi::dst_reg[0] = result` (SFPSTORE) | Store a vector result from an SFPU local register back to the DEST register file |
-| `sfpi::dst_reg++` (SFPINCRWC) | Increment the DEST register write cursor to advance to the next row |
-| `operator*` (SFPMUL) | Floating-point vector multiply -- used for `x * sigmoid(x)` |
-| `operator+` (SFPADD) | Floating-point vector add -- used for `1 + exp(-x)` in sigmoid |
-| `_sfpu_exp_improved_` / `_sfpu_exp_21f_` | Compute exp(-x) using SFPU math library functions. These are composite operations that use SFPMUL, SFPADD, SFPLUT, and other instructions internally |
-| `_sfpu_reciprocal_<N>` | Compute 1/x using an initial estimate plus N Newton-Raphson iterations. Uses SFPMUL and SFPADD |
-| `sfpi::float_to_fp16b` | Convert FP32 to BF16 format (truncation/rounding). Maps to SFPLUT or SFPCONV |
-| `sfpi::reinterpret<vFloat>` | Bitwise reinterpretation cast (no instruction emitted, just type change) |
-| `sfpi::vConst1` | SFPU constant register holding 1.0f |
+The SILU SFPU kernel is composed of several sub-operations. Here are the key SFPU instructions and intrinsics used throughout the call chain:
+
+1. **`sfpi::dst_reg[0]`** (SFPLOAD/SFPSTORE) -- Loads a row-pair (32 elements) from the DEST register file into an SFPU local register (vFloat), or stores back.
+
+2. **`sfpi::dst_reg++`** (SFPINCRWC) -- Increments the DEST register pointer to the next row-pair.
+
+3. **Negation (`-x`)** -- SFPU arithmetic negation, used to compute `-x` for `exp(-x)`.
+
+4. **`sfpi::float_to_fp16b(result, 0)`** -- Converts float32 to bfloat16 with round-to-nearest-even. Used when `is_fp32_dest_acc_en` is false.
+
+5. **`sfpi::reinterpret<vFloat>()`** -- Bitwise reinterpretation between vFloat/vInt/vUInt types without any data conversion.
+
+6. **Arithmetic multiply (`x * sigmoid_result`)** (SFPMAD) -- Multiplied-add operation used for the final `x * sigmoid(x)`.
+
+**Within `_sfpu_sigmoid_` (sigmoid sub-kernel):**
+
+7. **`_sfpu_exp_21f_` / `_sfpu_exp_improved_`** -- Polynomial-based exponential approximation. Uses:
+   - `sfpi::exexp()` / `sfpi::exexp_nodebias()` -- Extract exponent field from float
+   - `sfpi::exman8()` / `sfpi::exman9()` -- Extract mantissa with implicit bit
+   - `sfpi::shft()` -- Barrel shift for integer conversion
+   - `sfpi::int32_to_float()` -- Integer to float conversion
+   - `sfpi::setexp()` -- Set exponent field of a float
+   - `sfpi::vec_min_max()` (SFPSWAP) -- Clamping via min/max swap
+   - `PolynomialEvaluator::eval()` -- Horner's method polynomial evaluation using SFPMAD chains
+
+8. **`sfpi::vConst1`** -- Constant 1.0f loaded from the SFPU constant register file.
+
+9. **Addition (`vConst1 + exp_neg_x`)** (SFPMAD with one operand = 1) -- Computes `1 + exp(-x)`.
+
+10. **`_sfpu_reciprocal_<N>(denominator)`** -- Newton-Raphson reciprocal:
+    - `sfpi::approx_recip()` (SFPARECIP) -- Hardware approximate reciprocal seed (~7-bit precision)
+    - SFPMAD chains for Newton-Raphson refinement: `y = y * (2 - x*y)` iterated N times
+    - `sfpi::vConstFloatPrgm0` -- Programmable constant register loaded with 2.0f during init
+    - `v_if` / `v_endif` -- SFPU conditional execution for NaN detection
 
 #### SFPU Register Usage
 
 | Register | Usage |
-|---|---|
-| `dst_reg[0]` | DEST register -- input value is loaded from here, result is stored back here. Auto-incremented after each iteration. |
-| SFPU local registers (implicit) | `x`, `exp_neg_x`, `denominator`, `result` are allocated to SFPU vector local registers (lreg0-lreg3) by the compiler |
-| `vConst1` | Built-in constant register = 1.0f, used in `1 + exp(-x)` |
-
-The SFPU has 4 local vector registers (lreg0-lreg3). The SiLU computation requires:
-- lreg for `x` (must be preserved for the final multiply)
-- lreg for `exp(-x)`
-- lreg for `denominator`
-- lreg for the reciprocal result
-
-This is a tight fit within the 4-register budget, which is why the SFPI compiler must carefully schedule register usage.
+|----------|-------|
+| **DEST[0..3]** | Four faces of a 32x32 tile. Each face is 16x16 elements, processed as 8 row-pairs of 32 elements. `_llk_math_eltwise_unary_sfpu_params_` iterates over all 4 faces. |
+| **dst_reg pointer** | Auto-incremented through 8 row-pairs per face (ITERATIONS=8). |
+| **SFPU LRegs (vFloat)** | Local registers used for intermediate values: `x`, `exp_neg_x`, `denominator`, `result`, and Newton-Raphson temporaries `y`, `t`. |
+| **vConstFloatPrgm0** | Programmable constant set to 2.0f during `silu_init()`, used by `_sfpu_reciprocal_` for Newton-Raphson. |
+| **vConst0** | Constant 0.0f |
+| **vConst1** | Constant 1.0f, used in `1 + exp(-x)` |
 
 #### SFPU Execution Flow
 
-1. **Tile acquisition**: The compute kernel calls `tile_regs_acquire()` to gain exclusive access to DEST registers, then `copy_tile(CB0, 0, 0)` unpacks one tile from CB0 into DEST register 0. This moves data from L1 SRAM through the unpacker into the 32x32 DEST register.
+1. **Initialization** (`silu_tile_init`):
+   - Calls `silu_init<APPROX>()` which calls `sigmoid_init<false>()`
+   - `sigmoid_init<false>()` calls `_init_sfpu_reciprocal_<false>()` which sets `vConstFloatPrgm0 = 2.0f`
+   - On Blackhole, this specifically does NOT initialize the LOADMACRO-based fast reciprocal since `_sfpu_sigmoid_` uses the inline `_sfpu_reciprocal_` function rather than the standalone `calculate_reciprocal`
 
-2. **SFPU init**: `silu_tile_init()` is called once (before the tile loop, via the macro). It initializes the reciprocal lookup table needed by the Newton-Raphson reciprocal used inside sigmoid. On Blackhole this calls `sigmoid_init<false>()` which calls `_init_sfpu_reciprocal_<false>()`. On Wormhole it directly calls `_init_sfpu_reciprocal_<false>()`.
+2. **Tile acquisition** (in `eltwise_sfpu.cpp`):
+   - `cb_wait_front(c_0, 1)` blocks until a tile is available
+   - `copy_tile(c_0, 0, 0)` unpacks tile from CB c_0 into DEST register 0
 
-3. **Per-tile SFPU dispatch**: `silu_tile(0)` calls `llk_math_eltwise_unary_sfpu_silu` which calls `_llk_math_eltwise_unary_sfpu_params_`. This function:
-   - Computes the DEST register base address for tile index 0
-   - Iterates over the 4 faces of the 32x32 tile (each face is 16x16)
+3. **SFPU dispatch** (`silu_tile(0)`):
+   - Calls `llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(0)`
+   - `_llk_math_eltwise_unary_sfpu_start_` sets the DEST base address for tile index 0
+   - In RC (full tile) mode, iterates over all 4 faces (0-3)
    - For each face, calls `calculate_silu<is_fp32_dest_acc_en, 8>()`
 
-4. **Per-face SFPU computation** (`calculate_silu`): For each of the 8 iterations (8 rows of 16 elements per face):
-   a. Load `x` from `dst_reg[0]` (current row of 16 elements)
-   b. Compute `sigmoid(x)`:
-      - Negate x to get -x
-      - Compute `exp(-x)` via `_sfpu_exp_improved_` (FP32) or `_sfpu_exp_21f_` (BF16)
-      - Add 1.0 to get `1 + exp(-x)`
-      - Compute reciprocal via Newton-Raphson: `1 / (1 + exp(-x))`
-   c. Multiply: `x * sigmoid(x)` using SFPMUL
-   d. If BF16 mode: round result to BF16 via `float_to_fp16b`
-   e. Store result back to `dst_reg[0]`
-   f. Increment `dst_reg` to next row
+4. **Per-face SFPU computation** (`calculate_silu`):
+   - For each of the 8 row-pairs (ITERATIONS=8):
+     a. Load row-pair from DEST: `x = dst_reg[0]`
+     b. Compute `sigmoid(x)`:
+        - Compute `exp(-x)` via polynomial approximation
+        - Compute `1 + exp(-x)`
+        - Compute reciprocal of denominator via `approx_recip` + Newton-Raphson
+     c. Multiply: `result = x * sigmoid(x)`
+     d. If bfloat16 mode: round result to bfloat16
+     e. Store back: `dst_reg[0] = result`
+     f. Advance to next row-pair: `dst_reg++`
 
-5. **Pack and write-back**: After SFPU completes, `tile_regs_commit()` signals the packer. `pack_tile(0, CB2)` packs the result from DEST into the output circular buffer CB2. `cb_pop_front(CB0, 1)` frees the input slot, and `cb_push_back(CB2, 1)` signals the writer kernel.
+5. **Pack and publish** (back in `eltwise_sfpu.cpp`):
+   - `tile_regs_commit()` / `tile_regs_wait()` synchronize MATH and PACK engines
+   - `pack_tile(0, c_2)` packs DEST[0] into CB c_2
+   - `cb_pop_front(c_0, 1)` frees the input tile
+   - `cb_push_back(c_2, 1)` publishes the output tile for the writer
 
 #### SFPU Configuration
 
-| Configuration | Value | Notes |
-|---|---|---|
-| `APPROXIMATION_MODE` | `false` | SiLU always uses exact sigmoid, never LUT approximation |
-| `is_fp32_dest_acc_en` | Depends on operation attributes | Controls FP32 vs BF16 precision path |
-| `ITERATIONS` | 8 | 8 rows per face (16x16 face / 16 elements per row = 16, but SFPU processes 2 rows per SIMD lane group, yielding 8 iterations) |
-| `math_fidelity` | `HiFi4` | Highest fidelity, but does not directly affect SFPU (SFPU is always full precision) |
-| `math_approx_mode` | `false` | Mapped to the `APPROX` compile-time constant in compute kernels |
-| Reciprocal Newton-Raphson iterations | 2 (FP32) or 1 (BF16) | Controlled by `is_fp32_dest_acc_en` in `_sfpu_sigmoid_` |
+- **Math fidelity**: `MathFidelity::HiFi4` (set in `ComputeConfig`)
+- **Math approx mode**: `false` (SILU's `get_op_approx_mode` returns false by default, so no approximation)
+- **fp32_dest_acc_en**: Configurable per-call (affects which exp and reciprocal paths are used)
+- **unpack_to_dest_mode**: Default (or `UnpackToDestFp32` if `preserve_fp32_precision` is set)
+- **Preprocessor defines**: `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE=1` enables including `compute_kernel_api.h` which provides `silu_tile()` and `silu_tile_init()`
+- **SFPU_OP_CHAIN_0**: Expands to `silu_tile_init(); silu_tile(0);`
 
 #### Hardware Compatibility Notes
 
-**Blackhole vs Wormhole differences for SILU:**
+**Blackhole vs. Wormhole differences in the SILU kernel:**
 
-1. **`silu_init()` implementation**:
-   - **Blackhole**: Calls `sigmoid_init<false>()` which in turn calls `_init_sfpu_reciprocal_<false>()`
-   - **Wormhole**: Directly calls `_init_sfpu_reciprocal_<false>()` (or `<true>` if approximation mode)
-   - Functionally equivalent for the non-approximate case, but the Wormhole variant has an explicit `APPROXIMATION_MODE` branch while Blackhole always delegates to `sigmoid_init<false>()` regardless of the template parameter
+1. **`silu_init()` implementation differs**:
+   - **Blackhole**: Always calls `sigmoid_init<false>()` regardless of `APPROXIMATION_MODE`. The comment explains this is because `calculate_silu` always uses the non-approx `_sfpu_sigmoid_` path.
+   - **Wormhole**: Calls `_init_sfpu_reciprocal_<false>()` or `_init_sfpu_reciprocal_<true>()` based on `APPROXIMATION_MODE`. This is a subtle difference in initialization, though in practice SILU always has `APPROXIMATION_MODE=false`.
 
-2. **`sigmoid_init()` internals**:
-   - **Blackhole**: Uses `_init_sfpu_reciprocal_<false>()`
-   - **Wormhole**: Uses `_init_reciprocal_<false, false>()` (different function name, same purpose)
-   - This reflects a naming convention difference in the reciprocal init between architectures
+2. **`sigmoid_init<false>()` implementation differs**:
+   - **Blackhole**: Calls `_init_sfpu_reciprocal_<false>()` which sets `vConstFloatPrgm0 = 2.0f`
+   - **Wormhole**: Calls `_init_reciprocal_<false, false>()` which initializes the LOADMACRO-based fast reciprocal pipeline
 
-3. **`llk_math_eltwise_unary_sfpu_silu` template**:
-   - **Blackhole**: Has a defaulted `ITERATIONS = 8` template parameter
-   - **Wormhole**: Hardcodes `8` in the template argument to `calculate_silu`
-   - Functionally identical
+3. **`_sfpu_reciprocal_` implementation**:
+   - **Blackhole**: Uses `approx_recip` + Newton-Raphson iterations with conditional NaN handling using `v_if(t < 0)`. The Blackhole-specific comment notes that when `x=0` and `y=infinity`, `t=+NaN` regardless of operand signs.
+   - **Wormhole**: May use a different reciprocal implementation from the LLK library with different register allocation and pipeline scheduling.
 
-4. **`calculate_silu` function**: Identical source code on both architectures. The same SFPI code generates correct instructions for both because SFPI is a cross-architecture abstraction layer.
+4. **`_sfpu_exp_21f_` and `_sfpu_exp_improved_`**: Both architectures share the same high-level algorithm (polynomial approximation based on Moroz et al. 2022), but the underlying SFPU instruction encodings and timing differ.
 
-5. **Underlying `_sfpu_exp_improved_` / `_sfpu_exp_21f_` / `_sfpu_reciprocal_`**: These are SFPI library functions defined in the architecture-specific SFPI submodule. While the C++ source may be shared, the compiled instructions may differ due to hardware differences in the SFPU ALU between Wormhole and Blackhole.
+5. **`calculate_silu()` function**: Identical between Blackhole and Wormhole -- both use the same `x * _sfpu_sigmoid_(x)` formulation with the same template parameters.
 
-## Data Flow Summary
+## Implementation Notes
 
-```
-DRAM --> [NoC Read] --> L1 CB0 --> [Unpacker] --> DEST Registers
-                                                      |
-                                                  [SFPU: SiLU]
-                                                  x * sigmoid(x)
-                                                      |
-                                                  DEST Registers --> [Packer] --> L1 CB2 --> [NoC Write] --> DRAM
-```
+1. **No scalar parameters**: Unlike operations like HARDSHRINK or WHERE_TSS, SILU has no scalar parameters. The runtime args `packed_scalar1` and `packed_scalar2` are always 0 for SILU.
 
-**Per-tile pipeline**:
-```
-Reader:  cb_reserve_back(CB0) -> noc_async_read -> cb_push_back(CB0)
-                                                        |
-Compute: cb_wait_front(CB0) -> copy_tile -> SFPU_OP -> pack_tile -> cb_pop_front(CB0) -> cb_push_back(CB2)
-                                                                                              |
-Writer:  cb_wait_front(CB2) -> noc_async_write -> cb_pop_front(CB2)
-```
+2. **Op chain mechanism**: The SFPU operation is injected via preprocessor defines rather than being hard-coded in the compute kernel. The program factory calls `get_block_defines()` which generates `SFPU_OP_CHAIN_0` expanding to `silu_tile_init(); silu_tile(0);`. This allows the same `eltwise_sfpu.cpp` kernel to be reused for many different unary SFPU operations.
+
+3. **Compute kernel path**: SILU uses the default `eltwise_sfpu.cpp` compute kernel (falls through the `default` case in `get_compute_kernel_path`).
+
+4. **Include mechanism**: SILU falls into the `default` case of `get_macro_definition`, which returns `"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"`. This causes `sfpu_split_includes.h` to include the full `compute_kernel_api.h`, which provides `silu_tile()` and `silu_tile_init()`.
+
+5. **Sigmoid reuse**: SILU's SFPU kernel is remarkably concise because it delegates to the pre-existing `_sfpu_sigmoid_` helper. The entire mathematical complexity (exp, reciprocal, Newton-Raphson) is encapsulated in the sigmoid sub-kernel.
+
+6. **Precision modes**: Two distinct precision paths exist:
+   - **bfloat16 mode** (`is_fp32_dest_acc_en=false`): Uses `_sfpu_exp_21f_` (2nd degree polynomial, ~1 ULP on bfloat16) and 1-iteration Newton-Raphson reciprocal. Result is explicitly rounded to bfloat16.
+   - **float32 mode** (`is_fp32_dest_acc_en=true`): Uses `_sfpu_exp_f32_accurate_` (7th order Taylor series with Cody-Waite range reduction, <1 ULP) and 2-iteration Newton-Raphson reciprocal. No rounding.
+
+7. **Program caching**: The `override_runtime_arguments` method enables program caching. When the operation is called again with the same configuration but different tensors, only the buffer addresses need to be updated in the runtime args, avoiding full program recreation.
 
 ## External Knowledge Sources
 
-### DeepWiki References
+### DeepWiki Queries
 
-- **tenstorrent/tt-metal**: Confirmed program factory structure, SILU registration path, compute kernel selection via `get_compute_kernel_path` (SILU falls to default `eltwise_sfpu.cpp`), and the `get_op_init_and_func_default` dispatch for `silu_tile_init()`/`silu_tile()`.
-- **tenstorrent/tt-llk**: Confirmed `calculate_silu` implementation in `ckernel::sfpu` namespace, the dependency on `_sfpu_sigmoid_`, and architecture-specific file locations (`tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_silu.h`, `tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_silu.h`).
-- **tenstorrent/sfpi**: Confirmed SFPI instructions used (SFPLOAD, SFPSTORE, SFPMUL, SFPADD), the LUT-based sigmoid approximation path (not used by SILU), and the `float_to_fp16b` conversion function.
+1. **Query**: "How does the unary program factory work for SFPU operations like silu? What kernels does it use (reader, compute, writer)? How are circular buffers configured and how is work distributed across cores?"
+   **Reason**: Needed architectural overview of the unary program factory before diving into source code.
+   **Key Findings**: Confirmed three-kernel pattern (reader/compute/writer), double-buffered CBs (c_0 for input, c_2 for output), and two-group core distribution via `split_work_to_cores`. Identified the key source files and the SFPU_OP_CHAIN define mechanism.
 
-### Confluence References
+2. **Query**: "What is the SILU (SiLU / swish) SFPU kernel implementation? Where is the silu compute kernel and SFPU kernel source code located in the repository?"
+   **Reason**: Needed to locate the SFPU kernel files and understand the silu computation approach.
+   **Key Findings**: Confirmed `ckernel_sfpu_silu.h` location for both architectures, the `x * sigmoid(x)` formulation, and the LLK API wrapper in `llk_math_eltwise_unary_sfpu_silu.h`. Also identified that `silu_tile` is in `compute_kernel_api.h`.
 
-Not consulted for this analysis. The DeepWiki sources provided sufficient SFPU instruction detail for documenting the SiLU kernel.
+### Documentation References
 
-### Glean References
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+   **Reason**: Needed to understand how SILU's compute kernel path, macro defines, and SFPU op chain are determined.
+   **Key Information**: SILU uses default `eltwise_sfpu.cpp` kernel, `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` define, `silu_tile_init()` / `silu_tile(0)` op chain, and `get_op_approx_mode` returns false.
 
-Not consulted for this analysis. The open-source ckernel headers contained all necessary implementation details.
+2. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+   **Reason**: Needed to understand how the SFPU kernel function is dispatched across tile faces.
+   **Key Information**: `_llk_math_eltwise_unary_sfpu_params_` iterates over 4 faces in RC mode, calling the provided SFPU function for each face. Each face processes 8 row-pairs (ITERATIONS=8).
 
-## File Index
+3. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_recip.h`
+   **Reason**: Needed to understand the `_sfpu_reciprocal_` implementation used by sigmoid.
+   **Key Information**: Uses `approx_recip` hardware instruction as seed, then Newton-Raphson refinement with configurable iterations (0, 1, or 2). Includes NaN handling for edge cases (0 * inf).
 
-| File | Role |
-|---|---|
-| `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp` | TTNN API registration (`REGISTER_UNARY_OPERATION(silu, SILU)`) |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp` | `UnaryOpType::SILU` enum definition |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp` | Maps SILU to `silu_tile_init()`/`silu_tile()`, kernel path, defines |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.hpp` | Program factory struct declarations |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` | Host-side program construction (CB setup, kernel creation, work distribution) |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp` | Reader kernel (DRAM -> L1) |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | Writer kernel (L1 -> DRAM) |
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp` | Generic SFPU compute kernel (macro-driven) |
-| `tt_metal/hw/inc/api/compute/compute_kernel_api.h` | `silu_tile()` and `silu_tile_init()` API |
-| `tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h` | Conditional include routing |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_silu.h` | Blackhole LLK dispatch |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_silu.h` | Wormhole LLK dispatch |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h` | Blackhole SFPU microcode |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h` | Wormhole SFPU microcode |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h` | Blackhole sigmoid helper |
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h` | Wormhole sigmoid helper |
-| `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h` | Reciprocal SFPU wrapper |
+4. **Source**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h`
+   **Reason**: Needed to understand the exponential functions used by sigmoid (`_sfpu_exp_21f_` and `_sfpu_exp_improved_`).
+   **Key Information**: `_sfpu_exp_21f_` uses Moroz et al. 2022 algorithm with 2nd degree polynomial (fast, ~1 ULP on bfloat16). `_sfpu_exp_improved_` dispatches to `_sfpu_exp_21f_` for bfloat16 or `_sfpu_exp_f32_accurate_` (7th order Taylor) for float32 mode.

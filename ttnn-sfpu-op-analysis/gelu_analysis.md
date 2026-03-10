@@ -1,179 +1,171 @@
-# GELU Operation Analysis
+# GELU Implementation Analysis
 
 ## Overview
+The GELU (Gaussian Error Linear Unit) operation computes `GELU(x) = x * Phi(x)` where `Phi(x)` is the cumulative distribution function of the standard normal distribution. This is a widely used activation function in transformer models. The operation supports two modes: an approximation mode using a hardware LUT-based piecewise linear function, and an accurate mode using a polynomial CDF approximation.
 
-**Operation**: GELU (Gaussian Error Linear Unit)
-**Category**: Eltwise Unary
-**SFPU Operation**: Yes
-**Program Factory**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
 
-GELU is a smooth approximation of the rectifier function used as an activation in neural networks. Mathematically:
-```
-GELU(x) = x * Phi(x)
-```
-where Phi(x) is the CDF of the standard normal distribution. The Tenstorrent implementation provides two modes: an approximate mode using a piecewise linear LUT (look-up table), and an accurate mode using a polynomial CDF approximation. Additionally, the metal-level kernel in `ckernel_sfpu_gelu.h` contains a third path using a 15th-degree Chebyshev polynomial for a narrow input range (|x| < 3).
+The GELU operation uses the shared `UnaryProgramFactory` which dispatches to `eltwise_sfpu.cpp` as the compute kernel. The operation-specific behavior is injected via preprocessor defines (`SFPU_OP_GELU_INCLUDE` and `SFPU_OP_CHAIN_0`) that configure the generic kernel to call `gelu_tile_init()` and `gelu_tile()`.
 
----
+## Work Unit Definition
 
-## Program Factory Architecture
+| Attribute | Value |
+|-----------|-------|
+| **Granularity** | tile |
+| **Unit size** | 1 tile (32x32 elements) |
+| **Total units** | `num_pages` = total number of tiles in the input tensor |
+| **Loop structure** | Outer loop over blocks (`per_core_block_cnt`), inner loop over tiles within block (`per_core_block_dim` = 1). Each iteration processes one tile. |
 
-### Factory Selection
+## Tensor Format and Layout
 
-The GELU operation uses the standard `UnaryProgramFactory` (or `UnarySubCoreGridProgramFactory` when sub-core grids are specified). Factory selection is managed by `UnaryDeviceOperation`, which uses a `std::variant` to choose between:
-1. `UnaryProgramFactory` -- default, uses full compute grid
-2. `UnarySubCoreGridProgramFactory` -- when `sub_core_grids` is specified
-3. `UnaryShardedProgramFactory` -- for sharded tensors (not used for GELU in the interleaved case)
+### Input Tensor
 
-### Program Structure
+| Property | Input Tensor |
+|----------|--------------|
+| **Logical shape** | Arbitrary (any rank) |
+| **Dimension convention** | Flattened to linear tile sequence |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | BFLOAT16, FLOAT32, or other supported types |
 
-The program factory creates three kernels per Tensix core:
-- **Reader kernel**: Reads input tiles from DRAM via NoC
-- **Compute kernel**: Executes the GELU SFPU operation on each tile
-- **Writer kernel**: Writes output tiles back to DRAM via NoC
+### Output Tensor
 
-### Work Distribution
+| Property | Output Tensor |
+|----------|---------------|
+| **Logical shape** | Same as input |
+| **Dimension convention** | Same as input |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | Same as input (or specified output dtype) |
 
-Work is distributed across all available compute cores using `split_work_to_cores()`. The total number of tiles (pages) is divided into two core groups:
-- **Core group 1**: Gets `num_pages_per_core_group_1` tiles each
-- **Core group 2**: Gets `num_pages_per_core_group_2` tiles each (remainder distribution)
+### Layout Transformations
+No layout transformations are performed. Input and output must both be in TILE_LAYOUT.
 
-Each core processes tiles sequentially, one at a time (block size = 1).
+## Data Flow Pattern
 
----
+| Stage | Kernel | Reads From | Writes To | CB Operations |
+|-------|--------|------------|-----------|---------------|
+| 1 | Reader | DRAM/L1 (src_buffer) | CB c_0 | `cb_reserve_back(c_0, 1)`, `noc_async_read_page`, `cb_push_back(c_0, 1)` |
+| 2 | Compute | CB c_0 | CB c_2 | `cb_wait_front(c_0, 1)`, `copy_tile(c_0, 0, 0)`, SFPU GELU op, `pack_tile(0, c_2)`, `cb_pop_front(c_0, 1)`, `cb_push_back(c_2, per_core_block_dim)` |
+| 3 | Writer | CB c_2 | DRAM/L1 (dst_buffer) | `cb_wait_front(c_2, 1)`, `noc_async_write_page`, `cb_pop_front(c_2, 1)` |
 
 ## Circular Buffer Configuration
 
-| CB Index | Identifier | Purpose | Page Count | Data Format |
-|----------|-----------|---------|------------|-------------|
-| `c_0` | `src0_cb_index` | Input buffer | 2 | Input tensor data format |
-| `c_2` | `output_cb_index` | Output buffer | 2 | Output tensor data format |
+| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
+|-------|------|---------|----------|------------|-----------|----------|----------|----------|
+| c_0 | cb_input | Input tile staging | 2 tiles | 1 tile | Double | Reader | Compute | Program |
+| c_2 | cb_output | Output tile staging | 2 tiles | 1 tile | Double | Compute | Writer | Program |
 
-GELU does **not** require the temporary buffer `c_1` (used only by HARDSHRINK, CBRT, and LOGIT).
+Note: CB c_1 (tmp0) is NOT allocated for GELU since it is only created for HARDSHRINK, CBRT, or LOGIT operations.
 
-The double-buffering (2 pages) allows the reader to fill one page while the compute kernel processes the other, enabling pipeline overlap.
+## Pipeline Pattern Summary
+Both input (c_0) and output (c_2) circular buffers use double buffering (capacity = 2 tiles, block size = 1 tile). This allows the reader to fill one slot while compute processes the other, and similarly for compute/writer overlap.
 
----
+## Index Calculations
+The program factory uses `TensorAccessor` for both reader and writer kernels, which handles the mapping from a linear page index to the physical DRAM/L1 address. The reader kernel iterates sequentially from `start_id` to `start_id + num_pages`, reading one tile per iteration using `noc_async_read_page(i, s, l1_write_addr)`.
+
+The writer mirrors this pattern with `noc_async_write_page(i, s, l1_read_addr)`.
+
+## Memory Access Patterns
+
+### Read Pattern
+Sequential tile-by-tile reads. Each core reads a contiguous range of tile IDs from `start_id` to `start_id + num_pages_per_core`. Within each iteration, a single tile is read from DRAM/L1 via NoC into the input CB.
+
+### Write Pattern
+Sequential tile-by-tile writes. Each core writes its computed tiles in the same order to contiguous tile IDs in the output buffer.
+
+## Core Distribution Strategy
+
+| Attribute | Value |
+|-----------|-------|
+| **Grid topology** | 2D (column-major traversal) |
+| **Grid dimensions** | `compute_with_storage_grid_size` (device-dependent) |
+| **Total cores** | Determined by `split_work_to_cores` |
+| **Work per core** | `num_pages_per_core_group_1` or `num_pages_per_core_group_2` tiles |
+| **Load balancing** | Two-group split: group 1 gets `ceil(num_pages / num_cores)` tiles, group 2 gets `floor(num_pages / num_cores)` tiles |
+
+Core indexing uses column-major order: `core = {i / num_cores_y, i % num_cores_y}`.
+
+## Arguments
+
+### Compile-Time Arguments
+
+#### Reader Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0+ | TensorAccessorArgs | uint32_t[] | Tensor accessor configuration for src_buffer (bank mapping, page size, etc.) |
+
+#### Writer Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | output_cb_index | uint32_t | CB index for output (c_2) |
+| 1+ | TensorAccessorArgs | uint32_t[] | Tensor accessor configuration for dst_buffer |
+
+#### Compute Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | per_core_block_cnt | uint32_t | Number of tile blocks to process on this core |
+| 1 | per_core_block_dim | uint32_t | Number of tiles per block (always 1 for this factory) |
+
+### Runtime Arguments
+
+#### Reader Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | src_addr | uint32_t | Source buffer base address in DRAM/L1 |
+| 1 | num_pages | uint32_t | Number of tiles for this core to read |
+| 2 | start_id | uint32_t | Starting tile index for this core |
+
+#### Writer Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | dst_addr | uint32_t | Destination buffer base address in DRAM/L1 |
+| 1 | num_pages | uint32_t | Number of tiles for this core to write |
+| 2 | start_id | uint32_t | Starting tile index for this core |
+
+#### Compute Kernel
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | packed_scalar1 | uint32_t | Unused for GELU (set to 0) |
+| 1 | packed_scalar2 | uint32_t | Unused for GELU (set to 0) |
 
 ## Kernel Implementations
 
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader | BRISC (RISCV_0) | NOC0 | DRAM/L1 | CB c_0 | Read tiles via TensorAccessor |
+| compute | TRISC (math RISCV) | N/A | CB c_0 | CB c_2 | Unpack, SFPU GELU, pack |
+| writer | NCRISC (RISCV_1) | NOC1 | CB c_2 | DRAM/L1 | Write tiles via TensorAccessor |
+
 ### Reader Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);   // DRAM address of the input tensor
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);   // Number of tiles this core processes
-    const uint32_t start_id = get_arg_val<uint32_t>(2);    // Starting tile index for this core
-
-    constexpr auto src_args = TensorAccessorArgs<0>();      // Compile-time tensor accessor configuration
-
-    constexpr uint32_t cb_id_in0 = 0;                      // CB index c_0 for input
-
-    // Page size is read from the CB interface -- works for both tile and row-major layouts
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
-
-    constexpr uint32_t onepage = 1;                        // Process one page (tile) at a time
-
-    const auto s = TensorAccessor(src_args, src_addr, page_bytes);
-
-// Read tiles one by one from DRAM into the input circular buffer
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
-        cb_reserve_back(cb_id_in0, onepage);               // Wait for space in the CB
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0); // Get L1 write address
-        noc_async_read_page(i, s, l1_write_addr);          // Initiate async NoC read from DRAM
-        noc_async_read_barrier();                           // Wait for the read to complete
-        cb_push_back(cb_id_in0, onepage);                  // Signal the compute kernel that a tile is ready
-    }
-}
-```
-
-**Runtime Arguments**: `{src_buffer_address, num_pages_per_core, start_tile_id}`
-**Compile-Time Arguments**: `TensorAccessorArgs` (encoding buffer type, page size, bank mapping)
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
+- **Key Logic**: Simple sequential page reader. Reads one page at a time from `start_id` to `end_id`, using `TensorAccessor` to resolve physical addresses. Supports optional `BACKWARDS` mode via define.
 
 ### Writer Kernel
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);    // DRAM address of the output tensor
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);   // Number of tiles this core processes
-    const uint32_t start_id = get_arg_val<uint32_t>(2);    // Starting tile index for this core
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);  // Output CB index (c_2)
-    constexpr auto dst_args = TensorAccessorArgs<1>();            // Compile-time tensor accessor for output
-
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
-
-#ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, num_pages);                   // For sharded output, wait for all pages at once
-#else
-
-    constexpr uint32_t onepage = 1;
-
-    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
-
-#ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
-        cb_wait_front(cb_id_out, onepage);                 // Wait for compute to produce a tile
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);   // Get L1 read address
-        noc_async_write_page(i, s, l1_read_addr);          // Initiate async NoC write to DRAM
-        noc_async_writes_flushed();                        // Ensure write is in flight
-        cb_pop_front(cb_id_out, onepage);                  // Free the CB slot for compute to reuse
-    }
-    noc_async_write_barrier();                             // Final barrier: all writes complete
-#endif
-}
-```
-
-**Runtime Arguments**: `{dst_buffer_address, num_pages_per_core, start_tile_id}`
-**Compile-Time Arguments**: `{output_cb_index, TensorAccessorArgs}`
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+- **Key Logic**: Sequential page writer. Waits for compute to produce one page in CB c_2, then writes it out via NoC. Also supports `OUT_SHARDED` mode (not used in this factory) and `BACKWARDS` mode.
 
 ### Compute Kernel
-
 This section combines the full annotated source code of the compute kernel with architectural analysis.
 
 #### Compute Kernel File
 `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
 
-GELU uses the generic `eltwise_sfpu.cpp` compute kernel (the `default` case in `get_compute_kernel_path()`). The GELU-specific behavior is injected via preprocessor defines.
-
 #### Annotated Compute Kernel Source
-
 ```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"  // Conditionally includes gelu.h when SFPU_OP_GELU_INCLUDE is defined
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"  // conditionally includes gelu.h when SFPU_OP_GELU_INCLUDE=1
 #include "api/compute/eltwise_unary/trigonometry.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_unary/rpow.h"
@@ -181,288 +173,200 @@ GELU uses the generic `eltwise_sfpu.cpp` compute kernel (the `default` case in `
 #include "api/compute/eltwise_unary/fill.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // Number of tiles assigned to this core
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // Tiles per block (always 1 for GELU)
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // number of tile blocks this core processes
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // tiles per block (always 1 for GELU)
 
-    // Initialize the SFPU for unary operation -- sets up unpack/pack for input CB c_0 and output CB c_2
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
-
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);  // initialize unpack (c_0 -> SRC) and pack (DEST -> c_2) pipelines
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        // Reserve space in the output CB for the entire block (1 tile)
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-
+        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);  // reserve space in output CB for 1 tile
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            // Acquire exclusive access to the destination register file (DST)
-            tile_regs_acquire();
+            tile_regs_acquire();  // acquire exclusive access to DEST registers
 
-            // Wait for one tile to be available in the input CB (produced by reader)
-            cb_wait_front(tt::CBIndex::c_0, 1);
+            cb_wait_front(tt::CBIndex::c_0, 1);  // wait until reader has produced 1 tile in input CB
 
-            // Copy tile from input CB to DST register at index 0 -- this invokes the unpacker
-            copy_tile(tt::CBIndex::c_0, 0, 0);
+            copy_tile(tt::CBIndex::c_0, 0, 0);  // unpack tile 0 from c_0 into DEST[0] via the unpacker
 
-// The SFPU_OP_CHAIN_0 macro expands to the GELU init + compute calls:
-//   For GELU without param: "gelu_tile_init(); gelu_tile(0);"
-//   For GELU with param:    "gelu_tile_init<Pu>(); gelu_tile<Pu>(0);"
-// where P is the approximation mode parameter (0=accurate, 1=approximate)
 #ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0  // expands to: gelu_tile_init<P>(); gelu_tile<P>(0);
+                             // where P is the approx mode parameter (0=accurate, 1=approx)
+                             // gelu_tile_init configures LUT registers for SFPU GELU
+                             // gelu_tile(0) runs the SFPU GELU kernel on DEST[0]
 #endif
 
-            // Signal that DST registers are ready for packing
-            tile_regs_commit();
+            tile_regs_commit();  // signal that DEST registers are ready for packing
 
-            // Wait for pack to be ready to read from DST
-            tile_regs_wait();
+            tile_regs_wait();  // wait for packer to be ready
 
-            // Pack tile from DST register 0 into the output CB
-            pack_tile(0, tt::CBIndex::c_2);
+            pack_tile(0, tt::CBIndex::c_2);  // pack DEST[0] into output CB c_2
 
-            // Release the input tile slot so the reader can reuse it
-            cb_pop_front(tt::CBIndex::c_0, 1);
+            cb_pop_front(tt::CBIndex::c_0, 1);  // free the consumed input tile from c_0
 
-            // Release DST registers for the next iteration
-            tile_regs_release();
+            tile_regs_release();  // release DEST registers for next iteration
         }
-        // Push the completed block to the writer kernel
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
+        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);  // publish produced tile(s) to writer
     }
 }
 ```
 
-**Compile-Time Arguments**: `{per_core_block_cnt, per_core_block_dim (=1)}`
-**Runtime Arguments**: `{packed_scalar1 (=0), packed_scalar2 (=0)}` -- unused for GELU
-
-#### Compute Kernel Defines for GELU
-
-The program factory generates these preprocessor defines via `get_block_defines()` and `update_macro_defines()`:
-
-| Define | Value | Purpose |
-|--------|-------|---------|
-| `SFPU_OP_GELU_INCLUDE` | `1` | Gates the `#include "api/compute/eltwise_unary/gelu.h"` in `sfpu_split_includes.h` |
-| `SFPU_OP_CHAIN_0` | `SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0` | Macro chain that expands to init + compute |
-| `SFPU_OP_CHAIN_0_INIT_0` | `gelu_tile_init();` (default) or `gelu_tile_init<Pu>();` (parameterized) | Initialization call |
-| `SFPU_OP_CHAIN_0_FUNC_0` | `gelu_tile(0);` (default) or `gelu_tile<Pu>(0);` (parameterized) | Per-tile computation call |
-
-When the GELU operation is created with a parameter (e.g., `UnaryWithParam(UnaryOpType::GELU, 1.0f)` for approximate mode), the parameterized path is used. When created without a parameter, the default path is used (which defaults to `fast_and_approx = true`).
-
-#### Math Approximation Mode
-
-The `get_op_approx_mode()` function returns `false` for GELU (default case). This means `math_approx_mode` in the `ComputeConfig` is `false` unless all operations in the chain request approximate mode. However, the GELU-specific approximation is controlled by the template parameter `fast_and_approx`, not by the global `math_approx_mode` flag.
-
----
-
 ### SFPU Kernel Implementation
-
 This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
-#### SFPU Kernel Files
-
-The GELU SFPU implementation spans multiple layers:
-
-1. **API Layer**: `tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h` -- public API (`gelu_tile_init`, `gelu_tile`)
-2. **Metal ckernel Layer**: `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` -- metal-level dispatch with Chebyshev fallback
-3. **LLK Layer**: `tt_metal/third_party/tt_llk/tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_gelu.h` -- core SFPU implementation with LUT-based and CDF-based paths
-4. **CDF Helper**: `tt_metal/third_party/tt_llk/tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_cdf.h` -- CDF polynomial approximation
-5. **Polynomial Helper**: `tt_metal/third_party/tt_llk/tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_polyval.h` -- POLYVAL5 Horner's method
+#### SFPU Kernel File
+- **API layer**: `tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h`
+- **LLK implementation (Blackhole)**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_gelu.h`
+- **LLK implementation (Wormhole B0)**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h`
+- **CDF helper**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cdf.h`
+- **Dispatch layer**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
 
 #### Annotated SFPU Kernel Source
 
-**API Layer** (`gelu.h`):
-
+**API layer** (`gelu.h`):
 ```cpp
 #pragma once
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_gelu.h"           // Metal-level GELU implementation
-#include "llk_math_eltwise_unary_sfpu_macros.h"  // SFPU dispatch macros
+#include "ckernel_sfpu_gelu.h"       // LLK-layer GELU SFPU functions
+#include "llk_math_eltwise_unary_sfpu_macros.h"  // macro definitions for dispatching SFPU ops
 #endif
 
 namespace ckernel {
 
-// Initialization: calls _init_gelu_ from the LLK layer to load LUT coefficients into SFPU local registers
+// Initializes the SFPU pipeline for GELU computation.
+// When fast_and_approx=true (default), loads LUT coefficients into SFPU local registers.
+// When fast_and_approx=false, no special LUT setup needed (uses polynomial CDF).
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
     // SFPU_INIT_KERNEL_CALL expands to:
     //   llk_math_eltwise_unary_sfpu_init<SfpuType::gelu, fast_and_approx>(sfpu::gelu_init<fast_and_approx>)
-    // This configures the SFPU math pipeline and calls gelu_init to load LUT constants
+    // This calls gelu_init which loads piecewise-linear LUT coefficients into l_reg[0..6]
     MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, fast_and_approx));
 }
 
-// Per-tile computation: applies GELU to all elements in DST register at tile_index
+// Performs element-wise GELU on tile at DEST[tile_index].
+// DST register buffer must be acquired via tile_regs_acquire().
+// fast_and_approx: true = LUT-based approximation, false = polynomial CDF
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
     // SFPU_UNARY_NO_PARAM_KERNEL_FN expands to:
     //   _llk_math_eltwise_unary_sfpu_params_<fast_and_approx>(
     //       ckernel::sfpu::calculate_gelu<fast_and_approx>, idst, (int)VectorMode::RC)
-    // This iterates over all 4 faces of the tile, calling calculate_gelu on each face
+    // VectorMode::RC means process all 4 faces of the 32x32 tile
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, fast_and_approx, idst));
 }
 
 }  // namespace ckernel
 ```
 
-**Metal ckernel Layer** (`ckernel_sfpu_gelu.h` in `tt_metal/hw/ckernels/{arch}/`):
-
+**LLK dispatch layer** (`llk_math_eltwise_unary_sfpu_params.h`):
 ```cpp
-#pragma once
+// This function orchestrates SFPU execution across all 4 faces of a tile.
+// For VectorMode::RC (the mode used by GELU), it iterates over all 4 faces:
+//   Face 0: rows 0-15, cols 0-15
+//   Face 1: rows 0-15, cols 16-31
+//   Face 2: rows 16-31, cols 0-15
+//   Face 3: rows 16-31, cols 16-31
+// Each face call to sfpu_func processes 8 rows (ITERATIONS=8), each row having 16 elements.
+template <bool APPROXIMATE, typename Callable, typename... Args>
+inline void _llk_math_eltwise_unary_sfpu_params_(
+    Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
+{
+    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);  // set DEST register base address
 
-#include "ckernel_defs.h"
-#include "ckernel.h"
+    VectorMode mode = static_cast<VectorMode>(vector_mode);
 
-namespace ckernel {
-namespace sfpu {
-
-// POLYVAL15: 15th-degree polynomial evaluation using Horner's method
-// This evaluates p(x) = c15*x^15 + c14*x^14 + ... + c1*x + c0
-// Used by the Chebyshev approximation path for |x| < 3
-#define POLYVAL15(c15, c14, c13, c12, c11, c10, c9, c8, c7, c6, c5, c4, c3, c2, c1, c0, x)  \
-    (((((((((((((((c15) * (x) + (c14)) * (x) + (c13)) * (x) + (c12)) * (x) + (c11)) * (x) + \
-    (c10)) * (x) + (c9)) * (x) + (c8)) * (x) + (c7)) * (x) + (c6)) * (x) + (c5)) * (x) +   \
-    (c4)) * (x) + (c3)) * (x) + (c2)) * (x) + (c1)) * (x) + (c0)
-
-// Chebyshev polynomial approximation of GELU for inputs in [-5.5, +inf)
-// For inputs < -5.5, the result is 0.0 (GELU approaches 0 for very negative inputs)
-// The polynomial coefficients approximate x * Phi(x) directly
-inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
-    sfpi::vFloat result = 0.0f;
-    v_if(val >= -5.5f) {                      // Conditional: only compute for val >= -5.5
-        result = POLYVAL15(
-            -1.81205228163e-09,               // c15
-            -4.59055119276e-08,               // c14
-            -3.74540617693e-07,               // c13
-            -2.29754133825e-07,               // c12
-            1.19076782913e-05,                // c11
-            4.25116466215e-05,                // c10
-            -0.000138391838381,               // c9
-            -0.000862052441087,               // c8
-            0.000768340223025,                // c7
-            0.0092074331601,                  // c6
-            -0.00208478037614,                // c5
-            -0.0656369476513,                 // c4
-            0.00244542739174,                 // c3
-            0.398579460781,                   // c2  (close to 0.5 * 2/sqrt(pi))
-            0.499174645395,                   // c1  (close to 0.5 for GELU midpoint)
-            2.98325768482e-05,                // c0  (close to 0 for GELU at origin)
-            val);
-
-        // Correct the sign: GELU is an odd-like function around the origin
-        // setsgn copies the sign bit of val onto result
-        result = setsgn(result, val);
-    }
-    v_endif;
-    return result;
-}
-
-// Initialization wrapper: delegates to LLK _init_gelu_ to load LUT coefficients
-template <bool APPROXIMATION_MODE>
-void gelu_init() {
-    _init_gelu_<APPROXIMATION_MODE>();
-}
-
-// Main calculate_gelu function: dispatches between three paths
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_gelu() {
-    if constexpr (APPROXIMATION_MODE) {
-        // APPROXIMATE path: uses LUT-based piecewise linear approximation (fast)
-        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
-    } else {
-        // ACCURATE path in metal layer: uses Chebyshev polynomial for |x| < 3,
-        // identity (pass-through) for |x| >= 3 (where GELU(x) ~ x)
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];           // Load element from DST register
-            sfpi::vFloat result = in;                      // Default: pass through (for |x| >= 3)
-            v_if(in == 0.0f) { result = 0.0f; }           // Special case: GELU(0) = 0
-            v_elseif(in < 3.0f) {                          // For |x| < 3: use Chebyshev polynomial
-                result = calculate_gelu_chebyshev(in);
-            }
-            v_endif;
-            sfpi::dst_reg[0] = result;                     // Store result back to DST
-            sfpi::dst_reg++;                               // Advance to next row in the face
+    if (mode == VectorMode::RC)
+    {
+        // Process all four 16x16 faces of the 32x32 tile
+        for (int face = 0; face < 4; face++)
+        {
+            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            // Advance DEST face address pointer to next 16x16 face
+            _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
     }
+    _llk_math_eltwise_unary_sfpu_done_();  // finalize SFPU execution
 }
-
-}  // namespace sfpu
-}  // namespace ckernel
 ```
 
-**LLK Layer** (`ckernel_sfpu_gelu.h` in `tt_metal/third_party/tt_llk/`):
-
+**LLK SFPU kernel** (`ckernel_sfpu_gelu.h` - Blackhole, identical to Wormhole B0):
 ```cpp
 #pragma once
+
 #include <cstdint>
-#include "ckernel_sfpu_cdf.h"
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_load_config.h"
-#include "sfpi.h"
-#include "sfpi_fp16.h"
+
+#include "ckernel_sfpu_cdf.h"          // _calculate_cdf_appx_ for accurate mode
+#include "ckernel_sfpu_exp.h"          // exponential helpers (used by derivative, not main GELU)
+#include "ckernel_sfpu_load_config.h"  // _sfpu_load_imm32_ for loading LUT constants
+#include "sfpi.h"                      // SFPU programming interface (vFloat, dst_reg, l_reg, etc.)
+#include "sfpi_fp16.h"                 // FP16 conversion utilities
 
 namespace ckernel::sfpu
 {
 
-// Core GELU transformation shared by gelu_derivative (accurate mode)
-// In approximate mode: identity (pass-through to LUT)
-// In accurate mode: computes sqrt(2/pi) * (x + 0.044715 * x^3)
-//   This is the argument to tanh() in the GELU approximation formula:
-//   GELU(x) ~ 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+// Initialization function: loads piecewise-linear LUT coefficients into SFPU local registers.
+// These coefficients implement erf(x/sqrt(2)) as a 6-piece linear approximation
+// over the ranges [0,0.5], [0.5,1.0], [1.0,1.5], [1.5,2.0], [2.0,3.0], [3.0,+inf).
+// The function is symmetric (sign is handled by lut2_sign).
 template <bool APPROXIMATION_MODE>
-inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in)
+inline void _init_gelu_()
 {
-    sfpi::vFloat result;
-    if constexpr (APPROXIMATION_MODE)
-    {
-        result = in;    // In approx mode, the LUT handles everything
-    }
-    else
-    {
-        // f = 0.044715 * x^3 + x, then scaled by sqrt(2/pi) ~ 0.79788
-        result = (in * in) * (in * sfpi::s2vFloat16b(0.044715f)) + in;
-        result *= sfpi::s2vFloat16b(0.79788f);
-    }
-    return result;
+    sfpi::vConstFloatPrgm0 = 0.5f;  // store 0.5 in programmable constant register for use in compute
+
+    // Load piecewise-linear slope (A) and intercept (B) coefficients into local registers.
+    // Each 32-bit immediate packs two FP16b values: [hi_range_coeff | lo_range_coeff].
+    // LReg0: A for ranges [0.5,1.0] (hi=0.4939) and [0.0,0.5] (lo=0.1928)
+    _sfpu_load_imm32_(0, 0x37E7322B);
+    // LReg4: B for ranges [0.5,1.0] (hi=-0.1605) and [0.0,0.5] (lo=-0.0150)
+    _sfpu_load_imm32_(4, 0xB12286D8);
+
+    // LReg1: A for ranges [1.5,2.0] (hi=0.6099) and [1.0,1.5] (lo=0.6189)
+    _sfpu_load_imm32_(1, 0x38E138F3);
+    // LReg5: B for ranges [1.5,2.0] (hi=-0.2635) and [1.0,1.5] (lo=-0.2797)
+    _sfpu_load_imm32_(5, 0xB437B479);
+
+    // LReg2: A for ranges [3.0,+inf) (hi=0.50) and [2.0,3.0] (lo=0.5402)
+    _sfpu_load_imm32_(2, 0x38003852);
+    // LReg6: B for ranges [3.0,+inf) (hi=0.0/inf marker) and [2.0,3.0] (lo=-0.1194)
+    _sfpu_load_imm32_(6, 0x7c00afa4);
 }
 
-// APPROXIMATE GELU: uses a 6-entry piecewise linear LUT loaded during init
-// For each element: result = 0.5 * x + lut2_sign(x)
-// where lut2_sign approximates 0.5 * x * erf(x/sqrt(2)) using the preloaded coefficients
+// Approximation mode GELU computation.
+// For each of 8 rows in a face (ITERATIONS=8, each row = 16 SIMD elements):
+//   result = 0.5*x + lut2_sign(x)
+// where lut2_sign evaluates the piecewise-linear LUT on |x| and applies the sign of x.
+// This computes x * 0.5 * (1 + erf(x/sqrt(2))) via the identity:
+//   GELU(x) = 0.5*x + x_sign * LUT(|x|)
 template <int ITERATIONS>
 inline void _calculate_gelu_appx_()
 {
-    // Cache LUT coefficients from local registers into vUInt variables
-    // This avoids repeated SFPU register reads in the inner loop
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];   // Slopes for ranges [0,0.5) and [0.5,1.0)
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];   // Slopes for ranges [1.0,1.5) and [1.5,2.0)
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];   // Slopes for ranges [2.0,3.0) and [3.0,+inf)
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];   // Intercepts for ranges [0,0.5) and [0.5,1.0)
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];   // Intercepts for ranges [1.0,1.5) and [1.5,2.0)
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];   // Intercepts for ranges [2.0,3.0) and [3.0,+inf)
+    // Cache local registers into vUInt variables for efficient repeated access
+    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];  // slopes for ranges [0.5,1.0] and [0.0,0.5]
+    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];  // slopes for ranges [1.5,2.0] and [1.0,1.5]
+    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];  // slopes for ranges [3.0,inf) and [2.0,3.0]
+    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];  // intercepts for ranges [0.5,1.0] and [0.0,0.5]
+    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];  // intercepts for ranges [1.5,2.0] and [1.0,1.5]
+    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];  // intercepts for ranges [3.0,inf) and [2.0,3.0]
 
-#pragma GCC unroll 8
+#pragma GCC unroll 8  // fully unroll: one iteration per row in a 16x16 face
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in      = sfpi::dst_reg[0];          // Load element from DST
-        sfpi::vFloat half    = sfpi::vConstFloatPrgm0;     // 0.5, loaded during init
-        sfpi::vFloat half_in = in * half;                  // half_in = 0.5 * x
-        // lut2_sign: evaluates a piecewise linear function on |x|, preserving sign
-        // Each segment: result_segment = slope_i * |x| + intercept_i
-        // The function approximates 0.5 * erf(x/sqrt(2)) (the signed CDF offset)
+        sfpi::vFloat in      = sfpi::dst_reg[0];           // load current row from DEST register
+        sfpi::vFloat half    = sfpi::vConstFloatPrgm0;      // 0.5 from programmable constant
+        sfpi::vFloat half_in = in * half;                    // compute 0.5 * x
+        // lut2_sign: evaluates 6-piece piecewise-linear function on |x|, then applies sign of x.
+        // Uses SFPLUTFP32 instruction with FP16_6ENTRY_TABLE1 mode and SGN_UPDATE.
+        // The LUT computes: sign(x) * (A_i * |x| + B_i) for the appropriate range i.
+        // This approximates 0.5 * erf(x/sqrt(2)) * |x| with the sign correction.
         sfpi::vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
-        result               = half_in + result;           // GELU(x) = 0.5*x + lut_result
+        result               = half_in + result;             // GELU(x) = 0.5*x + lut_result
 
-        sfpi::dst_reg[0] = result;                         // Store result
-        sfpi::dst_reg++;                                   // Move to next row
+        sfpi::dst_reg[0] = result;                           // write result back to DEST register
 
-        // Historical comment showing the underlying SFPU instruction sequence:
-        // TTI_SFPLOAD(3, 0, 1, 0);       -- load from DEST into LReg3
-        // TTI_SFPLUTFP32(7, 2);           -- LReg7 = LUT(LReg3)
-        // TTI_SFPMAD(3, 12, 7, 3, 0);    -- LReg3 = 0.5*LReg3 + LReg7
-        // TTI_SFPSTORE(3, 0, 3, 0);      -- store and increment write counter
+        sfpi::dst_reg++;                                     // advance to next row in face
     }
 
-    // Restore LUT coefficients to local registers (required for correct state management)
+    // Restore local registers (they may have been clobbered by SFPU pipeline)
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
     sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
     sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
@@ -471,25 +375,24 @@ inline void _calculate_gelu_appx_()
     sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
 }
 
-// ACCURATE GELU: uses polynomial CDF approximation
-// GELU(x) = x * CDF(x) where CDF is approximated by a 5th-degree polynomial
+// Accurate mode GELU computation using polynomial CDF approximation.
+// Computes GELU(x) = x * CDF(x) where CDF is approximated by a degree-4 polynomial
+// for |x| < 2.5 and a linear function for 2.5 <= |x| < 5.
 template <int ITERATIONS>
 inline void _calculate_gelu_accurate_()
 {
-    constexpr bool scaled = true;     // "scaled" means CDF result is multiplied by x
+    constexpr bool scaled = true;  // tells _calculate_cdf_appx_ to multiply result by x
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in     = sfpi::dst_reg[0];
-        // _calculate_cdf_appx_(in, scaled=true) computes:
-        //   CDF(x) * x  where CDF is a piecewise polynomial approximation
-        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);
-        sfpi::dst_reg[0]    = result;
-        sfpi::dst_reg++;
+        sfpi::vFloat in     = sfpi::dst_reg[0];              // load current row from DEST
+        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);  // CDF(x) * x = GELU(x)
+        sfpi::dst_reg[0]    = result;                        // write back to DEST
+        sfpi::dst_reg++;                                     // advance to next row
     }
 }
 
-// Dispatcher: selects approximate or accurate path based on template parameter
+// Top-level dispatcher: selects approximation or accurate mode at compile time.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_gelu_()
 {
@@ -503,73 +406,41 @@ inline void _calculate_gelu_()
     }
 }
 
-// Initialization: loads piecewise linear LUT coefficients into SFPU local registers
-// These coefficients define 6 segments of the GELU approximation for |x| in [0, +inf):
-//   [0.0, 0.5):   slope=0.1928, intercept=-0.0150
-//   [0.5, 1.0):   slope=0.4939, intercept=-0.1605
-//   [1.0, 1.5):   slope=0.6189, intercept=-0.2797
-//   [1.5, 2.0):   slope=0.6099, intercept=-0.2635
-//   [2.0, 3.0):   slope=0.5402, intercept=-0.1194
-//   [3.0, +inf):  slope=0.50,   intercept=0.0 (saturates to 0.5*x)
-template <bool APPROXIMATION_MODE>
-inline void _init_gelu_()
-{
-    sfpi::vConstFloatPrgm0 = 0.5f;     // Store 0.5 in programmable constant register
-
-    // LReg0: slopes for segments [0.5,1.0) in hi-16 and [0,0.5) in lo-16
-    _sfpu_load_imm32_(0, 0x37E7322B);  // hi=0.4939(FP16), lo=0.1928(FP16)
-    // LReg4: intercepts for segments [0.5,1.0) in hi-16 and [0,0.5) in lo-16
-    _sfpu_load_imm32_(4, 0xB12286D8);  // hi=-0.1605(FP16), lo=-0.0150(FP16)
-
-    // LReg1: slopes for segments [1.5,2.0) in hi-16 and [1.0,1.5) in lo-16
-    _sfpu_load_imm32_(1, 0x38E138F3);  // hi=0.6099(FP16), lo=0.6189(FP16)
-    // LReg5: intercepts for segments [1.5,2.0) in hi-16 and [1.0,1.5) in lo-16
-    _sfpu_load_imm32_(5, 0xB437B479);  // hi=-0.2635(FP16), lo=-0.2797(FP16)
-
-    // LReg2: slopes for segments [3.0,+inf) in hi-16 and [2.0,3.0) in lo-16
-    _sfpu_load_imm32_(2, 0x38003852);  // hi=0.50(FP16), lo=0.5402(FP16)
-    // LReg6: intercepts for segments [3.0,+inf) in hi-16 and [2.0,3.0) in lo-16
-    _sfpu_load_imm32_(6, 0x7c00afa4);  // hi=+inf(used as 0 intercept), lo=-0.1194(FP16)
-}
-
 } // namespace ckernel::sfpu
 ```
 
-**CDF Approximation** (`ckernel_sfpu_cdf.h`):
-
+**CDF helper** (`ckernel_sfpu_cdf.h`, used by accurate mode):
 ```cpp
 #pragma once
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"  // POLYVAL5 polynomial evaluation
 #include "sfpi.h"
 
 namespace ckernel::sfpu
 {
 
-// Positive CDF: polynomial approximation of Phi(x) for x >= 0
-// Uses two ranges:
-//   [0, 2.5): 4th-degree polynomial
-//   [2.5, 5): linear approximation
-//   [5, +inf): saturates to 1.0
+// Computes CDF for positive values using two polynomial segments.
 inline sfpi::vFloat _calculate_pos_cdf_appx_(sfpi::vFloat val)
 {
+    // Two-piece polynomial approximation:
+    // For val in [0, 2.5): degree-4 polynomial with coefficients optimized for CDF fit
+    // For val in [2.5, 5): linear approximation 0.44656975 * val + 0.58216001
     sfpi::vFloat result;
     v_if (val < 2.5f)
     {
-        // 4th-degree polynomial fit for CDF in [0, 2.5)
-        // Coefficients: [0.0122792, -0.05281024, -0.03048313, 0.41314081, 0.49866379]
-        result = POLYVAL5<sfpi::vFloat>(
-            0.0122792f, -0.05281024f, -0.03048313f, 0.41314081f, 0.49866379f, val);
+        // POLYVAL5 evaluates: c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
+        result = POLYVAL5<sfpi::vFloat>(0.0122792f, -0.05281024f, -0.03048313f, 0.41314081f, 0.49866379f, val);
     }
     v_else
     {
-        // Linear approximation for [2.5, 5): slope * x + intercept
+        // Linear approximation for larger values (approaching 1.0)
         result = 0.44656975f * val + 0.58216001f;
     }
     v_endif;
 
-    // Clamp to [0, 1]
+    // Clamp to [0, 1] range
     v_if (result > 1.0f)
     {
         result = 1.0f;
@@ -578,25 +449,26 @@ inline sfpi::vFloat _calculate_pos_cdf_appx_(sfpi::vFloat val)
     return result;
 }
 
-// Full CDF: handles negative inputs by symmetry CDF(-x) = 1 - CDF(x)
-// When scaled=true (used by GELU): returns CDF(x) * x  (= GELU(x))
+// Computes CDF of the standard normal distribution.
+// Uses symmetry: CDF(-x) = 1 - CDF(x).
+// When scaled=true, returns CDF(x) * x (i.e., GELU(x)).
 inline sfpi::vFloat _calculate_cdf_appx_(sfpi::vFloat val, bool scaled = false)
 {
     sfpi::vFloat result = 0.0f;
 
     v_if (val < 0.0f)
     {
-        result = 1.0f - _calculate_pos_cdf_appx_(-val);   // Symmetry: CDF(-x) = 1 - CDF(x)
+        result = 1.0f - _calculate_pos_cdf_appx_(-val);  // symmetry for negative inputs
     }
     v_else
     {
-        result = _calculate_pos_cdf_appx_(val);
+        result = _calculate_pos_cdf_appx_(val);           // direct computation for positive
     }
     v_endif;
 
     if (scaled)
     {
-        result *= val;    // GELU(x) = x * CDF(x)
+        result *= val;  // GELU(x) = x * CDF(x)
     }
     return result;
 }
@@ -604,183 +476,183 @@ inline sfpi::vFloat _calculate_cdf_appx_(sfpi::vFloat val, bool scaled = false)
 } // namespace ckernel::sfpu
 ```
 
+**Metal-layer GELU wrapper** (`ckernel_sfpu_gelu.h` in `tt_metal/hw/ckernels/blackhole/`):
+```cpp
+#pragma once
+
+#include "ckernel_defs.h"
+#include "ckernel.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Horner's method evaluation of a 15th-degree Chebyshev polynomial.
+// Used only in the non-approximation path of the metal layer's calculate_gelu.
+#define POLYVAL15(c15, c14, c13, c12, c11, c10, c9, c8, c7, c6, c5, c4, c3, c2, c1, c0, x) \
+    (((((((((((((((c15) * (x) + (c14)) * (x) + (c13)) * (x) + (c12)) * (x) + (c11)) * (x) + (c10)) * (x) + (c9)) * \
+                (x) + (c8)) * (x) + (c7)) * (x) + (c6)) * (x) + (c5)) * (x) + (c4)) * (x) + \
+       (c3)) * (x) + (c2)) * (x) + (c1)) * (x) + (c0)
+
+// Alternative Chebyshev-based GELU for the metal layer's non-approx path.
+// Computes GELU(x) directly via a 15th-degree polynomial for |x| < 5.5.
+inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
+    sfpi::vFloat result = 0.0f;
+    v_if(val >= -5.5f) {
+        result = POLYVAL15(
+            -1.81205228163e-09, -4.59055119276e-08, -3.74540617693e-07,
+            -2.29754133825e-07,  1.19076782913e-05,  4.25116466215e-05,
+            -0.000138391838381, -0.000862052441087,  0.000768340223025,
+             0.0092074331601,   -0.00208478037614,  -0.0656369476513,
+             0.00244542739174,   0.398579460781,     0.499174645395,
+             2.98325768482e-05, val);
+        result = setsgn(result, val);  // ensure result has same sign as input
+    }
+    v_endif;
+    return result;
+}
+
+// Initialization: delegates to LLK _init_gelu_ which loads LUT coefficients.
+template <bool APPROXIMATION_MODE>
+void gelu_init() {
+    _init_gelu_<APPROXIMATION_MODE>();
+}
+
+// Main GELU computation entry point.
+// In approx mode: delegates to _calculate_gelu_ (LUT-based).
+// In non-approx mode: uses Chebyshev polynomial for |x| < 3, passthrough for |x| >= 3.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_gelu() {
+    if constexpr (APPROXIMATION_MODE) {
+        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();  // LLK appx path
+    } else {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = in;           // default: passthrough for |x| >= 3
+        v_if(in == 0.0f) { result = 0.0f; }  // special case: GELU(0) = 0
+        v_elseif(in < 3.0f) { result = calculate_gelu_chebyshev(in); }  // polynomial for |x| < 3
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+    }
+}
+
+}  // namespace sfpu
+}  // namespace ckernel
+```
+
 #### SFPU Instructions Used
 
-| Instruction / Intrinsic | Description |
-|------------------------|-------------|
-| `SFPLOAD` / `sfpi::dst_reg[0]` (read) | Loads a vector element from the DEST register file into an SFPU local register (LReg3) |
-| `SFPSTORE` / `sfpi::dst_reg[0]` (write) | Stores an SFPU local register value back to the DEST register file |
-| `SFPLOADI` / `_sfpu_load_imm32_` | Loads a 32-bit immediate value into an SFPU local register (used during init to set LUT coefficients) |
-| `SFPMUL` / `*` operator | Vectorized floating-point multiplication (e.g., `in * half`) |
-| `SFPMAD` / `*` + `+` operators | Multiply-accumulate: computes `a * b + c` in a single operation |
-| `SFPLUTFP32` / `lut2_sign()` | Evaluates a 6-entry piecewise linear function using coefficients in LRegs; the `_sign` variant preserves the input sign |
-| `SFPSETCC` / `v_if`, `v_elseif` | Sets per-lane condition flags for conditional execution (e.g., `val < 3.0f`) |
-| `SFPENCC` / `v_if` block entry | Enables conditional execution mode |
-| `SFPCOMPC` / `v_else`, `v_elseif` | Complements condition flags for else branches |
-| `SFPPOPC` / `v_endif` | Restores condition flags from the stack (ends conditional block) |
-| `SFPPUSHC` / `v_if` nesting | Pushes condition flags onto the stack for nested conditionals |
-| `setsgn()` | Copies the sign bit from one value to another (used in Chebyshev path) |
-| `sfpi::s2vFloat16b()` | Converts a scalar float to a BF16 SFPU vector constant |
+| Instruction/Intrinsic | Description |
+|----------------------|-------------|
+| `sfpi::dst_reg[0]` (SFPLOAD/SFPSTORE) | Reads/writes a row of 16 elements from/to the DEST register file |
+| `sfpi::dst_reg++` (INCRWC) | Advances the DEST register row pointer by one row (16 elements) |
+| `sfpi::vConstFloatPrgm0` | Programmable constant register, loaded with 0.5f during init |
+| `_sfpu_load_imm32_` (SFPLOADI) | Loads a 32-bit immediate value into an SFPU local register |
+| `sfpi::l_reg[N]` (LREG access) | Reads from SFPU local registers 0-6 holding LUT coefficients |
+| `lut2_sign` (SFPLUTFP32) | 6-piece piecewise-linear LUT evaluation with sign update. Uses `__builtin_rvtt_sfplutfp32_6r` with `SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 \| SFPLUTFP32_MOD0_SGN_UPDATE` |
+| `v_if` / `v_elseif` / `v_else` / `v_endif` (SFPSETCC/SFPENCC) | SIMD predicated execution - enables conditional per-element branching |
+| `setsgn` (SFPSETSGN) | Copies the sign bit from one value to another |
+| Multiply `*` (SFPMUL/SFPMAD) | SFPU floating-point multiply |
+| Add `+` (SFPMAD/SFPADD) | SFPU floating-point add |
 
 #### SFPU Register Usage
 
-| Register | Usage |
-|----------|-------|
-| `dst_reg[0]` | Primary working register -- input is loaded here, result is stored here |
-| `dst_reg++` | Advances to the next row within a face (32 elements per face, 8 rows of 4) |
-| `LReg0` | Piecewise linear slopes for ranges [0.5, 1.0) and [0.0, 0.5) packed as FP16 hi/lo |
-| `LReg1` | Piecewise linear slopes for ranges [1.5, 2.0) and [1.0, 1.5) |
-| `LReg2` | Piecewise linear slopes for ranges [3.0, +inf) and [2.0, 3.0) |
-| `LReg4` | Piecewise linear intercepts for ranges [0.5, 1.0) and [0.0, 0.5) |
-| `LReg5` | Piecewise linear intercepts for ranges [1.5, 2.0) and [1.0, 1.5) |
-| `LReg6` | Piecewise linear intercepts for ranges [3.0, +inf) and [2.0, 3.0) |
-| `vConstFloatPrgm0` | Programmable constant register, loaded with 0.5 during init |
-| `LReg3` (implicit) | Used internally by `SFPLOAD`/`SFPSTORE` as the data transfer register |
-| `LReg7` (implicit) | Used internally by `SFPLUTFP32` as the LUT output register |
+| Register | Purpose |
+|----------|---------|
+| **DEST[0]** (dst_reg[0]) | Input/output for each row; holds tile data being processed |
+| **vConstFloatPrgm0** | Stores 0.5f constant used in approx mode |
+| **LReg0** | Slopes for ranges [0.5,1.0] (hi) and [0.0,0.5] (lo) - packed FP16b |
+| **LReg1** | Slopes for ranges [1.5,2.0] (hi) and [1.0,1.5] (lo) |
+| **LReg2** | Slopes for ranges [3.0,inf) (hi) and [2.0,3.0] (lo) |
+| **LReg4** | Intercepts for ranges [0.5,1.0] (hi) and [0.0,0.5] (lo) |
+| **LReg5** | Intercepts for ranges [1.5,2.0] (hi) and [1.0,1.5] (lo) |
+| **LReg6** | Intercepts for ranges [3.0,inf) (hi) and [2.0,3.0] (lo) |
+
+Note: LReg3 and LReg7 are not used by GELU init. The local registers are cached into `vUInt` variables at the start of the loop and restored after to preserve state across iterations.
 
 #### SFPU Execution Flow
 
-The full execution flow for processing one tile through the GELU SFPU operation:
+1. **Initialization** (`gelu_tile_init` -> `_init_gelu_`):
+   - Sets `vConstFloatPrgm0 = 0.5f`
+   - Loads 6 pairs of (slope, intercept) coefficients as packed FP16b values into LReg0, LReg1, LReg2, LReg4, LReg5, LReg6 via `_sfpu_load_imm32_`
 
-1. **Initialization** (`gelu_tile_init`):
-   - `llk_math_eltwise_unary_sfpu_init` configures the SFPU math pipeline for the `gelu` SfpuType
-   - `_init_gelu_()` loads 0.5 into `vConstFloatPrgm0` and loads 6 piecewise linear coefficients (slopes + intercepts) into LReg0-6 via `_sfpu_load_imm32_` (which compiles to `SFPLOADI` instructions)
+2. **Tile dispatch** (`gelu_tile` -> `_llk_math_eltwise_unary_sfpu_params_`):
+   - Sets DEST register base address to the target tile
+   - Iterates over 4 faces (each 16x16 sub-block of the 32x32 tile)
+   - For each face, calls `calculate_gelu<APPROX_MODE>()`
 
-2. **Tile acquisition**: `tile_regs_acquire()` locks the DEST register file for exclusive math RISC-V access
+3. **Per-face computation** (8 iterations per face, one per row of 16 elements):
+   - **Approximation mode** (`_calculate_gelu_appx_`):
+     - Loads row from DEST
+     - Computes `half_in = 0.5 * x`
+     - Evaluates `lut2_sign(x, l0..l6)` which performs: `sign(x) * (A_i * |x| + B_i)` for the appropriate piecewise segment
+     - Computes `result = half_in + lut_result`
+     - Stores result back to DEST, advances row pointer
+   - **Accurate mode** (`_calculate_gelu_accurate_`):
+     - Loads row from DEST
+     - Calls `_calculate_cdf_appx_(x, scaled=true)` which computes `x * CDF(x)` using a degree-4 polynomial for |x| < 2.5 and a linear fit for 2.5 <= |x| < 5
+     - Stores result back to DEST, advances row pointer
 
-3. **Unpack**: `cb_wait_front(c_0, 1)` blocks until the reader has produced a tile; `copy_tile(c_0, 0, 0)` invokes the unpacker to decompress the tile from the input CB into DEST register 0
-
-4. **SFPU dispatch** (`gelu_tile`):
-   - `_llk_math_eltwise_unary_sfpu_start_` positions the SFPU to operate on the correct DST tile index
-   - For `VectorMode::RC` (full tile), the dispatch iterates over all 4 faces (each face = 16x16 = 256 elements)
-   - For each face, `calculate_gelu<APPROX_MODE>()` is called with `ITERATIONS = 8` (8 rows of 4 elements = 32 elements per face half)
-
-5. **Per-face SFPU computation** (approximate path):
-   - For each of 8 iterations:
-     a. `dst_reg[0]` loads the current 4-element vector from DEST
-     b. `half_in = in * 0.5` computes half the input
-     c. `lut2_sign(in, l0..l6)` evaluates the piecewise linear LUT on `|in|` and applies the sign of `in`
-     d. `result = half_in + lut_result` combines to produce GELU(x)
-     e. `dst_reg[0] = result` stores the result back
-     f. `dst_reg++` advances to the next row
-
-6. **Per-face SFPU computation** (accurate path -- LLK layer):
-   - For each of 8 iterations:
-     a. `dst_reg[0]` loads the current vector
-     b. `_calculate_cdf_appx_(in, scaled=true)` computes:
-        - If `in >= 0`: `POLYVAL5(coeffs, in) * in` (4th-degree polynomial scaled by x)
-        - If `in < 0`: `(1 - POLYVAL5(coeffs, -in)) * in`
-        - Clamps CDF to [0, 1] before scaling
-     c. Stores result and advances
-
-7. **Per-face SFPU computation** (Chebyshev path -- metal layer, accurate mode):
-   - For each of 8 iterations:
-     a. Loads the current vector
-     b. If `in == 0`: result = 0
-     c. If `in < 3`: evaluates 15th-degree Chebyshev polynomial, then `setsgn(result, in)`
-     d. If `in >= 3`: result = in (GELU(x) ~ x for large positive x)
-     e. Stores result and advances
-
-8. **Face transition**: `_llk_math_eltwise_unary_sfpu_inc_dst_face_addr_()` moves the SFPU to the next face
-
-9. **Completion**: `_llk_math_eltwise_unary_sfpu_done_()` finalizes SFPU state
-
-10. **Pack**: `tile_regs_commit()` signals the packer; `tile_regs_wait()` waits for readiness; `pack_tile(0, c_2)` packs the result from DEST into the output CB
-
-11. **Release**: `cb_pop_front(c_0, 1)` frees the input CB slot; `tile_regs_release()` unlocks DEST; `cb_push_back(c_2, 1)` signals the writer
+4. **Completion**: After all 4 faces processed, `_llk_math_eltwise_unary_sfpu_done_()` is called to finalize SFPU state.
 
 #### SFPU Configuration
 
-| Setting | Value | Notes |
-|---------|-------|-------|
-| `math_fidelity` | `MathFidelity::HiFi4` | Highest fidelity -- full precision FP multiply |
-| `math_approx_mode` | `false` | GELU returns `false` from `get_op_approx_mode()` |
-| `fp32_dest_acc_en` | Depends on `args.fp32_dest_acc_en` | When true, DEST uses FP32 accumulation |
-| `preserve_fp32_precision` | Depends on `args.preserve_fp32_precision` | When true, unpack goes directly to DEST in FP32 |
-| `fast_and_approx` template param | Default `true`, overridable via `UnaryWithParam` | Controls which GELU algorithm is used |
-| `ITERATIONS` | 8 (default) | 8 iterations x 4 elements = 32 elements per face half |
-| `VectorMode` | `RC` (Row-Column) | All 4 faces of the 32x32 tile are processed |
-| `SfpuType` | `gelu` | Used for SFPU init configuration |
+| Configuration | Value |
+|--------------|-------|
+| **Math fidelity** | HiFi4 |
+| **Math approx mode** | `false` (from `get_op_approx_mode` which returns false for GELU) |
+| **fp32_dest_acc_en** | Configurable via `args.fp32_dest_acc_en` |
+| **Unpack to dest mode** | Default (or UnpackToDestFp32 if `preserve_fp32_precision`) |
+| **SFPU_OP_GELU_INCLUDE** | Set to "1" - includes `gelu.h` |
+| **SFPU_OP_CHAIN_0** | Set to `gelu_tile_init<P>(); gelu_tile<P>(0);` where P depends on parameter |
+| **APPROXIMATION_MODE template** | Controlled by param0 of UnaryOpType::GELU (0=accurate, 1=approx) |
+
+The GELU operation's approximation mode is controlled by the `param0` parameter passed when constructing `UnaryWithParam(UnaryOpType::GELU, static_cast<float>(bool))`. This is encoded as a template parameter: `gelu_tile_init<P>()` and `gelu_tile<P>(idst)` where P is 0 (accurate) or 1 (fast approximate).
+
+Importantly, `get_op_approx_mode` returns `false` for GELU, meaning the global `math_approx_mode` flag in `ComputeConfig` is set to `false`. The per-operation approximation is instead controlled by the template parameter.
 
 #### Hardware Compatibility Notes
 
-The GELU implementation is **identical** between Wormhole B0 and Blackhole architectures:
-- Both `tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h` and `tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_gelu.h` contain the same source code
-- Both `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` and the Blackhole variant contain the same source code
-- The LUT coefficients, polynomial coefficients, and control flow are all shared
-- The `SFPLUTFP32` instruction used by `lut2_sign` is available on both architectures
-- Any differences would arise from the underlying FMA precision model (`fma_model_bh` vs `fma_model_wh`), which could cause minor numerical differences in the polynomial evaluation results, but the algorithm and coefficients are identical
+The Blackhole and Wormhole B0 implementations of the GELU SFPU kernel are **identical** (confirmed by diff). Both architectures:
+- Use the same LUT coefficients and piecewise-linear approximation
+- Use the same `lut2_sign` / `SFPLUTFP32` instruction interface
+- Use the same CDF polynomial approximation for accurate mode
+- Share the same `_sfpu_load_imm32_` instruction for loading constants
 
----
+The Chebyshev polynomial path in the metal-layer `calculate_gelu` (non-approx, non-LLK) uses `setsgn` which is available on both architectures.
 
-## Compile-Time vs Runtime Arguments
+## Implementation Notes
 
-### Compile-Time Arguments (Compute Kernel)
+1. **Dual non-approx paths**: There are two different "accurate" implementations. The metal-layer `calculate_gelu` (in `ckernel_sfpu_gelu.h` under `tt_metal/hw/ckernels/`) uses a 15th-degree Chebyshev polynomial for |x| < 3. The LLK-layer `_calculate_gelu_accurate_` (in `tt_metal/third_party/tt_llk/`) uses a 4th-degree polynomial CDF approximation. In approximation mode, both paths converge to the same LUT-based `_calculate_gelu_appx_`.
 
-| Index | Name | Value for GELU |
-|-------|------|---------------|
-| 0 | `per_core_block_cnt` | Number of tiles per core |
-| 1 | `per_core_block_dim` | 1 (one tile per block) |
+2. **No packed scalars for GELU**: The program factory sets `packed_scalar1 = 0` and `packed_scalar2 = 0` since GELU does not use runtime scalar parameters (unlike HARDSHRINK or WHERE_TSS).
 
-### Runtime Arguments
+3. **No temporary CB**: CB c_1 (tmp0) is not allocated for GELU, reducing L1 memory usage.
 
-| Kernel | Index | Name | Description |
-|--------|-------|------|-------------|
-| Reader | 0 | `src_addr` | Input buffer DRAM address |
-| Reader | 1 | `num_pages` | Tiles to process |
-| Reader | 2 | `start_id` | Starting tile index |
-| Writer | 0 | `dst_addr` | Output buffer DRAM address |
-| Writer | 1 | `num_pages` | Tiles to process |
-| Writer | 2 | `start_id` | Starting tile index |
-| Compute | 0 | `packed_scalar1` | 0 (unused for GELU) |
-| Compute | 1 | `packed_scalar2` | 0 (unused for GELU) |
+4. **LUT coefficient packing**: Each `_sfpu_load_imm32_` call packs two FP16b coefficients into a single 32-bit word. The SFPLUTFP32 instruction hardware unpacks these based on which range the input magnitude falls into, selecting the appropriate (slope, intercept) pair for the piecewise-linear evaluation.
 
----
+5. **Sign handling via lut2_sign**: The `lut2_sign` variant of `lut2` automatically applies the sign of the input to the LUT output via the `SFPLUTFP32_MOD0_SGN_UPDATE` flag. This exploits the symmetry of erf(x) being an odd function, allowing the LUT to store only positive-side coefficients.
 
-## Operation Registration and Dispatch Chain
-
-The GELU operation follows this dispatch chain from Python to SFPU:
-
-1. **Python API**: `ttnn.gelu(input_tensor)` or `ttnn.gelu(input_tensor, fast_and_approx=True)`
-2. **C++ binding**: Maps to `UnaryWithParam(UnaryOpType::GELU, param)` where `param = 0.0f` (accurate) or `1.0f` (approximate)
-3. **Device operation**: `UnaryDeviceOperation` selects the appropriate program factory
-4. **Program factory**: `UnaryProgramFactory::create()` builds the program:
-   - `get_macro_definition(GELU)` returns `"SFPU_OP_GELU_INCLUDE"`
-   - `get_compute_kernel_path(GELU)` returns `"eltwise_sfpu.cpp"` (default case)
-   - `get_op_init_and_func(GELU)` returns `{"gelu_tile_init();", "gelu_tile(0);"}` (default) or parameterized variants
-5. **Compute kernel**: `eltwise_sfpu.cpp` with `SFPU_OP_CHAIN_0` expanding to `gelu_tile_init(); gelu_tile(0);`
-6. **API layer**: `gelu.h` calls `SFPU_INIT_KERNEL_CALL` and `SFPU_UNARY_NO_PARAM_KERNEL_FN`
-7. **LLK macros**: Expand to `llk_math_eltwise_unary_sfpu_init` and `_llk_math_eltwise_unary_sfpu_params_`
-8. **SFPU kernel**: `calculate_gelu<APPROX>()` dispatches to `_calculate_gelu_appx_` or `_calculate_gelu_accurate_`
-
----
+6. **Face-level parallelism**: Each `calculate_gelu` call processes 8 rows of 16 elements (128 elements per face), and the dispatch layer calls it 4 times per tile for a total of 512 elements (one 16x16 face x 4 = full 32x32 tile). The loop is fully unrolled (`#pragma GCC unroll 8`) for maximum instruction-level parallelism.
 
 ## External Knowledge Sources
 
-### DeepWiki References
-- `tenstorrent/tt-metal`: GELU operation architecture, program factory dispatch, compute kernel paths, `UnaryOpType` enum
-- `tenstorrent/tt-llk`: `ckernel::sfpu` namespace details, `_init_gelu_`, `_calculate_gelu_`, LUT and CDF functions
-- `tenstorrent/tt-isa-documentation`: SFPU instruction details (`SFPLOADI`, `SFPMAD`, `SFPMUL`, `SFPLUTFP32`, `SFPSETCC`, `SFPENCC`, `SFPCOMPC`, `SFPPOPC`, `SFPPUSHC`), piecewise linear function evaluation, conditional execution
+### DeepWiki Queries
+1. **Query**: "How is the GELU unary SFPU operation implemented? What compute kernel files are used, and how does the unary program factory dispatch GELU?"
+   **Reason**: Initial reconnaissance to understand the GELU dispatch chain and locate all relevant source files.
+   **Key Findings**: Identified the full file hierarchy: program factory -> eltwise_sfpu.cpp -> gelu.h -> ckernel_sfpu_gelu.h. Learned about the SFPU_OP_GELU_INCLUDE define mechanism and the two-mode (approx/accurate) implementation.
 
-### Confluence References
-Not consulted for this analysis. The DeepWiki sources provided sufficient detail on SFPU instructions.
+2. **Query**: "How is the GELU SFPU kernel implemented in LLK? What functions like gelu_tile_init and gelu_tile are defined, and what SFPU instructions do they use?" (tenstorrent/tt-llk)
+   **Reason**: Needed detailed LLK-layer implementation information including SFPU instructions and register usage.
+   **Key Findings**: Confirmed the `_init_gelu_` / `_calculate_gelu_appx_` / `_calculate_gelu_accurate_` function structure. Learned about `lut2_sign`, `vConstFloatPrgm0`, `_sfpu_load_imm32_`, and the 6-piece piecewise-linear approximation scheme.
 
-### Glean References
-Not consulted for this analysis. The open-source codebase provided all necessary implementation details.
+### Documentation References
+1. **Source**: `runtime/sfpi/include/sfpi_lib.h`
+   **Reason**: Needed to understand the `lut2_sign` function implementation and which SFPU hardware instruction it maps to.
+   **Key Information**: `lut2_sign` with 6 vUInt arguments maps to `__builtin_rvtt_sfplutfp32_6r` with `SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | SFPLUTFP32_MOD0_SGN_UPDATE` mode flags.
 
----
-
-## Key Design Decisions
-
-1. **Three computation paths**: The GELU implementation provides three different algorithms with different accuracy/speed tradeoffs:
-   - **Approximate (LUT)**: Fastest, uses precomputed piecewise linear segments via `SFPLUTFP32`. Requires only ~5 SFPU instructions per element.
-   - **Accurate (CDF polynomial)**: Medium speed, uses a 5th-degree polynomial CDF approximation. More operations but better accuracy.
-   - **Accurate (Chebyshev, metal-layer override)**: Slowest but most accurate for |x| < 3, using a 15th-degree polynomial. The metal layer overrides the LLK accurate path with this for non-approximate mode.
-
-2. **LUT coefficient packing**: The 6-segment LUT coefficients are packed as pairs of FP16 values in 32-bit immediates, fitting into just 6 LRegs. This efficient packing is critical because the SFPU has a limited number of local registers (LReg0-7).
-
-3. **Generic compute kernel**: GELU shares the `eltwise_sfpu.cpp` kernel with dozens of other unary operations. Specialization happens entirely through preprocessor defines, avoiding kernel code duplication.
-
-4. **Default to approximate mode**: The `gelu_tile_init` and `gelu_tile` templates default `fast_and_approx = true`, reflecting that most use cases prioritize throughput over precision.
-
-5. **No temporary CB required**: Unlike HARDSHRINK or CBRT, GELU does not need the temporary CB `c_1`, which keeps its memory footprint minimal.
+2. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+   **Reason**: Needed to trace how GELU's macro defines are generated, how approx mode is controlled, and which compute kernel path is selected.
+   **Key Information**: GELU maps to `SFPU_OP_GELU_INCLUDE` define, uses `eltwise_sfpu.cpp` as default kernel path, generates `gelu_tile_init<P>(); gelu_tile<P>(idst);` where P is the approx mode from param0.

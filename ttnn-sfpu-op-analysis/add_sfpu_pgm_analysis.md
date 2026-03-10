@@ -1,250 +1,199 @@
-# SFPU Operation Analysis: ADD (Legacy Element-Wise Binary SFPU)
+# ADD (element_wise_multi_core_sfpu) Implementation Analysis
 
 ## Overview
 
-This document provides a comprehensive structural analysis of the binary ADD operation as implemented through the SFPU (Special Function Processing Unit) path in the legacy element-wise multi-core program factory. The SFPU path is used instead of the FPU path when operating in FP32 destination accumulation mode or when mixed-precision operands require explicit data handling that the SFPU's scalar vector pipeline supports more flexibly.
+The ADD operation performs element-wise floating-point addition of two input tensors using the SFPU (Special Function Processing Unit) on Tenstorrent hardware. Unlike the FPU-based binary add (which uses the matrix engine's `add_tiles` instruction), this SFPU variant copies both input tiles into DEST registers and executes the addition via SFPI vector instructions. This program factory is selected when input tensor shapes are identical and the operation is identified as an SFPU-routed binary operation.
 
-**Operation**: `BinaryOpType::ADD`
-**Program Factory**: `ElementWiseMultiCoreSfpu`
-**Program Factory File**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp`
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp`
 
-The SFPU ADD for floating-point types resolves to `add_binary_tile(i*2, i*2+1, i*2)`, which in turn calls `_calculate_sfpu_binary_<APPROX, BinaryOp::ADD, 8>(...)`. The core math is a single SFPI instruction: `result = in0 + in1`, which maps to the hardware `sfpadd` instruction. For integer types (INT32, UINT32, UINT16), a separate `add_int_tile` path is used instead.
+## Work Unit Definition
 
----
+One work unit is a **block of tiles**. The compute kernel processes tiles in blocks of size `per_core_block_size` (determined by `find_max_block_size`), iterating over `per_core_block_cnt` blocks per core. For the interleaved (non-sharded) case, `block_size = 1` and `block_cnt = num_tiles_per_core`, so one work unit equals one tile. For sharded tensors, the block size is the largest power-of-two divisor of `num_tiles_per_shard`.
 
-## Program Factory Structure
+## Tensor Format and Layout
 
-### Factory Class
-- **Namespace**: `ttnn::operations::binary`
-- **Class**: `BinaryDeviceOperation::ElementWiseMultiCoreSfpu`
-- **Methods**:
-  - `create(...)` -- Builds the full program (CBs, kernels, runtime args)
-  - `override_runtime_arguments(...)` -- Updates runtime args for cached program reuse
+### Input Tensors
 
-### Operation Attributes Used
-| Attribute | Purpose |
+| Property | Input A (cb_in0) | Input B (cb_in1) |
+|---|---|---|
+| Dimension Convention | NHWC-style, last dim is width | Same as A |
+| Tensor Layout | TILED (32x32) | TILED (32x32) |
+| Memory Layout | Interleaved or Sharded | Interleaved or Sharded |
+| Buffer Type | DRAM or L1 | DRAM or L1 |
+| Data Type | Any float (BF16, FP32, BF4_B, BF8_B) or INT32/UINT16/UINT32 | Same or different from A |
+
+### Output Tensor
+
+| Property | Output (cb_out0) |
 |---|---|
-| `binary_op_type` | Selects the SFPU binary operation (ADD, SUB, MUL, etc.) |
-| `activations` | Optional fused post-op activations (e.g., RELU) |
-| `input_tensor_a_activation` | Optional pre-processing activation on input A |
-| `worker_grid` | CoreRangeSet of cores to dispatch to |
+| Dimension Convention | Same as inputs |
+| Tensor Layout | TILED (32x32) |
+| Memory Layout | Interleaved or Sharded |
+| Buffer Type | DRAM or L1 |
+| Data Type | Determined by operation config |
 
----
+### Layout Transformations
+
+No explicit tilize/untilize is performed within this program factory. All tensors are expected in tiled layout at entry. The `UnpackToDestMode::UnpackToDestFp32` is set for all CBs (except for POWER ops), meaning unpacking promotes data to FP32 in DEST registers regardless of the input data format.
+
+## Data Flow Pattern
+
+1. **Reader kernel** reads tiles from input tensor A into `cb_in0` (CB index 0) and from input tensor B into `cb_in1` (CB index 1). For sharded inputs, the reader simply does `cb_reserve_back` / `cb_push_back` to make the already-present L1 data available.
+2. **Compute kernel** (for ADD with float types, no pre-scaling):
+   - Waits for `per_core_block_size` tiles in both `cb_inp0` and `cb_inp1`.
+   - Acquires DEST registers via `tile_regs_acquire()` + `tile_regs_wait()`.
+   - Copies tiles from `cb_inp0` to even DEST slots (`i*2`) and from `cb_inp1` to odd DEST slots (`i*2+1`).
+   - Calls `add_binary_tile_init()` then `add_binary_tile(i*2, i*2+1, i*2)` -- the SFPU adds DEST[i*2] + DEST[i*2+1] and writes result to DEST[i*2].
+   - Packs result from DEST[i*2] into `cb_out0`.
+   - Releases DEST registers and pops input CBs, pushes output CB.
+3. **Writer kernel** reads tiles from `cb_out0` and writes them to the output tensor in DRAM/L1. For sharded output, it simply waits on the CB (data is already in the right L1 location).
 
 ## Circular Buffer Configuration
 
-| CB Index | Name | Role | Size (non-sharded) | Size (sharded) |
-|---|---|---|---|---|
-| `c_0` | `cb_src0` | Input A | `2 * max_block_size * tile_size` | `num_tiles_per_shard * tile_size` |
-| `c_1` | `cb_src1` | Input B | `2 * max_block_size * tile_size` | `num_tiles_per_shard * tile_size` |
-| `c_2` | `cb_output` | Output | `2 * max_block_size * tile_size` | `num_tiles_per_shard * tile_size` |
-| `c_3` | `cb_inp0` (interim) | Pre-processed input A | `max_block_size * tile_size` | Same |
-| `c_4` | `cb_inp1` (interim) | Pre-processed input B | `max_block_size * tile_size` | Same |
+| CB ID | Name | Purpose | Data Format | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
+|---|---|---|---|---|---|---|---|---|
+| c_0 | cb_src0 | Input A tiles | src0_cb_data_format | Sharded: `num_tiles_per_shard`; Interleaved: `2 * max_block_size` | 1 (reader pushes 1 at a time) | Sharded: single-buffered (full shard); Interleaved: double-buffered | Reader | Compute |
+| c_1 | cb_src1 | Input B tiles | src1_cb_data_format | Sharded: `num_tiles_per_shard`; Interleaved: `2 * max_block_size` | 1 | Same as c_0 | Reader | Compute |
+| c_2 | cb_out0 | Output tiles | dst_cb_data_format | Sharded/block-width: `num_tiles_per_shard`; Interleaved: `2 * max_block_size` | `per_core_block_size` | Sharded: single-buffered; Interleaved: double-buffered | Compute | Writer |
+| c_3 | cb_interm0 | Intermediate for pre-scaled input A | interim_cb0_format | `max_block_size` | `per_core_block_size` | Single-buffered | Compute (pre-scale) | Compute (main) |
+| c_4 | cb_interm1 | Intermediate for pre-scaled input B | interim_cb1_format | `max_block_size` | `per_core_block_size` | Single-buffered | Compute (pre-scale) | Compute (main) |
 
-**Notes on CB c_3 and c_4**: These interim CBs are only created when the compile-time defines `SFPU_OP_INIT_PRE_IN0_0` or `SFPU_OP_INIT_PRE_IN1_0` are present. For plain ADD, neither is defined, so only c_0, c_1, and c_2 are used. Operations like LOGADDEXP or DIV use these interim buffers for pre-scaling (e.g., applying EXP or RECIP to inputs before the binary operation).
+**Note**: CBs c_3 and c_4 are only created when `SFPU_OP_INIT_PRE_IN0_0` or `SFPU_OP_INIT_PRE_IN1_0` defines are present. For plain ADD, these defines are NOT set, so only c_0, c_1, and c_2 are used.
 
-**Sharding behavior**: When an input or output tensor is sharded, its CB is globally allocated to the tensor's buffer address. This avoids data movement -- the reader/writer simply marks the CB as ready without actually copying data.
+## Pipeline Pattern Summary
 
-### Data Format Handling
+- **Interleaved path**: c_0 and c_1 have capacity `2 * max_block_size` with reader pushing 1 tile at a time -- this is **double-buffered**, allowing the reader to fill the next tile while compute processes the current one. c_2 has capacity `2 * max_block_size` -- also **double-buffered**.
+- **Sharded path**: All CBs are sized to hold the entire shard, and the globally-allocated address maps directly to the tensor's L1 buffer. This is effectively **single-buffered** since the entire shard is available at once.
 
-The program factory determines data formats from tensor dtypes:
-- `src0_cb_data_format` from input A dtype
-- `src1_cb_data_format` from input B dtype
-- `dst_cb_data_format` from output dtype
+## Index Calculations
 
-FP32 destination accumulation is enabled when the output format is Float32, Int32, or UInt32. For non-POWER operations, all CBs use `UnpackToDestMode::UnpackToDestFp32`, meaning the unpack hardware converts data to FP32 before placing it in destination registers.
+For **interleaved** tensors, the reader uses `TensorAccessor` to map linear tile IDs to physical DRAM/L1 addresses. Each core receives a `start_id` and `num_tiles`, iterating `tile_id` from `start_id` to `start_id + num_tiles - 1`. The `TensorAccessor` handles bank interleaving internally.
 
----
+For **block/width-sharded** tensors, the `start_id` calculation accounts for the 2D shard grid:
+```
+start_id = (core_index / num_shards_per_width) * (block_height * block_width * num_shards_per_width)
+         + (core_index % num_shards_per_width) * block_width
+```
+The reader then uses a nested loop over `block_height` x `block_width`, advancing the row start by `num_cores_y * block_width` after each row.
+
+## Memory Access Patterns
+
+### Read Pattern
+- **Interleaved**: Sequential tile reads via `noc_async_read_tile` with tile IDs incrementing from `start_id`. Each tile is read individually with a barrier after each read (no batching). This is a sequential access pattern.
+- **Block/width sharded (reader for non-sharded input)**: Row-major within each block, with stride `num_cores_y * block_width` between rows.
+- **Sharded inputs**: No NoC reads -- data is already in L1.
+
+### Write Pattern
+- **Interleaved**: Sequential tile writes via `noc_async_write_page` from `start_id` to `start_id + num_pages - 1`. Each tile is written individually with a flush after each write.
+- **Block/width sharded to interleaved**: Row-major writes within unpadded block dimensions, skipping padding tiles.
+- **Sharded output**: No NoC writes -- output CB is globally allocated to the output buffer.
+
+## Core Distribution Strategy
+
+| Property | Value |
+|---|---|
+| Grid Topology | Determined by `operation_attributes.worker_grid` |
+| Work Splitting | `split_work_to_cores()` for interleaved; shard grid for sharded |
+| Core Group 1 | Cores with `num_tiles_per_core_group_1` tiles (ceil division) |
+| Core Group 2 | Cores with `num_tiles_per_core_group_2` tiles (floor division, may be 0) |
+| Remainder Handling | Two core groups: group 1 gets one extra tile per core |
+| Traversal Order | Row-major by default; shard orientation for sharded |
+| Unused Cores | Runtime args zeroed out (num_tiles = 0) to create no-op execution |
+
+For a single rectangular grid starting at (0,0), the factory uses an optimized path with `grid_to_cores()`. Otherwise, it falls back to `corerange_to_cores()` for arbitrary `CoreRangeSet` topologies.
+
+## Arguments
+
+### Compile-Time Arguments
+
+#### Reader Kernel
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | block_or_width_sharded | uint32_t | 1 if block/width sharded, 0 otherwise |
+| 1+ | src0_args (TensorAccessorArgs) | varies | Tensor accessor params for input A (only if not IN0_SHARDED) |
+| varies | src1_args (TensorAccessorArgs) | varies | Tensor accessor params for input B (only if not IN1_SHARDED) |
+
+#### Writer Kernel
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | output_cb_index | uint32_t | CB index for output (always c_2) |
+| 1+ | dst_args (TensorAccessorArgs) | varies | Tensor accessor params for output buffer |
+
+#### Compute Kernel
+Compile-time args are passed via `ComputeConfig`:
+- `fp32_dest_acc_en`: true if output is Float32, Int32, or UInt32
+- `unpack_to_dest_mode`: `UnpackToDestFp32` for all CBs (for non-POWER ops)
+- `defines`: Map of preprocessor defines including `BINOP_INIT`, `BINARY_SFPU_OP`, and optionally `PACK_RELU`
+
+### Runtime Arguments
+
+#### Reader Kernel
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | src0_addr | uint32_t | Base address of input tensor A buffer |
+| 1 | src1_addr | uint32_t | Base address of input tensor B buffer |
+| 2 | num_tiles | uint32_t | Total tiles this core must read |
+| 3 | start_id | uint32_t | Starting tile ID for this core |
+| 4 | block_height | uint32_t | Shard block height in tiles (0 if interleaved) |
+| 5 | block_width | uint32_t | Shard block width in tiles (0 if interleaved) |
+| 6 | num_cores_y | uint32_t | Number of shards per width dimension |
+
+#### Compute Kernel
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | per_core_block_cnt | uint32_t | Number of blocks to process on this core |
+| 1 | per_core_block_size | uint32_t | Number of tiles per block |
+
+#### Writer Kernel (interleaved output)
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | dst_addr | uint32_t | Base address of output tensor buffer |
+| 1 | num_pages | uint32_t | Number of tiles to write |
+| 2 | start_id | uint32_t | Starting tile ID for output |
+
+#### Writer Kernel (block/width sharded to interleaved)
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | dst_addr | uint32_t | Base address of output tensor buffer |
+| 1 | block_height_tiles | uint32_t | Block height in tiles |
+| 2 | block_width_tiles | uint32_t | Block width in tiles |
+| 3 | unpadded_block_height_tiles | uint32_t | Unpadded block height in tiles |
+| 4 | unpadded_block_width_tiles | uint32_t | Unpadded block width in tiles |
+| 5 | output_width_tiles | uint32_t | Full output width in tiles |
+| 6 | block_num_tiles | uint32_t | Total tiles in the block |
+| 7 | start_id_offset | uint32_t | Starting tile offset |
+| 8 | start_id_base | uint32_t | Base starting tile ID (always 0) |
 
 ## Kernel Implementations
 
 ### Reader Kernel
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp`
-**Type**: ReaderDataMovementConfig
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp`
+- **Key Logic**: Handles 4 modes via preprocessor defines: (1) both sharded -- just reserve/push CBs, (2) IN0 sharded only, (3) IN1 sharded only, (4) neither sharded -- sequential tile reads. For block/width sharded non-sharded inputs, uses nested height x width loops with stride.
 
-#### Annotated Reader Kernel Source
+### Writer Kernel (interleaved)
 
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-// SPDX-License-Identifier: Apache-2.0
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+- **Key Logic**: Simple sequential page writes. For sharded output, just does `cb_wait_front` (no writes needed).
 
-#include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+### Writer Kernel (block/width sharded to interleaved)
 
-void kernel_main() {
-    // Runtime arguments: buffer addresses, tile count, starting tile ID, and block dimensions
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);     // DRAM address of input tensor A
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);     // DRAM address of input tensor B
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);      // Total tiles this core processes
-    uint32_t start_id = get_arg_val<uint32_t>(3);       // Starting tile index for this core
-    uint32_t block_height = get_arg_val<uint32_t>(4);   // Used for block/width sharded layouts
-    uint32_t block_width = get_arg_val<uint32_t>(5);    // Used for block/width sharded layouts
-    uint32_t num_cores_y = get_arg_val<uint32_t>(6);    // Number of shards per width dimension
-
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;   // CB for input A
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;   // CB for input B
-    // Compile-time arg: whether layout is block or width sharded
-    constexpr bool block_or_width_sharded = get_compile_time_arg_val(0) == 1;
-
-    // TensorAccessor compile-time args are conditionally compiled based on sharding defines.
-    // When an input is sharded, its TensorAccessor is not needed because data is already in L1.
-#if !defined(IN0_SHARDED) && !defined(IN1_SHARDED)
-    constexpr auto src0_args = TensorAccessorArgs<1>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-#elif !defined(IN0_SHARDED)
-    constexpr auto src0_args = TensorAccessorArgs<1>();
-#elif !defined(IN1_SHARDED)
-    constexpr auto src1_args = TensorAccessorArgs<1>();
-#endif
-
-    // For sharded inputs, just mark the CB as having all tiles ready.
-    // The CB is globally allocated to the tensor's buffer, so no DMA needed.
-#ifdef IN0_SHARDED
-    cb_reserve_back(cb_id_in0, num_tiles);
-    cb_push_back(cb_id_in0, num_tiles);
-#else
-    uint32_t l1_write_addr_in0;
-    uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
-#endif
-#ifdef IN1_SHARDED
-    cb_reserve_back(cb_id_in1, num_tiles);
-    cb_push_back(cb_id_in1, num_tiles);
-#else
-    uint32_t l1_write_addr_in1;
-    uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
-#endif
-
-#if !(defined IN0_SHARDED && defined IN1_SHARDED)
-    constexpr uint32_t onetile = 1;
-
-    if constexpr (block_or_width_sharded) {
-        // Block/width sharded: iterate through a 2D block of tiles.
-        // row_start_tile_id jumps by num_cores_y * block_width between rows
-        // because each row of shards is distributed across cores.
-        uint32_t row_start_tile_id = start_id;
-        for (uint32_t h = 0; h < block_height; h++) {
-            uint32_t tile_id = row_start_tile_id;
-            for (uint32_t w = 0; w < block_width; w++) {
-#ifndef IN0_SHARDED
-                cb_reserve_back(cb_id_in0, onetile);
-                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(tile_id, s0, l1_write_addr_in0);  // DMA read from DRAM
-#endif
-#ifndef IN1_SHARDED
-                cb_reserve_back(cb_id_in1, onetile);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
-#endif
-                tile_id++;
-                noc_async_read_barrier();  // Wait for DMA to complete before publishing
-#ifndef IN0_SHARDED
-                cb_push_back(cb_id_in0, onetile);
-#endif
-#ifndef IN1_SHARDED
-                cb_push_back(cb_id_in1, onetile);
-#endif
-            }
-            row_start_tile_id += num_cores_y * block_width;
-        }
-    } else {
-        // Height sharded or interleaved: simple linear tile iteration
-        for (uint32_t tile_id = start_id; tile_id < start_id + num_tiles; tile_id++) {
-#ifndef IN0_SHARDED
-            cb_reserve_back(cb_id_in0, onetile);
-            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
-#endif
-#ifndef IN1_SHARDED
-            cb_reserve_back(cb_id_in1, onetile);
-            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-            noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
-#endif
-            noc_async_read_barrier();
-#ifndef IN0_SHARDED
-            cb_push_back(cb_id_in0, onetile);
-#endif
-#ifndef IN1_SHARDED
-            cb_push_back(cb_id_in1, onetile);
-#endif
-        }
-    }
-#endif
-}
-```
-
-### Writer Kernel
-
-**File** (default path): `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-**Alternative** (block/width sharded, non-sharded output): `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp`
-**Type**: WriterDataMovementConfig
-
-#### Annotated Writer Kernel Source
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-// SPDX-License-Identifier: Apache-2.0
-
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);   // DRAM address of output tensor
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);   // Number of tiles to write
-    const uint32_t start_id = get_arg_val<uint32_t>(2);    // Starting tile index
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);  // CB index (c_2)
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
-
-#ifdef OUT_SHARDED
-    // Sharded output: just wait for compute to fill all tiles.
-    // The CB is globally allocated to the output buffer, so data is already in place.
-    cb_wait_front(cb_id_out, num_pages);
-#else
-    constexpr uint32_t onepage = 1;
-    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
-
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_wait_front(cb_id_out, onepage);              // Wait for compute to produce a tile
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_page(i, s, l1_read_addr);       // DMA write tile to DRAM
-        noc_async_writes_flushed();                      // Ensure write is dispatched
-        cb_pop_front(cb_id_out, onepage);                // Free the CB slot
-    }
-    noc_async_write_barrier();  // Final barrier to ensure all writes complete
-#endif
-}
-```
+- **File**: `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp`
+- **Key Logic**: Waits for entire block, then writes only unpadded tiles in row-major order, skipping padding.
 
 ### Compute Kernel
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp`
-**Type**: ComputeConfig with SFPU defines
+This section combines the full annotated source code of the compute kernel with architectural analysis.
 
-This is the central compute kernel that orchestrates the SFPU binary operation. It is parameterized entirely through compile-time `#define` macros set by the host-side `get_defines_fp32()` function.
+#### Compute Kernel File
 
-#### Compile-Time Defines for ADD (Floating-Point)
-
-For `BinaryOpType::ADD` with floating-point inputs, `get_defines_fp32()` produces:
-- `BINOP_INIT` = `add_binary_tile_init();`
-- `BINARY_SFPU_OP` = `add_binary_tile(i*2, i*2+1, i*2);`
-
-No `SFPU_OP_INIT_PRE_IN0_0` or `SFPU_OP_INIT_PRE_IN1_0` defines are generated, so the pre-scaling code paths are inactive.
-
-#### Compile-Time Defines for ADD (Integer Types)
-
-For integer inputs (e.g., both INT32), `get_defines_fp32()` produces:
-- `ADD_INT_INIT` = `add_int_tile_init();`
-- `BINARY_SFPU_OP` = `add_int_tile<DataFormat::Int32>(i*2, i*2+1, i*2);`
+`ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp`
 
 #### Annotated Compute Kernel Source
 
 ```cpp
 // SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -254,10 +203,10 @@ For integer inputs (e.g., both INT32), `get_defines_fp32()` produces:
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_binary_sfpu.h"     // Provides add_binary_tile, sub_binary_tile, etc.
+#include "api/compute/eltwise_binary_sfpu.h"       // provides add_binary_tile, add_binary_tile_init, etc.
 #include "api/compute/binary_bitwise_sfpu.h"
 #include "api/compute/binary_shift.h"
-#include "api/compute/add_int_sfpu.h"             // Provides add_int_tile for integer addition
+#include "api/compute/add_int_sfpu.h"
 #include "api/compute/sub_int_sfpu.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/div_int32_floor.h"
@@ -270,47 +219,48 @@ For integer inputs (e.g., both INT32), `get_defines_fp32()` produces:
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"
 
-// PRE_SCALE is true if either input requires pre-processing (e.g., EXP for LOGADDEXP)
+// PRE_SCALE is true if any pre-scaling defines are active (e.g., for LOGADDEXP, DIV, etc.)
+// For plain ADD, neither SFPU_OP_INIT_PRE_IN0_0 nor SFPU_OP_INIT_PRE_IN1_0 is defined.
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 void kernel_main() {
-    // Runtime arguments from the host: how many blocks and how many tiles per block
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);   // Number of tile blocks
-    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);  // Tiles per block
+    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);   // number of blocks to process
+    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);   // tiles per block
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;   // Raw input A from reader
-    constexpr auto cb_in1 = tt::CBIndex::c_1;   // Raw input B from reader
+    constexpr auto cb_in0 = tt::CBIndex::c_0;   // raw input A from reader
+    constexpr auto cb_in1 = tt::CBIndex::c_1;   // raw input B from reader
 
-    // If pre-scaling is needed, use interim CBs; otherwise alias directly to input CBs
+    // For ADD, no pre-scaling is needed, so cb_inp0 == cb_in0 and cb_inp1 == cb_in1.
+    // When pre-scaling IS active (e.g., LOGADDEXP does exp on inputs first),
+    // cb_inp0/cb_inp1 point to intermediate CBs c_3/c_4 that hold pre-scaled data.
 #ifdef SFPU_OP_INIT_PRE_IN0_0
-    constexpr auto cb_inp0 = tt::CBIndex::c_3;   // Pre-processed input A
+    constexpr auto cb_inp0 = tt::CBIndex::c_3;
 #else
-    constexpr auto cb_inp0 = cb_in0;              // For ADD: no pre-processing, use raw input directly
+    constexpr auto cb_inp0 = cb_in0;             // for ADD: cb_inp0 = c_0
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN1_0
-    constexpr auto cb_inp1 = tt::CBIndex::c_4;   // Pre-processed input B
+    constexpr auto cb_inp1 = tt::CBIndex::c_4;
 #else
-    constexpr auto cb_inp1 = cb_in1;              // For ADD: no pre-processing, use raw input directly
+    constexpr auto cb_inp1 = cb_in1;             // for ADD: cb_inp1 = c_1
 #endif
 
-    constexpr auto cb_out0 = tt::CBIndex::c_2;   // Output CB
+    constexpr auto cb_out0 = tt::CBIndex::c_2;   // output CB
 
-    // Initialize common unary op state (sets up packer/unpacker for the CB formats)
-    unary_op_init_common(cb_in0, cb_out0);
+    unary_op_init_common(cb_in0, cb_out0);        // initializes unpack/pack pipeline for these CBs
 
 #ifdef PACK_RELU
-    // For ADD with fused RELU activation (single RELU), use hardware pack-time RELU
-    // instead of an SFPU post-op. This is faster because it happens during pack.
+    // For ADD + ReLU fused activation, configure pack stage to clamp negatives to zero.
+    // This is a hardware-level optimization: ReLU is applied during packing, not as a separate SFPU op.
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
-        // --- PRE-SCALING PHASE (inactive for plain ADD) ---
-        // When SFPU_OP_INIT_PRE_IN0_0 is defined, this block copies input A tiles
-        // from cb_in0 to DST, applies an SFPU function (e.g., EXP), and packs
-        // results to cb_inp0 (c_3). Similarly for input B with PRE_IN1_0.
+        // ---- PRE-SCALING SECTION (skipped for plain ADD) ----
+        // For ops like LOGADDEXP, this section would apply exp() to each input
+        // before the binary operation. For ADD, this entire section is compiled out.
+
 #if PRE_SCALE
         copy_tile_to_dst_init_short(cb_in0);
 #endif
@@ -318,18 +268,21 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_PRE_IN0_0
         cb_wait_front(cb_in0, per_core_block_size);
         cb_reserve_back(cb_inp0, per_core_block_size);
+
         tile_regs_acquire();
-        SFPU_OP_INIT_PRE_IN0_0          // e.g., exp_tile_init() for LOGADDEXP
+        SFPU_OP_INIT_PRE_IN0_0                       // e.g., exp_tile_init() for LOGADDEXP
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_in0, i, i);     // Copy tile from CB to DST register i
-            SFPU_OP_FUNC_PRE_IN0_0       // e.g., exp_tile(i) -- apply SFPU to DST[i]
+            copy_tile(cb_in0, i, i);                  // copy from cb_in0 to DEST[i]
+            SFPU_OP_FUNC_PRE_IN0_0                    // e.g., exp_tile(i) for LOGADDEXP
         }
         tile_regs_commit();
+
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_inp0);       // Pack DST[i] into interim CB
+            pack_tile(i, cb_inp0);                    // pack DEST[i] -> cb_inp0 (c_3)
         }
         tile_regs_release();
+
         cb_pop_front(cb_in0, per_core_block_size);
         cb_push_back(cb_inp0, per_core_block_size);
 #endif
@@ -337,6 +290,7 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_PRE_IN1_0
         cb_wait_front(cb_in1, per_core_block_size);
         cb_reserve_back(cb_inp1, per_core_block_size);
+
         tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN1_0
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
@@ -344,99 +298,86 @@ void kernel_main() {
             SFPU_OP_FUNC_PRE_IN1_0
         }
         tile_regs_commit();
+
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             pack_tile(i, cb_inp1);
         }
         tile_regs_release();
+
         cb_pop_front(cb_in1, per_core_block_size);
         cb_push_back(cb_inp1, per_core_block_size);
 #endif
 
-        // --- MAIN BINARY OPERATION PHASE ---
-        // Wait for both inputs and reserve output space
-        cb_wait_front(cb_inp0, per_core_block_size);
-        cb_wait_front(cb_inp1, per_core_block_size);
-        cb_reserve_back(cb_out0, per_core_block_size);
+        // ---- MAIN BINARY OPERATION SECTION ----
 
-        tile_regs_acquire();   // Acquire exclusive access to DST registers
-        tile_regs_wait();      // Wait for DST registers to be available
+        cb_wait_front(cb_inp0, per_core_block_size);  // wait for input A tiles (from reader or pre-scale)
+        cb_wait_front(cb_inp1, per_core_block_size);  // wait for input B tiles
+        cb_reserve_back(cb_out0, per_core_block_size); // reserve space in output CB
 
-        // Copy input A tiles into even DST slots (0, 2, 4, ...)
-        // The _with_dt variant reconfigures the unpacker for the source CB's data type
-        copy_tile_to_dst_init_short_with_dt(cb_inp1, cb_inp0);
+        tile_regs_acquire();                           // acquire exclusive access to DEST registers
+        tile_regs_wait();                              // wait until DEST registers are ready
+
+        // Copy input A tiles into even DEST slots: DEST[0], DEST[2], DEST[4], ...
+        copy_tile_to_dst_init_short_with_dt(cb_inp1, cb_inp0); // configure unpack for cb_inp0's data type
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp0, i, i * 2);      // CB_inp0[i] -> DST[i*2]
+            copy_tile(cb_inp0, i, i * 2);              // cb_inp0[i] -> DEST[i*2]
         }
 
-        // Copy input B tiles into odd DST slots (1, 3, 5, ...)
-        copy_tile_to_dst_init_short_with_dt(cb_inp0, cb_inp1);
+        // Copy input B tiles into odd DEST slots: DEST[1], DEST[3], DEST[5], ...
+        copy_tile_to_dst_init_short_with_dt(cb_inp0, cb_inp1); // reconfigure unpack for cb_inp1's data type
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp1, i, i * 2 + 1);  // CB_inp1[i] -> DST[i*2+1]
+            copy_tile(cb_inp1, i, i * 2 + 1);         // cb_inp1[i] -> DEST[i*2+1]
 
-            // Initialize the SFPU operation (one-time per tile for some ops)
-            // For ADD: expands to add_binary_tile_init();
+            // For ADD: BINOP_INIT expands to add_binary_tile_init()
+            // This configures the SFPU for the binary add operation.
 #ifdef BINOP_INIT
-            BINOP_INIT
+            BINOP_INIT                                 // add_binary_tile_init();
 #endif
-#ifdef ADD_INT_INIT
-            ADD_INT_INIT       // For integer ADD: expands to add_int_tile_init();
-#endif
-            // (Other INIT macros for SUB_INT, MUL_INT, etc. are inactive for ADD)
+            // (Other init macros for INT ops, bitwise, shift are compiled out for float ADD)
 
-            // Execute the binary SFPU operation
-            // For floating-point ADD: expands to add_binary_tile(i*2, i*2+1, i*2);
-            // This reads DST[i*2] (in0) and DST[i*2+1] (in1), computes in0+in1,
-            // and writes the result back to DST[i*2]
+            // For ADD: BINARY_SFPU_OP expands to add_binary_tile(i*2, i*2+1, i*2);
+            // This performs DEST[i*2] = DEST[i*2] + DEST[i*2+1] on the SFPU.
 #ifdef BINARY_SFPU_OP
-            BINARY_SFPU_OP
+            BINARY_SFPU_OP                             // add_binary_tile(i*2, i*2+1, i*2);
 #endif
-
-            // (SFPU_OP_INIT_0/FUNC_0 and SFPU_OP_CHAIN_0 are for fused post-ops)
+            // Post-binary unary chain (e.g., for LOGADDEXP this would be log_tile)
+            // For plain ADD, SFPU_OP_INIT_0 and SFPU_OP_CHAIN_0 are not defined.
 #ifdef SFPU_OP_INIT_0
-            SFPU_OP_INIT_0     // e.g., for BIAS_GELU: gelu_tile_init()
-            SFPU_OP_FUNC_0     // e.g., gelu_tile(i*2)
+            SFPU_OP_INIT_0
+            SFPU_OP_FUNC_0
 #endif
 
 #ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0    // Chained post-ops (e.g., typecast)
+            SFPU_OP_CHAIN_0
 #endif
-
-            // Pack the result from DST[i*2] into the output CB
-            pack_tile(i * 2, cb_out0);
+            pack_tile(i * 2, cb_out0);                 // pack DEST[i*2] (result) -> output CB
         }
+        tile_regs_commit();                            // signal that DEST writes are complete
+        tile_regs_release();                           // release DEST register lock
 
-        tile_regs_commit();    // Signal that DST writes are complete
-        tile_regs_release();   // Release DST register ownership
-
-        // Release input CBs and publish output
-        cb_pop_front(cb_inp0, per_core_block_size);
-        cb_pop_front(cb_inp1, per_core_block_size);
-        cb_push_back(cb_out0, per_core_block_size);
+        cb_pop_front(cb_inp0, per_core_block_size);    // free input A tiles in CB
+        cb_pop_front(cb_inp1, per_core_block_size);    // free input B tiles in CB
+        cb_push_back(cb_out0, per_core_block_size);    // publish output tiles for writer
     }
 }
 ```
 
----
-
 ### SFPU Kernel Implementation
 
-This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to for the floating-point ADD case.
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to via `add_binary_tile(i*2, i*2+1, i*2)`.
 
 #### SFPU Kernel File
 
-The core SFPU binary implementation lives in the tt-llk submodule:
-- **Wormhole**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h`
-- **Blackhole**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h`
+`tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h`
 
-The metal-side wrappers (which call into tt-llk) are at:
-- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h`
-- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h`
+(Identical implementation exists for Blackhole at `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h`)
 
-#### Annotated SFPU Kernel Source (tt-llk, Wormhole B0)
+#### Annotated SFPU Kernel Source
 
 ```cpp
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -447,50 +388,48 @@ The metal-side wrappers (which call into tt-llk) are at:
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpi.h"                    // SFPI C++ wrapper around SFPU hardware intrinsics
+#include "sfpi.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
 
-// The main templated function for all simple binary SFPU operations.
-// Templated on the BinaryOp enum to select the operation at compile time.
-// ITERATIONS=8 processes 8 rows per call (one 16x16 face).
-// The _llk_math_eltwise_binary_sfpu_params_ wrapper calls this 4 times
-// in RC mode to cover all 4 faces of a 32x32 tile.
+// (float32_to_bf16_rne and other binary variants omitted for brevity -- not used for ADD)
+
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
 inline void _calculate_sfpu_binary_(
-    const std::uint32_t dst_index_in0,
-    const std::uint32_t dst_index_in1,
-    const std::uint32_t dst_index_out)
+    const std::uint32_t dst_index_in0,    // DEST tile index for input A (i*2)
+    const std::uint32_t dst_index_in1,    // DEST tile index for input B (i*2+1)
+    const std::uint32_t dst_index_out)    // DEST tile index for output (i*2, same as in0)
 {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
 
-    // SFPU microcode: process ITERATIONS rows of the current face.
-    // Each iteration processes one row of the SFPU vector width (32 elements
-    // processed as a vector lane of width determined by the hardware).
+    // SFPU microcode: iterate over 8 rows per face (ITERATIONS=8).
+    // Each tile has 4 faces, and the _llk_math_eltwise_binary_sfpu_params_ caller
+    // invokes this function once per face (4 times in RC mode), advancing the
+    // DEST register base pointer between faces via TTI_SETRWC.
     for (int d = 0; d < ITERATIONS; d++)
     {
-        // Each tile in Dest occupies 32 rows when accessed via SFPI
-        // (64 rows / SFP_DESTREG_STRIDE of 2)
+        // Each tile occupies 32 "rows" in DEST when accessed via SFPI.
+        // This is because DEST has 64 rows per tile but SFPI stride is 2,
+        // so 64 / SFP_DESTREG_STRIDE(2) = 32.
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
-        // Load one vector-width row from each input tile in the DST register file.
-        // dst_reg[index] accesses the current row at offset (index * dst_tile_size_sfpi)
-        // from the base address that auto-increments via dst_reg++.
+        // Load one row (32 floats) from DEST at the input A tile position.
+        // dst_reg[dst_index_in0 * 32] indexes to the start of input A's tile.
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+
+        // Load one row (32 floats) from DEST at the input B tile position.
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
         sfpi::vFloat result = 0.0f;
 
-        // Compile-time dispatch based on BinaryOp enum.
-        // For ADD, this is the only active branch.
+        // Compile-time dispatch based on BINOP template parameter.
+        // For BinaryOp::ADD, this is a simple vector addition.
         if constexpr (BINOP == BinaryOp::ADD)
         {
-            // Element-wise floating-point addition.
-            // Maps to the SFPU sfpadd instruction via the SFPI operator+ overload.
-            // sfpadd performs: for each lane i: result[i] = in0[i] + in1[i]
-            result = in0 + in1;
+            result = in0 + in1;   // SFPU vector add: 32-wide element-wise addition
         }
         else if constexpr (BINOP == BinaryOp::SUB)
         {
@@ -527,263 +466,139 @@ inline void _calculate_sfpu_binary_(
             v_endif;
         }
 
-        // Write the result back to the output tile position in DST
+        // Store the result back to DEST at the output tile position.
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
 
-        // Advance to the next row within the face.
-        // dst_reg++ increments the base row pointer by SFP_DESTREG_STRIDE.
+        // Advance the DEST register pointer to the next row within the face.
+        // This increments the implicit row counter so the next iteration
+        // processes the next row of 32 elements.
         sfpi::dst_reg++;
     }
 }
 
-// Initialization function for binary SFPU operations.
-// For ADD, no special initialization is needed (no reciprocal tables, no log tables).
-template <bool APPROXIMATION_MODE, BinaryOp BINOP>
+template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void _sfpu_binary_init_()
 {
+    // For ADD, no special initialization is needed.
+    // DIV and POW need reciprocal init; XLOGY needs log init.
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW)
     {
-        _init_sfpu_reciprocal_<false>();   // Load reciprocal LUT for Newton-Raphson
+        _init_sfpu_reciprocal_<false>();
     }
     else if constexpr (BINOP == BinaryOp::XLOGY)
     {
-        _init_log_<APPROXIMATION_MODE>(); // Load log coefficients
+        _init_log_<APPROXIMATION_MODE>();
     }
-    // For ADD, SUB, MUL, RSUB: no initialization required
+    // BinaryOp::ADD falls through with no initialization.
 }
 
 } // namespace sfpu
 } // namespace ckernel
 ```
 
-#### Metal-Side Wrapper (ckernel_sfpu_binary.h in tt_metal)
-
-The metal-side `ckernel_sfpu_binary.h` provides a thin forwarding layer:
-
-```cpp
-// calculate_sfpu_binary just forwards to the tt-llk implementation
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
-}
-```
-
-Note: The `is_fp32_dest_acc_en` template parameter is present but unused for the generic binary path. The specialized `calculate_sfpu_binary_mul` and `calculate_sfpu_binary_div` variants in the metal wrapper do use it to conditionally apply BF16 rounding.
-
 #### SFPU Instructions Used
 
-| Instruction/Intrinsic | SFPI Mapping | Description |
-|---|---|---|
-| `sfpadd` | `vFloat operator+(vFloat, vFloat)` | Element-wise floating-point addition across all SFPU vector lanes |
-| `SFPLOADI` (implicit) | `sfpi::dst_reg[offset]` read | Load a vector row from DST register file into an SFPU local register |
-| `SFPSTORE` (implicit) | `sfpi::dst_reg[offset] = val` write | Store a vector from SFPU local register back to DST register file |
+| Instruction/Intrinsic | Description |
+|---|---|
+| `sfpi::dst_reg[index]` (load) | Loads a vector of 32 float elements from the DEST register file at the specified offset |
+| `sfpi::dst_reg[index]` (store) | Stores a vector of 32 float elements back to the DEST register file |
+| `sfpi::dst_reg++` | Increments the implicit DEST row pointer by 1 (advances to next row within a face) |
+| `vFloat + vFloat` (operator+) | SFPU vector addition -- performs 32-wide element-wise floating-point addition |
 
-For the ADD operation specifically, the instruction sequence per row is minimal:
-1. Load `in0` from DST (SFPLOADI-equivalent)
-2. Load `in1` from DST (SFPLOADI-equivalent)
-3. `sfpadd` to compute `in0 + in1`
-4. Store result to DST (SFPSTORE-equivalent)
+For the ADD operation specifically, only the addition operator (`+`) on `vFloat` types is used. This maps to the SFPU's native floating-point addition capability operating on 32-element vectors.
 
 #### SFPU Register Usage
 
-| Register | Usage |
-|---|---|
-| DST[i*2 * 32 + row] | Input tile A, accessed via `dst_reg[dst_index_in0 * 32]` |
-| DST[(i*2+1) * 32 + row] | Input tile B, accessed via `dst_reg[dst_index_in1 * 32]` |
-| DST[i*2 * 32 + row] (output) | Result overwrites input A position, `dst_reg[dst_index_out * 32]` |
-| SFPU local registers (L0-L7) | Temporary storage for `in0`, `in1`, `result` during SFPI execution |
-
-The DST register file is shared between the FPU and SFPU. Each 32x32 tile occupies 32 SFPI-addressable rows (because SFP_DESTREG_STRIDE = 2, so 64 physical rows / 2 = 32 logical rows). Two tiles are loaded simultaneously (in0 at even slot, in1 at odd slot), and the result overwrites the even slot.
+- **DEST registers**: Two input tiles are loaded into adjacent DEST slots (e.g., DEST[0] and DEST[1]). The result overwrites the first input's slot (DEST[0]). Each tile occupies 32 SFPI-accessible rows in DEST.
+- **dst_tile_size_sfpi = 32**: Constant offset multiplier to index different tiles within DEST. DEST has 64 physical rows per tile but SFPI accesses them with a stride of 2, yielding 32 addressable rows.
+- **DEST row pointer** (`dst_reg++`): Auto-incremented each iteration to walk through the 8 rows of a face. The outer `_llk_math_eltwise_binary_sfpu_params_` function handles advancing between the 4 faces of a tile via `TTI_SETRWC`.
 
 #### SFPU Execution Flow
 
-1. **Reader fills input CBs**: The reader kernel DMA-reads tiles from DRAM into `cb_in0` (c_0) and `cb_in1` (c_1), one tile at a time, publishing each via `cb_push_back`.
+1. **Tile acquisition**: The compute kernel calls `tile_regs_acquire()` + `tile_regs_wait()` to get exclusive access to DEST registers.
 
-2. **Compute waits for inputs**: `cb_wait_front(cb_inp0, per_core_block_size)` and `cb_wait_front(cb_inp1, per_core_block_size)` block until the reader has produced enough tiles.
+2. **Unpack to DEST**: `copy_tile(cb_inp0, i, i*2)` unpacks tile `i` from `cb_inp0` into DEST slot `i*2`. Similarly, `copy_tile(cb_inp1, i, i*2+1)` unpacks tile `i` from `cb_inp1` into DEST slot `i*2+1`. With `UnpackToDestFp32` mode, data is promoted to FP32 in DEST regardless of input format.
 
-3. **Tile register acquisition**: `tile_regs_acquire()` + `tile_regs_wait()` acquire exclusive access to the DST register file.
+3. **SFPU initialization**: `add_binary_tile_init()` calls through:
+   - `llk_math_eltwise_binary_sfpu_binop_init<APPROX, BinaryOp::ADD>()` which calls
+   - `llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROX>(sfpu_binary_init<APPROX, BinaryOp::ADD>)` which calls
+   - `_llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()` -- configures SFPU config register, sets address modifiers (ADDR_MOD_7 with zero increments), resets counters
+   - `sfpu_binary_init<APPROX, BinaryOp::ADD>()` -- calls `_sfpu_binary_init_` which is a no-op for ADD
 
-4. **Unpack input A to DST (even slots)**: `copy_tile_to_dst_init_short_with_dt(cb_inp1, cb_inp0)` reconfigures the unpacker for cb_inp0's data format, then `copy_tile(cb_inp0, i, i*2)` unpacks tile `i` from the CB into DST slot `i*2`. This uses the A2D (Any-to-Dest) hardware path.
+4. **SFPU execution**: `add_binary_tile(i*2, i*2+1, i*2)` calls through:
+   - `llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::ADD>(i*2, i*2+1, i*2)` which calls
+   - `_llk_math_eltwise_binary_sfpu_params_<APPROX>(calculate_sfpu_binary<APPROX, BinaryOp::ADD, 8, false>, i*2, i*2+1, i*2, VectorMode::RC)`
+   - This function:
+     a. Calls `_llk_math_eltwise_binary_sfpu_start_` -- sets DEST write address, stalls until math pipe ready
+     b. Loops 4 times (once per face in RC mode), calling `_calculate_sfpu_binary_` each time
+     c. After each face, advances the DEST pointer by 16 rows via two `TTI_SETRWC` commands (8 rows each)
+     d. Calls `_llk_math_eltwise_binary_sfpu_done_` -- clears DEST address, waits for SFPU completion
 
-5. **Unpack input B to DST (odd slots)**: Similarly, `copy_tile(cb_inp1, i, i*2+1)` unpacks into DST slot `i*2+1`.
+5. **Inside `_calculate_sfpu_binary_`** (per face, 8 iterations):
+   - Loads `in0` from DEST[dst_index_in0 * 32] (input A row)
+   - Loads `in1` from DEST[dst_index_in1 * 32] (input B row)
+   - Computes `result = in0 + in1` (32-wide vector add)
+   - Stores `result` to DEST[dst_index_out * 32]
+   - Increments `dst_reg` to next row
 
-6. **SFPU initialization**: `add_binary_tile_init()` calls through to `llk_math_eltwise_binary_sfpu_binop_init<APPROX, BinaryOp::ADD>()`, which:
-   - Calls `_llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()` to configure SFPU config registers, set up address modifiers (ADDR_MOD_7 with zero increments), and reset counters.
-   - Calls `sfpu_binary_init<APPROX, BinaryOp::ADD>()` which is a no-op for ADD (no LUT initialization needed).
-
-7. **SFPU binary execution**: `add_binary_tile(i*2, i*2+1, i*2)` calls `llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::ADD>(i*2, i*2+1, i*2)`, which calls `_llk_math_eltwise_binary_sfpu_params_`. This function:
-   - Calls `_llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(0)` to set the DST write address and stall until the math pipeline is ready.
-   - In `VectorMode::RC` (default), loops over all 4 faces of the 32x32 tile. For each face, calls `calculate_sfpu_binary<APPROX, BinaryOp::ADD, 8>()` which processes 8 rows.
-   - Between faces, issues `TTI_SETRWC` to advance the DST row counter by 16 rows (two increments of 8).
-   - Calls `_llk_math_eltwise_binary_sfpu_done_()` to clear the DST address and wait for SFPU completion.
-
-8. **Pack result to output CB**: `pack_tile(i*2, cb_out0)` packs the result from DST slot `i*2` into the output circular buffer.
-
-9. **Release and publish**: `tile_regs_commit()` + `tile_regs_release()` release DST ownership. `cb_pop_front` frees input CB slots, `cb_push_back` publishes output tiles.
-
-10. **Writer drains output CB**: The writer kernel waits on `cb_wait_front(cb_out0, 1)`, reads the tile, and DMA-writes it to DRAM via `noc_async_write_page`.
+6. **Pack**: `pack_tile(i*2, cb_out0)` packs the result from DEST[i*2] back to the output circular buffer. The pack stage may apply ReLU clamping if `PACK_RELU` is defined.
 
 #### SFPU Configuration
 
-| Configuration | Value | Reason |
-|---|---|---|
-| `fp32_dest_acc_en` | `true` when output is Float32/Int32/UInt32 | Enables 32-bit accumulation in DST registers |
-| `UnpackToDestMode` | `UnpackToDestFp32` for all CBs (non-POWER ops) | Forces unpack to FP32 in DST for SFPU precision |
-| `APPROX` | Compile-time bool from ComputeConfig | Controls approximation mode (unused for ADD) |
-| `VectorMode` | `RC` (Row-Column, all 4 faces) | Processes entire 32x32 tile |
-| `ADDR_MOD_7` | srca=0, srcb=0, dest=0 | No auto-increment on address modifiers |
-| ITERATIONS | 8 | Processes 8 rows per face (8 * 4 faces = 32 rows total) |
+- **APPROXIMATION_MODE (APPROX)**: Template parameter passed through all layers. For ADD, it is unused since addition is exact.
+- **fp32_dest_acc_en**: Set to `true` when output dtype is Float32/Int32/UInt32. This keeps DEST in full FP32 precision.
+- **UnpackToDestFp32**: For all non-POWER binary SFPU ops, inputs are unpacked to FP32 in DEST, ensuring the SFPU operates in full precision.
+- **ADDR_MOD_7**: Configured with zero increments for src/dest -- the SFPU manages its own addressing via `dst_reg` indexing.
+- **VectorMode::RC**: Default mode processes all 4 faces of a 32x32 tile (row and column faces).
 
 #### Hardware Compatibility Notes
 
-The Wormhole B0 and Blackhole implementations of `_calculate_sfpu_binary_` are **identical** for the ADD operation. Both use the same `sfpi::vFloat` operator+ which maps to `sfpadd`. The only difference between architectures is in the SFPI backend:
+The SFPU binary add implementation (`_calculate_sfpu_binary_` with `BinaryOp::ADD`) is identical between Wormhole B0 and Blackhole architectures. Both use the same SFPI intrinsics (`dst_reg` load/store, `vFloat` arithmetic). The LLK orchestration layer (`llk_math_eltwise_binary_sfpu.h` and `llk_math_eltwise_binary_sfpu_params.h`) is also architecture-identical for this operation.
 
-- **Wormhole B0**: `sfpadd` maps to `__builtin_rvtt_wh_sfpadd`
-- **Blackhole**: `sfpadd` maps to `__builtin_rvtt_bh_sfpadd`
+The `ckernel_sfpu_binary.h` files in both `tt_llk_wormhole_b0` and `tt_llk_blackhole` contain the same implementation. Architecture differences would only manifest for operations requiring special hardware features (e.g., different LUT configurations or instruction availability), which do not apply to simple addition.
 
-Both implement IEEE 754 floating-point addition across all vector lanes. The functional behavior is identical.
+## Implementation Notes
 
-The metal-side `ckernel_sfpu_binary.h` wrappers in both `wormhole_b0` and `blackhole` directories also include `calculate_sfpu_binary_mul` and `calculate_sfpu_binary_div` which have additional logic (BF16 rounding via `float32_to_bf16_rne`, special-case handling for zero/infinity), but these are not invoked for the ADD path.
+1. **SFPU vs FPU path**: The SFPU binary add factory (`element_wise_multi_core_sfpu`) uses the SFPU vector unit rather than the FPU matrix unit. The key difference is that inputs are explicitly copied into DEST via `copy_tile` (using the A2D unpack path), and the SFPU then operates on DEST directly. The FPU path would use `add_tiles` which goes through the FPU's matrix pipeline. The SFPU path is used to support FP32 accumulation and mixed-precision operations that the FPU may not natively handle.
 
----
+2. **Interleaved input pair layout in DEST**: Input A occupies even DEST slots (0, 2, 4, ...) and Input B occupies odd slots (1, 3, 5, ...). This interleaving ensures both operands of each tile pair are adjacent in DEST for efficient SFPU access. The result overwrites the even slot (Input A's position).
 
-## Macro-Driven Define System
+3. **DEST capacity constraint**: With 16-bit formats, up to 4 tiles from each operand can be in DEST simultaneously (8 total). With 32-bit formats, this is reduced to 2 tiles per operand (4 total). This limits `per_core_block_size` to at most 4 (16-bit) or 2 (32-bit) tiles per block.
 
-The program factory uses `get_defines_fp32()` from `binary_op_utils.cpp` to generate compile-time defines that parameterize the compute kernel. This is a key architectural pattern: a single generic compute kernel source file serves all binary SFPU operations through preprocessor defines.
+4. **Fused ReLU optimization**: When the only fused activation is ReLU, it is applied at the pack stage via hardware (`PACK_RELU` define) rather than as a separate SFPU operation. This avoids an extra SFPU pass.
 
-### Define Generation for ADD
+5. **Macro-driven polymorphism**: The same compute kernel source file handles ADD, SUB, MUL, DIV, POWER, bitwise, shift, comparison, and compound operations (LOGADDEXP, HYPOT, etc.) through preprocessor defines. For ADD, the active defines are:
+   - `BINOP_INIT` = `add_binary_tile_init();`
+   - `BINARY_SFPU_OP` = `add_binary_tile(i*2, i*2+1, i*2);`
 
-```
-Input: BinaryOpType::ADD, input_a_dtype, input_b_dtype
-```
-
-**Floating-point path** (e.g., BFLOAT16 x BFLOAT16):
-```
-BINOP_INIT     -> "add_binary_tile_init();"
-BINARY_SFPU_OP -> "add_binary_tile(i*2, i*2+1, i*2);"
-```
-
-**Integer path** (e.g., INT32 x INT32):
-```
-ADD_INT_INIT   -> "add_int_tile_init();"
-BINARY_SFPU_OP -> "add_int_tile<DataFormat::Int32>(i*2, i*2+1, i*2);"
-```
-
-**With fused RELU** (single RELU activation on ADD):
-```
-PACK_RELU -> "1"
-```
-This uses hardware pack-time RELU rather than an SFPU post-op, which is an optimization specific to ADD+RELU.
-
-### DST Register Layout
-
-The compute kernel uses an interleaved layout in DST:
-```
-DST[0] = input A tile 0    (accessed as i*2 where i=0)
-DST[1] = input B tile 0    (accessed as i*2+1 where i=0)
-DST[2] = input A tile 1    (accessed as i*2 where i=1)
-DST[3] = input B tile 1    (accessed as i*2+1 where i=1)
-...
-```
-The SFPU operation reads from `DST[i*2]` and `DST[i*2+1]` and writes the result to `DST[i*2]`, overwriting input A. The packer then reads from `DST[i*2]`.
-
----
-
-## Runtime Arguments
-
-### Reader Kernel Runtime Args
-| Index | Name | Description |
-|---|---|---|
-| 0 | `src0_addr` | DRAM address of input tensor A |
-| 1 | `src1_addr` | DRAM address of input tensor B |
-| 2 | `num_tiles` | Number of tiles for this core |
-| 3 | `start_id` | Starting tile index |
-| 4 | `block_height` | Shard block height (tiles) |
-| 5 | `block_width` | Shard block width (tiles) |
-| 6 | `num_cores_y` | Number of shards per width |
-
-### Compute Kernel Runtime Args
-| Index | Name | Description |
-|---|---|---|
-| 0 | `per_core_block_cnt` | Number of tile blocks to process |
-| 1 | `per_core_block_size` | Number of tiles per block |
-
-### Writer Kernel Runtime Args (non-sharded output)
-| Index | Name | Description |
-|---|---|---|
-| 0 | `dst_addr` | DRAM address of output tensor |
-| 1 | `num_pages` | Number of tiles to write |
-| 2 | `start_id` | Starting tile index |
-
----
-
-## Work Distribution
-
-The program factory supports three work distribution strategies:
-
-1. **Interleaved (no sharding)**: Tiles are split evenly across cores using `split_work_to_cores`. Each core processes a contiguous range of tile IDs. Two core groups may exist if tiles don't divide evenly.
-
-2. **Height sharded**: Each core owns a contiguous shard of tiles in the height dimension. The reader marks its CB as ready without DMA.
-
-3. **Block/width sharded**: Tiles are distributed in a 2D grid pattern. The reader uses `block_height`/`block_width` to iterate through a 2D tile block, with `num_cores_y` used to compute stride between rows.
-
-### Program Caching
-
-The `override_runtime_arguments` method enables program caching. On subsequent invocations with the same operation attributes but different tensor buffers, only the runtime arguments (buffer addresses, tile counts) are updated without rebuilding the entire program. The cached program stores kernel handles, CB handles, core grid, and tile sizes.
-
----
-
-## Call Chain Summary
-
-```
-Host: get_defines_fp32(BinaryOpType::ADD, ...)
-  -> defines["BINOP_INIT"] = "add_binary_tile_init();"
-  -> defines["BINARY_SFPU_OP"] = "add_binary_tile(i*2, i*2+1, i*2);"
-
-Compute kernel: eltwise_binary_sfpu_kernel.cpp
-  -> BINOP_INIT expands to: add_binary_tile_init()
-      -> llk_math_eltwise_binary_sfpu_binop_init<APPROX, BinaryOp::ADD>()
-          -> _llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()
-              -> sfpu::_init_sfpu_config_reg()
-              -> eltwise_binary_sfpu_configure_addrmod<SfpuType::unused>()
-              -> math::reset_counters(SET_ABD_F)
-          -> sfpu_binary_init<APPROX, BinaryOp::ADD>()
-              -> _sfpu_binary_init_<APPROX, BinaryOp::ADD>()  // no-op for ADD
-
-  -> BINARY_SFPU_OP expands to: add_binary_tile(i*2, i*2+1, i*2)
-      -> llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::ADD>(i*2, i*2+1, i*2)
-          -> _llk_math_eltwise_binary_sfpu_params_<APPROX>(
-                calculate_sfpu_binary<APPROX, BinaryOp::ADD, 8, false>,
-                i*2, i*2+1, i*2, VectorMode::RC)
-              -> _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(0)
-                  -> math::set_dst_write_addr(0)
-                  -> TTI_STALLWAIT(STALL_SFPU, MATH)
-              -> for face in 0..3:
-                  -> calculate_sfpu_binary<APPROX, BinaryOp::ADD, 8>(i*2, i*2+1, i*2)
-                      -> _calculate_sfpu_binary_<APPROX, BinaryOp::ADD, 8>(...)
-                          -> for row in 0..7:
-                              in0 = dst_reg[i*2 * 32]     // SFPLOADI
-                              in1 = dst_reg[(i*2+1) * 32]  // SFPLOADI
-                              result = in0 + in1           // sfpadd
-                              dst_reg[i*2 * 32] = result   // SFPSTORE
-                              dst_reg++                    // advance row
-                  -> TTI_SETRWC (advance DST counter by 16 rows)
-              -> _llk_math_eltwise_binary_sfpu_done_()
-                  -> math::clear_dst_reg_addr()
-                  -> TTI_STALLWAIT(STALL_CFG, WAIT_SFPU)
-```
-
----
+6. **Integer ADD variant**: When both inputs are INT32, UINT32, or UINT16, the factory uses `add_int_tile` instead of `add_binary_tile`, with the `ADD_INT_INIT` define instead of `BINOP_INIT`. This routes through a different SFPU kernel optimized for integer arithmetic.
 
 ## External Knowledge Sources
 
-### DeepWiki References
-- `tenstorrent/tt-metal`: Binary eltwise SFPU program factory structure, CB configuration, kernel dispatch patterns
-- `tenstorrent/tt-llk`: `_calculate_sfpu_binary_` function structure, `_llk_math_eltwise_binary_sfpu_params_` face iteration logic, LLK API call chain
-- `tenstorrent/sfpi`: SFPI operator overloads mapping to SFPU instructions (`vFloat operator+` -> `sfpadd`), local register model (L0-L7), `dst_reg` accessor semantics
+### DeepWiki Queries
 
-### Confluence References
-Not consulted for this analysis. The ADD operation uses a single `sfpadd` instruction whose behavior is well-documented in DeepWiki and the source code.
+1. **Query**: "How does the binary eltwise SFPU program factory work in ttnn? What kernels does it use (reader, compute, writer)? How does it handle interleaved vs sharded tensors and core distribution for binary operations like add?"
+   **Reason**: Initial architectural understanding of the factory structure and kernel selection.
+   **Key Findings**: Confirmed the three kernels (reader_binary_interleaved_start_id, eltwise_binary_sfpu_kernel, writer_unary_interleaved_start_id), sharding handling via defines (IN0_SHARDED, IN1_SHARDED, OUT_SHARDED), and core distribution via worker_grid.
 
-### Glean References
-Not consulted for this analysis. The ADD operation does not require confidential hardware specification details beyond what is available in the open-source code.
+2. **Query**: "How does the SFPU binary add operation work at the ckernel level? What are the add_binary_tile_init and add_binary_tile functions?"
+   **Reason**: Understanding the LLK-level implementation of the SFPU binary add.
+   **Key Findings**: Confirmed the call chain: `add_binary_tile` -> `llk_math_eltwise_binary_sfpu_binop` -> `_llk_math_eltwise_binary_sfpu_params_` -> `_calculate_sfpu_binary_`. The ADD case simply does `result = in0 + in1`. Init is a no-op for ADD.
+
+3. **Query**: "Where is the _calculate_sfpu_binary_ function defined? Show me the full implementation including BinaryOp::ADD handling."
+   **Reason**: Locating the actual SFPU kernel source code in the tt-llk submodule.
+   **Key Findings**: Found in `ckernel_sfpu_binary.h` within tt-llk. Confirmed the ITERATIONS=8 loop, dst_tile_size_sfpi=32, and the compile-time switch on BinaryOp.
+
+### Documentation References
+
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_utils.cpp`
+   **Reason**: Understanding how preprocessor defines are generated for the ADD operation.
+   **Key Information**: For float ADD, `get_defines_fp32` sets `BINOP_INIT` = `add_binary_tile_init();` and `BINARY_SFPU_OP` = `add_binary_tile(i*2, i*2+1, i*2);`. For integer ADD, it uses `ADD_INT_INIT` with `add_int_tile` instead.
+
+2. **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h`
+   **Reason**: Understanding the LLK orchestration layer for binary SFPU operations.
+   **Key Information**: `_llk_math_eltwise_binary_sfpu_init_` configures SFPU config register and address modifiers. `_llk_math_eltwise_binary_sfpu_start_` sets DEST write address and stalls until math ready. `_llk_math_eltwise_binary_sfpu_done_` clears state and waits for SFPU completion.
+
+3. **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu_params.h`
+   **Reason**: Understanding how the SFPU function is called across tile faces.
+   **Key Information**: In RC mode, the SFPU function is called 4 times (once per face), with `TTI_SETRWC` advancing the DEST pointer by 16 rows between faces. This processes all 32x32 elements of a tile (4 faces x 8 iterations x 32-wide vectors = 1024 elements).

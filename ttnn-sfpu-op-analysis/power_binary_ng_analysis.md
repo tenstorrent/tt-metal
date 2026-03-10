@@ -1,126 +1,265 @@
-# POWER (binary_ng) -- SFPU Operation Analysis
+# POWER (binary_ng) Implementation Analysis
 
-## Operation Overview
+## Overview
+
+The POWER operation computes element-wise exponentiation: `output = base ** exponent`, where `base` is input tensor A and `exponent` is input tensor B (or a scalar). It is implemented as an SFPU-only binary operation within the `binary_ng` framework. The operation supports full broadcasting semantics across all dimensions, scalar exponents, and handles special cases such as negative bases, zero bases with negative exponents, and non-integer exponents with negative bases.
+
+**Program Factory Path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
+
+## Work Unit Definition
+
+One work unit is a single 32x32 tile. The compute kernel processes `num_tiles_per_cycle = 1` output tile per read-compute-write cycle. Each cycle loads one LHS tile and one RHS tile into DEST registers, applies the SFPU power kernel across all 4 faces of the tile (8 iterations of 4 rows each = 32 rows total per face, times 4 faces), packs the result, and writes it to the output circular buffer.
+
+## Tensor Format and Layout
+
+### Input Tensor A (base)
 
 | Property | Value |
 |---|---|
-| Operation Name | POWER (binary) |
-| Operation Type | Binary SFPU elementwise |
-| Framework | binary_ng (next-generation binary operation framework) |
-| Namespace | `ttnn::operations::binary_ng` |
-| BinaryOpType | `BinaryOpType::POWER` |
-| SfpuBinaryOp | `SfpuBinaryOp::POWER` |
-| Compute Semantics | `output[i] = base[i] ** exponent[i]` (elementwise power) |
-| SFPU-Only | Yes -- POWER is exclusively an SFPU operation; FPU path throws `TT_THROW` |
-| FP32 Dest Accumulator | Conditional -- only when input dtype is FLOAT32 (unlike most other SFPU ops which unconditionally enable fp32 dest) |
+| Dimension Convention | Up to N-D; internally decomposed to (nD, D, N, C, Ht, Wt) |
+| Tensor Layout | TILE (32x32) |
+| Memory Layout | INTERLEAVED or SHARDED (HEIGHT, WIDTH, BLOCK) |
+| Buffer Type | DRAM or L1 |
+| Data Type | BFLOAT16, FLOAT32 (determines algorithm path) |
 
-### Why binary_ng?
+### Input Tensor B (exponent)
 
-The binary_ng framework is the next-generation binary operation infrastructure that replaces the legacy binary operation path. It provides a unified program factory for all binary operations (FPU and SFPU) with support for:
-- Subtile broadcasting (scalar, row, column, mixed)
-- Pre/post activation fusions (LHS, RHS, and POST processing)
-- Sharded memory layouts with native L1 sharding
-- Multi-dimensional tensor broadcasting (up to rank 6+)
-- Scalar operand mode (one tensor, one scalar)
+| Property | Value |
+|---|---|
+| Dimension Convention | Same as A, or scalar |
+| Tensor Layout | TILE (32x32) or scalar (single value broadcast to all elements) |
+| Memory Layout | INTERLEAVED or SHARDED |
+| Buffer Type | DRAM or L1 |
+| Data Type | Matches A dtype for SFPU path; BFLOAT16 or FLOAT32 |
 
-POWER uses binary_ng because it requires two input tiles (base and exponent), which is the natural fit for the binary operation framework rather than the unary framework.
+### Output Tensor C
 
-## Program Factory
+| Property | Value |
+|---|---|
+| Dimension Convention | Broadcast-expanded shape of A and B |
+| Tensor Layout | TILE (32x32) |
+| Memory Layout | INTERLEAVED or SHARDED |
+| Buffer Type | DRAM or L1 |
+| Data Type | Configurable; typically matches input dtype |
 
-### File
-`ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
+### Layout Transformations
 
-### Operation Attributes
+No explicit tilize/untilize is performed within the program factory. All tensors must already be in tiled format. The reader kernels handle broadcasting by using stride values that collapse dimensions where the input size is 1 (stride set to 0 when a dimension has size 1), effectively repeating data along broadcast dimensions.
 
-The `BinaryNgDeviceOperation::operation_attributes_t` struct (defined in `binary_ng_device_operation.hpp`) carries:
+## Data Flow Pattern
 
-| Field | Type | Role for POWER |
-|---|---|---|
-| `binary_op_type` | `BinaryOpType` | Set to `BinaryOpType::POWER` |
-| `is_sfpu` | `bool` | `true` -- POWER is SFPU-only |
-| `is_quant_op` | `bool` | `false` |
-| `is_where_op` | `bool` | `false` |
-| `subtile_broadcast_type` | `SubtileBroadcastType` | Determined by input shapes |
-| `scalar` | `optional<ScalarVariant>` | Set when one operand is a scalar |
-| `lhs_activations` | `SmallVector<EltwiseUnaryWithParam>` | Pre-processing for LHS (base) |
-| `rhs_activations` | `SmallVector<EltwiseUnaryWithParam>` | Pre-processing for RHS (exponent) |
-| `post_activations` | `SmallVector<EltwiseUnaryWithParam>` | Post-processing on result |
-| `input_dtype` | `DataType` | Input data type |
-| `worker_grid` | `CoreRangeSet` | Available compute cores |
+The data flow depends on whether B is a tensor or a scalar, and on the `SubtileBroadcastType`.
 
-### OpConfig for POWER
+### Two-Tensor Path (B is a tensor, no broadcast or with broadcast)
 
-In `binary_ng_utils.cpp`, the `OpConfig` constructor maps `BinaryOpType::POWER` to `SfpuBinaryOp::POWER`. There is no pre/post processing -- POWER maps directly to the SFPU op with no decomposition:
+1. **Reader kernel** reads tiles from both tensor A (into CB c_0) and tensor B (into CB c_1) from DRAM/L1, one tile at a time per tensor. For sharded inputs, the reader simply marks tiles as available without NoC reads.
+2. **Compute kernel** waits for tiles in CB c_0 and CB c_1, copies them to DEST register slots 0 and 1 respectively, executes `power_binary_tile(0, 1, 0)` which runs the SFPU binary power kernel, then packs the result from DEST[0] into CB c_2.
+3. **Writer kernel** reads completed tiles from CB c_2 and writes them to the output tensor in DRAM/L1 via NoC.
 
-```cpp
-case BinaryOpType::POWER:
-    if (is_sfpu_op()) {
-        binary_op = SfpuBinaryOp::POWER;
-    } else {
-        TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
-    }
-    break;
-```
+### Scalar Path (B is a scalar)
 
-The `as_defines()` method then calls `get_sfpu_init_fn(SfpuBinaryOp::POWER, dtype)` which returns:
-- `BINARY_SFPU_INIT` = `"power_binary_tile_init();"`
-- `BINARY_SFPU_OP` = `"power_binary_tile"`
+1. **Writer kernel** (acting as scalar data provider) fills a single tile in CB c_1 with the scalar value. This tile remains in the CB for the entire kernel execution.
+2. **Reader kernel** reads tiles from tensor A into CB c_0 one at a time.
+3. **Compute kernel** waits for each LHS tile, copies both LHS and the persistent scalar RHS tile to DEST, runs the SFPU power operation, packs, and outputs.
+4. **Writer kernel** also handles writing output tiles from CB c_2 to DRAM/L1.
 
-### POWER-Specific UnpackToDestMode Handling
+### Broadcast Path (e.g., SCALAR_A, COL_A, COL_B)
 
-POWER has unique behavior compared to other binary SFPU operations. Most SFPU ops unconditionally set `UnpackToDestMode::UnpackToDestFp32` for all source CBs. POWER conditionally sets it based on the actual input data type:
-
-```cpp
-if (op_type != BinaryOpType::POWER) {
-    // All other SFPU ops: unconditionally fp32 unpack-to-dest
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    // ...
-} else {
-    // POWER: only fp32 unpack-to-dest if input is actually float32
-    unpack_to_dest_mode[src0_cb_index] =
-        (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
-    unpack_to_dest_mode[src1_cb_index] =
-        (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
-    // ...
-}
-```
-
-This design decision exists because the SFPU power kernel has two algorithm paths (`_sfpu_binary_power_21f_` for bfloat16 and `_sfpu_binary_power_f32_` for float32), and forcing fp32 unpack-to-dest for bfloat16 inputs would waste DEST register capacity (halving the number of available tiles) without a meaningful accuracy benefit for the 21f approximation path.
-
-### Kernel Selection Logic
-
-The compute kernel selected depends on the `SubtileBroadcastType` and whether `b` is a tensor or scalar:
-
-| Condition | Compute Kernel | Reader Kernel | Writer Kernel |
-|---|---|---|---|
-| `b` is scalar (no tensor) | `ComputeScalar` -> `eltwise_binary_sfpu_scalar.cpp` | `ReaderNoBcast` -> `reader_interleaved_no_bcast.cpp` | `WriterScalar` -> `writer_interleaved_scalar.cpp` |
-| `b` is tensor, NONE broadcast | `ComputeNoBcast` -> `eltwise_binary_sfpu_no_bcast.cpp` | `ReaderNoBcastNg` -> `reader_interleaved_no_bcast.cpp` (ng) | `WriterNoBcastNg` -> `writer_interleaved_no_bcast.cpp` (ng) |
-| `b` is tensor, SCALAR_A/B | `ComputeBcast` -> `eltwise_binary_sfpu.cpp` | `ReaderScalarBcastNg` | `WriterNoBcastNg` |
-| `b` is tensor, COL_A/COL_B | `ComputeBcast` -> `eltwise_binary_sfpu.cpp` | `ReaderColBcastNg` | `WriterNoBcastNg` |
-| `b` is tensor, ROW_A/ROW_B | `ComputeNoBcast` (or `ComputeRowBcastNg` if LLK bcast) | `ReaderRowBcastNg` | `WriterNoBcastNg` |
-
-All SFPU compute kernels use `is_sfpu=true` in `get_kernel_file_path()`, which selects the `*_sfpu_*` variant of the compute kernel file.
+For broadcast subtypes, the compute kernel (`eltwise_binary_sfpu.cpp`) uses a frequency-based iteration pattern. The broadcast operand is loaded once and held while the non-broadcast operand cycles through `freq` tiles before the broadcast operand is refreshed.
 
 ## Circular Buffer Configuration
 
-| CB Index | Constant | Purpose | Size (tiles) | Data Format |
-|---|---|---|---|---|
-| `c_0` | `cb_pre_lhs` / `cb_src_a` | Input A (base) | `a_num_tiles_per_shard` or 2 (double buffer) | `a_data_format` |
-| `c_1` | `cb_pre_rhs` / `cb_src_b` | Input B (exponent) | `b_num_tiles_per_shard` or 2 (1 if scalar) | `b_data_format` |
-| `c_2` | `cb_out` / `cb_src_c` | Output | `c_num_tiles_per_shard` or 2 (double buffer) | `c_data_format` |
-| `c_3` | `cb_post_lhs` | LHS intermediate (only if LHS activations present) | 1 | Same as `a_data_format` (for SFPU ops) |
-| `c_4` | `cb_post_rhs` | RHS intermediate (only if RHS activations present) | 1 | Same as `b_data_format` (for SFPU ops) |
-| `c_5` | (row bcast A) | Only for ROW_A / ROW_A_COL_B broadcast | 2 | `a_data_format` |
-| `c_6` | (row bcast B) | Only for ROW_B / ROW_B_COL_A broadcast | 2 | `b_data_format` |
+| CB ID | Purpose | Capacity (tiles) | Data Format | Producer | Consumer | Buffering |
+|---|---|---|---|---|---|---|
+| c_0 | Input A (base) | 2 (interleaved) or shard_volume (sharded) | A data format | Reader | Compute | Double-buffered (interleaved) |
+| c_1 | Input B (exponent) | 1 (scalar) or 2 (tensor interleaved) or shard_volume (sharded) | B data format | Reader or Writer (scalar path) | Compute | Single (scalar) or Double (tensor) |
+| c_2 | Output C (result) | 2 (interleaved) or shard_volume (sharded) | C data format | Compute | Writer | Double-buffered (interleaved) |
+| c_3 | LHS intermediate (activations) | 1 | A data format | Compute (preprocess) | Compute | Single-buffered, only if LHS activations defined |
+| c_4 | RHS intermediate (activations) | 1 | B data format | Compute (preprocess) | Compute | Single-buffered, only if RHS activations defined |
+| c_5 | Row broadcast A scratch | 2 | A data format | Reader | Compute | Double-buffered, only for ROW_A or ROW_A_COL_B |
+| c_6 | Row broadcast B scratch | 2 | B data format | Reader | Compute | Double-buffered, only for ROW_B or ROW_B_COL_A |
 
-For POWER, `c_3` and `c_4` are typically not used since POWER has no `process_lhs` or `process_rhs` activations by default (it maps directly to the SFPU op). However, the user can supply custom lhs/rhs/post activations via the API.
+For POWER specifically, there are no LHS or RHS pre-activations (the `OpConfig` for POWER sets no `process_lhs` or `process_rhs`), so CBs c_3 and c_4 are not created. CBs c_5 and c_6 are only created for row-broadcast subtypes.
+
+## Pipeline Pattern Summary
+
+- **Interleaved mode**: CB c_0 and c_1 have capacity 2, enabling double-buffering where the reader can fill the next tile while the compute processes the current one. CB c_2 similarly allows compute to fill while writer drains.
+- **Sharded mode**: CBs are sized to the full shard volume, so all tiles are available at once (no streaming overlap needed).
+- **Scalar mode**: CB c_1 has capacity 1 (single tile), filled once and consumed repeatedly.
+
+## Index Calculations
+
+The program factory decomposes the output tensor shape into 5D+ dimensions: `(nD, D, N, C, Ht, Wt)` where `nD` collapses all dimensions beyond rank 5. The `start_tile_id` for each core is a linear offset into the flattened output tile space.
+
+Within the reader/writer kernels, the linear `start_tile_id` is decomposed back into per-dimension indices:
+```
+tiles_per_n = C * Ht * Wt
+tiles_per_d = N * tiles_per_n
+tiles_per_nd = D * tiles_per_d
+```
+Each dimension index is computed via successive division/modulo operations.
+
+For **broadcasting**, the reader kernel uses stride values per dimension. When an input dimension has size 1, the stride is set to 0 by the host code (`aHt * aWt * (aC > 1)` evaluates to 0 when `aC == 1`), causing the reader to repeat the same tiles along that dimension.
+
+## Memory Access Patterns
+
+### Read Pattern
+- **Interleaved**: Sequential tile reads with broadcast-aware strides. Each tile is read individually via `noc_async_read_page` with an immediate barrier (no pipelining of NoC reads within the innermost loop).
+- **Sharded**: No NoC reads; data is already in L1. The reader kernel just calls `cb_reserve_back` + `cb_push_back` to expose the shard to the compute kernel.
+
+### Write Pattern
+- **Interleaved**: Sequential tile writes via `noc_async_write_page` with immediate barrier.
+- **Sharded**: No NoC writes; output is already in L1 via the sharded CB.
+
+## Core Distribution Strategy
+
+| Property | Value |
+|---|---|
+| Grid Topology | Rectangular grid from `operation_attributes.worker_grid` |
+| Work Splitting | `split_work_to_cores` distributes output tiles across cores |
+| Load Balancing | Two core groups: group 1 gets `ceil(total_tiles / num_cores)` tiles, group 2 gets the remainder |
+| Remainder Handling | Cores outside both groups receive zero-tile runtime args and exit immediately |
+| Sharded Mode | Grid is determined by the shard spec; each core processes its local shard |
+
+For the zero-start rectangular grid optimization, `grid_to_cores` provides a fast row-major or column-major core enumeration. Non-zero-start or multi-range grids fall back to `corerange_to_cores`.
+
+## Arguments
+
+### Compile-Time Arguments
+
+**Compute Kernel**:
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | num_tiles_per_cycle | uint32_t | Always 1; number of output tiles per compute cycle |
+
+The compute kernel also receives preprocessor defines:
+- `BINARY_SFPU_INIT` = `power_binary_tile_init();`
+- `BINARY_SFPU_OP` = `power_binary_tile`
+- `BCAST_INPUT` = `""` or `"0"` or `"1"` depending on broadcast type
+- `PROCESS_LHS_ACTIVATIONS(i)` = empty (no LHS preprocess for POWER)
+- `PROCESS_RHS_ACTIVATIONS(i)` = empty (no RHS preprocess for POWER)
+- `PROCESS_POST_ACTIVATIONS(i)` = empty (unless user specifies post-activations)
+
+**Reader Kernel**:
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0..N | TensorAccessorArgs for A | uint32_t[] | Compile-time accessor config for tensor A |
+| N+1..M | TensorAccessorArgs for B | uint32_t[] | Compile-time accessor config for tensor B |
+| M+1 | has_sharding | uint32_t | 1 if native L1 sharding is active, 0 otherwise |
+
+Defines: `SRC_SHARDED`, `SRC_SHARDED_B` (0 or 1).
+
+**Writer Kernel**:
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0..N | TensorAccessorArgs for C | uint32_t[] | Compile-time accessor config for output tensor |
+| N+1 | has_sharding | uint32_t | 1 if native L1 sharding is active, 0 otherwise |
+
+Defines: `DST_SHARDED` (0 or 1).
+
+### Runtime Arguments
+
+**Reader Kernel** (21 args for two-tensor path):
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | src_addr | uint32_t | DRAM/L1 address of tensor A |
+| 1 | start_tile_id | uint32_t | Starting output tile index for this core |
+| 2 | src_num_tiles | uint32_t | Number of A tiles in shard (sharded only) |
+| 3 | dst_num_tiles | uint32_t | Number of output tiles this core processes |
+| 4 | dst_shard_width | uint32_t | Width of shard in tiles (sharded only) |
+| 5 | nD_stride | uint32_t | Tile stride for collapsed dims >5 (0 if dim==1) |
+| 6 | d_stride | uint32_t | Tile stride for D dimension |
+| 7 | n_stride | uint32_t | Tile stride for N dimension |
+| 8 | c_stride | uint32_t | Tile stride for C dimension |
+| 9 | D | uint32_t | Size of D dimension |
+| 10 | N | uint32_t | Size of N dimension |
+| 11 | C | uint32_t | Size of C dimension |
+| 12 | Ht | uint32_t | Height in tiles |
+| 13 | Wt | uint32_t | Width in tiles |
+| 14 | cND | uint32_t | Number of collapsed dimensions >5 |
+| 15 | src_addr_b | uint32_t | DRAM/L1 address of tensor B |
+| 16 | nD_stride_b | uint32_t | B tile stride for collapsed dims >5 |
+| 17 | d_stride_b | uint32_t | B tile stride for D dimension |
+| 18 | n_stride_b | uint32_t | B tile stride for N dimension |
+| 19 | c_stride_b | uint32_t | B tile stride for C dimension |
+| 20 | src_num_tiles_b | uint32_t | Number of B tiles in shard (sharded only) |
+
+**Writer Kernel** (11 args for two-tensor path):
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | dst_addr | uint32_t | DRAM/L1 address of output tensor |
+| 1 | start_tile_id | uint32_t | Starting output tile index |
+| 2 | dst_num_tiles | uint32_t | Number of output tiles |
+| 3 | dst_shard_width | uint32_t | Shard width in tiles |
+| 4 | D | uint32_t | Output D dimension |
+| 5 | N | uint32_t | Output N dimension |
+| 6 | C | uint32_t | Output C dimension |
+| 7 | Ht | uint32_t | Output height in tiles |
+| 8 | Wt | uint32_t | Output width in tiles |
+| 9 | cND | uint32_t | Collapsed dims >5 |
+| 10 | (unused) | uint32_t | Reserved (set to 0) |
+
+**Writer Kernel** (11 args for scalar path):
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | packed_scalar | uint32_t | Scalar exponent value packed into uint32 |
+| 1 | dst_addr | uint32_t | DRAM/L1 address of output tensor |
+| 2 | start_tile_id | uint32_t | Starting output tile index |
+| 3 | dst_num_tiles | uint32_t | Number of output tiles |
+| 4 | dst_shard_width | uint32_t | Shard width in tiles |
+| 5 | D | uint32_t | Output D dimension |
+| 6 | N | uint32_t | Output N dimension |
+| 7 | C | uint32_t | Output C dimension |
+| 8 | Ht | uint32_t | Output height in tiles |
+| 9 | Wt | uint32_t | Output width in tiles |
+| 10 | cND | uint32_t | Collapsed dims >5 |
+
+**Compute Kernel** (4 args):
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | num_tiles | uint32_t | Total tiles to process on this core |
+| 1 | tile_freq | uint32_t | Broadcast frequency (for bcast kernel variants) |
+| 2 | tile_start | uint32_t | Starting offset within broadcast cycle |
+| 3 | compute_scalar_value | uint32_t | Unused for POWER (set to 0) |
 
 ## Kernel Implementations
 
+### Reader Kernel
+
+**Two-tensor path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp`
+
+Reads tiles from both tensor A and tensor B into CB c_0 and CB c_1 respectively. Uses nested loops over the 5D+ decomposition to handle broadcasting through stride values. For sharded inputs, simply marks shard tiles as available.
+
+**Scalar path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp`
+
+Reads only tensor A tiles into CB c_0. The scalar value is handled by the writer kernel.
+
+### Writer Kernel
+
+**Two-tensor path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp`
+
+Reads completed tiles from CB c_2 and writes to output tensor. For sharded outputs, no NoC writes needed.
+
+**Scalar path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_scalar.cpp`
+
+Fills a single tile in CB c_1 with the packed scalar value, then writes output tiles from CB c_2 to DRAM/L1.
+
 ### Compute Kernel
 
-The primary compute kernel for POWER (no broadcast, two tensor inputs) is:
+The specific compute kernel file depends on the `SubtileBroadcastType`:
+
+- **NONE (no broadcast)**: `eltwise_binary_sfpu_no_bcast.cpp` -- simple per-tile loop
+- **SCALAR_A/SCALAR_B, COL_A/COL_B, ROW_B_COL_A/ROW_A_COL_B**: `eltwise_binary_sfpu.cpp` -- frequency-based broadcast iteration
+- **Scalar B (no tensor B)**: `eltwise_binary_sfpu_scalar.cpp` -- RHS loaded once, LHS iterates
+
+For the primary no-broadcast case, the compute kernel is:
 
 #### Compute Kernel File
 `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp`
@@ -134,14 +273,10 @@ The primary compute kernel for POWER (no broadcast, two tensor inputs) is:
 
 #include <cstdint>
 
-// SFPU split includes provide individual SFPU math function headers
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-// Eltwise unary compute API (used for unary_op_init_common, copy_tile, pack_tile, etc.)
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
-// Binary SFPU API header -- provides power_binary_tile, power_binary_tile_init, etc.
-#include "api/compute/eltwise_binary_sfpu.h"
-// Additional binary SFPU includes for other operations that share this kernel file
+#include "api/compute/eltwise_binary_sfpu.h"       // provides power_binary_tile, power_binary_tile_init
 #include "api/compute/binary_bitwise_sfpu.h"
 #include "api/compute/binary_shift.h"
 #include "api/compute/add_int_sfpu.h"
@@ -158,139 +293,95 @@ The primary compute kernel for POWER (no broadcast, two tensor inputs) is:
 #include "api/compute/xlogy.h"
 #include "api/compute/binary_comp.h"
 
-// Common macro utilities for activation preprocessing and CB management
-#include "eltwise_utils_common.hpp"
-// SFPU-specific preprocessing macros (PREPROCESS, etc.)
-#include "eltwise_utils_sfpu.hpp"
+#include "eltwise_utils_common.hpp"    // macro infrastructure: HAS_ACTIVATIONS, PROCESS_ACTIVATIONS, etc.
+#include "eltwise_utils_sfpu.hpp"      // PREPROCESS macro for activation preprocessing
 
 void kernel_main() {
-    // Runtime argument 0: total number of tiles this core must process
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);  // runtime arg 0: total tiles for this core
 
-    // Compile-time argument 0: number of tiles processed per read-compute-write cycle (always 1)
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // always 1
 
-    // CB indices for input A (base), input B (exponent), and output
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;   // CB for input A (base)
+    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;   // CB for input B (exponent)
+    constexpr auto cb_out = tt::CBIndex::c_2;        // CB for output C (result)
 
-    // If LHS/RHS activations are defined (via compile-time defines), use intermediate CBs c_3/c_4.
-    // HAS_ACTIVATIONS is a macro that evaluates to 1 if PROCESS_LHS_ACTIVATIONS(i) is non-empty.
-    // For POWER with no user-supplied activations, cb_post_lhs == cb_pre_lhs (c_0), cb_post_rhs == cb_pre_rhs (c_1).
+    // If LHS/RHS activations are defined, use intermediate CBs; otherwise alias to pre-CBs
+    // For POWER, no activations are defined, so cb_post_lhs == cb_pre_lhs, cb_post_rhs == cb_pre_rhs
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
-    // Initialize common compute state: sets up unpack config for cb_post_lhs and pack config for cb_out.
-    unary_op_init_common(cb_post_lhs, cb_out);
+    unary_op_init_common(cb_post_lhs, cb_out);  // initialize unpack/pack pipeline for LHS->output path
 #ifdef PACK_RELU
-    // If PACK_RELU is defined, configure hardware-level ReLU clamping on the packer output.
-    // Not typically used with POWER, but supported if user adds relu post-activation.
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));  // not used for POWER
 #endif
 
-    // SFPU init placement strategy:
-    // If there are NO activations (LHS, RHS, or POST), initialize the SFPU once before the loop.
-    // This calls power_binary_tile_init() which sets programmable constants:
-    //   vConstFloatPrgm0 = 1.442695f  (1/ln(2))
-    //   vConstFloatPrgm1 = -127.0f    (clamping threshold)
-    //   vConstFloatPrgm2 = NaN        (for special-case returns)
+    // For POWER with no activations, BINARY_SFPU_INIT is called once here
+    // This expands to: power_binary_tile_init();
+    // which calls llk_math_eltwise_binary_sfpu_binary_pow_init<APPROX>()
+    // which sets vConstFloatPrgm0=1.442695, vConstFloatPrgm1=-127.0, vConstFloatPrgm2=NaN
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
 #endif
 
-    // Main tile processing loop -- one tile per iteration
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // PREPROCESS: If LHS activations exist, apply them (copy to intermediate CB, run SFPU op, pack back).
-        // For POWER with no activations, this is a no-op (PREPROCESS_0 macro).
+        // PREPROCESS is a no-op for POWER (no LHS activations)
         PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
-        // Wait for LHS tile to be available in the post-activation CB
-        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
+        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);  // wait for reader to produce 1 LHS tile
 
-        // Same for RHS (exponent)
+        // PREPROCESS is a no-op for POWER (no RHS activations)
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
+        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);  // wait for reader to produce 1 RHS tile
 
-        // Reserve space in output CB for the result tile
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        cb_reserve_back(cb_out, num_tiles_per_cycle);  // reserve space for 1 output tile
 
-        // If activations changed the SFPU state, re-initialize before the binary op.
-        // This handles the case where LHS/RHS preprocessing used different SFPU functions
-        // that overwrote the programmable constants.
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-        BINARY_SFPU_INIT
+        BINARY_SFPU_INIT  // not reached for POWER
 #endif
-        // Acquire DEST register file -- blocks until DEST is available for writing
-        tile_regs_acquire();
+        tile_regs_acquire();  // acquire DEST register file (blocks until math RISC has exclusive access)
 
-        // Copy LHS (base) tile into DEST at slot i*2 (even slots for input A)
-        // First configure unpack for the LHS data format
-        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+        // Copy LHS tile from CB c_0 to DEST[0] (even slot)
+        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);  // configure unpack for LHS format
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            // copy_tile unpacks tile from CB into DEST register at specified index
-            // Slot i*2 = 0 for first tile of cycle (base goes to DEST[0])
-            copy_tile(cb_post_lhs, i, i * 2);
+            copy_tile(cb_post_lhs, i, i * 2);  // unpack tile i from CB to DEST[0] (base)
         }
 
-        // Copy RHS (exponent) tile into DEST at slot i*2+1 (odd slots for input B)
-        copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
+        // Copy RHS tile from CB c_1 to DEST[1] (odd slot)
+        copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);  // reconfigure unpack for RHS format
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            // Slot i*2+1 = 1 for first tile of cycle (exponent goes to DEST[1])
-            copy_tile(cb_post_rhs, i, i * 2 + 1);
+            copy_tile(cb_post_rhs, i, i * 2 + 1);  // unpack tile i from CB to DEST[1] (exponent)
 
-            // If POST activations exist, re-init SFPU constants here (they may have been
-            // overwritten by the post-activation SFPU function from the previous iteration)
 #if HAS_ACTIVATIONS(POST)
-            BINARY_SFPU_INIT
+            BINARY_SFPU_INIT  // not reached for POWER without post-activations
 #endif
-            // Execute the SFPU binary power operation:
-            // BINARY_SFPU_OP expands to power_binary_tile(i*2, i*2+1, i*2)
-            // This reads base from DEST[0], exponent from DEST[1], writes result to DEST[0]
+            // Execute SFPU power: DEST[0] = DEST[0] ** DEST[1]
+            // Expands to: power_binary_tile(0, 1, 0)
+            // which calls llk_math_eltwise_binary_sfpu_binary_pow<APPROX, DST_ACCUM_MODE>(0, 1, 0)
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
-
-            // Apply post-activations if any (e.g., relu, abs, etc.)
-            PROCESS_POST_ACTIVATIONS(i * 2);
+            PROCESS_POST_ACTIVATIONS(i * 2);  // no-op for POWER without post-activations
         }
-        // Signal that DEST writes are complete -- hand off to packer
-        tile_regs_commit();
+        tile_regs_commit();  // signal that DEST writes are complete, hand off to pack
 
-        // Wait for DEST to be ready for reading (packer side)
-        tile_regs_wait();
+        tile_regs_wait();  // wait for pack RISC to be ready
 
-        // Pack result tile from DEST[i*2] into output CB
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out);
+            pack_tile(i * 2, cb_out);  // pack DEST[0] result into output CB c_2
         }
-        // Release DEST registers for the next iteration
-        tile_regs_release();
+        tile_regs_release();  // release DEST registers
 
-        // Push completed output tile to output CB (makes it visible to writer kernel)
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        // Free consumed input tiles from LHS and RHS CBs
-        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
-        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
+        cb_push_back(cb_out, num_tiles_per_cycle);      // notify writer that 1 output tile is ready
+        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);  // free LHS tile slot for reader
+        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);  // free RHS tile slot for reader
     }
 }
 ```
 
-#### Other Compute Kernel Variants
-
-| Variant | File | When Used |
-|---|---|---|
-| Scalar (one tensor, one scalar) | `eltwise_binary_sfpu_scalar.cpp` | `b` is a scalar, not a tensor |
-| Broadcast (COL, SCALAR subtile) | `eltwise_binary_sfpu.cpp` | One input needs subtile-level broadcast |
-| Row broadcast | `eltwise_binary_sfpu_row_bcast.cpp` (ng) | ROW_A or ROW_B broadcast with LLK bcast |
-| Row-col broadcast | `eltwise_binary_sfpu_row_col_bcast.cpp` (ng) | Mixed row-col broadcast |
-
-All variants share the same fundamental pattern: copy LHS to DEST[even], copy RHS to DEST[odd], call `BINARY_SFPU_OP`, pack result. The differences are in how tiles are re-used across iterations (scalar variant reads RHS once; broadcast variant re-reads the broadcast input).
-
 ### SFPU Kernel Implementation
-
-This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
 #### SFPU Kernel File
 `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_pow.h`
-(Wormhole variant at `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_pow.h` -- identical implementation)
+(Wormhole variant at: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_pow.h`)
+
+Both architecture variants are identical in implementation.
 
 #### Annotated SFPU Kernel Source
 
@@ -303,125 +394,88 @@ This section provides a dedicated deep dive into the underlying SFPU kernel func
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_conversions.h"  // provides _float_to_int32_positive_
-#include "ckernel_sfpu_exp.h"          // provides _sfpu_exp_f32_accurate_ (used in fp32 path)
-#include "sfpu/ckernel_sfpu_polyval.h" // provides PolynomialEvaluator::eval (used in fp32 path)
-#include "sfpi.h"                      // SFPI programming interface (vFloat, vInt, dst_reg, etc.)
+#include "ckernel_sfpu_conversions.h"
+#include "ckernel_sfpu_exp.h"           // provides _sfpu_exp_f32_accurate_ used by f32 path
+#include "sfpu/ckernel_sfpu_polyval.h"  // provides PolynomialEvaluator used by f32 path
+#include "sfpi.h"                       // SFPI programming interface for vector operations
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-// ============================================================================
-// BFloat16 / Default Path: _sfpu_binary_power_21f_
-// ============================================================================
-//
-// Implements base**pow using the "exp_21f" algorithm from:
-//   Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
-//   https://doi.org/10.1109/MSP.2022.3157460
-//
-// Two-step approach:
-//   1) Compute log2(base) using a 3rd-order polynomial approximation
-//   2) Compute 2^(pow * log2(base)) using the exp_21f fast exponentiation
-//
-// This path is selected when is_fp32_dest_acc_en == false (bfloat16 inputs).
-// It uses fewer instructions than the fp32 path but has lower precision.
-//
-// Requires programmable constants set by sfpu_binary_pow_init():
-//   vConstFloatPrgm0 = 1.442695f  (1/ln(2), used for log base conversion)
-//   vConstFloatPrgm1 = -127.0f    (clamping threshold for overflow prevention)
-//   vConstFloatPrgm2 = NaN        (returned for undefined cases like 0^(-1))
-//
+/**
+ * BF16 path: _sfpu_binary_power_21f_
+ * Computes base**pow using: 2^(pow * log2(base))
+ * Uses 3rd-order polynomial approximation for log2 and Moroz et al. exp_21f algorithm for 2^x
+ * This is the lower-precision, faster path used when is_fp32_dest_acc_en == false
+ */
 template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat pow) {
-    // Step 1: Compute log2(base) via polynomial approximation
-    //
-    // IEEE 754 float = (-1)^s * 2^(exp-127) * 1.mantissa
-    // log2(x) = (exp - 127) + log2(1.mantissa)
-    // We approximate log2(1.mantissa) with a polynomial over [1, 2)
+    // === Step 1: Compute log2(base) ===
 
-    // Take absolute value by clearing the sign bit (SFPSETSGN instruction)
-    sfpi::vFloat absbase = setsgn(base, 0);
-    // Normalize to range [1, 2) by setting exponent to 127 (bias) (SFPSETEXP instruction)
-    sfpi::vFloat x = sfpi::setexp(absbase, 127);
+    sfpi::vFloat absbase = setsgn(base, 0);       // take absolute value by clearing sign bit
+    sfpi::vFloat x = sfpi::setexp(absbase, 127);   // normalize mantissa to range [1, 2) by setting exponent to bias
 
-    // 3rd order polynomial approximation for log2(x) over [1, 2):
-    // Coefficients determined using rminimax (rational minimax) optimization.
-    // Horner form: x * (x * (x * c3 + c2) + c1) + c0
-    // Hex float literals for exact coefficient representation:
-    //   0x2.44734p-4f  ~= 0.14193
-    //   0xd.e712ap-4f  ~= 0.86866
-    //   0x2.4f5388p+0f ~= 2.30991
-    //   0x1.952992p+0f ~= 1.58325
+    // 3rd order polynomial approximation of ln(x) for x in [1,2], coefficients from rminimax
+    // This computes ln(mantissa) using Horner's method
     sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
 
-    // Extract the integer exponent from the original base (SFPEXEXP instruction)
-    sfpi::vInt exp = sfpi::exexp(base);
-    // Handle negative exponents: two's complement negation
-    // v_if/v_endif are SFPU conditional execution (predicated lanes)
-    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
+    // Extract the biased exponent and convert to float
+    sfpi::vInt exp = sfpi::exexp(base);  // SFPU instruction: extract exponent field as signed int
+    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }  // manual abs + sign for negative exponents
     v_endif;
-    // Convert integer exponent to float for addition (SFPCAST instruction)
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);  // convert integer exponent to float
 
-    // Combine: log2(base) = exponent + polynomial(mantissa) * (1/ln(2))
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;  // 1/ln(2) = 1.442695
+    // Combine: log2(base) = exponent + ln(mantissa) * (1/ln(2))
+    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;  // 1.442695 = 1/ln(2), loaded from programmable constant
     sfpi::vFloat log2_result = exp_f32 + series_result * vConst1Ln2;
 
-    // Step 2: Compute base**pow = 2^(pow * log2(base))
-    sfpi::vFloat z_f32 = pow * log2_result;
+    // === Step 2: Compute 2^(pow * log2(base)) using Moroz et al. exp_21f ===
 
-    // Clamp z_f32 to -127 to prevent overflow when the result should approach 0.
-    // Without clamping, the exp_21f algorithm wraps around for very negative inputs.
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;  // -127.0f
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
+    sfpi::vFloat z_f32 = pow * log2_result;
+    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;  // -127.0
+    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }  // clamp to prevent overflow for large negative exponents
     v_endif;
 
-    // exp_21f algorithm from Moroz et al. 2022, Section 5:
-    // 2^x ~ reinterpret_as_float( (bias + x) * 2^23 )
-    // where bias = 0x3f800000 / 2^23 = 1.0 in the integer domain
-    //
-    // Multiply by 2^23 using SFPDIVP2 (add 23 to exponent), which is a single-cycle
-    // instruction with immediate operand -- more efficient than a multiply.
-    z_f32 = addexp(z_f32, 23);  // z_f32 *= 2^23 (SFPDIVP2 with imm=23)
-    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);  // 1.0f reinterpreted as int = 0x3f800000
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
+    // Moroz exp_21f: compute 2^z by bit manipulation
+    // Multiply z by 2^23 (mantissa bits of float32) using addexp which is a single SFPDIVP2 instruction
+    z_f32 = addexp(z_f32, 23);  // z_f32 *= 2^23; single-cycle SFPDIVP2 instruction
+    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);  // IEEE 754 representation of 1.0f = float bias * 2^23
+    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);  // convert to integer for bit manipulation
 
-    // Decompose z into integer exponent part and fractional mantissa part
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // exponent bits (SFPEXEXP)
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // mantissa bits (SFPEXMAN)
+    // Split z into integer exponent part and fractional mantissa part
+    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));    // extract exponent bits (z & 0x7f800000)
+    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // extract mantissa bits (z & 0x007fffff)
 
-    // Horner-form correction polynomial for improved accuracy:
-    // d1 = 0.40196114e-7 (small correction factor)
-    // d2 and d3 incorporate the fractional part (zif) for interpolation
+    // Compute 2^fraction using Horner-form polynomial with pre-computed constants
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
     sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
     sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560e) + zif, 0);
 
     d2 = d1 * d2;
-    zif = _float_to_int32_positive_(d2 * d3);
+    zif = _float_to_int32_positive_(d2 * d3);  // compute fractional 2^x result as integer bits
 
-    // Restore the exponent by setting it to 127 + zii (re-biasing)
+    // Restore the integer exponent to get final 2^z result
     zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
+
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
 
-    // Post-processing: handle special cases
-    // Convert pow to integer for sign/integer checks
-    sfpi::vInt pow_int = sfpi::float_to_int16(pow, 0);  // int16 is sufficient (large powers -> 0/inf)
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+    // === Post-processing: handle special cases ===
 
-    // Special case: 0^(negative) = NaN (division by zero)
+    sfpi::vInt pow_int = sfpi::float_to_int16(pow, 0);  // truncate exponent to int16 for sign/parity checks
+    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);  // round-trip to check if pow is integer
+
+    // 0^(negative) = NaN
     v_if((absbase == 0.f) && pow < 0.f) {
-        y = sfpi::vConstFloatPrgm2;  // NaN
+        y = sfpi::vConstFloatPrgm2;  // NaN from programmable constant
     }
     v_endif;
 
-    // Special case: negative base
+    // Negative base handling
     v_if(base < 0.0f) {
-        // Odd integer power -> negative result, even integer power -> positive result
-        // Shift LSB of pow_int to sign bit position to set result sign
-        y = setsgn(y, pow_int << 31);
+        // Sign of result depends on parity of exponent: odd -> negative, even -> positive
+        y = setsgn(y, pow_int << 31);  // shift LSB of pow_int to sign bit position
 
         // Non-integer power of negative base -> NaN (complex result)
         v_if(pow_rounded != pow) {
@@ -432,96 +486,85 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        // When DEST is bfloat16, SFPSTORE will truncate float32 LReg values.
-        // Explicit round-to-nearest-even conversion prevents accuracy loss.
-        // Example: 9^2 = 80.8 (truncation) vs 81.0 (rounding)
+        // When DEST is bfloat16, explicitly round to bf16 using round-to-nearest-even
+        // to avoid truncation artifacts (e.g., 9^2 = 80.8 truncates to 80.5 instead of 81)
         y = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
     }
 
     return y;
 }
 
-// ============================================================================
-// Float32 Path: _sfpu_binary_power_f32_
-// ============================================================================
-//
-// Higher-precision implementation for float32 inputs.
-// Uses improved log2 calculation with range reduction and Newton-Raphson reciprocal,
-// plus Cody-Waite + Taylor expansion for exp.
-//
+/**
+ * FP32 path: _sfpu_binary_power_f32_
+ * Higher-precision implementation using improved log2 and Cody-Waite + Taylor exp
+ * Used when is_fp32_dest_acc_en == true (FLOAT32 input/output)
+ */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
-    // Step 1: Compute log2(base) using improved log with range reduction
+    // === Step 1: Compute log2(base) using improved log ===
 
     sfpi::vFloat abs_base = sfpi::abs(base);
-    // Normalize mantissa to [1, 2)
-    sfpi::vFloat m = sfpi::setexp(abs_base, 127);
-    sfpi::vInt exp = sfpi::exexp(abs_base);
+    sfpi::vFloat m = sfpi::setexp(abs_base, 127);  // normalize mantissa to [1, 2)
+    sfpi::vInt exp = sfpi::exexp(abs_base);          // extract exponent
 
     // Range reduction: ensure m in [sqrt(2)/2, sqrt(2)] for better polynomial convergence
     constexpr float SQRT2 = 1.4142135381698608f;
     v_if(m >= SQRT2) {
-        m = m * 0.5f;  // SFPMUL: divide by 2
-        exp = exp + 1;  // compensate exponent
+        m = m * 0.5f;    // divide by 2
+        exp = exp + 1;   // compensate exponent
     }
     v_endif;
 
-    // Transform to z = (m-1)/(m+1) for logarithm series
-    // This transformation converges faster than direct series on [1,2]
+    // Transform to z = (m-1)/(m+1) for log series
     sfpi::vFloat m_plus_1 = m + sfpi::vConst1;
     sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
 
-    // Compute 1/(m+1) using Newton-Raphson with linear initial guess
-    // Initial guess: 1.0 - 0.2426...*t (linear interpolation on [1.7, 2.4])
-    sfpi::vFloat recip = sfpi::vConst1 - 0.2426406871192851f * m_plus_1;
-    recip = recip * (2.0f - m_plus_1 * recip);  // 1st Newton-Raphson iteration
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR iteration for float32 precision
+    // Compute reciprocal of (m+1) using linear initial guess + 2 Newton-Raphson iterations
+    sfpi::vFloat recip = sfpi::vConst1 - 0.2426406871192851f * m_plus_1;  // linear approximation on [1.7, 2.4]
+    recip = recip * (2.0f - m_plus_1 * recip);  // 1st Newton-Raphson refinement
+    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd Newton-Raphson for float32 precision
     sfpi::vFloat z = m_minus_1 * recip;
 
-    // Polynomial approximation of atanh(z) using odd powers via Horner's method
-    // ln(m) = 2 * atanh(z) = 2 * z * (1 + z^2/3 + z^4/5 + z^6/7 + z^8/9 + z^10/11)
+    // Polynomial approximation of atanh-like series: ln((1+z)/(1-z)) = 2*z*(1 + z^2/3 + z^4/5 + ...)
     sfpi::vFloat z2 = z * z;
     sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, sfpi::vConst1,
-        0.3333333333333333f,   // 1/3
-        0.2f,                   // 1/5
-        0.14285714285714285f,   // 1/7
-        0.1111111111111111f,    // 1/9
-        0.09090909090909091f);  // 1/11
-    sfpi::vFloat ln_m = 2.0f * (z * p);
+        z2, sfpi::vConst1, 0.3333333333333333f, 0.2f, 0.14285714285714285f,
+        0.1111111111111111f, 0.09090909090909091f);  // coefficients: 1, 1/3, 1/5, 1/7, 1/9, 1/11
+    sfpi::vFloat ln_m = 2.0f * (z * p);  // ln(m) result
 
-    // Convert integer exponent to float, handling sign manually for SFPU compatibility
+    // Convert exponent to float with proper sign handling
     sfpi::vInt sign_bit = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(exp) >> 31);
     sfpi::vInt exp_sign = sfpi::vInt(0) - sign_bit;     // 0 or 0xFFFFFFFF
-    sfpi::vInt exp_abs = (exp ^ exp_sign) - exp_sign;   // absolute value via XOR trick
+    sfpi::vInt exp_abs = (exp ^ exp_sign) - exp_sign;    // absolute value via two's complement
     sfpi::vFloat exp_f32 = sfpi::int32_to_float(sfpi::setsgn(exp_abs, exp_sign), 0);
 
     // log2(base) = exponent + ln(mantissa) / ln(2)
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;  // 1/ln(2)
     sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
 
-    // Step 2: base**pow = 2^(pow * log2(base))
+    // === Step 2: Compute 2^(pow * log2(base)) ===
+
     sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;  // -127.0f
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
+    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;  // -127.0
+    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }  // clamp for underflow
     v_endif;
 
-    // Use Cody-Waite range reduction + Taylor expansion for accurate exp
-    // This achieves <1 ULP error for float32
+    // Use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
     constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_f32_accurate_(z_f32 * LN2);
+    sfpi::vFloat y = _sfpu_exp_f32_accurate_(z_f32 * LN2);  // 2^z = exp(z * ln(2))
 
-    // Same special-case handling as the 21f path
+    // === Special case handling (same as bf16 path) ===
+
     v_if((abs_base == 0.f) && pow < 0.f) {
-        y = sfpi::vConstFloatPrgm2;  // NaN
+        y = sfpi::vConstFloatPrgm2;  // 0^(negative) = NaN
     }
     v_endif;
 
     v_if(base < 0.0f) {
         sfpi::vInt pow_int = sfpi::float_to_int16(pow, 0);
         sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
-        y = sfpi::setsgn(y, pow_int << 31);
+        y = sfpi::setsgn(y, pow_int << 31);  // set sign based on parity of integer exponent
         v_if(pow_rounded != pow) {
-            y = sfpi::vConstFloatPrgm2;  // NaN for non-integer power of negative base
+            y = sfpi::vConstFloatPrgm2;  // non-integer power of negative base = NaN
         }
         v_endif;
     }
@@ -530,68 +573,48 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
-// ============================================================================
-// Template Dispatch: _sfpu_binary_power_
-// ============================================================================
-// Selects between 21f (bfloat16) and f32 paths based on dest accumulator mode.
-
+// Template dispatch: select algorithm based on DEST accumulation mode
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow);
 
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_21f_<false>(base, pow);  // bfloat16 path
+    return _sfpu_binary_power_21f_<false>(base, pow);  // BF16 path
 }
 
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_f32_(base, pow);  // float32 path
+    return _sfpu_binary_power_f32_(base, pow);  // FP32 high-precision path
 }
 
-// ============================================================================
-// Entry Point: calculate_sfpu_binary_pow
-// ============================================================================
-// Called from the LLK layer (_llk_math_eltwise_binary_sfpu_params_).
-// Iterates over all 8 rows within a face (ITERATIONS=8) of the DEST register.
-//
-// The outer LLK params function (_llk_math_eltwise_binary_sfpu_params_) handles
-// face iteration (4 faces for RC mode), calling this function once per face.
-// Each face has 8 rows of 4 elements each (32 elements per face, 128 per tile).
-// Total: 4 faces * 8 iterations = 32 SFPU passes over a tile.
-
+/**
+ * Top-level SFPU kernel entry point for binary power
+ * Called once per face (4 times per tile in RC vector mode)
+ * Each call processes 8 iterations (rows) within the face
+ */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_sfpu_binary_pow(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
-        // DEST tile size in SFPI units: 64 rows / SFP_DESTREG_STRIDE = 32 rows per tile
-        // (SFPU processes 4 elements per row, so 32 rows * 4 = 128 elements = 4 faces * 32)
+        // Each tile face has 32 rows in SFPI addressing (64 / SFP_DESTREG_STRIDE = 32)
         constexpr uint dst_tile_size_sfpi = 32;
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];  // load base from DEST
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];  // load exponent from DEST
 
-        // Load base and exponent vectors from their respective DEST tile slots
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];  // SFPLOAD
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];  // SFPLOAD
+        sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);  // compute base^exponent
 
-        // Compute power using the appropriate precision path
-        sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
-
-        // Store result back to output DEST slot
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;  // SFPSTORE
-        // Advance the DEST register pointer to the next row
-        sfpi::dst_reg++;  // SETRWC to advance by 1 row
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;  // store result back to DEST
+        sfpi::dst_reg++;  // advance to next row within the face
     }
 }
 
-// ============================================================================
-// Initialization: sfpu_binary_pow_init
-// ============================================================================
-// Sets the three programmable SFPU constants used throughout the power computation.
-// Called once at the start of computation (or re-called when activations overwrite them).
-
+/**
+ * Initialization: set programmable constants used by the power algorithm
+ */
 template <bool APPROXIMATION_MODE>
 inline void sfpu_binary_pow_init() {
-    sfpi::vConstFloatPrgm0 = 1.442695f;                          // 1/ln(2) for log base conversion
-    sfpi::vConstFloatPrgm1 = -127.0f;                            // clamping threshold
-    sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();  // NaN for special cases
+    sfpi::vConstFloatPrgm0 = 1.442695f;                            // 1/ln(2) for log2 computation
+    sfpi::vConstFloatPrgm1 = -127.0f;                              // underflow clamp threshold
+    sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN(); // NaN for invalid cases
 }
 
 }  // namespace sfpu
@@ -600,172 +623,104 @@ inline void sfpu_binary_pow_init() {
 
 #### SFPU Instructions Used
 
-| SFPI Intrinsic / Instruction | Underlying SFPU Instruction | Description |
-|---|---|---|
-| `sfpi::dst_reg[idx]` (read) | `SFPLOAD` | Load 4-element vector from DEST register row |
-| `sfpi::dst_reg[idx]` (write) | `SFPSTORE` | Store 4-element vector to DEST register row |
-| `sfpi::dst_reg++` | `SETRWC` | Advance DEST register read/write pointer by 1 row |
-| `sfpi::setsgn(v, s)` | `SFPSETSGN` | Set sign bit of float vector |
-| `sfpi::setexp(v, e)` | `SFPSETEXP` | Set exponent field of float vector |
-| `sfpi::exexp(v)` | `SFPEXEXP` | Extract exponent from float as integer |
-| `sfpi::exman9(v)` | `SFPEXMAN` | Extract 9-bit mantissa from float |
-| `sfpi::abs(v)` | `SFPABS` | Absolute value |
-| `sfpi::addexp(v, n)` | `SFPDIVP2` | Add immediate to exponent (multiply by 2^n) |
-| `sfpi::int32_to_float(v, 0)` | `SFPCAST` | Convert int32 to float |
-| `sfpi::float_to_int16(v, 0)` | `SFPCAST` | Convert float to int16 (truncation) |
-| `sfpi::float_to_fp16b(v, 0)` | `SFPCAST` | Convert float to bfloat16 (round-to-nearest-even) |
-| `sfpi::reinterpret<T>(v)` | `SFPNOP` (reinterpret) | Bitwise reinterpret between vFloat/vInt/vUInt |
-| `v_if(...) { } v_endif;` | `SFPSETCC` / `SFPENCC` | Predicated execution (conditional per-lane) |
-| `operator*`, `operator+`, `operator-` | `SFPMAD` / `SFPMUL` | Fused multiply-add or standalone multiply |
-| `operator<<` (vInt) | `SFPSHFT` | Bitwise left shift |
-| `operator~` (vInt) | `SFPNOT` | Bitwise NOT |
-| `operator^` (vInt) | `SFPXOR` | Bitwise XOR |
-| `_float_to_int32_positive_` | Multiple (SFPEXEXP, SFPSETMAN, SFPSHFT, SFPSETCC) | Custom float-to-positive-int32 conversion |
-| `_sfpu_exp_f32_accurate_` | Multiple (SFPMAD, SFPDIVP2, SFPCAST, etc.) | Cody-Waite + Taylor exp for fp32 path |
-| `PolynomialEvaluator::eval` | Multiple SFPMAD | Horner-form polynomial evaluation |
+| Instruction / Intrinsic | Description |
+|---|---|
+| `sfpi::setsgn(val, sign)` | Sets the sign bit of a float value; maps to SFPSETSGN instruction |
+| `sfpi::setexp(val, exp)` | Sets the exponent field of a float; maps to SFPSETEXP instruction |
+| `sfpi::exexp(val)` | Extracts the exponent field as a signed integer; maps to SFPEXEXP instruction |
+| `sfpi::exman9(val)` | Extracts the 9-bit mantissa + lower bits; maps to SFPEXMAN instruction |
+| `sfpi::abs(val)` | Computes absolute value (clears sign bit) |
+| `sfpi::addexp(val, n)` | Adds `n` to the exponent field (multiply by 2^n); maps to SFPDIVP2 instruction |
+| `sfpi::int32_to_float(val, mode)` | Converts integer to float; maps to SFPCAST instruction |
+| `sfpi::float_to_int16(val, mode)` | Converts float to 16-bit integer (truncation); maps to SFPCAST instruction |
+| `sfpi::float_to_fp16b(val, mode)` | Converts float32 to bfloat16 with rounding; maps to SFPCAST instruction |
+| `_float_to_int32_positive_(val)` | Converts positive float to int32 via bit manipulation |
+| `_sfpu_exp_f32_accurate_(val)` | Computes exp(x) using Cody-Waite + Taylor series for FP32 accuracy |
+| `sfpi::reinterpret<T>(val)` | Reinterprets bits between vFloat/vInt without conversion |
+| `v_if(...) { } v_endif` | Predicated execution (SFPSETCC + conditional stores); vectorized branch |
+| `sfpi::dst_reg[idx]` | Load/store from DEST register file; maps to SFPLOAD/SFPSTORE |
+| `sfpi::vConstFloatPrgm0/1/2` | Programmable SFPU constants; set via SFPLOADI |
+| `PolynomialEvaluator::eval(...)` | Horner-form polynomial evaluation using MAD instructions |
 
 #### SFPU Register Usage
 
-**DEST Registers (DST)**:
-- `dst_index_in0 * 32` (base): Input A tile occupies even-indexed DEST slot. For `num_tiles_per_cycle=1`, this is DEST slot 0.
-- `dst_index_in1 * 32` (exponent): Input B tile occupies odd-indexed DEST slot. For `num_tiles_per_cycle=1`, this is DEST slot 1.
-- `dst_index_out * 32` (result): Output overwrites the base slot (slot 0), so the operation is in-place w.r.t. the base tile.
-
-**SFPU Local Registers (LRegs)**:
-- The SFPU has 8 local registers (LRegs), each holding a 4-element vector.
-- The power computation is register-intensive, using all available LRegs for intermediate values (absbase, x, series_result, exp, exp_f32, log2_result, z_f32, z, zii, zif, d1, d2, d3, y, pow_int, pow_rounded).
-- The compiler (SFPI) manages register allocation automatically.
-
-**Programmable Constants**:
-- `vConstFloatPrgm0`: 1.442695f (1/ln(2))
-- `vConstFloatPrgm1`: -127.0f (overflow clamp)
-- `vConstFloatPrgm2`: NaN (special case return)
-- `vConst1`: 1.0f (built-in constant, used in fp32 path)
+- **DEST registers**: Two input tiles occupy DEST[0] (base, at `dst_index_in0 * 32`) and DEST[1] (exponent, at `dst_index_in1 * 32`). The output overwrites DEST[0] (at `dst_index_out * 32`).
+- **SFPU LRegs (vFloat/vInt)**: The kernel uses multiple local vector registers for intermediate calculations (absbase, x, series_result, exp_f32, log2_result, z_f32, z, zii, zif, d1, d2, d3, y, pow_int, pow_rounded). These map to SFPU local registers (LRegs 0-7).
+- **Programmable constants**: `vConstFloatPrgm0` = 1/ln(2), `vConstFloatPrgm1` = -127.0, `vConstFloatPrgm2` = NaN. Set during `sfpu_binary_pow_init()`.
+- **`dst_reg++`**: Advances the DEST register pointer by `SFP_DESTREG_STRIDE` (2 rows) to process the next row pair within a face.
 
 #### SFPU Execution Flow
 
-1. **Initialization** (`sfpu_binary_pow_init`): Sets three programmable constants in the SFPU constant registers. This is called once per tile batch (or re-called if activations overwrite them).
+1. **Initialization** (`sfpu_binary_pow_init`): Three programmable constants are loaded: 1/ln(2), -127.0, and NaN. These persist across all tiles processed by this core.
 
-2. **LLK Layer Dispatch** (`_llk_math_eltwise_binary_sfpu_params_`):
-   - Asserts that DEST indices are valid
-   - Calls `_llk_math_eltwise_binary_sfpu_start_` to configure SFPU for operation
-   - In RC mode (default), loops over 4 faces of the 32x32 tile
-   - For each face, calls `calculate_sfpu_binary_pow` which processes 8 rows
-   - After each face, advances the DEST read/write pointer by 2 SETRWC steps (8 rows each)
-   - Calls `_llk_math_eltwise_binary_sfpu_done_` to finalize
+2. **Per-tile dispatch** (`_llk_math_eltwise_binary_sfpu_params_`): The LLK params wrapper is called with `VectorMode::RC` (default), which iterates over all 4 faces of the 32x32 tile:
+   - For each face, `calculate_sfpu_binary_pow` is called once
+   - After each face, `TTI_SETRWC` advances the DEST register write pointer by 16 rows (8+8) to the next face
+   - Total: 4 faces x 8 iterations x 4 elements per vector = 1024 elements = 32x32 tile
 
-3. **Per-Row Processing** (`calculate_sfpu_binary_pow`):
-   - Iterates 8 times per face (ITERATIONS=8)
-   - Each iteration processes one row of 4 elements:
-     a. `SFPLOAD` base vector from DEST[in0 * 32]
-     b. `SFPLOAD` exponent vector from DEST[in1 * 32]
-     c. Call `_sfpu_binary_power_<is_fp32_dest_acc_en>` to compute power
-     d. `SFPSTORE` result to DEST[out * 32]
-     e. `SETRWC` (dst_reg++) to advance to next row
+3. **Per-face computation** (`calculate_sfpu_binary_pow`, 8 iterations per face):
+   - Load one row-vector of base values from DEST[in0] and one from DEST[in1]
+   - Call `_sfpu_binary_power_<is_fp32_dest_acc_en>` which dispatches to either:
+     - `_sfpu_binary_power_21f_` (BF16 path): 3rd-order polynomial log2 + Moroz exp_21f
+     - `_sfpu_binary_power_f32_` (FP32 path): improved log2 with Newton-Raphson reciprocal + Cody-Waite Taylor exp
+   - Store result back to DEST[out]
+   - Advance `dst_reg++`
 
-4. **Power Computation** (bf16 path -- `_sfpu_binary_power_21f_`):
-   a. Compute `|base|` and normalize mantissa to [1, 2)
-   b. Evaluate 3rd-order polynomial for log2 of the mantissa
-   c. Extract and convert the integer exponent
-   d. Combine to get `log2(base)`
-   e. Compute `z = pow * log2(base)`, clamp to [-127, ...]
-   f. Apply exp_21f: multiply by 2^23, add bias, decompose, polynomial correction
-   g. Handle special cases (0^negative -> NaN, negative base handling)
-   h. Convert result to bfloat16 with round-to-nearest-even
+4. **Algorithm detail** (both paths share the same structure):
+   - Compute `log2(|base|)` = exponent + polynomial(mantissa) * (1/ln(2))
+   - Compute `z = pow * log2(|base|)`, clamped to [-127, +inf)
+   - Compute `2^z` (BF16: bit-manipulation exp_21f; FP32: Cody-Waite accurate exp)
+   - Handle special cases: 0^negative -> NaN, negative base with odd power -> negate, negative base with non-integer power -> NaN
+   - BF16 path: explicit round-to-nearest-even conversion to avoid truncation artifacts
 
-5. **Packing**: After the SFPU completes all faces, DEST contents are packed back to the output CB via `pack_tile`.
+5. **Pack**: After all 4 faces, `tile_regs_commit()` signals pack RISC, which reads DEST[0] and packs into the output CB.
 
 #### SFPU Configuration
 
-**Compile-Time Defines** (set by `OpConfig::as_defines()`):
-- `BINARY_SFPU_INIT` = `power_binary_tile_init();`
-- `BINARY_SFPU_OP` = `power_binary_tile`
-- `BCAST_INPUT` = `""` (empty for no-bcast, `"0"` or `"1"` for bcast variants)
-
-**Template Parameters**:
-- `APPROX`: Set based on `fast_and_approximate_mode` -- currently unused by the power kernel (both paths use the same algorithm regardless of APPROX)
-- `DST_ACCUM_MODE`: Controls `is_fp32_dest_acc_en` template parameter, which selects between the 21f and f32 algorithm paths
-
-**Math Fidelity**: Not directly applicable to SFPU operations (math fidelity controls the FPU matrix engine, not the SFPU vector unit). The precision is controlled by `is_fp32_dest_acc_en`.
-
-**UnpackToDestMode**: For POWER specifically:
-- FLOAT32 inputs: `UnpackToDestFp32` -- tiles are unpacked to 32-bit float in DEST
-- Other inputs (bfloat16): `Default` -- tiles remain in their native 16-bit format in DEST
+- **`UnpackToDestMode`**: For POWER specifically, the program factory does NOT force `UnpackToDestFp32` for all CBs (unlike most other binary SFPU ops). Instead, it conditionally sets `UnpackToDestFp32` only when the input dtype is FLOAT32. This is because the power algorithm has dedicated BF16 and FP32 paths.
+- **`fp32_dest_acc_en`**: Enabled when output, or both inputs, are FLOAT32/INT32/UINT32. This selects the `_sfpu_binary_power_f32_` path.
+- **`DST_ACCUM_MODE`**: Passed as template parameter to the LLK function; determines DEST register sizing and accumulation behavior.
+- **`APPROX`**: Template parameter passed through from compute config; for POWER both paths are the same regardless of this flag.
+- **Math fidelity**: Not directly configurable for SFPU ops (fidelity primarily affects FPU matrix operations).
 
 #### Hardware Compatibility Notes
 
-The Blackhole and Wormhole implementations are **identical** for the binary power kernel. Both `ckernel_sfpu_binary_pow.h` files contain the same code. This is because:
+The Blackhole and Wormhole implementations of `ckernel_sfpu_binary_pow.h` are **identical**. Both architectures use the same SFPI instruction set for this operation. The key SFPU instructions used (SFPLOAD, SFPSTORE, SFPSETSGN, SFPSETEXP, SFPEXEXP, SFPEXMAN, SFPDIVP2, SFPCAST, SFPMAD, SFPSETCC) are available on both Wormhole B0 and Blackhole architectures.
 
-1. The SFPI programming interface abstracts away hardware differences between the two architectures
-2. The power kernel uses only standard SFPI intrinsics (no architecture-specific instructions)
-3. The polynomial coefficients and algorithm structure are the same
+The `_sfpu_exp_f32_accurate_` function used by the FP32 path is also defined in `ckernel_sfpu_exp.h` which has architecture-specific implementations, but the power kernel itself is architecture-agnostic.
 
-The only difference is in the LLK infrastructure layer (`_llk_math_eltwise_binary_sfpu_params_`), which has minor differences in face iteration and SETRWC patterns between architectures, but the functional behavior is identical.
+## Implementation Notes
 
-### Dataflow Kernels
+1. **Two algorithm paths**: The POWER operation uniquely selects between a fast BF16 polynomial approximation (`_sfpu_binary_power_21f_`) and a high-precision FP32 path (`_sfpu_binary_power_f32_`). This is controlled at compile time by the `is_fp32_dest_acc_en` template parameter, which is set based on whether the input/output types require FP32 DEST accumulation.
 
-#### Reader Kernel (Two Tensor Inputs)
+2. **No FPU fallback**: Unlike some binary ops (ADD, SUB, MUL) that can use both FPU and SFPU paths, POWER is SFPU-only. Attempting to use it with the FPU path throws `TT_THROW("Unsupported binary op for FPU")`.
 
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp`
+3. **Special UnpackToDestMode handling**: POWER is the only binary_ng SFPU operation that does NOT unconditionally force `UnpackToDestFp32` for all circular buffers. Lines 741-755 of the program factory explicitly check `op_type != BinaryOpType::POWER` and conditionally set the unpack mode based on input dtype. This is because the BF16 path (`_sfpu_binary_power_21f_`) works directly with BF16 data in DEST and includes its own explicit `float_to_fp16b` rounding at the end.
 
-This reader handles the case where both base and exponent are full tensors. It reads tiles from both input tensors using the TensorAccessor API, handling multi-dimensional broadcasting and sharded layouts. Key aspects:
+4. **Broadcast support**: The operation supports all `SubtileBroadcastType` variants (NONE, SCALAR_A/B, ROW_A/B, COL_A/B, and mixed ROW_COL), allowing flexible broadcasting patterns between the base and exponent tensors.
 
-- Reads tiles one at a time from DRAM/L1 using `noc_async_read_page`
-- Supports both interleaved and sharded memory layouts (compile-time `SRC_SHARDED`/`SRC_SHARDED_B` defines)
-- For sharded inputs, simply makes existing shard visible via `cb_reserve_back`/`cb_push_back`
-- For interleaved inputs, iterates through the multi-dimensional tile space (nD, D, N, C, Ht, Wt) with stride calculations for broadcasting
-- Runtime args include per-dimension strides that encode broadcasting (stride=0 means broadcast along that dimension)
+5. **Moroz et al. algorithm**: The BF16 path implements the `exp_21f` algorithm from "Simple Multiple Precision Algorithms for Exponential Functions" (IEEE Signal Processing Magazine, 2022). Key optimization: `addexp(z, 23)` compiles to a single-cycle `SFPDIVP2` instruction instead of a multiply-by-constant, saving 2 cycles.
 
-#### Writer Kernel (Scalar Variant)
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_scalar.cpp`
-
-Used when one operand is a scalar. The writer:
-1. Fills a single tile in CB c_1 with the scalar value (using `fill_with_val` helpers)
-2. Writes computed output tiles from CB c_2 to DRAM using `noc_async_write_page`
-3. Iterates through the output tile space with the same multi-dimensional loop structure
-
-#### Writer Kernel (Two Tensor Inputs)
-
-**File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp`
-
-Simpler writer that only writes output tiles from CB c_2 to DRAM. The reader handles both input tiles.
-
-## Work Distribution
-
-The program factory distributes output tiles across available cores using `split_work_to_cores`:
-
-1. **Total tiles**: `c_num_tiles = c.physical_volume() / tile_hw`
-2. **Core splitting**: Creates two core groups -- group 1 gets `num_tiles_per_core_group_1` tiles, group 2 gets `num_tiles_per_core_group_2` tiles (handles uneven division)
-3. **Per-core runtime args**: Each core receives `c_num_tiles` (its tile count) and `c_start_id` (its starting tile offset)
-4. **Sharded mode**: When inputs/outputs are sharded, each core processes its local shard directly from L1, avoiding DRAM reads
-
-Compute runtime args per core: `{c_num_tiles, freq, counter, compute_scalar_value}`
-- `freq` and `counter` are for broadcast iteration patterns (both 1/0 for NONE broadcast)
-- `compute_scalar_value` is 0 for POWER (no quantization)
+6. **Accuracy consideration for BF16**: The explicit `float_to_fp16b` conversion at line 147 uses round-to-nearest-even instead of truncation. Without this, results like 9^2 would yield 80.5 instead of 81 due to the intermediate FP32->BF16 truncation in SFPSTORE.
 
 ## External Knowledge Sources
 
-### DeepWiki References
-- `tenstorrent/tt-metal`: Binary_ng program factory structure, kernel path resolution, OpConfig mapping for POWER, UnpackToDestMode handling
-- `tenstorrent/tt-metal`: SFPU power operation -- algorithm details (21f vs f32 paths), special case handling, ckernel_sfpu_binary_pow.h location
+### DeepWiki Queries
 
-### Confluence References
-Not consulted for this analysis -- DeepWiki provided sufficient detail on the SFPU instruction set intrinsics used by the power kernel.
+1. **Query**: "How does the binary_ng program factory work? What are the different subtypes (scalar, bcast, etc.) and how does it select kernels?"
+   **Reason**: Needed to understand the overall binary_ng framework architecture, kernel selection logic, and broadcast handling.
+   **Key Findings**: The `BinaryNgKernelConfig` maps `SubtileBroadcastType` to specific kernel names. The program factory creates reader/compute/writer kernels with defines that configure the operation type. Circular buffers are double-buffered (2 tiles) for interleaved mode and shard-sized for sharded mode.
 
-### Glean References
-Not consulted for this analysis -- the binary power kernel implementation is fully available in the open-source codebase.
+2. **Query**: "How does the SFPU power operation work in binary_ng? What compute kernels are used for eltwise_power in the binary_ng framework?"
+   **Reason**: Needed to understand the SFPU power kernel call chain and algorithm details.
+   **Key Findings**: POWER maps to `SfpuBinaryOp::POWER`, uses `power_binary_tile` / `power_binary_tile_init`, dispatches to `calculate_sfpu_binary_pow` which has two algorithm paths based on `is_fp32_dest_acc_en`. The BF16 path uses polynomial log2 + exp_21f, the FP32 path uses improved log2 with Newton-Raphson + Cody-Waite Taylor exp.
 
-## Key Design Decisions
+### Documentation References
 
-1. **Two-path precision strategy**: The POWER operation provides distinct algorithm implementations for bfloat16 (21f) and float32 inputs, rather than always using the higher-precision path. This is because the 21f path uses fewer SFPU instructions (faster), and bfloat16 output cannot benefit from float32-level intermediate precision anyway. The conditional `UnpackToDestMode` reinforces this -- it avoids wasting DEST capacity on fp32 when the 21f path is sufficient.
+1. **Source**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_pow.h`
+   **Reason**: Primary SFPU kernel implementation for the power operation.
+   **Key Information**: Complete implementation of both BF16 and FP32 paths, special case handling, programmable constant initialization.
 
-2. **exp_21f vs Cody-Waite+Taylor**: The bfloat16 path uses the Moroz et al. exp_21f algorithm which exploits IEEE 754 bit manipulation for fast 2^x computation. The float32 path uses the more accurate (but slower) Cody-Waite range reduction with Taylor series expansion, achieving <1 ULP error.
-
-3. **Log2 implementation difference**: The bfloat16 path uses a simple 3rd-order polynomial for log2 over [1,2). The float32 path uses range reduction to [sqrt(2)/2, sqrt(2)] with an atanh-based series (6 terms) and Newton-Raphson reciprocal, providing much higher accuracy.
-
-4. **Programmable constants**: Using `vConstFloatPrgm0/1/2` for frequently-used constants (1/ln(2), -127, NaN) avoids repeated `SFPLOADI` instructions, saving instruction slots and cycles.
-
-5. **In-place DEST operation**: The result overwrites the base tile slot (`odst = idst0`), which avoids needing a third DEST slot and is natural since the base is consumed after computation.
-
-6. **Shared kernel binary**: All binary SFPU operations share the same `.cpp` compute kernel file. The specific operation is selected entirely through compile-time defines (`BINARY_SFPU_INIT`, `BINARY_SFPU_OP`), which means the kernel binary is specialized per operation at compile time with zero runtime dispatch overhead.
+2. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu_params.h`
+   **Reason**: Understanding the LLK dispatch wrapper that iterates over tile faces.
+   **Key Information**: `_llk_math_eltwise_binary_sfpu_params_` dispatches the SFPU function 4 times (one per face) in RC vector mode, using `TTI_SETRWC` to advance the DEST register pointer between faces.
