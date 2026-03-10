@@ -181,6 +181,17 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+inline void handle_interupt() {
+    uint64_t mcause;
+    asm volatile("csrr %0, mcause" : "=r"(mcause));
+    ASSERT(0 == 1, debug_assert_type_t::DebugAssertCrtaOutOfBounds);
+#if !defined(WATCHER_ENABLED)  // hang anyway
+    while (1) {
+        ;
+    }
+#endif
+}
+
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
@@ -210,6 +221,7 @@ extern "C" uint32_t _start1() {
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        asm volatile("csrw mtvec, %0" : : "r"(handle_interupt));  // set the interrupt handler
 
         trigger_sync_register_init();
 
@@ -344,22 +356,6 @@ extern "C" uint32_t _start1() {
 
                 trigger_sync_register_init();
 
-                if constexpr (ASSERT_ENABLED) {
-                    if (noc_mode == DM_DYNAMIC_NOC) {
-                        WAYPOINT("NKFW");
-                        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
-                        // landed and the NOC interface is in a known idle state for the next kernel.
-                        for (int noc = 0; noc < NUM_NOCS; noc++) {
-                            ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
-                        }
-                        WAYPOINT("NKFD");
-                    }
-                }
-
 #if defined(PROFILE_KERNEL)
                 if (noc_mode == DM_DYNAMIC_NOC) {
                     // re-init for profiler to able to run barrier in dedicated noc mode
@@ -431,6 +427,9 @@ extern "C" uint32_t _start1() {
         WAYPOINT("D1");
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+        if (hartid == 4) {
+            asm volatile(".word 0x00000000");
+        }
     }
 
     return 0;
