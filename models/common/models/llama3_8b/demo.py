@@ -103,17 +103,34 @@ def load_input_prompts(batch_size: int):
 
 def create_model_and_args(mesh_device, optimizations="performance"):
     """Create Llama3Transformer1D and ModelArgs for testing."""
+    from models.tt_transformers.tt.common import PagedAttentionConfig
     from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     instruct = "Instruct" in hf_model
 
+    num_devices = mesh_device.get_num_devices()
+    max_batch_size = 32
+    if num_devices >= 8:
+        max_seq_len = 131072 // max_batch_size
+    else:
+        max_seq_len = 1024
+
+    block_size = 32
+    max_num_blocks = (max_seq_len // block_size) * max_batch_size
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+
     model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
-        max_batch_size=32,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
         optimizations=(
-            DecodersPrecision.from_string(optimizations) if isinstance(optimizations, str) else optimizations
+            lambda args: getattr(DecodersPrecision, optimizations)(
+                num_decoders=args.n_layers, model_name=args.model_name
+            )
+            if isinstance(optimizations, str)
+            else optimizations
         ),
     )
 
@@ -126,6 +143,7 @@ def create_model_and_args(mesh_device, optimizations="performance"):
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
+        paged_attention_config=paged_attention_config,
     )
 
     return model, model_args
@@ -136,6 +154,7 @@ def create_model_and_args(mesh_device, optimizations="performance"):
 # =============================================================================
 
 
+# todo)) just use the mesh_device from conftest.py
 @pytest.fixture(scope="module")
 def mesh_device(request):
     """Mesh device fixture. Uses MESH_DEVICE env var or auto-detects."""
@@ -187,29 +206,39 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
     model_name = model_args.model_name
     reference_tokens, top5_tokens = load_reference_data(model_name)
 
+    # Ensure reference_tokens is 1D for slicing
+    if reference_tokens.dim() > 1:
+        reference_tokens = reference_tokens.squeeze()
+
     half = len(reference_tokens) // 2
     prompt_tokens = reference_tokens[:half].unsqueeze(0)  # [1, half]
 
     executor = LlamaExecutor(model, mesh_device, model_args=model_args)
 
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    max_batch_size = model_args.max_batch_size
+    max_seq_len = model_args.max_seq_len
+    block_size = 32
+    max_num_blocks_per_user = max_seq_len // block_size
+    max_num_blocks = max_num_blocks_per_user * max_batch_size
 
-    paged_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
     kv_cache_shape = (
-        paged_config.max_num_blocks,
+        max_num_blocks,
         model_args.n_kv_heads // mesh_device.get_num_devices(),
-        paged_config.block_size,
+        block_size,
         model_args.head_dim,
     )
     kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_args.n_layers)
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
     teacher = TeacherForceExecutor(executor)
+    target_top5 = top5_tokens[half - 1 :] if top5_tokens.shape[0] < len(reference_tokens) else top5_tokens[half:]
     result = teacher.run(
         prompt_tokens=prompt_tokens,
         reference_tokens=reference_tokens,
-        top5_tokens=top5_tokens[half:],
+        top5_tokens=target_top5,
         kv_cache=kv_cache,
-        max_batch_size=model_args.max_batch_size,
+        page_table=page_table,
+        max_batch_size=max_batch_size,
     )
 
     top1 = result.top1_accuracy() * 100
@@ -236,16 +265,20 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
     """Run performance benchmark (TTFT + tok/s/u)."""
     traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
 
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    block_size = 32
+    max_seq_len = model_args.max_seq_len
+    max_batch_size = model_args.max_batch_size
+    max_num_blocks_per_user = max_seq_len // block_size
+    max_num_blocks = max_num_blocks_per_user * max_batch_size
 
-    paged_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
     kv_cache_shape = (
-        paged_config.max_num_blocks,
+        max_num_blocks,
         model_args.n_kv_heads // mesh_device.get_num_devices(),
-        paged_config.block_size,
+        block_size,
         model_args.head_dim,
     )
     kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_args.n_layers)
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
     prompts = load_input_prompts(batch_size)
     tokenizer = model_args.tokenizer
@@ -260,8 +293,9 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
     result = bench.run(
         tokens=input_tokens,
         kv_cache=kv_cache,
+        page_table=page_table,
         num_decode_tokens=128,
-        max_batch_size=model_args.max_batch_size,
+        max_batch_size=max_batch_size,
         enable_trace=True,
     )
 

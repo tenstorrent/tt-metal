@@ -103,10 +103,7 @@ class TransformerBlock1D(LightweightModule):
 
         attn_in = self.attention_norm.decode_forward(x)
         attn_out = self.attention.decode_forward(attn_in, current_pos, rot_mats, page_table=page_table)
-        old = attn_out
         attn_out = ttnn.to_memory_config(attn_out, self.decode_residual_memcfg)
-        if old is not attn_out:
-            ttnn.deallocate(old)
 
         hidden_states = ttnn.add(residual, attn_out, memory_config=self.decode_residual_memcfg)
         residual = hidden_states
@@ -137,10 +134,7 @@ class TransformerBlock1D(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
         )
-        old = attn_out
         attn_out = ttnn.to_memory_config(attn_out, self.prefill_residual_memcfg)
-        if old is not attn_out:
-            ttnn.deallocate(old)
 
         hidden_states = ttnn.add(residual, attn_out, memory_config=self.prefill_residual_memcfg)
         residual = hidden_states
@@ -168,10 +162,7 @@ class TransformerBlock1D(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        kv_cache=None,
     ):
-        if kv_cache is not None:
-            self.attention.kv_cache = tuple(kv_cache)
         if mode == "prefill":
             return self.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
         return self.decode_forward(x, current_pos, rot_mats, page_table)
@@ -268,6 +259,23 @@ class Llama3Transformer1D(LightweightModule):
         self.activation_dtypes = config.activation_dtypes or [None] * config.n_layers
 
     # =========================================================================
+    # KV Cache binding
+    # =========================================================================
+
+    def set_kv_cache(self, kv_cache: list):
+        """Bind static kv_cache pool via each attention layer's config.
+
+        Must be called before the first forward (before load_device_weights runs).
+        The kv_cache is resolved from config during load_device_weights(), just
+        like all other weights.
+        """
+        assert len(kv_cache) == len(
+            self.layers
+        ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers"
+        for i, layer in enumerate(self.layers):
+            layer.attention.config.kv_cache = tuple(kv_cache[i])
+
+    # =========================================================================
     # Forward methods — take pre-embedded tensors
     # =========================================================================
 
@@ -277,21 +285,12 @@ class Llama3Transformer1D(LightweightModule):
         current_pos: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         page_table: ttnn.Tensor | None = None,
-        kv_cache: list | None = None,
     ) -> ttnn.Tensor:
         """Decode forward. x_embed is already embedded, unsqueezed, and in decode_residual_memcfg."""
         x = x_embed
 
         for i, layer in enumerate(self.layers):
-            if kv_cache is not None:
-                layer.attention.kv_cache = tuple(kv_cache[i])
-
-            activation_dtype = self.activation_dtypes[i]
-            if activation_dtype is not None:
-                old = x
-                x = ttnn.to_memory_config(x, self.decode_residual_memcfg, activation_dtype)
-                if old is not x:
-                    ttnn.deallocate(old)
+            x = ttnn.to_memory_config(x, self.decode_residual_memcfg, self.activation_dtypes[i])
 
             x = layer.decode_forward(x, current_pos, rot_mats, page_table)
 
@@ -308,15 +307,11 @@ class Llama3Transformer1D(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
-        kv_cache: list | None = None,
     ) -> ttnn.Tensor:
         """Prefill forward. x_embed is already embedded and unsqueezed to 4D."""
         x = x_embed
 
         for i, layer in enumerate(self.layers):
-            if kv_cache is not None:
-                layer.attention.kv_cache = tuple(kv_cache[i])
-
             activation_dtype = self.activation_dtypes[i]
             if activation_dtype is not None and x.dtype != activation_dtype:
                 old = x
@@ -334,11 +329,11 @@ class Llama3Transformer1D(LightweightModule):
         ttnn.deallocate(old)
 
         x = self.norm.prefill_forward(x)
+        lm_head_memcfg = self.lm_head.config.input_memcfg
+        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded():
+            x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
         x = self.lm_head.forward(x)
-        old = x
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        if old is not x:
-            ttnn.deallocate(old)
         return x
 
     def forward(
@@ -353,7 +348,6 @@ class Llama3Transformer1D(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token: int = -1,
-        kv_cache=None,
     ) -> ttnn.Tensor:
         """Dispatcher for backward compatibility. Llama 3.1-8B has no local rope."""
         rot_mats = rot_mats_global
@@ -366,14 +360,12 @@ class Llama3Transformer1D(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 get_last_token=get_last_token,
-                kv_cache=kv_cache,
             )
         return self.decode_forward(
             x,
             current_pos,
             rot_mats,
             page_table=page_table,
-            kv_cache=kv_cache,
         )
 
     # =========================================================================
@@ -431,7 +423,7 @@ class Llama3Transformer1D(LightweightModule):
         weight_cache_path,
         dtype=None,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        use_paged_kv_cache=None,
     ):
         """Build Llama3Transformer1D from TTTv1 ModelArgs.
 
@@ -441,13 +433,18 @@ class Llama3Transformer1D(LightweightModule):
         """
         from tqdm import tqdm
 
+        from models.tt_transformers.tt.common import Mode
         from models.tt_transformers.tt.model_config import TensorGroup
 
         instance = object.__new__(cls)
         super(Llama3Transformer1D, instance).__init__()
 
+        if use_paged_kv_cache is None:
+            use_paged_kv_cache = paged_attention_config is not None
+
         tt_ccl_inst = get_tt_ccl(mesh_device) if mesh_device.get_num_devices() > 1 else None
         model_config = args.get_model_config()
+        model_config["DECODE_RESIDUAL_MEMCFG"] = args.get_residual_mem_config(Mode.DECODE)
 
         instance.config = None
         instance.mesh_device = mesh_device
@@ -455,7 +452,7 @@ class Llama3Transformer1D(LightweightModule):
         instance.vocab_size = args.vocab_size
         instance.n_layers = args.n_layers
         instance.num_devices = mesh_device.get_num_devices()
-        instance.decode_residual_memcfg = model_config.get("DECODE_RESIDUAL_MEMCFG")
+        instance.decode_residual_memcfg = model_config["DECODE_RESIDUAL_MEMCFG"]
         instance.prefill_residual_memcfg = ttnn.DRAM_MEMORY_CONFIG
         instance.activation_dtypes = [
             args.decoders_optimizations.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION)
@@ -477,6 +474,10 @@ class Llama3Transformer1D(LightweightModule):
         )
         trans_mats_dict = instance.rope_setup.get_both_trans_mats()
 
+        attn_norm_cfg = args.get_norm_config("attn", Mode.DECODE)
+        ff_norm_cfg = args.get_norm_config("ff", Mode.DECODE)
+        lm_head_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE)
+
         layers = []
         for i in tqdm(range(args.n_layers), desc="Building TTTv2 layers"):
             attn_norm = RMSNorm1D.from_model_args(
@@ -487,6 +488,8 @@ class Llama3Transformer1D(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
                 weight_key="attention_norm",
+                sharded_program_config=attn_norm_cfg.get("sharded_program_config"),
+                sharded_output_config=attn_norm_cfg.get("sharded_output_config"),
             )
             attention = Attention1D.from_model_args(
                 mesh_device=mesh_device,
@@ -507,6 +510,8 @@ class Llama3Transformer1D(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
                 weight_key="ffn_norm",
+                sharded_program_config=ff_norm_cfg.get("sharded_program_config"),
+                sharded_output_config=ff_norm_cfg.get("sharded_output_config"),
             )
             mlp = MLP1D.from_model_args(
                 mesh_device=mesh_device,
@@ -540,6 +545,8 @@ class Llama3Transformer1D(LightweightModule):
             layer_num=None,
             weight_key="norm",
             state_dict_prefix=args.get_state_dict_prefix("", None),
+            sharded_program_config=lm_head_norm_cfg.get("sharded_program_config"),
+            sharded_output_config=lm_head_norm_cfg.get("sharded_output_config"),
         )
 
         state_dict_prefix = args.get_state_dict_prefix("", None)

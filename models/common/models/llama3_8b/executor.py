@@ -132,7 +132,17 @@ class LlamaExecutor:
                 for kv in ["k", "v"]
             ]
             kv_cache.append(kv_tt_i)
+        self._kv_cache = kv_cache
+        self.model.set_kv_cache(kv_cache)
         return kv_cache
+
+    def _assert_kv_cache_identity(self, kv_cache):
+        """Verify kv_cache passed to forward is the same object bound at allocation."""
+        if kv_cache is not None and hasattr(self, "_kv_cache"):
+            assert kv_cache is self._kv_cache, (
+                "kv_cache passed to forward differs from the allocated cache. "
+                "Call allocate_kv_cache() again after reallocating."
+            )
 
     # =========================================================================
     # Input preparation
@@ -161,7 +171,9 @@ class LlamaExecutor:
             tokens_embd = None
 
         rope = self.model.rope_setup
-        mat_len = rope.cos_matrix_prefill.shape[2]
+        # Load device weights if not already loaded
+        rope.load_device_weights()
+        mat_len = rope.cos_matrix.shape[2]
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
@@ -172,16 +184,14 @@ class LlamaExecutor:
         prefill_start = 0 if trace_enabled else start_pos
         slice_end = max_seq_len if trace_enabled else min(mat_len, required_end)
 
-        cos_slice = rope.cos_matrix_prefill[:, :, prefill_start:slice_end, :]
-        sin_slice = rope.sin_matrix_prefill[:, :, prefill_start:slice_end, :]
+        cos_slice = rope.cos_matrix[:, :, prefill_start:slice_end, :]
+        sin_slice = rope.sin_matrix[:, :, prefill_start:slice_end, :]
 
         if pad_len > 0:
             padding = [(0, 0)] * 4
             padding[2] = (0, pad_len)
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-
-        rot_mats = [cos_slice, sin_slice]
 
         tt_page_table = None
         if page_table is not None:
@@ -205,7 +215,8 @@ class LlamaExecutor:
 
         return (
             tokens_tt if trace_enabled else tokens_embd,
-            rot_mats,
+            cos_slice,
+            sin_slice,
             tt_page_table,
             tt_chunk_page_table,
         )
@@ -279,6 +290,7 @@ class LlamaExecutor:
     ):
         """Per-user prefill loop with chunked prefill + prefix caching."""
         self.mode = Mode.PREFILL
+        self._assert_kv_cache_identity(kv_cache)
 
         if page_table is None:
             enable_trace = False
@@ -328,7 +340,6 @@ class LlamaExecutor:
                 page_table=page_table_user,
                 user_id=0 if page_table is not None else user_id,
                 last_token_idx=last_token_idx,
-                kv_cache=kv_cache,
                 num_cached_tokens=num_cached_tokens,
             )
 
@@ -353,7 +364,7 @@ class LlamaExecutor:
 
         return output_tensor
 
-    def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, num_cached_tokens=0):
+    def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
         """Prefill a single user with chunked prefill support."""
         seq_len = tokens.shape[-1]
         max_chunk = self.model_args.max_prefill_chunk_size if self.model_args else seq_len
@@ -361,11 +372,11 @@ class LlamaExecutor:
         use_prefix_caching = num_cached_tokens > 0
 
         if use_chunked or use_prefix_caching:
-            assert page_table is not None and kv_cache is not None
+            assert page_table is not None and self._kv_cache is not None
             chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk) if use_chunked else seq_len
 
             last_token_in_seq = last_token_idx - num_cached_tokens
-            block_size = get_block_size(kv_cache)
+            block_size = get_block_size(self._kv_cache)
             last_token_in_chunk = last_token_in_seq % chunk_size
             last_chunk_start = (last_token_in_seq // chunk_size) * chunk_size
 
@@ -381,7 +392,7 @@ class LlamaExecutor:
                 chunk_tokens = tokens[:, chunk_start_rel:chunk_end_rel]
                 chunk_page_table = page_table_padded[:, chunk_start // block_size : chunk_end // block_size]
 
-                prefill_input, rot_mats, page_table_tt, chunk_page_table_tt = self.prepare_prefill_inputs(
+                prefill_input, cos, sin, page_table_tt, chunk_page_table_tt = self.prepare_prefill_inputs(
                     chunk_tokens,
                     start_pos=chunk_start,
                     page_table=page_table_padded,
@@ -392,13 +403,12 @@ class LlamaExecutor:
                 get_last_token = (last_token_in_chunk // 32) * 32
                 logits = self.model.prefill_forward(
                     prefill_input,
-                    rot_mats,
+                    [cos, sin],
                     user_id=0,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                     get_last_token=get_last_token,
-                    kv_cache=kv_cache,
                 )
 
                 if chunk_start_rel == last_chunk_start:
@@ -406,7 +416,7 @@ class LlamaExecutor:
                 else:
                     del logits
         else:
-            prefill_input, rot_mats, page_table_tt, _ = self.prepare_prefill_inputs(
+            prefill_input, cos, sin, page_table_tt, _ = self.prepare_prefill_inputs(
                 tokens,
                 page_table=page_table,
                 last_token_idx=last_token_idx,
@@ -415,11 +425,10 @@ class LlamaExecutor:
             get_last_token = (last_token_idx // 32) * 32
             return self.model.prefill_forward(
                 prefill_input,
-                rot_mats,
+                [cos, sin],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=get_last_token,
-                kv_cache=kv_cache,
             )
 
     # =========================================================================
@@ -439,6 +448,7 @@ class LlamaExecutor:
     ):
         """Single decode step. Returns (logits_or_tokens, log_probs)."""
         self.mode = Mode.DECODE
+        self._assert_kv_cache_identity(kv_cache)
         B = tokens.shape[0]
         vocab_size = self.model.vocab_size
         num_devices = self.model.num_devices
@@ -470,7 +480,6 @@ class LlamaExecutor:
             tt_current_pos,
             rot_mats,
             page_table=tt_page_table,
-            kv_cache=kv_cache,
         )
 
         if sampling_on_device and self.model.sampling is not None:
@@ -529,7 +538,7 @@ class TracedLlamaExecutor:
     # =========================================================================
 
     def warmup_model_prefill(
-        self, kv_cache, enable_trace=True, can_sample_on_device=False, non_greedy_decoding_on_device=False
+        self, kv_cache=None, enable_trace=True, can_sample_on_device=False, non_greedy_decoding_on_device=False
     ):
         """Warmup prefill traces for supported sequence lengths."""
         if self.already_warmed_up_prefill:
@@ -539,6 +548,12 @@ class TracedLlamaExecutor:
         if not self.model_args:
             return
 
+        kv_cache = getattr(self._direct, "_kv_cache", None)
+        is_paged = kv_cache is not None and hasattr(self.model, "layers") and len(self.model.layers) > 0
+        if is_paged:
+            attn_cfg = self.model.layers[0].attention.config
+            is_paged = attn_cfg.paged_attention_config is not None
+
         supported_seq_lens = self.model_args.get_warmup_prefill_supported_seq_lens()
 
         for seq_len in supported_seq_lens:
@@ -546,9 +561,15 @@ class TracedLlamaExecutor:
             warmup_prompt_lens = torch.tensor([seq_len], dtype=torch.long)
             warmup_empty_slots = [0]
 
+            warmup_page_table = None
+            if is_paged:
+                block_size = get_block_size(kv_cache)
+                num_blocks = num_blocks_in_seq(seq_len, block_size)
+                warmup_page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+
             self.prefill_forward(
                 warmup_tokens,
-                page_table=None,
+                page_table=warmup_page_table,
                 kv_cache=kv_cache,
                 prompt_lens=warmup_prompt_lens,
                 empty_slots=warmup_empty_slots,
@@ -577,6 +598,7 @@ class TracedLlamaExecutor:
     ):
         """Traced prefill: lazy capture on first call per seq_len, replay after."""
         self.mode = Mode.PREFILL
+        self._direct._assert_kv_cache_identity(kv_cache)
 
         if page_table is None:
             enable_trace = False
@@ -584,7 +606,6 @@ class TracedLlamaExecutor:
         if warmup_prefill:
             sampling_supported = getattr(self.model, "sampling", None) is not None
             self.warmup_model_prefill(
-                kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=sampling_supported,
                 non_greedy_decoding_on_device=sampling_supported,
@@ -638,7 +659,6 @@ class TracedLlamaExecutor:
                     page_table=page_table_user,
                     user_id=0,
                     last_token_idx=last_token_idx,
-                    kv_cache=kv_cache,
                     prefill_seq_len=prefill_seq_len,
                 )
                 logits = self.model.norm.prefill_forward(
@@ -656,7 +676,6 @@ class TracedLlamaExecutor:
                     page_table=page_table_user,
                     user_id=0 if page_table is not None else user_id,
                     last_token_idx=last_token_idx,
-                    kv_cache=kv_cache,
                     num_cached_tokens=num_cached_tokens,
                 )
 
@@ -681,7 +700,7 @@ class TracedLlamaExecutor:
 
         return output_tensor
 
-    def _easy_trace_prefill(self, tokens, page_table, user_id, last_token_idx, kv_cache, prefill_seq_len):
+    def _easy_trace_prefill(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
         """Lazy trace capture for prefill. Captures on first call per seq_len."""
         if self.trace_id_prefill[prefill_seq_len] is None:
             return self._capture_and_run_prefill_trace(
@@ -689,7 +708,6 @@ class TracedLlamaExecutor:
                 page_table,
                 user_id,
                 last_token_idx,
-                kv_cache,
                 prefill_seq_len,
             )
 
@@ -707,14 +725,13 @@ class TracedLlamaExecutor:
         ttnn.execute_trace(self.mesh_device, self.trace_id_prefill[prefill_seq_len], cq_id=0, blocking=False)
         return self.trace_output_prefill[prefill_seq_len]
 
-    def _capture_and_run_prefill_trace(self, tokens, page_table, user_id, last_token_idx, kv_cache, prefill_seq_len):
+    def _capture_and_run_prefill_trace(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
         """Compile + capture trace for a specific prefill seq_len."""
         self._direct._prefill_single_user(
             tokens,
             page_table=page_table,
             user_id=user_id,
             last_token_idx=last_token_idx,
-            kv_cache=kv_cache,
         )
         logger.info(f"Compiled prefill for seq_len={prefill_seq_len}")
 
@@ -728,11 +745,10 @@ class TracedLlamaExecutor:
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        tokens_embd, tt_page_table, tt_chunk_page_table = (
-            self.model.embed_prefill(device_inputs[0]),
-            device_inputs[2],
-            device_inputs[3],
-        )
+        tokens_embd = self.model.embed_prefill(device_inputs[0])
+        rot_mats = [device_inputs[1], device_inputs[2]]
+        tt_page_table = device_inputs[3]
+        tt_chunk_page_table = device_inputs[4]
 
         max_seq_len = self.model_args.max_seq_len if self.model_args else prefill_seq_len
         logits = self.model.prefill_forward(
@@ -742,7 +758,6 @@ class TracedLlamaExecutor:
             page_table=tt_page_table,
             chunk_page_table=tt_chunk_page_table,
             get_last_token=-1,
-            kv_cache=kv_cache,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -771,6 +786,7 @@ class TracedLlamaExecutor:
     ):
         """Traced decode: lazy capture on first call, replay after."""
         self.mode = Mode.DECODE
+        self._direct._assert_kv_cache_identity(kv_cache)
         sampling_on_device = sampling_params is not None
         B = tokens.shape[0]
         vocab_size = self.model.vocab_size
@@ -844,7 +860,7 @@ class TracedLlamaExecutor:
             tokens,
             start_pos,
             page_table=page_table,
-            kv_cache=kv_cache,
+            kv_cache=kv_cache,  # passed to _direct for identity assertion
             enable_trace=False,
             read_from_device=False,
             sampling_params=None,
@@ -865,7 +881,6 @@ class TracedLlamaExecutor:
             tt_current_pos,
             rot_mats,
             page_table=tt_page_table,
-            kv_cache=kv_cache,
         )
 
         if sampling_on_device and self.model.sampling is not None:
@@ -1022,7 +1037,8 @@ class PerfBenchmarkResult:
 
     @property
     def ttft_ms(self) -> float:
-        return self.prefill_time_s * 1000
+        """Average time-to-first-token per user (ms)."""
+        return self.prefill_time_s / self.batch_size * 1000
 
     @property
     def tok_s_u(self) -> float:
@@ -1073,23 +1089,32 @@ class PerfBenchmarkExecutor:
     ) -> PerfBenchmarkResult:
         """Timed prefill + decode loop.
 
+        Matches TTTv1 methodology: compile prefill is excluded from TTFT.
         Iteration 0 of decode is the compile iteration (timed separately).
         Returns PerfBenchmarkResult with raw timings + derived metrics.
         """
         batch_size = tokens.shape[0]
         prompt_len = tokens.shape[1]
+        max_batch_size = max(max_batch_size, batch_size)
 
-        t0 = time.perf_counter()
-        prefill_output = self.executor.prefill_forward(
-            tokens,
+        prefill_kwargs = dict(
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=torch.tensor([prompt_len] * batch_size),
             empty_slots=list(range(batch_size)),
-            enable_trace=enable_trace,
+            enable_trace=False,
             start_pos=start_pos,
             sampling_params=sampling_params,
         )
+
+        # Compile prefill: warmup + first run (excluded from TTFT, matches TTTv1)
+        self.executor.prefill_forward(tokens, **prefill_kwargs)
+        if hasattr(self.executor, "mesh_device"):
+            ttnn.synchronize_device(self.executor.mesh_device)
+
+        # Inference prefill: timed run with ops already compiled (this is TTFT)
+        t0 = time.perf_counter()
+        prefill_output = self.executor.prefill_forward(tokens, **prefill_kwargs)
         if hasattr(self.executor, "mesh_device"):
             ttnn.synchronize_device(self.executor.mesh_device)
         prefill_time = time.perf_counter() - t0
