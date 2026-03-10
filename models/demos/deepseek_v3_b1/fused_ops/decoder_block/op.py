@@ -64,6 +64,7 @@ class DecoderBlock:
         moe_use_hardcoded_expert_index=False,
         moe_hardcoded_expert_index=0,
         moe_num_devices=1,
+        moe_reduce_root_device_idx=0,
     ):
         full_q, new_kv, attn_output = AttentionBlock.golden(
             input_tensor,
@@ -132,6 +133,7 @@ class DecoderBlock:
                 shared_up_weights=moe_shared_up_weights[:, shard_start:shard_end],
                 shared_down_weights=moe_shared_down_weights[shard_start:shard_end, :],
                 hardcoded_expert_index=dev_idx,
+                include_residual=(dev_idx == moe_reduce_root_device_idx),
                 **moe_golden_kwargs,
             )
             per_device_outputs.append(dev_output)

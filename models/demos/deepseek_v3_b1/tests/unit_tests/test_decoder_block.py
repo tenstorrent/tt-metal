@@ -1016,7 +1016,6 @@ def test_decoder(
     ttnn_attention_output = ttnn.to_torch(
         attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
     )
-    # ttnn_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ========================================================================
     # Run standalone MoeOp.op on MLA output (validate golden MoE path)
@@ -1072,11 +1071,18 @@ def test_decoder(
         moe_ref_indices_torch = None
 
     moe_reduce_torch = ttnn.to_torch(moe_ref_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    decoder_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_coord_tuple = d["reduce_root_coord"]
     root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
     moe_reduce_root = moe_reduce_torch[root_device_idx]
     moe_device_output_valid = extract_routed_expert_output(
         moe_reduce_root.unsqueeze(0),
+        d["num_gate_proj_cores"],
+        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+        d["per_core_down_proj_N"],
+    )
+    decoder_moe_output_valid = extract_routed_expert_output(
+        decoder_moe_output.unsqueeze(0),
         d["num_gate_proj_cores"],
         RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
         d["per_core_down_proj_N"],
@@ -1138,6 +1144,7 @@ def test_decoder(
         moe_use_hardcoded_expert_index=use_hardcoded_expert_index,
         moe_hardcoded_expert_index=0,
         moe_num_devices=num_devices,
+        moe_reduce_root_device_idx=root_coord_tuple[0] * mesh_cols + root_coord_tuple[1],
     )
 
     logger.info(f"MLA output: {mla_output}")
@@ -1280,12 +1287,12 @@ def test_decoder(
     # ========================================================================
     # Golden with moe_num_devices>1 computes per-device golden with TP-sharded shared
     # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
-    passing, pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.996)
+    passing, pcc = comp_pcc(moe_output.flatten(), decoder_moe_output_valid.flatten(), 0.996)
     pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.996)
     logger.info(f"MoE PCC: {pcc}")
     logger.info(f"Pure MoE PCC: {pure_moe_pcc}")
     logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
-    logger.info(f"DecoderBlock MoE output: {moe_device_output_valid.flatten()[:8]}")
+    logger.info(f"DecoderBlock MoE output: {decoder_moe_output_valid.flatten()[:8]}")
     logger.info(f"Pure MoE output: {moe_device_output_valid.flatten()[:8]}")
     if use_hardcoded_expert_index:
         assert pure_moe_passing, f"Standalone MoE PCC check failed: {pure_moe_pcc}"
