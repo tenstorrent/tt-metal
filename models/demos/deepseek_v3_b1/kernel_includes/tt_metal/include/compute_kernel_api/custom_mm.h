@@ -193,7 +193,7 @@ ALWI void custom_mm_block_unpack(
     const std::uint32_t in1_tile_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed, clear_srcs>(
+    UNPACK((llk_unpack_AB_custom_mm<read_transposed, clear_src>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
 }
 
