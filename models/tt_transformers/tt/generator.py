@@ -468,6 +468,7 @@ class Generator(WarmupForwardMixin):
             and len(set(prefill_seq_lens)) == 1
             and prefill_seq_lens[0] * batch_size < MAX_BATCHED_PREFILL_SEQ_LEN
             and self.data_parallel == 1
+            and not getattr(self.model_args[0], "disable_batched_prefill", False)
         )
 
         all_users = [0] if use_batched_prefill else empty_slots
