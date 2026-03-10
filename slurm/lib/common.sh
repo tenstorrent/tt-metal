@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Guard against double-sourcing
+[[ -n "${_SLURM_CI_COMMON_SH:-}" ]] && return 0
+_SLURM_CI_COMMON_SH=1
+
 # ---------------------------------------------------------------------------
 # Script directory detection
 # ---------------------------------------------------------------------------
