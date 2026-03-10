@@ -130,9 +130,6 @@ def test_model_inference(
         pcc = 0.88 if mode_accuracy else 0.86
     else:
         pcc = 0.94 if mode_accuracy else 0.86
-        if mode_accuracy and model_args.base_model_name == "Meta-Llama-3-8B":
-            pcc = 0.92  # slight numerical variance on some devices (e.g. blackhole)
-
     model_name = model_args.base_model_name
 
     # Set num_layers for prefetcher if it is not None

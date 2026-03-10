@@ -106,6 +106,7 @@ class ModelOptimizations:
         else:
             if (
                 base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Meta-Llama-3")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
