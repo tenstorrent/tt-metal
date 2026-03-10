@@ -34,12 +34,16 @@ class TestTargetConfig:
             self.simulator_port: int = simulator_port
             self.device_id: int = device_id
             self.log_level: str = log_level
+            self.reset_simulator_per_test: bool = False
             TestTargetConfig._initialized = True
 
     def update_from_pytest_config(self, config):
         """Update only the simulator related settings from pytest config"""
         self.run_simulator = config.getoption("--run-simulator", default=False)
         self.simulator_port = config.getoption("--port", default=5555)
+        self.reset_simulator_per_test = config.getoption(
+            "--reset-simulator-per-test", default=False
+        )
 
 
 def initialize_test_target_from_pytest(config):
