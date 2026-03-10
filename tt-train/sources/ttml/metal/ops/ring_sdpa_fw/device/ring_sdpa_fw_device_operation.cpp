@@ -63,10 +63,10 @@ RingSDPAFwDeviceOperation::tensor_return_value_t RingSDPAFwDeviceOperation::crea
     return {output, intermediates};
 }
 
-tt::stl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         attrs.ring_size,
         attrs.ring_axis,
         attrs.step,
