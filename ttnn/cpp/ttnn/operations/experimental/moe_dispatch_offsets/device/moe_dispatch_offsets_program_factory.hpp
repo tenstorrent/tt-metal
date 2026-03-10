@@ -10,8 +10,10 @@
 namespace ttnn::experimental::prim {
 
 struct MoeDispatchOffsetsSharedVariables {
-    tt::tt_metal::KernelHandle kernel_id = 0;
-    CoreCoord core;
+    tt::tt_metal::KernelHandle kernel_id0 = 0;
+    tt::tt_metal::KernelHandle kernel_id1 = 0;
+    std::vector<CoreCoord> cores0;
+    std::vector<CoreCoord> cores1;
 };
 
 struct MoeDispatchOffsetsProgramFactory {
