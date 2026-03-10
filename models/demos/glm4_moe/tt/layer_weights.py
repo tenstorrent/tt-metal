@@ -73,6 +73,8 @@ def _env_experts_dtype() -> ttnn.DataType:
     override = os.environ.get("GLM4_MOE_EXPERTS_TT_DTYPE", "").strip().lower()
     if not override:
         return ttnn.bfloat8_b
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
     if override in {"bf8", "bfloat8_b"}:
         return ttnn.bfloat8_b
     if override in {"bf16", "bfloat16"}:
@@ -80,6 +82,23 @@ def _env_experts_dtype() -> ttnn.DataType:
     if override in {"f32", "fp32", "float32"}:
         return ttnn.float32
     raise ValueError(f"Invalid GLM4_MOE_EXPERTS_TT_DTYPE={override!r}")
+
+
+def _env_expert_projection_dtype(proj_name: str) -> ttnn.DataType:
+    """Per-projection dtype override. Falls back to GLM4_MOE_EXPERTS_TT_DTYPE."""
+    env_key = f"GLM4_MOE_EXPERTS_{proj_name.upper()}_DTYPE"
+    override = os.environ.get(env_key, "").strip().lower()
+    if not override:
+        return _env_experts_dtype()
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if override in {"f32", "fp32", "float32"}:
+        return ttnn.float32
+    raise ValueError(f"Invalid {env_key}={override!r}")
 
 
 def _env_dense_dtype() -> ttnn.DataType:
@@ -584,11 +603,16 @@ def convert_decoder_layer_weights(
         _msync("after e_bias_tile as_tensor")
 
         # Stack and shard expert weights across all 32 devices (EP=32)
-        experts_dtype = _env_experts_dtype()
+        w1_dtype = _env_expert_projection_dtype("W1")
+        w2_dtype = _env_expert_projection_dtype("W2")
+        w3_dtype = _env_expert_projection_dtype("W3")
         num_experts = int(hparams.n_routed_experts)
         moe_intermediate = int(hparams.moe_intermediate_size)
         hidden = int(hparams.hidden_size)
-        experts_variant = f"ep{num_devices}_v1"
+        dtype_tag = f"{w1_dtype.name}_{w2_dtype.name}_{w3_dtype.name}"
+        experts_variant = f"ep{num_devices}_{dtype_tag}_v1"
+        if layer_idx == int(hparams.first_k_dense_replace):
+            logger.info(f"  Expert dtypes: w1={w1_dtype.name}, w2={w2_dtype.name}, w3={w3_dtype.name}")
 
         w1_list: list[torch.Tensor] = []
         w3_list: list[torch.Tensor] = []
@@ -632,7 +656,7 @@ def convert_decoder_layer_weights(
                 device=device,
                 torch_weights=w1w3_stacked,
                 cache_file=c("w1w3_experts", experts_variant),
-                dtype=experts_dtype,
+                dtype=w1_dtype,
             )
             _msync("after w1w3_experts")
             w1_experts: Optional[ttnn.Tensor] = None
@@ -642,14 +666,14 @@ def convert_decoder_layer_weights(
                 device=device,
                 torch_weights=w1_stacked,
                 cache_file=c("w1_experts", experts_variant),
-                dtype=experts_dtype,
+                dtype=w1_dtype,
             )
             _msync("after w1_experts")
             w3_experts = _experts_weight_tt(
                 device=device,
                 torch_weights=w3_stacked,
                 cache_file=c("w3_experts", experts_variant),
-                dtype=experts_dtype,
+                dtype=w3_dtype,
             )
             _msync("after w3_experts")
             w1w3_experts_tt = None
@@ -658,7 +682,7 @@ def convert_decoder_layer_weights(
             device=device,
             torch_weights=w2_stacked,
             cache_file=c("w2_experts", experts_variant),
-            dtype=experts_dtype,
+            dtype=w2_dtype,
         )
         _msync("after w2_experts")
 
