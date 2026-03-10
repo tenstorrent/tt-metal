@@ -1,0 +1,24 @@
+{
+  "name": "policy_postprocessor",
+  "steps": [
+    {
+      "registry_name": "unnormalizer_processor",
+      "config": {
+        "eps": 1e-08,
+        "features": {},
+        "norm_map": {
+          "VISUAL": "IDENTITY",
+          "STATE": "MEAN_STD",
+          "ACTION": "MEAN_STD"
+        }
+      }
+    },
+    {
+      "registry_name": "device_processor",
+      "config": {
+        "device": "cpu",
+        "float_dtype": null
+      }
+    }
+  ]
+}

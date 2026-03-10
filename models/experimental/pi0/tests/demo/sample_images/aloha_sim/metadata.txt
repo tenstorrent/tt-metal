@@ -1,0 +1,8 @@
+ALOHA Sim Sample Images
+========================================
+
+Dataset: lerobot/aloha_sim_transfer_cube_human
+Video frames: 20000
+Resolution: 480x640
+Extracted frames: [0, 500, 1000, 2000, 4000]
+Task: Transfer cube

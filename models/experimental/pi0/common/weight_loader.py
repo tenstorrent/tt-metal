@@ -17,7 +17,7 @@ Weight Structure:
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -61,10 +61,25 @@ class PI0Config:
 
     @classmethod
     def from_json(cls, json_path: Union[str, Path]) -> "PI0Config":
-        """Load config from JSON file."""
+        """Load config from JSON file.
+
+        Accepts both PI0Config-shaped JSON and LeRobot policy config.json
+        (only known fields are used; extra keys like 'type', 'input_features' are ignored).
+        """
         with open(json_path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        # LeRobot config uses different names; map to PI0Config fields
+        if "max_action_dim" in data and "action_dim" not in data:
+            data = dict(data, action_dim=data["max_action_dim"])
+        if "chunk_size" in data and "action_horizon" not in data:
+            data = dict(data, action_horizon=data["chunk_size"])
+        elif "n_action_steps" in data and "action_horizon" not in data:
+            data = dict(data, action_horizon=data["n_action_steps"])
+        if "dtype" in data and "precision" not in data:
+            data = dict(data, precision=data.get("dtype", "bfloat16"))
+        field_names = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in field_names}
+        return cls(**filtered)
 
 
 def load_pi0_state_dict(

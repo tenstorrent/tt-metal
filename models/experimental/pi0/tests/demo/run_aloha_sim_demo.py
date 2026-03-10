@@ -10,12 +10,18 @@ from the ALOHA sim dataset, proving the model works with realistic inputs.
 
 Usage:
     python run_aloha_sim_demo.py
+    python run_aloha_sim_demo.py --torch-only   # Skip TTNN (no device); use if you get segfault
 """
 
+import faulthandler
+import argparse
 import sys
 import os
 import time
 from pathlib import Path
+
+# Dump traceback on segfault (e.g. in TTNN/device code)
+faulthandler.enable()
 
 import torch
 import numpy as np
@@ -43,6 +49,8 @@ TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
 CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
+# HuggingFace fallback when local weights are not present (uses huggingface_hub)
+PI0_HF_REPO_ID = "lerobot/pi0_base"
 ALOHA_SIM_IMAGES_DIR = DEMO_DIR / "sample_images" / "aloha_sim"
 ALOHA_SIM_PROMPT = "Transfer cube"
 BATCH_SIZE = 1
@@ -108,15 +116,31 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="PI0 demo with ALOHA sim images")
+    parser.add_argument(
+        "--torch-only",
+        action="store_true",
+        help="Run PyTorch reference only (no TTNN/device). Use if you get a segfault without Tenstorrent hardware.",
+    )
+    args = parser.parse_args()
+
     print("\n" + "=" * 70)
     print("       PI0 DEMO - ALOHA SIM REAL IMAGES")
     print("=" * 70)
+    if args.torch_only:
+        print("   (--torch-only: skipping TTNN device path)\n")
 
-    # Check paths
+    # Resolve checkpoint: use local path if present, else HuggingFace (download on first load)
     checkpoint_path = Path(CHECKPOINT_PATH)
-    if not checkpoint_path.exists():
-        print(f"❌ Checkpoint not found: {checkpoint_path}")
-        sys.exit(1)
+    if checkpoint_path.exists():
+        model_path_for_loader = str(checkpoint_path)
+        print(f"📂 Using local weights: {checkpoint_path}")
+    else:
+        model_path_for_loader = PI0_HF_REPO_ID
+        print(f"📥 Local weights not found at {checkpoint_path}")
+        print(f"   Using HuggingFace: {PI0_HF_REPO_ID} (will download on first load)")
+        print(f"   To use local weights instead, run:")
+        print(f"   python {Path(__file__).parent.parent / 'download_pretrained_weights.py'}")
 
     if not ALOHA_SIM_IMAGES_DIR.exists():
         print(f"❌ ALOHA sim images not found: {ALOHA_SIM_IMAGES_DIR}")
@@ -155,18 +179,28 @@ def main():
     print(f'\n🗣️  Prompt: "{ALOHA_SIM_PROMPT}"')
     print(f"🤖 State: random {config.state_dim}-dim vector")
 
-    # Load models
+    # Load models (weight download happens on first access if using HuggingFace)
     print(f"\n📦 Loading models...")
-    weight_loader = PI0WeightLoader(str(checkpoint_path))
+    weight_loader = PI0WeightLoader(model_path_for_loader)
+    try:
+        print(f"   Loading PyTorch reference...")
+        torch_model = PI0ModelTorch(config, weight_loader)
+    except Exception as e:
+        if model_path_for_loader == PI0_HF_REPO_ID:
+            print(f"\n❌ Failed to load weights from HuggingFace: {e}")
+            print(f"   Install: pip install huggingface_hub")
+            print(f"   For gated repos, set HF_TOKEN or run: huggingface-cli login")
+            print(f"   Or download locally: python {Path(__file__).parent.parent / 'download_pretrained_weights.py'}")
+        else:
+            print(f"\n❌ Failed to load weights: {e}")
+        sys.exit(1)
 
-    print(f"   Loading PyTorch reference...")
-    torch_model = PI0ModelTorch(config, weight_loader)
-
-    print(f"   Loading TTNN model...")
-    device = ttnn.open_device(device_id=0, l1_small_size=24576)
-
-    torch.manual_seed(SEED)
-    ttnn_model = PI0ModelTTNN(config, weight_loader, device)
+    device = None
+    if not args.torch_only:
+        print(f"   Loading TTNN model...")
+        device = ttnn.open_device(device_id=0, l1_small_size=24576)
+        torch.manual_seed(SEED)
+        ttnn_model = PI0ModelTTNN(config, weight_loader, device)
 
     # Run inference
     print(f"\n🚀 Running inference on REAL images (10 denoising steps)...")
@@ -184,6 +218,16 @@ def main():
         )
     torch_time = (time.time() - t0) * 1000
     print(f"   PyTorch: {torch_time:.2f}ms")
+
+    if args.torch_only:
+        print("\n" + "-" * 70)
+        print("📊 RESULTS (PyTorch only)")
+        print("-" * 70)
+        print(f"\n  PyTorch Actions: shape {torch_actions.shape}")
+        print(f"    Range: [{torch_actions.min():.4f}, {torch_actions.max():.4f}], Mean: {torch_actions.mean():.4f}")
+        print(f"\n  (TTNN skipped; run without --torch-only on a machine with Tenstorrent device to compare.)")
+        print("=" * 70 + "\n")
+        return 0
 
     # TTNN
     t0 = time.time()

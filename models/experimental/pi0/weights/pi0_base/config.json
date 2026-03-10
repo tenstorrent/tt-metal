@@ -1,0 +1,82 @@
+{
+    "type": "pi0",
+    "n_obs_steps": 1,
+    "input_features": {
+        "observation.images.base_0_rgb": {
+            "type": "VISUAL",
+            "shape": [
+                3,
+                224,
+                224
+            ]
+        },
+        "observation.images.left_wrist_0_rgb": {
+            "type": "VISUAL",
+            "shape": [
+                3,
+                224,
+                224
+            ]
+        },
+        "observation.images.right_wrist_0_rgb": {
+            "type": "VISUAL",
+            "shape": [
+                3,
+                224,
+                224
+            ]
+        },
+        "observation.state": {
+            "type": "STATE",
+            "shape": [
+                32
+            ]
+        }
+    },
+    "output_features": {
+        "action": {
+            "type": "ACTION",
+            "shape": [
+                32
+            ]
+        }
+    },
+    "device": "cuda",
+    "use_amp": false,
+    "push_to_hub": true,
+    "repo_id": null,
+    "private": null,
+    "tags": null,
+    "license": null,
+    "paligemma_variant": "gemma_2b",
+    "action_expert_variant": "gemma_300m",
+    "dtype": "float32",
+    "chunk_size": 50,
+    "n_action_steps": 50,
+    "max_action_dim": 32,
+    "max_state_dim": 32,
+    "num_inference_steps": 10,
+    "time_sampling_beta_alpha": 1.5,
+    "time_sampling_beta_beta": 1.0,
+    "min_period": 0.004,
+    "max_period": 4.0,
+    "image_resolution": [
+        224,
+        224
+    ],
+    "gradient_checkpointing": false,
+    "compile_model": false,
+    "compile_mode": "max-autotune",
+    "optimizer_lr": 2.5e-05,
+    "optimizer_betas": [
+        0.9,
+        0.95
+    ],
+    "optimizer_eps": 1e-08,
+    "optimizer_weight_decay": 0.01,
+    "optimizer_grad_clip_norm": 1.0,
+    "scheduler_warmup_steps": 1000,
+    "scheduler_decay_steps": 30000,
+    "scheduler_decay_lr": 2.5e-06,
+    "tokenizer_max_length": 48
+}
