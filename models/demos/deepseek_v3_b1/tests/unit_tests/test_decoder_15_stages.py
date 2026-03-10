@@ -25,21 +25,15 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import create_gate_indices_tensor, prepare_moe_layer_weights
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
-    SharedExpert,
     create_routed_expert_tensors,
     create_shared_expert_tensors,
-    extract_routed_expert_output,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 
 
 def create_fabric_router_config(max_payload_size):
@@ -198,7 +192,6 @@ def test_persistent_moe_15_stages(
         if my_mesh_id >= 1:
             downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
 
-        
         # ── MoE tensors (MoE stages only) ──
 
         r = None
@@ -219,7 +212,9 @@ def test_persistent_moe_15_stages(
             )
 
             num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
-            available_cores = ttnn.num_cores_to_corerangeset(num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True)
+            available_cores = ttnn.num_cores_to_corerangeset(
+                num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
+            )
 
             bcast_cluster_axis = 0
             bcast_secondary_cluster_axis = 1
@@ -245,7 +240,6 @@ def test_persistent_moe_15_stages(
             ttnn.synchronize_device(mesh_device)
 
             recv_socket = pipeline_block.get_downstream_socket()
-
 
         # ── Launch pipeline ──
         pipeline_block.run()
@@ -291,6 +285,7 @@ def test_persistent_moe_15_stages(
             #     is_torus=is_torus,
             #     downstream_socket=downstream_socket,
             # )
+            is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
             moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
                 # AttentionBlock parameters
                 d["input_tensor_mesh"],
@@ -357,9 +352,10 @@ def test_persistent_moe_15_stages(
                 num_links=1,  # num_links
                 skip_ccl=False,
                 upstream_socket=recv_socket,
-                downstream_socket=downstream_socket
+                downstream_socket=downstream_socket,
                 persistent_next_iter_semaphore=persistent_next_iter_semaphore,
                 persistent_mode=True,
+                is_torus=is_torus,
             )
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
         ttnn.distributed_context_barrier()

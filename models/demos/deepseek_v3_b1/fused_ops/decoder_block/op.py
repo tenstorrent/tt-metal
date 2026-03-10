@@ -217,6 +217,7 @@ class DecoderBlock:
         downstream_socket=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        is_torus=True,
     ):
         print("A")
         cb_id_manager = CircularBufferIdManager()
@@ -305,6 +306,7 @@ class DecoderBlock:
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
             bcast_sender_coord=sender_coord,
+            is_torus=is_torus,
         )
 
         moe._build_descriptors()
