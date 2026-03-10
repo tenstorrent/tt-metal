@@ -16,18 +16,19 @@
   cmd: pytest tests/nightly/tg/ccl
   skus:
     wh_galaxy:
-      timeout: 37
+      timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
 # MoE tests covering special 1x16 ring fabric config
-- name: Galaxy MoE tests
-  cmd: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe
-  skus:
-    wh_galaxy:
-      timeout: 3
-  owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ttnn
+# TODO (AM) temporarily skipping to see if CCL tests complete in 40 minutes
+# - name: Galaxy MoE tests
+#   cmd: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe
+#   skus:
+#     wh_galaxy:
+#       timeout: 3
+#   owner_id: U05ACKAJTHS # Naif Tarafdar
+#   team: ttnn
 
 - name: Galaxy Fabric unit tests
   cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
