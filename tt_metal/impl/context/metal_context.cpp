@@ -611,6 +611,12 @@ void MetalContext::set_fabric_config(
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
+        // Update the risc firmware context descriptor with the new fabric settings
+        // as well due to transient state between the descriptor creation and the fabric config update
+        if (risc_fw_context_descriptor_) {
+            risc_fw_context_descriptor_->fabric_config_ = fabric_config;
+            risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
+        }
     } else {
         TT_FATAL(
             this->fabric_config_ == fabric_config,
@@ -661,6 +667,17 @@ void MetalContext::set_fabric_config(
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;
+
+    // Update the risc firmware context descriptor with the new fabric settings
+    // as well due to transient state between the descriptor creation and the fabric config update
+    if (risc_fw_context_descriptor_) {
+        risc_fw_context_descriptor_->fabric_config_ = fabric_config;
+        risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
+        risc_fw_context_descriptor_->num_routing_planes_ = num_routing_planes;
+        risc_fw_context_descriptor_->fabric_tensix_config_ = fabric_tensix_config;
+        risc_fw_context_descriptor_->fabric_udm_mode_ = fabric_udm_mode;
+        risc_fw_context_descriptor_->fabric_manager_ = fabric_manager;
+    }
 
     // Reinitialize control plane with updated fabric settings
     if (control_plane_ != nullptr) {
@@ -742,17 +759,18 @@ void MetalContext::init_context_descriptor(
 }
 
 void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size) {
-    // Various settings are not known and not relevant for risc firmware
+    // Fabric settings are used during risc init. In some cases, fabric is already running
+    // and we don't want to reset the cores
     risc_fw_context_descriptor_ = std::make_shared<ContextDescriptor>(
         hal(),
         get_cluster(),
         rtoptions(),
-        tt::tt_fabric::FabricConfig::DISABLED,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricTensixConfig::DISABLED,
-        tt::tt_fabric::FabricUDMMode::DISABLED,
-        tt::tt_fabric::FabricManagerMode::DEFAULT,
-        tt::tt_fabric::FabricRouterConfig{},
+        fabric_config_,
+        fabric_reliability_mode_,
+        fabric_tensix_config_,
+        fabric_udm_mode_,
+        fabric_manager_,
+        fabric_router_config_,
         num_hw_cqs,
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,
