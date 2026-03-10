@@ -1075,12 +1075,7 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     }
 }
 
-template <
-    bool is_causal,
-    bool is_chunked,
-    uint32_t sliding_window_size,
-    bool padded_or_joint_masks,
-    uint32_t cb_mask_in>
+template <bool is_chunked, uint32_t sliding_window_size, bool padded_or_joint_masks, uint32_t cb_mask_in>
 void generate_mask(
     const uint32_t Sq_chunk_t,
     const uint32_t Sk_chunk_t,
@@ -1089,8 +1084,9 @@ void generate_mask(
     const bool generate_mask_0,
     const bool generate_mask_1,
     const uint32_t unpadded_Sk_mask_0,
-    const uint32_t unpadded_Sk_mask_1) {
-    if constexpr (is_causal || sliding_window_size > 0) {
+    const uint32_t unpadded_Sk_mask_1,
+    const bool is_causal) {
+    if (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
             // Bump it up to the chunk start

@@ -273,9 +273,9 @@ class Attention(Module):
                 q,
                 k,
                 v,
-                add_q,
-                add_k,
-                add_v,
+                joint_tensor_q=add_q,
+                joint_tensor_k=add_k,
+                joint_tensor_v=add_v,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),

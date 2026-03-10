@@ -153,12 +153,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
-    const std::string& joint_strategy,
     std::size_t logical_n,
     SDPAProgramConfig program_config,
     const int32_t dim,
@@ -169,19 +165,21 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const CoreCoord ccl_core_grid_offset,
+    bool is_causal,
+    bool is_balanced,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
+    const std::optional<std::string>& joint_strategy) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
-        input_tensor_k,  // AllGather input
-        input_tensor_v,  // AllGather input
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
+        input_tensor_k,              // AllGather input
+        input_tensor_v,              // AllGather input
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
-        joint_strategy,
         logical_n,
         std::move(program_config),
         dim,
@@ -192,10 +190,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         topology,
         ccl_core_grid_offset,
         subdevice_id,
+        is_causal,
+        is_balanced,
         scale,
         compute_kernel_config,
-        core_allocation_strategy);
-    return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
+        core_allocation_strategy,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        joint_strategy);
+    // For backward compatibility, return actual tensor (even if empty when no joint input)
+    auto joint_output = output_tensors.joint_output.has_value()
+                            ? output_tensors.joint_output.value()
+                            : ttnn::Tensor{};  // Empty tensor when no joint input provided
+    return {output_tensors.output, joint_output, output_tensors.lse_output};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
