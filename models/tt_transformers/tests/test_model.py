@@ -142,11 +142,10 @@ def test_model_inference(
     if layers == 1:  # quick mode has tight PCC checks for known models
         model_name = model_args.base_model_name
 
-        # Define tight final PCC thresholds for quick mode. Use .get() so unknown models
-        # (e.g. Meta-Llama-3-8B, Llama-3-8B from different HF paths) use defaults and don't KeyError.
-        _default_8b_pcc = (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954
+        # Define tight final PCC thresholds for quick mode
         final_model_pcc_map = {
             "Llama-3.1-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
+            "Meta-Llama-3-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.973,
             "Llama-3.2-1B": 0.999 if mode_accuracy else 0.991,
             "Llama-3.2-3B": 0.954 if mode_accuracy else 0.945,
@@ -154,10 +153,11 @@ def test_model_inference(
             "Llama-3.2-90B": 0.971,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
         }
-        final_model_pcc = final_model_pcc_map.get(model_name, _default_8b_pcc)
+        final_model_pcc = final_model_pcc_map[model_name]
 
         final_k_cache_pcc_map = {
             "Llama-3.1-8B": 0.9997,
+            "Meta-Llama-3-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
             "Llama-3.2-1B": 0.9998,
             "Llama-3.2-3B": 0.9998,
@@ -165,9 +165,10 @@ def test_model_inference(
             "Llama-3.2-90B": 0.9995,
             "Mistral-7B": 0.68,
         }
-        final_k_cache_pcc = final_k_cache_pcc_map.get(model_name, 0.9997)
+        final_k_cache_pcc = final_k_cache_pcc_map[model_name]
         final_v_cache_pcc_map = {
             "Llama-3.1-8B": 0.9997,
+            "Meta-Llama-3-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
             "Llama-3.2-1B": 0.9996,
             "Llama-3.2-3B": 0.9998,
@@ -175,10 +176,11 @@ def test_model_inference(
             "Llama-3.2-90B": 0.9996,
             "Mistral-7B": 0.68,
         }
-        final_v_cache_pcc = final_v_cache_pcc_map.get(model_name, 0.9997)
+        final_v_cache_pcc = final_v_cache_pcc_map[model_name]
 
         quick_iterations_map = {
             "Llama-3.1-8B": 6,
+            "Meta-Llama-3-8B": 6,
             "Llama-3.1-70B": 6,
             "Llama-3.2-1B": 2,
             "Llama-3.2-3B": 4,
@@ -186,7 +188,7 @@ def test_model_inference(
             "Llama-3.2-90B": 6,
             "Mistral-7B": 2,
         }
-        quick_iterations = quick_iterations_map.get(model_name, 6)
+        quick_iterations = quick_iterations_map[model_name]
 
         iterations = quick_iterations
     else:

@@ -434,6 +434,8 @@ class ModelArgs:
     }
 
     LOCAL_HF_PARAMS = {
+        "Meta-Llama-3-8B": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
         "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
         "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
         "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
@@ -450,9 +452,7 @@ class ModelArgs:
     }
 
     def _get_local_hf_params_path(self):
-        """Path to HF config for dummy weights; uses CKPT_DIR for Meta-Llama-3-8B, else LOCAL_HF_PARAMS."""
-        if self.model_name in ("Meta-Llama-3-8B", "Meta-Llama-3-8B-Instruct"):
-            return self.CKPT_DIR
+        """Path to HF config for dummy weights (from LOCAL_HF_PARAMS)."""
         path = self.LOCAL_HF_PARAMS.get(self.model_name)
         if path is not None:
             return path
