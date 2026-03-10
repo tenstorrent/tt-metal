@@ -44,6 +44,12 @@ struct operation_attributes_t {
     // Each source encodes: bit 31 = is_recv (0=local hs_rm, 1=staging_buf),
     //                       bits 0-30 = row index in that source buffer.
     std::optional<std::vector<std::vector<uint32_t>>> per_expert_dispatch_sources;
+    // Multi-destination dispatch metadata (optional, for 1xN N>2).
+    // When present, overrides dispatch_metadata for the send portion of fabric dispatch.
+    // Each inner vector is flat: [recv_device_count, send_dest_count,
+    //   {dir, hops, offset, count, indices...}×send_dest_count]
+    // Requires per_expert_dispatch_sources to also be set.
+    std::optional<std::vector<std::vector<uint32_t>>> multi_dest_dispatch_metadata;
     // When true, use FPU combine on compute cores instead of scalar combine on
     // a dedicated core. ~370x faster at E=4. Requires CB3/4/5 on compute cores.
     bool enable_fpu_combine = false;

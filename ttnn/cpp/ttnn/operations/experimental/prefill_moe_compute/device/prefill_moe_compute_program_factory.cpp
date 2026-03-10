@@ -612,30 +612,70 @@ PrefillMoeComputeMeshFactory::create_at(
         dispatch_args.push_back(D_tiles);          // [9]
         dispatch_args.push_back(M_tiles);          // [10] M_padded_tiles (per-expert tile rows)
 
-        // Transform old-format dispatch_metadata to new kernel format.
-        // Old Python format: [local_count, recv_count, send_count, local_indices..., send_indices...]
-        // New kernel format: [recv_count, send_count, send_indices..., num_experts, M_0, sources_0..., ...]
-        {
+        // Mesh topology info (needed for both paths)
+        auto mesh_shape = mesh_dev->shape();
+        auto coord_row = mesh_coordinate[0];
+        auto coord_col = mesh_coordinate[1];
+        bool dispatch_has_east = (coord_col + 1 < mesh_shape[1]);
+        bool dispatch_has_west = (coord_col > 0);
+
+        // Build dispatch metadata in v3 kernel format:
+        //   [recv_device_count, send_dest_count,
+        //    {dir, hops, offset, count, indices...}×send_dest_count,
+        //    num_experts, {M_e, sources...}×num_experts]
+        if (attributes.multi_dest_dispatch_metadata.has_value()) {
+            const auto& mdm = (*attributes.multi_dest_dispatch_metadata)[device_index];
+            dispatch_args.insert(dispatch_args.end(), mdm.begin(), mdm.end());
+
+            TT_FATAL(
+                attributes.per_expert_dispatch_sources.has_value(),
+                "per_expert_dispatch_sources required for multi_dest_dispatch_metadata");
+            const auto& expert_sources = (*attributes.per_expert_dispatch_sources)[device_index];
+            dispatch_args.insert(dispatch_args.end(), expert_sources.begin(), expert_sources.end());
+        } else {
+            // Backward-compatible single-destination path.
+            // Converts old dispatch_metadata format to v3 kernel format.
             size_t dm_idx = 0;
             uint32_t local_count = dev_dispatch_meta[dm_idx++];
             uint32_t recv_count = dev_dispatch_meta[dm_idx++];
             uint32_t send_count = dev_dispatch_meta[dm_idx++];
 
-            // Extract local_indices and send_indices from old format
             std::vector<uint32_t> local_indices(
                 dev_dispatch_meta.begin() + dm_idx, dev_dispatch_meta.begin() + dm_idx + local_count);
             dm_idx += local_count;
             std::vector<uint32_t> send_indices(
                 dev_dispatch_meta.begin() + dm_idx, dev_dispatch_meta.begin() + dm_idx + send_count);
 
-            // Append recv_count, send_count, send_indices
-            dispatch_args.push_back(recv_count);
-            dispatch_args.push_back(send_count);
-            dispatch_args.insert(dispatch_args.end(), send_indices.begin(), send_indices.end());
+            // Compute single-dest direction and hops
+            uint32_t target_col;
+            if (!attributes.dispatch_target_cols.empty()) {
+                target_col = attributes.dispatch_target_cols[device_index];
+            } else {
+                target_col = (coord_col + 1 < mesh_shape[1]) ? coord_col + 1 : coord_col - 1;
+            }
+            uint32_t dispatch_send_direction;
+            uint32_t dispatch_num_hops;
+            if (target_col > coord_col) {
+                dispatch_send_direction = 0;  // EAST
+                dispatch_num_hops = target_col - coord_col;
+            } else {
+                dispatch_send_direction = 1;  // WEST
+                dispatch_num_hops = coord_col - target_col;
+            }
+
+            // v3 format: recv_device_count, send_dest_count, per-dest block
+            dispatch_args.push_back(recv_count > 0 ? 1u : 0u);  // recv_device_count
+            dispatch_args.push_back(send_count > 0 ? 1u : 0u);  // send_dest_count
+            if (send_count > 0) {
+                dispatch_args.push_back(dispatch_send_direction);
+                dispatch_args.push_back(dispatch_num_hops);
+                dispatch_args.push_back(0u);  // remote_staging_offset (0 for single dest)
+                dispatch_args.push_back(send_count);
+                dispatch_args.insert(dispatch_args.end(), send_indices.begin(), send_indices.end());
+            }
 
             // Per-expert pkt_buf assembly metadata
             if (attributes.per_expert_dispatch_sources.has_value()) {
-                // Per-expert sources provided directly by Python
                 const auto& expert_sources = (*attributes.per_expert_dispatch_sources)[device_index];
                 dispatch_args.insert(dispatch_args.end(), expert_sources.begin(), expert_sources.end());
             } else {
@@ -644,50 +684,15 @@ PrefillMoeComputeMeshFactory::create_at(
                 dispatch_args.push_back(num_experts);
                 for (uint32_t e = 0; e < num_experts; ++e) {
                     dispatch_args.push_back(M_padded);
-                    // Local token sources: bit 31 = 0 (local hs_rm)
                     for (uint32_t i = 0; i < local_count; ++i) {
                         dispatch_args.push_back(local_indices[i]);
                     }
-                    // Received token sources: bit 31 = 1 (staging_buf)
                     for (uint32_t i = 0; i < recv_count; ++i) {
                         dispatch_args.push_back((1u << 31) | i);
                     }
                 }
             }
         }
-
-        // Direction-based fabric connection setup (EAST/WEST for 1xN mesh)
-        auto mesh_shape = mesh_dev->shape();
-        auto coord_row = mesh_coordinate[0];
-        auto coord_col = mesh_coordinate[1];
-
-        // Determine target device for this device's dispatch
-        uint32_t target_col;
-        if (!attributes.dispatch_target_cols.empty()) {
-            target_col = attributes.dispatch_target_cols[device_index];
-        } else {
-            // Default: forward-preferring for backward compatibility
-            target_col = (coord_col + 1 < mesh_shape[1]) ? coord_col + 1 : coord_col - 1;
-        }
-
-        // Compute send direction and hop count
-        uint32_t dispatch_send_direction;  // 0=EAST, 1=WEST
-        uint32_t dispatch_num_hops;
-        if (target_col > coord_col) {
-            dispatch_send_direction = 0;  // EAST
-            dispatch_num_hops = target_col - coord_col;
-        } else {
-            dispatch_send_direction = 1;  // WEST
-            dispatch_num_hops = coord_col - target_col;
-        }
-
-        // Which directions have valid immediate neighbors
-        bool dispatch_has_east = (coord_col + 1 < mesh_shape[1]);
-        bool dispatch_has_west = (coord_col > 0);
-
-        // Append send_direction and num_hops RT args
-        dispatch_args.push_back(dispatch_send_direction);
-        dispatch_args.push_back(dispatch_num_hops);
 
         // Append fabric connection RT args for each valid direction
         auto src_node_id = mesh_dev->get_fabric_node_id(mesh_coordinate);

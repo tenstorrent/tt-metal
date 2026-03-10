@@ -55,6 +55,7 @@ struct PrefillMoeComputeDeviceOperation {
         const std::vector<std::vector<uint32_t>>& dispatch_metadata = {},
         const std::vector<uint32_t>& dispatch_target_cols = {},
         const std::optional<std::vector<std::vector<uint32_t>>>& per_expert_dispatch_sources = std::nullopt,
+        const std::optional<std::vector<std::vector<uint32_t>>>& multi_dest_dispatch_metadata = std::nullopt,
         bool enable_fpu_combine = false);
 };
 

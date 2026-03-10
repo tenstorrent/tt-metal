@@ -64,6 +64,7 @@ PrefillMoeComputeDeviceOperation::invoke(
     const std::vector<std::vector<uint32_t>>& dispatch_metadata,
     const std::vector<uint32_t>& dispatch_target_cols,
     const std::optional<std::vector<std::vector<uint32_t>>>& per_expert_dispatch_sources,
+    const std::optional<std::vector<std::vector<uint32_t>>>& multi_dest_dispatch_metadata,
     bool enable_fpu_combine) {
     return {
         operation_attributes_t{
@@ -77,6 +78,7 @@ PrefillMoeComputeDeviceOperation::invoke(
             dispatch_metadata,
             dispatch_target_cols,
             per_expert_dispatch_sources,
+            multi_dest_dispatch_metadata,
             enable_fpu_combine},
         tensor_args_t{
             hidden_states,

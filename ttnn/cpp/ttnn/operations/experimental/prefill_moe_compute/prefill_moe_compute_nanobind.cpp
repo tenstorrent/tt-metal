@@ -44,7 +44,9 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             enable_fabric_dispatch: Enable fabric token dispatch (default False)
             dispatch_metadata: Per-device dispatch routing metadata
             dispatch_target_cols: Per-device target column for dispatch exchange
-            per_expert_dispatch_sources: Per-device per-expert token sources for per-expert pkt_buf assembly
+            per_expert_dispatch_sources: Per-device per-expert token sources
+            multi_dest_dispatch_metadata: Per-device multi-destination dispatch metadata
+            enable_fpu_combine: Enable FPU combine on compute cores
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("hidden_states").noconvert(),
@@ -68,6 +70,7 @@ void bind_prefill_moe_compute(nb::module_& mod) {
             nb::arg("dispatch_metadata") = nb::none(),
             nb::arg("dispatch_target_cols") = std::vector<uint32_t>{},
             nb::arg("per_expert_dispatch_sources") = nb::none(),
+            nb::arg("multi_dest_dispatch_metadata") = nb::none(),
             nb::arg("enable_fpu_combine") = false,
         });
 }
