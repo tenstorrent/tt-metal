@@ -972,6 +972,10 @@ class LMHeadSampling:
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
                 if not skip_ccl:
                     bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
+
+                    bcast_pkt_cb_descriptor.format_descriptors[0].tile = ttnn.TileDescriptor(rms_interpreted_tile)
+                    bcast_pkt_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
                 # ================================================================

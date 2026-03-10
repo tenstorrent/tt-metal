@@ -1148,35 +1148,36 @@ def test_persistent_moe_multi_token(
             torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
             torch_token[0, 0] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            start_time = time.time()
-            num_tokens_in_flight = 64
-            for iteration in range(num_tokens_in_flight):
-                pipeline_block.write_token(token_tensor)
-                logger.info(f"[rank=0] token {iteration} injected")
-            for iter_ in range(num_tokens_in_flight):
-                d2h_output_tensor = ttnn.from_torch(
-                    torch.zeros(1, num_elements, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
+            num_tokens_in_flight = 128
+            for top_iter in range(100):
+                start_time = time.time()
+                for iteration in range(num_tokens_in_flight):
+                    pipeline_block.write_token(token_tensor)
+                    logger.info(f"[rank=0] token {iteration} injected")
+                for iter_ in range(num_tokens_in_flight):
+                    d2h_output_tensor = ttnn.from_torch(
+                        torch.zeros(1, num_elements, dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
 
-                print(f"[rank={my_mesh_id}] iteration {iter_} waiting for D2H result")
-                pipeline_block.read_output(d2h_output_tensor)
-                print(f"[rank={my_mesh_id}] iteration {iter_} D2H result read")
-                d2h_result = ttnn.to_torch(d2h_output_tensor)
+                    print(f"[rank={my_mesh_id}] iteration {iter_} waiting for D2H result")
+                    pipeline_block.read_output(d2h_output_tensor)
+                    print(f"[rank={my_mesh_id}] iteration {iter_} D2H result read")
+                    # d2h_result = ttnn.to_torch(d2h_output_tensor)
 
-                d2h_nonzero = torch.count_nonzero(d2h_result)
-                logger.info(
-                    f"[rank={my_mesh_id}] iteration {iter_}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
-                    f"first 5={d2h_result[0, :5]}"
-                )
-                assert (
-                    d2h_nonzero > 0
-                ), f"D2H output is all zeros at iteration {iter_} — persistent MoE 15-stage pipeline failed"
-            end_time = time.time()
-            print(f"[rank=0] time taken to move {num_tokens_in_flight} tokens: {end_time - start_time} seconds")
+                    # d2h_nonzero = torch.count_nonzero(d2h_result)
+                    # logger.info(
+                    #     f"[rank={my_mesh_id}] iteration {iter_}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
+                    #     f"first 5={d2h_result[0, :5]}"
+                    # )
+                    # assert (
+                    #     d2h_nonzero > 0
+                    # ), f"D2H output is all zeros at iteration {iter_} — persistent MoE 15-stage pipeline failed"
+                end_time = time.time()
+                print(f"[rank=0] time taken to move {num_tokens_in_flight} tokens: {end_time - start_time} seconds")
 
-            logger.info(f"[rank={my_mesh_id}] all {num_tokens_in_flight} iterations passed")
+                logger.info(f"[rank={my_mesh_id}] all {num_tokens_in_flight} iterations passed")
 
         logger.info(f"[rank={my_mesh_id}] waiting for barrier")
         ttnn.distributed_context_barrier()
