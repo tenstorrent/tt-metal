@@ -154,7 +154,12 @@ def _perform_ttnn_operation(tensor, operation: str, axis: int = 0, optional_seco
 
 
 def _run_precision_test(
-    input_tensor: torch.Tensor, device, operation: str = "sum", axis: int = 0, matmul_config: dict = None
+    input_tensor: torch.Tensor,
+    device,
+    operation: str = "sum",
+    axis: int = 0,
+    matmul_config: dict = None,
+    optional_matmul_second_tensor: torch.Tensor = None,
 ) -> dict:
     """Run a single precision test comparing bfloat16 vs bfloat8_b results"""
 
@@ -163,9 +168,12 @@ def _run_precision_test(
     ttnn_optional_second_tensor = None
     torch_tensor_bf16 = input_tensor.bfloat16()
     if operation in [OperationType.MATMUL, OperationType.MATMUL_TT]:
-        # For matmul, create a second tensor with compatible shape
+        # For matmul, create or use provided second tensor with compatible shape
         second_shape = (input_tensor.shape[1], input_tensor.shape[0])
-        torch_optional_second_tensor = torch.randn(second_shape).bfloat16()
+        if optional_matmul_second_tensor is not None and optional_matmul_second_tensor.shape == second_shape:
+            torch_optional_second_tensor = optional_matmul_second_tensor.bfloat16()
+        else:
+            torch_optional_second_tensor = torch.randn(second_shape).bfloat16()
 
     # Convert to ttnn tensors
     ttnn_tensor_bf8_b = ttnn.from_torch(torch_tensor_bf16, device=device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat8_b)
