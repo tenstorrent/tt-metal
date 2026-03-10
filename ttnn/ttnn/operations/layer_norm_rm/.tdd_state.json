@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/layer_norm_rm",
   "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 4,
-  "last_passing_commit": "a7a66f7b6be7db5785d6b49affb642f1c7f02de2",
+  "current_stage_index": 5,
+  "last_passing_commit": "9100dba34ff4b85da1a779b1bf7ef44957f56b64",
   "stages": [
     {
       "name": "data_pipeline",
@@ -176,8 +176,8 @@
       "extra_ttnn_setup": "gamma_ttnn = ttnn.from_torch(gamma_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\nbeta_ttnn = ttnn.from_torch(beta_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
+      "status": "passed",
+      "commit": "9100dba34ff4b85da1a779b1bf7ef44957f56b64",
       "attempts": 0,
       "free_retries": 0,
       "max_attempts": 6,
