@@ -17,16 +17,16 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_mla_wqkv_ab impo
 
 
 @pytest.mark.parametrize(
-    "M, K, N, L",
+    "M, K, N, L, pos",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", [True], ids=["check_accuracy_True"])
 @pytest.mark.parametrize("dump_outputs", [False], ids=["dump_outputs_False"])
-def test_mla_wqkv_ab_performance(M, K, N, L, check_accuracy, dump_outputs):
+def test_mla_wqkv_ab_performance(M, K, N, L, pos, check_accuracy, dump_outputs):
     command = (
         "pytest "
         "tests/ttnn/nightly/unit_tests/operations/experimental/test_mla_wqkv_ab.py::"
-        f"test_mla_wqkv_ab[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-L={L}-dispatch_row]"
+        f"test_mla_wqkv_ab[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-L={L}-pos={pos}-dispatch_row]"
     )
     run_device_profiler(command, "ttnn_mla_wqkv_ab_performance", device_analysis_types=["device_kernel_duration"])
 
@@ -50,8 +50,8 @@ def test_mla_wqkv_ab_performance(M, K, N, L, check_accuracy, dump_outputs):
     logger.warning(f"Useful Bandwidth: {useful_bandwidth} GB/s")
 
     assert (
-        duration_us < SHAPE2TIME[(M, K, N, L)]
-    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N, L)]} us"
+        duration_us < SHAPE2TIME[(M, K, N, L, pos)]
+    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N, L, pos)]} us"
 
 
 def post_process_ops_log(output_logs_subdir: str, float_columns: list[str]):

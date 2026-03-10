@@ -2,13 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
+from pathlib import Path
+from types import SimpleNamespace
 import pytest
 import torch
 import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, comp_allclose
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
 
 PCC_THRESHOLD = 0.998
 
@@ -70,6 +74,55 @@ def create_torch_w(L, K, N):
     """
     torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w
+
+
+def create_torch_rope(hf_config):
+    """
+    Create fused DeepSeek sin/cos table in torch.
+
+    Returns:
+        torch_rope: Tensor of shape (1, 1, max_seq_len, 64) with fused [cos(32) | sin(32)].
+    """
+    args = {
+        "dim": hf_config.qk_rope_head_dim,
+        "max_position_embeddings": hf_config.max_seq_len,
+        "base": hf_config.rope_theta * 1.0,
+        "device": "cpu",
+        "scaling_factor": hf_config.rope_scaling["factor"],
+        "original_max_position_embeddings": hf_config.rope_scaling["original_max_position_embeddings"],
+        "beta_fast": hf_config.rope_scaling["beta_fast"],
+        "beta_slow": hf_config.rope_scaling["beta_slow"],
+        "mscale": hf_config.rope_scaling["mscale"],
+        "mscale_all_dim": hf_config.rope_scaling["mscale_all_dim"],
+    }
+
+    reference_rope = DeepseekV3YarnRotaryEmbedding(**args)
+
+    # [max_seq_len, dim], where dim is [t1, .., td//2, t1, .., td//2]
+    # Same data is repeated for cos and sin, so we can just take the first half.
+    cos = reference_rope.cos_cached[:, : hf_config.qk_rope_head_dim // 2]
+    sin = reference_rope.sin_cached[:, : hf_config.qk_rope_head_dim // 2]
+
+    cos_sin = torch.cat([cos, sin], dim=-1)
+
+    # Create zeros of shape cos_sin
+    cos_sin = torch.zeros_like(cos_sin)
+    return cos_sin
+
+
+def prepare_rope_tensor(torch_rope, num_dram_banks):
+    """
+    Replicate the rope table for every DRAM bank so each worker can read from its local bank.
+
+    Args:
+        torch_rope: Tensor of shape (1, 1, max_seq_len, 64) with fused [cos(32) | sin(32)].
+        num_dram_banks: Number of DRAM banks / worker cores.
+
+    Returns:
+        Tensor of shape (num_dram_banks, 1, max_seq_len * 2, 32) in the layout TT expects.
+    """
+    torch_rope = torch_rope.view(1, 1, -1, ttnn.TILE_SIZE)
+    return torch_rope.repeat(num_dram_banks, 1, 1, 1)
 
 
 def n_tiles_for_core(core_id, num_cores):
@@ -163,8 +216,8 @@ def get_accuracy_metrics(torch_output, tt_output):
     }
 
 
-def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
-    # torch.manual_seed(0)
+def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
+    torch.manual_seed(0)
 
     logger.info(
         f"Running test_mla_wqkv_ab with M={M}, K={K}, N={N}, L={L}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
@@ -184,6 +237,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
     # --------------------------------------------------------------------------
     in0_dtype = ttnn.bfloat16
     w_dtype = ttnn.bfloat8_b
+    rope_dtype = ttnn.bfloat16
     num_dram_banks = len(in0_core_coords)
 
     dram_core_coords = [ttnn.CoreCoord(dram_bank_id, 0) for dram_bank_id in range(num_dram_banks)]
@@ -217,6 +271,29 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
     w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
 
     w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+
+    # ------------------------------------------------------------------------
+    # Create DRAM shard spec for rope table.
+    # Tensor shape: (max_seq_len, 128) -> replicated over 12 DRAM banks
+    # ------------------------------------------------------------------------
+    deepseek_config_path = (
+        Path(__file__).resolve().parents[6] / "models" / "demos" / "deepseek_v3" / "reference" / "config.json"
+    )
+    with open(deepseek_config_path) as f:
+        deepseek_config = json.load(f)
+    rope_cfg = SimpleNamespace(
+        qk_rope_head_dim=deepseek_config["qk_rope_head_dim"],
+        max_seq_len=deepseek_config["max_position_embeddings"],
+        rope_theta=float(deepseek_config["rope_theta"]),
+        rope_scaling=deepseek_config["rope_scaling"],
+    )
+
+    rope_shard_height = rope_cfg.max_seq_len * rope_cfg.qk_rope_head_dim // ttnn.TILE_SIZE
+    rope_shard_width = ttnn.TILE_SIZE
+    rope_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (rope_shard_height, rope_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    rope_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, rope_shard_spec)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for output
@@ -254,6 +331,25 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=w_mem_config,
         )
+
+        # ------------------------------------------------------------------------
+        # Create torch rope tensor
+        # ------------------------------------------------------------------------
+        torch_rope = create_torch_rope(rope_cfg)
+
+        # ------------------------------------------------------------------------
+        # Prepare rope tensor (reordered)
+        torch_rope_reordered = prepare_rope_tensor(torch_rope, num_dram_banks)
+
+        # Create tt_rope tensor with DRAM sharding
+        tt_rope = ttnn.from_torch(
+            torch_rope_reordered,
+            dtype=rope_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=rope_mem_config,
+        )
+
     else:
         tt_input = ttnn.empty(
             input_shape,
@@ -268,6 +364,13 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=w_mem_config,
+        )
+        tt_rope = ttnn.empty(
+            (num_dram_banks, rope_shard_height, rope_shard_width),
+            dtype=rope_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=rope_mem_config,
         )
 
     # --------------------------------------------------------------------------
@@ -290,8 +393,10 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
         ttnn.experimental.deepseek.mla.mla_wqkv_ab(
             tt_input,
             w_tensor=tt_w,
+            rope_tensor=tt_rope,
             output_tensor=tt_output,
             layer_id=layer_id,
+            pos=pos,
         )
 
         tt_to_torch_output = ttnn.to_torch(tt_output)
@@ -328,7 +433,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2112, 1): 68,
+    (32, 7168, 2112, 1, 0): 69,
 }
 
 
@@ -345,18 +450,19 @@ SHAPE2TIME = {
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "M, K, N, L",
+    "M, K, N, L, pos",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
 @pytest.mark.parametrize("dump_outputs", [False], ids=["dump_outputs_False"])
-def test_mla_wqkv_ab(device, M, K, N, L, check_accuracy, dump_outputs):
+def test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
     accuracy_metrics = run_test_mla_wqkv_ab(
         device,
         M,
         K,
         N,
         L,
+        pos,
         check_accuracy,
         dump_outputs,
     )

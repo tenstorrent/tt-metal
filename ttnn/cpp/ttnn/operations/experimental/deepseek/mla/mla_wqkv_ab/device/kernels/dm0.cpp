@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/api/tt-metalium/constants.hpp"
 
 // Triple buffering constants
 #define NUM_SLOTS 3  // 3 slots in CB
@@ -29,7 +30,8 @@ void kernel_main() {
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto rope_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<rope_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -37,17 +39,21 @@ void kernel_main() {
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_addr = get_arg_val<uint32_t>(argidx++);
+    const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    const auto pos = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_r2c_rope = tt::CBIndex::c_3;
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
+    constexpr uint32_t rope_tile_size = get_tile_size(cb_r2c_rope);
     constexpr uint32_t out_tile_size = get_tile_size(cb_s2c_out);
 
     // Constants for MLA WqkvAb
@@ -63,9 +69,6 @@ void kernel_main() {
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
     constexpr uint32_t w_num_blocks = num_w_tiles / w_tiles_per_block;
 
-    // NOC packet size for bf8_b weight reads: 7 tiles * 1088B = 7616B.
-    constexpr uint32_t noc_packet_size = w_tile_size * w_tiles_per_txn;
-
     //-------------------------------------------------------------------------
     // DRAM Reading constants
     //-------------------------------------------------------------------------
@@ -75,6 +78,18 @@ void kernel_main() {
     // DRAM bank's base NOC address
     const uint64_t dram_noc_addr =
         get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/w_addr);
+
+    //-------------------------------------------------------------------------
+    // Rope reading constants
+    //-------------------------------------------------------------------------
+    // We read just 2 rows of this tensor for a given position, which is 1/16 of the tile's rows
+    constexpr uint32_t rope_bytes_per_txn = rope_tile_size / 16;
+
+    // DRAM bank's base NOC address
+    const uint64_t rope_noc_addr =
+        get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/rope_addr);
+
+    const uint32_t rope_dram_read_offset = rope_bytes_per_txn * pos;
 
     //-------------------------------------------------------------------------
     // CB addresses
@@ -94,9 +109,9 @@ void kernel_main() {
     }
 
     //-------------------------------------------------------------------------
-    // Expert loop
+    // W reading loop
     //-------------------------------------------------------------------------
-    // Set w0_w1 state once before loop (will be reused for all experts)
+    // Set w0_w1 state once before loop
     noc_async_read_one_packet_set_state<true>(dram_noc_addr, w_bytes_per_txn, vchannel);
 
     //-------------------------------------------------------------------------
@@ -109,7 +124,7 @@ void kernel_main() {
     cb_reserve_back(cb_r2c_w, w_tiles_per_block);
 
     //-------------------------------------------------------------------------
-    // Pipelined reading of W0/W1
+    // Pipelined reading of W
     //-------------------------------------------------------------------------
     uint32_t w_dram_read_offset = 0;
 
@@ -140,8 +155,25 @@ void kernel_main() {
         txns_in_flight = true;
     }
 
+    //-------------------------------------------------------------------------
+    // Rope reading loop
+    //-------------------------------------------------------------------------
+    // Set rope state once before loop
+    noc_async_read_one_packet_set_state<true>(rope_noc_addr, rope_bytes_per_txn, vchannel);
+    cb_reserve_back(cb_r2c_rope, 1);
+
+    noc_async_read_set_trid(trid_to_issue);
+    noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+        rope_noc_addr, rope_dram_read_offset, get_write_ptr(cb_r2c_rope), trid_to_issue);
+
     noc_async_read_barrier_with_trid(trid_to_wait);
     cb_push_back(cb_r2c_w, w_tiles_per_block);
+
+    ADVANCE_TRID(trid_to_wait);
+
+    // Get the last transaction in flight
+    noc_async_read_barrier_with_trid(trid_to_wait);
+    cb_push_back(cb_r2c_rope, 1);
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.

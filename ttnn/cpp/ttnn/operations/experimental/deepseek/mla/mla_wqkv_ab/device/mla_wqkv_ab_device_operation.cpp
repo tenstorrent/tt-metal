@@ -28,10 +28,19 @@ MlaWqkvAbDeviceOperation::tensor_return_value_t MlaWqkvAbDeviceOperation::create
 
 std::tuple<MlaWqkvAbDeviceOperation::operation_attributes_t, MlaWqkvAbDeviceOperation::tensor_args_t>
 MlaWqkvAbDeviceOperation::invoke(
-    const Tensor& input_tensor, const Tensor& w_tensor, const Tensor& output_tensor, const uint32_t layer_id) {
+    const Tensor& input_tensor,
+    const Tensor& w_tensor,
+    const Tensor& rope_tensor,
+    const Tensor& output_tensor,
+    const uint32_t layer_id,
+    const uint32_t pos) {
     return {
-        operation_attributes_t{.layer_id = layer_id},
-        tensor_args_t{.input_tensor = input_tensor, .w_tensor = w_tensor, .output_tensor = output_tensor}};
+        operation_attributes_t{.layer_id = layer_id, .pos = pos},
+        tensor_args_t{
+            .input_tensor = input_tensor,
+            .w_tensor = w_tensor,
+            .rope_tensor = rope_tensor,
+            .output_tensor = output_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::mla::mla_wqkv_ab

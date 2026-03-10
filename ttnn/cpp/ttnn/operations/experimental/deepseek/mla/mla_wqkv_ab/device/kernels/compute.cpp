@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/api/tt-metalium/constants.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/debug/dprint_tensix.h"
 #include "api/compute/tile_move_copy.h"
+#include "rope_sfpu.h"
+
+#include "api/debug/dprint_tensix.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -20,12 +22,15 @@ void kernel_main() {
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_addr = get_arg_val<uint32_t>(argidx++);
+    const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    const auto pos = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_r2c_rope = tt::CBIndex::c_3;
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
 
     // Constants for MLA WqkvAb
@@ -57,8 +62,6 @@ void kernel_main() {
     mm_block_init(
         cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/n_tiles_this_core, /*rt_dim=*/1, /*kt_dim=*/1);
 
-    // copy_tile_init(cb_r2c_w);
-
     //-------------------------------------------------------------------------
     // Compute: input @ weight -> output
     //-------------------------------------------------------------------------
@@ -81,25 +84,34 @@ void kernel_main() {
                 /*ct_dim=*/n_tiles_this_core,
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
-
-            // copy_tile(cb_r2c_w, k, 0);
-            // dprint_tensix_dest_reg(0);
         }
 
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
 
-    // fill_tile_init();
-    // for (uint32_t i = 0; i < n_tiles_this_core; ++i) {
-    //     fill_tile(i, float(dram_bank_id));
-    // }
+    cb_wait_front(cb_r2c_rope, 1);
+
+    // Configure unpacker A to Float16_b
+    reconfig_data_format_srca(cb_r2c_rope);
+
+    if (dram_bank_id == 11) {
+        copy_tile_init(cb_r2c_rope);
+        copy_tile(cb_r2c_rope, 0, n_tiles_this_core);
+        rope_tile_init();
+
+        // This is the first tile with k_pe output
+        rope_tile(n_tiles_this_core - 2);
+
+        dprint_tensix_dest_reg(n_tiles_this_core);
+        dprint_tensix_dest_reg(n_tiles_this_core - 2);
+        dprint_tensix_dest_reg(n_tiles_this_core - 1);
+    }
+    cb_pop_front(cb_r2c_rope, 1);
 
     tile_regs_commit();
     tile_regs_wait();
 
-    // cb_reserve_back(cb_s2c_out, 1);
     pack_tile_block(0, cb_s2c_out, n_tiles_this_core);
-    // cb_push_back(cb_s2c_out, 1);
     tile_regs_release();
 
     // We have one extra slot reserved, which we won't use, drain it.

@@ -37,6 +37,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         | cb_r2c_w       | CBIndex::c_0  | Bfp8_b     | true  |    42*3  |      137088     |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224   |      458752     |
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
+        | cb_r2c_rope    | CBIndex::c_3  | Float16_b  | true  |    1     |      2048       |
         | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    6     |      12288      |
         ------------------------------------------------------------------------------------
     */
@@ -45,6 +46,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 42 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
+        {"cb_r2c_rope", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 1},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
@@ -74,8 +76,8 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
     }
 
     // Create compile args for the program
-    const auto tensors =
-        std::vector<const Tensor*>{&tensor_args.input_tensor, &tensor_args.w_tensor, &tensor_args.output_tensor};
+    const auto tensors = std::vector<const Tensor*>{
+        &tensor_args.input_tensor, &tensor_args.w_tensor, &tensor_args.rope_tensor, &tensor_args.output_tensor};
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
@@ -129,6 +131,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
     }
+    runtime_args.push_back(operation_attributes.pos);
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -152,7 +155,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
 
         runtime_args[0] = dram_bank;
         runtime_args[1] = vchannel;
-        // runtime_args[2-4] are already set to tensor addresses
+        // runtime_args[2-5] are already set to tensor addresses and runtime_args[6] stores pos
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
@@ -171,7 +174,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
 
 void MlaWqkvAbProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t&) {
     auto& program = cached_program.program;
@@ -183,12 +186,16 @@ void MlaWqkvAbProgramFactory::override_runtime_arguments(
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, shared_variables.cb_handles_sharded["cb_s2c_out"], *tensor_args.output_tensor.buffer());
 
-    // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [2] = input_tensor address, [3] = w_tensor address, [4] = output_tensor address
+    // Update runtime args for all kernels with new tensor addresses/position.
+    // Runtime args layout:
+    // [2] = input_tensor address, [3] = w_tensor address, [4] = rope_tensor address, [5] = output_tensor address,
+    // [6] = pos
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
             runtime_args[3] = tensor_args.w_tensor.buffer()->address();
+            runtime_args[4] = tensor_args.rope_tensor.buffer()->address();
+            runtime_args[6] = operation_attributes.pos;
         }
     }
 }
