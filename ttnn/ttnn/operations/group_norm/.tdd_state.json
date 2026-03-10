@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/group_norm",
   "spec_path": "ttnn/ttnn/operations/group_norm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 0,
-  "last_passing_commit": null,
+  "current_stage_index": 1,
+  "last_passing_commit": "d8496d03c2b9e02206830a6c502e4c3b33428bae",
   "stages": [
     {
       "name": "data_pipeline",
@@ -32,12 +32,28 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
-      "commit": null,
+      "status": "passed",
+      "commit": "d8496d03c2b9e02206830a6c502e4c3b33428bae",
       "attempts": 0,
-      "free_retries": 0,
+      "free_retries": 1,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: _metal/hw/firmware/src/tt-1xx/trisck.cc:13:\n/localdev/mstaletovic/tt-metal/ttnn/ttnn/operations/group_norm/kernels/group_norm_compute.cpp:9:10: fatal error: compute_kernel_api/common.h: No such file o",
+          "details": {
+            "error_snippet": "_metal/hw/firmware/src/tt-1xx/trisck.cc:13:\n/localdev/mstaletovic/tt-metal/ttnn/ttnn/operations/group_norm/kernels/group_norm_compute.cpp:9:10: fatal error: compute_kernel_api/common.h: No such file or directory\n    9 | #include \"compute_kernel_api/common.h\"\n      |          ^~~~~~~~~~~~~~~~~~~~~~~~"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "data_pipeline",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "group_mean_subtract",
@@ -64,7 +80,7 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
