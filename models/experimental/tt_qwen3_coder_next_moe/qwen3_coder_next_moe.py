@@ -49,8 +49,9 @@ def _expert_weights_from_state_dict(
     gate_up_tt: List[ttnn.Tensor] = []
     down_tt: List[ttnn.Tensor] = []
     for e in range(num_experts):
-        # gate_up[e]: (2*interm, hidden) -> (1,1, 2*interm, hidden) for matmul input @ W.T
-        w_gu = gate_up[e].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
+        # gate_up[e]: (2*interm, hidden) -> we store as (hidden, 2*interm) so that
+        # input (.., hidden) @ W (hidden, 2*interm) yields (..., 2*interm).
+        w_gu = gate_up[e].permute(1, 0).to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
         cache_gu = None
         if not dummy_weights and weight_cache_path is not None:
             cache_gu = weight_cache_path / f"qwen3_moe_layer{layer_num}_expert{e}_gate_up"
@@ -248,9 +249,30 @@ class TtQwen3CoderNextMoELayer(LightweightModule):
         if self.config.routed_scaling_factor != 1.0:
             topk_weights = ttnn.mul(topk_weights, self.config.routed_scaling_factor)
 
-        # 3) Expert forward all on device: run all experts on full input, then combine on host.
-        expert_outputs: List[ttnn.Tensor] = []
-        for e in range(self._num_experts):
+        # 3) Expert forward and mixing entirely on TTNN.
+        # Build per-expert, per-token weights using TTNN scatter on device.
+        T_len = batch_seq
+        num_experts = self._num_experts
+        expert_input = ttnn.from_torch(
+            torch.zeros((1, 1, T_len, num_experts), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        expert_weights = ttnn.scatter(
+            input=expert_input,
+            index=topk_indices,
+            src=topk_weights,
+            dim=3,
+        )
+        expert_input.deallocate(True)
+        topk_indices.deallocate(True)
+        topk_weights.deallocate(True)
+
+        routed_output: Optional[ttnn.Tensor] = None
+        for e in range(num_experts):
             gate_up_out = ttnn.matmul(
                 input_4d,
                 self.gate_up_tt[e],
@@ -272,59 +294,21 @@ class TtQwen3CoderNextMoELayer(LightweightModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             combined.deallocate(True)
-            expert_outputs.append(expert_out)
 
-        mesh_composer = (
-            ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1) if self.mesh_device.get_num_devices() > 1 else None
-        )
+            # Slice per-expert weights: (1,1,T,1) and apply on device.
+            weights_e_tt = ttnn.slice(expert_weights, (0, 0, 0, e), (1, 1, T_len, e + 1))
+            weighted_expert = ttnn.mul(expert_out, weights_e_tt)
+            weights_e_tt.deallocate(True)
+            expert_out.deallocate(True)
 
-        # Expert outputs: list of TTNN (1,1,T,H) → torch (E,T,H)
-        expert_out_ts: List[torch.Tensor] = []
-        for exp in expert_outputs:
-            exp_t = ttnn.to_torch(exp, mesh_composer=mesh_composer)
-            exp.deallocate(True)
-            if isinstance(exp_t, (list, tuple)):
-                exp_t = exp_t[0]
-            while exp_t.dim() > 2 and exp_t.shape[0] == 1:
-                exp_t = exp_t.squeeze(0)
-            if exp_t.dim() == 3 and exp_t.shape[0] == 1:
-                exp_t = exp_t.squeeze(0)
-            assert exp_t.dim() == 2 and exp_t.shape[0] == batch_seq and exp_t.shape[1] == hidden
-            expert_out_ts.append(exp_t)
+            if routed_output is None:
+                routed_output = weighted_expert
+            else:
+                routed_output = ttnn.add(routed_output, weighted_expert)
+                weighted_expert.deallocate(True)
 
-        experts_stack = torch.stack(expert_out_ts, dim=0)  # (E,T,H)
-
-        # Routing tensors: TTNN → torch, squeeze to (T,K)
-        topk_idx_t = ttnn.to_torch(topk_indices, mesh_composer=mesh_composer)
-        topk_w_t = ttnn.to_torch(topk_weights, mesh_composer=mesh_composer)
-        topk_indices.deallocate(True)
-        topk_weights.deallocate(True)
-        if isinstance(topk_idx_t, (list, tuple)):
-            topk_idx_t = topk_idx_t[0]
-        if isinstance(topk_w_t, (list, tuple)):
-            topk_w_t = topk_w_t[0]
-        topk_idx_t = topk_idx_t.view(-1, self._top_k)
-        topk_w_t = topk_w_t.view(-1, self._top_k)
-
-        # Weighted sum per token in torch: routed_torch shape (T,H)
-        T_len = batch_seq
-        routed_torch = torch.zeros(T_len, hidden, dtype=experts_stack.dtype, device=experts_stack.device)
-        num_experts = experts_stack.shape[0]
-        for t_idx in range(T_len):
-            for k_idx in range(self._top_k):
-                e_idx = int(topk_idx_t[t_idx, k_idx].item())
-                if 0 <= e_idx < num_experts:
-                    w = topk_w_t[t_idx, k_idx]
-                    routed_torch[t_idx] += w * experts_stack[e_idx, t_idx]
-
-        routed_t = routed_torch.unsqueeze(0).unsqueeze(0)
-        routed_output = ttnn.from_torch(
-            routed_t.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-        )
+        expert_weights.deallocate(True)
+        assert routed_output is not None
 
         # 4) Shared expert: down(silu(gate_proj(x)) * up_proj(x))
         gate_out = ttnn.matmul(

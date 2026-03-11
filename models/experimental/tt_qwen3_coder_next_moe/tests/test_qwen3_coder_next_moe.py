@@ -22,6 +22,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.common import Mode
 from models.experimental.tt_qwen3_coder_next_moe import Qwen3CoderNextMoEConfig, TtQwen3CoderNextMoELayer
+from models.experimental.tt_symbiote.tests.test_qwen3_moe import _load_qwen3_moe_from_cache
 
 
 def _make_qwen3_moe_state_dict_and_ref(
@@ -118,3 +119,74 @@ def test_qwen3_coder_next_moe_vs_torch(mesh_device, reset_seeds, device_params):
     passing, actual_pcc = comp_pcc(ref_out, tt_out_t, pcc_threshold)
     print(f"Qwen3 Coder Next MoE PCC: {actual_pcc} (threshold {pcc_threshold})")
     assert passing, f"Qwen3 Coder Next MoE PCC below {pcc_threshold}: {actual_pcc}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+def test_qwen3_coder_next_moe_real_weights(mesh_device, reset_seeds, device_params):
+    """Compare TtQwen3CoderNextMoELayer to a real HF Qwen3NextSparseMoeBlock layer."""
+    prefix = "model.layers.0.mlp."
+
+    # Load real MoE block with fused expert weights using shared helper.
+    ref_block, _ = _load_qwen3_moe_from_cache()
+
+    # Build state_dict with tt-style prefix.
+    raw_sd = ref_block.state_dict()
+    state_dict = {f"{prefix}{k}": v.clone() for k, v in raw_sd.items()}
+
+    # Derive config directly from the loaded block to avoid relying on a .config attribute.
+    gate = ref_block.gate
+    experts = ref_block.experts
+    shared_up_weight = raw_sd["shared_expert.up_proj.weight"]
+    shared_intermediate = shared_up_weight.shape[0]
+
+    hidden_size = gate.hidden_dim
+
+    config = Qwen3CoderNextMoEConfig(
+        hidden_size=gate.hidden_dim,
+        num_experts=gate.num_experts,
+        num_experts_per_tok=gate.top_k,
+        moe_intermediate_size=experts.intermediate_dim,
+        shared_expert_intermediate_size=shared_intermediate,
+        norm_topk_prob=gate.norm_topk_prob,
+        routed_scaling_factor=1.0,
+    )
+
+    tt_moe = TtQwen3CoderNextMoELayer(
+        mesh_device=mesh_device,
+        state_dict=state_dict,
+        state_dict_prefix=prefix,
+        config=config,
+        layer_num=0,
+        dtype=ttnn.bfloat16,
+        tt_ccl=None,
+        dummy_weights=False,
+        weight_cache_path=None,
+    )
+
+    batch_seq = 8
+    torch.manual_seed(321)
+    pt_input = torch.randn(1, batch_seq, hidden_size, dtype=torch.bfloat16) * 0.02
+
+    # Run reference block in bfloat16 to match its weights and avoid dtype mismatch.
+    ref_out = ref_block(pt_input)
+    if isinstance(ref_out, tuple):
+        ref_out = ref_out[0]
+
+    tt_input = ttnn.from_torch(
+        pt_input.reshape(1, 1, batch_seq, hidden_size),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = tt_moe(tt_input, mode=Mode.DECODE)
+    tt_out_t = ttnn.to_torch(tt_out)
+    if isinstance(tt_out_t, (list, tuple)):
+        tt_out_t = tt_out_t[0]
+    tt_out_t = torch.Tensor(tt_out_t).reshape(1, batch_seq, hidden_size).float()
+
+    pcc_threshold = 0.98
+    passing, actual_pcc = comp_pcc(ref_out, tt_out_t, pcc_threshold)
+    print(f"Qwen3 Coder Next MoE (real weights) PCC: {actual_pcc} (threshold {pcc_threshold})")
+    assert passing, f"Qwen3 Coder Next MoE (real weights) PCC below {pcc_threshold}: {actual_pcc}"
