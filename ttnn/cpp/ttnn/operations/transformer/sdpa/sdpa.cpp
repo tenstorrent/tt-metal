@@ -195,7 +195,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         scale,
         compute_kernel_config,
         core_allocation_strategy);
-    return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
+    return {output_tensors.output, output_tensors.joint_output, output_tensors.stats_output};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
