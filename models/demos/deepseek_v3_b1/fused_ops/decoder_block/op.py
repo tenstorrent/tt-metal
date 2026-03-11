@@ -94,9 +94,6 @@ class DecoderBlock:
             moe_rmsnorm_epsilon = epsilon
 
         moe_golden_kwargs = dict(
-            gate_proj_weights_dict=moe_gate_proj_weights_dict,
-            up_proj_weights_dict=moe_up_proj_weights_dict,
-            down_proj_weights_dict=moe_down_proj_weights_dict,
             rmsnorm_gamma=moe_rmsnorm_gamma,
             rmsnorm_epsilon=moe_rmsnorm_epsilon,
             enable_routing=moe_enable_routing,
@@ -113,22 +110,38 @@ class DecoderBlock:
                 shared_gate_weights=moe_shared_gate_weights,
                 shared_up_weights=moe_shared_up_weights,
                 shared_down_weights=moe_shared_down_weights,
+                gate_proj_weights_dict=moe_gate_proj_weights_dict,
+                up_proj_weights_dict=moe_up_proj_weights_dict,
+                down_proj_weights_dict=moe_down_proj_weights_dict,
                 hardcoded_expert_index=moe_hardcoded_expert_index,
                 **moe_golden_kwargs,
             )
             return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
 
         K_down_per_device = moe_shared_gate_weights.shape[1] // moe_num_devices
+        is_moe = moe_enable_routing
         per_device_outputs = []
         for dev_idx in range(moe_num_devices):
             shard_start = dev_idx * K_down_per_device
             shard_end = shard_start + K_down_per_device
+            # MoE: weights are replicated; each device selects its expert by device index.
+            # Dense MLP: each device owns a unique expert shard; remap it to key 0
+            # so MoeRoutedExpertOp.golden (which always picks key 0 when enable_routing=False)
+            # reads the correct per-device expert.
+            expert_idx = dev_idx if is_moe else 0
+            gate_dict = moe_gate_proj_weights_dict if is_moe else {0: moe_gate_proj_weights_dict[dev_idx]}
+            up_dict = moe_up_proj_weights_dict if is_moe else {0: moe_up_proj_weights_dict[dev_idx]}
+            down_dict = moe_down_proj_weights_dict if is_moe else {0: moe_down_proj_weights_dict[dev_idx]}
+
             scores, indices, dev_output = MoeOp.golden(
                 attn_output,
                 shared_gate_weights=moe_shared_gate_weights[:, shard_start:shard_end],
                 shared_up_weights=moe_shared_up_weights[:, shard_start:shard_end],
                 shared_down_weights=moe_shared_down_weights[shard_start:shard_end, :],
-                hardcoded_expert_index=dev_idx,
+                gate_proj_weights_dict=gate_dict,
+                up_proj_weights_dict=up_dict,
+                down_proj_weights_dict=down_dict,
+                hardcoded_expert_index=expert_idx,
                 include_residual=(dev_idx == moe_reduce_root_device_idx),
                 **moe_golden_kwargs,
             )
