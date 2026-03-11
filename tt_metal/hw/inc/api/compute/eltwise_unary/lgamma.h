@@ -37,6 +37,18 @@ ALWI void lgamma_stirling_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
 }
 
+// clang-format on
+ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
+    MATH((llk_math_eltwise_binary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst0, idst1, idst2)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void lgamma_stirling_float_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
+}
+
 /**
  * Combines the Stirling-based lgamma approximation with the reflection formula correction for inputs x < 0.5.
  * Uses (1 - x) via the reflection formula and writes the adjusted lgamma result to the output tile.

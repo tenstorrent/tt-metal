@@ -186,6 +186,14 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
     return result;
 }
 
+Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    // if (x.dtype() == DataType::BFLOAT16) {
+    //     return _lgamma_fast(x, output_mem_config);
+    // }
+    // return _lgamma(x, output_mem_config);
+    return ttnn::operations::unary::ExecuteUnary<unary::UnaryOpType::LGAMMA>::invoke(x, output_mem_config);
+}
+
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
