@@ -4,3 +4,6 @@
 {"event":"mode_detection","mode":"Hybrid","references":["reduce_w_analysis.md","reduce_h_analysis.md"],"roles":["compute_core dim=-1","compute_core dim=-2"],"ts":"2026-03-11T17:23:53+00:00"}
 {"event":"design_decision","phase":"dim=-1","choice":"Row-buffered single DRAM pass","rationale":"Buffer Wt tiles per row, process all 4 phases (max, sub+exp, sum+recip, mul) before next row. Wt is typically small enough for L1.","ts":"2026-03-11T17:23:55+00:00"}
 {"event":"design_decision","phase":"dim=-2","choice":"Chunk-buffered single DRAM pass","rationale":"Buffer Ht*chunk_size tiles per chunk. Program factory adjusts chunk_size based on available L1. For test shapes this is well within limits.","ts":"2026-03-11T17:23:56+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: softmax","ts":"2026-03-11T17:28:03+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"8e10682b66","ts":"2026-03-11T17:28:04+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[],"final_commit":"8e10682b66","ts":"2026-03-11T17:28:05+00:00"}
