@@ -161,10 +161,33 @@ docker_run() {
     # Caller-provided extra args
     docker_args+=( "${extra_args[@]}" )
 
+    # Skip image entrypoint (e.g. dev image starts sshd which fails as
+    # non-root).  Slurm handles multi-node orchestration natively.
+    docker_args+=( --entrypoint "" )
+
+    # Local venv activation: when the workspace contains a python_env built
+    # by create_venv.sh (--relocatable), activate it inside the container so
+    # the editable ttnn install and all dev deps are on sys.path.
+    #   LOCAL_VENV=1  force on
+    #   LOCAL_VENV=0  force off
+    #   unset         auto-detect from workspace
+    local venv_prefix=""
+    local local_venv="${LOCAL_VENV:-auto}"
+    if [[ "$local_venv" == "auto" ]]; then
+        [[ -f "${WORKSPACE:-.}/python_env/bin/activate" ]] && local_venv=1 || local_venv=0
+    fi
+
+    if [[ "$local_venv" == "1" ]]; then
+        local cwd="${CONTAINER_WORKDIR:-/work}"
+        venv_prefix="source ${cwd}/python_env/bin/activate && "
+        docker_args+=( -e "LD_LIBRARY_PATH=${cwd}/build/lib" )
+        log_info "Local venv detected, will activate: ${cwd}/python_env"
+    fi
+
     log_info "Running in container: $image"
     log_debug "docker run ${docker_args[*]} $image bash -c ..."
 
-    docker run "${docker_args[@]}" "$image" bash -c "set -euo pipefail; $commands"
+    docker run "${docker_args[@]}" "$image" bash -c "set -euo pipefail; ${venv_prefix}$commands"
     local rc=$?
 
     if [[ $rc -ne 0 ]]; then

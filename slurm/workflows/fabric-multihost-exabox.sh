@@ -21,6 +21,7 @@ resolve_docker_image dev
 setup_job
 
 ALLOC_DIR="${ARTIFACT_DIR}/multihost-$(hostname -s)"
+ALLOC_DIR_CONTAINER="/artifacts/multihost-$(hostname -s)"
 mkdir -p "${ALLOC_DIR}"
 
 cleanup_multihost() {
@@ -33,7 +34,7 @@ trap 'cleanup_multihost' EXIT
 multihost_setup "${ALLOC_DIR}"
 
 TEST_CMD="pytest tests/tt_fabric/multihost -x --timeout=900 \
-    --hostfile=${ALLOC_DIR}/hostfile.txt \
-    --rankfile=${ALLOC_DIR}/rankfile.txt"
+    --hostfile=${ALLOC_DIR_CONTAINER}/hostfile.txt \
+    --rankfile=${ALLOC_DIR_CONTAINER}/rankfile.txt"
 
 docker_run "$DOCKER_IMAGE" "${TEST_CMD}"
