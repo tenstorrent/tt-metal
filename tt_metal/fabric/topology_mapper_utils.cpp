@@ -11,6 +11,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -219,6 +220,7 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
     return result;
 }
 
+// FIXME: Add Z direction support for physical adjacency map
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -260,26 +262,114 @@ get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd
         bool is_device_level = (src_instance.kind == ::tt::tt_fabric::NodeKind::Device) &&
                                (dst_instance.kind == ::tt::tt_fabric::NodeKind::Device);
 
+        uint32_t src_mesh_id_val;
+        uint32_t dst_mesh_id_val;
+
         if (is_device_level) {
             const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
             const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
-            uint32_t src_mesh_id_val = src_mesh_instance.local_id;
-            uint32_t dst_mesh_id_val = dst_mesh_instance.local_id;
+            src_mesh_id_val = src_mesh_instance.local_id;
+            dst_mesh_id_val = dst_mesh_instance.local_id;
             requested_intermesh_ports[src_mesh_id_val][dst_mesh_id_val].push_back(
                 {src_instance.local_id, dst_instance.local_id, connection_data.count});
         } else {
-            uint32_t src_mesh_id_val = src_instance.local_id;
-            uint32_t dst_mesh_id_val = dst_instance.local_id;
+            src_mesh_id_val = src_instance.local_id;
+            dst_mesh_id_val = dst_instance.local_id;
             requested_intermesh_connections[src_mesh_id_val][dst_mesh_id_val] = connection_data.count;
         }
     }
     return {requested_intermesh_connections, requested_intermesh_ports};
 }
 
+// Compute intermesh_assign_z_direction from MeshGraphDescriptor by checking each connection's assign_z_direction flag.
+std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>
+compute_intermesh_assign_z_direction_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd) {
+    std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>
+        intermesh_assign_z_direction;
+
+    if (!mgd.has_connections_of_type("FABRIC")) {
+        return intermesh_assign_z_direction;
+    }
+
+    for (::tt::tt_fabric::ConnectionId conn_id : mgd.connections_by_type("FABRIC")) {
+        const auto& connection_data = mgd.get_connection(conn_id);
+        const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
+        const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
+
+        bool is_device_level = (src_instance.kind == ::tt::tt_fabric::NodeKind::Device) &&
+                               (dst_instance.kind == ::tt::tt_fabric::NodeKind::Device);
+
+        uint32_t src_mesh_id_val;
+        uint32_t dst_mesh_id_val;
+
+        if (is_device_level) {
+            const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
+            const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
+            src_mesh_id_val = src_mesh_instance.local_id;
+            dst_mesh_id_val = dst_mesh_instance.local_id;
+        } else {
+            src_mesh_id_val = src_instance.local_id;
+            dst_mesh_id_val = dst_instance.local_id;
+        }
+
+        // Track mesh pairs that should use Z direction and count connections (bidirectional)
+        if (connection_data.assign_z_direction) {
+            ::tt::tt_fabric::MeshId src_mesh_id(src_mesh_id_val);
+            ::tt::tt_fabric::MeshId dst_mesh_id(dst_mesh_id_val);
+            // Increment count for each connection that uses Z direction
+            intermesh_assign_z_direction[src_mesh_id][dst_mesh_id]++;
+            intermesh_assign_z_direction[dst_mesh_id][src_mesh_id]++;
+        }
+    }
+    return intermesh_assign_z_direction;
+}
+
+// Compute intermesh_assign_z_direction from connections/ports using a predicate function.
+// The predicate takes (src_mesh_id, dst_mesh_id) and returns whether that pair should use Z direction.
+std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>
+compute_intermesh_assign_z_direction_from_connections(
+    const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,
+    const ::tt::tt_fabric::RequestedIntermeshPorts& requested_intermesh_ports,
+    std::function<bool(::tt::tt_fabric::MeshId, ::tt::tt_fabric::MeshId)> should_use_z_direction) {
+    std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>
+        intermesh_assign_z_direction;
+
+    // Count connections from requested_intermesh_connections (mesh-level connections)
+    for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_connections) {
+        ::tt::tt_fabric::MeshId src_mesh_id(src_mesh_id_val);
+        for (const auto& [dst_mesh_id_val, _] : dst_mesh_map) {
+            ::tt::tt_fabric::MeshId dst_mesh_id(dst_mesh_id_val);
+            if (should_use_z_direction(src_mesh_id, dst_mesh_id)) {
+                // Each mesh-level connection spec counts as 1 connection
+                intermesh_assign_z_direction[src_mesh_id][dst_mesh_id]++;
+                intermesh_assign_z_direction[dst_mesh_id][src_mesh_id]++;
+            }
+        }
+    }
+
+    // Count connections from requested_intermesh_ports (device-level connections)
+    for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_ports) {
+        ::tt::tt_fabric::MeshId src_mesh_id(src_mesh_id_val);
+        for (const auto& [dst_mesh_id_val, port_list] : dst_mesh_map) {
+            ::tt::tt_fabric::MeshId dst_mesh_id(dst_mesh_id_val);
+            if (should_use_z_direction(src_mesh_id, dst_mesh_id)) {
+                // Each port entry in the list is a separate connection
+                uint32_t connection_count = static_cast<uint32_t>(port_list.size());
+                intermesh_assign_z_direction[src_mesh_id][dst_mesh_id] += connection_count;
+                intermesh_assign_z_direction[dst_mesh_id][src_mesh_id] += connection_count;
+            }
+        }
+    }
+
+    return intermesh_assign_z_direction;
+}
+
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph_impl(
     const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>>& mesh_adjacency_graphs,
     const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,
-    const ::tt::tt_fabric::RequestedIntermeshPorts& requested_intermesh_ports) {
+    const ::tt::tt_fabric::RequestedIntermeshPorts& requested_intermesh_ports,
+    const std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>&
+        intermesh_assign_z_direction) {
     // This function handles both strict mode (requested_intermesh_ports) and relaxed mode
     // (requested_intermesh_connections) intermesh connections:
     // - Strict mode: Creates fabric node-level exit nodes (LogicalExitNode with mesh_id and fabric_node_id)
@@ -395,6 +485,9 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph_impl(
     // Build mesh-level graph from adjacency map
     logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
 
+    // Store assign_z_direction information for intermesh connections
+    logical_multi_mesh_graph.intermesh_assign_z_direction_ = intermesh_assign_z_direction;
+
     for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
         auto exit_node_it = exit_node_adjacency_maps.find(mesh_id);
         if (exit_node_it != exit_node_adjacency_maps.end() && !exit_node_it->second.empty()) {
@@ -415,8 +508,12 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph_descriptor);
     auto [requested_intermesh_connections, requested_intermesh_ports] =
         get_requested_intermesh_from_mgd(mesh_graph_descriptor);
+    auto intermesh_assign_z_direction = compute_intermesh_assign_z_direction_from_mgd(mesh_graph_descriptor);
     return build_logical_multi_mesh_adjacency_graph_impl(
-        mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
+        mesh_adjacency_graphs,
+        requested_intermesh_connections,
+        requested_intermesh_ports,
+        intermesh_assign_z_direction);
 }
 
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
@@ -425,8 +522,20 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+
+    // Build intermesh_assign_z_direction map using the mesh_graph's should_assign_z_direction method
+    auto intermesh_assign_z_direction = compute_intermesh_assign_z_direction_from_connections(
+        requested_intermesh_connections,
+        requested_intermesh_ports,
+        [&mesh_graph](::tt::tt_fabric::MeshId src, ::tt::tt_fabric::MeshId dst) {
+            return mesh_graph.should_assign_z_direction(src, dst);
+        });
+
     return build_logical_multi_mesh_adjacency_graph_impl(
-        mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
+        mesh_adjacency_graphs,
+        requested_intermesh_connections,
+        requested_intermesh_ports,
+        intermesh_assign_z_direction);
 }
 
 /**
@@ -1211,6 +1320,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
         if (!failed_mesh_pairs.empty()) {
             log_debug(tt::LogFabric, "Failed mesh pairs from previous attempts: {}", failed_mesh_pairs.size());
         }
+
+        // FIXME: Add z direction constraints for intermesh mapping please
 
         // Perform inter-mesh mapping
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(

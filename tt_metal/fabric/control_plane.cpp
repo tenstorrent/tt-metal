@@ -2653,10 +2653,10 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 // Override direction to Z BEFORE creating port_id if needed
                 RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
+#
                 // Assign this port id to the exit node if it is not already assigned
-                bool valid_direction =
-                    !curr_exit_node_direction.contains(exit_node_hash) ||
-                    curr_exit_node_direction.at(exit_node_hash) == final_direction;
+                bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
+                                       curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
