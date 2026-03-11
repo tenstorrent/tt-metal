@@ -101,7 +101,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 in_ref.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
                 "ND Sharded tensors must have the same grid.");
             TT_FATAL(
-                in_ref.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+                in_ref.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
                 "Block sharded inputs necessary for ND sharded tensors");
             const auto& first_shard_shape = first_nd_shard_spec.value().shard_shape;
             const auto& curr_shard_shape = in_ref.nd_shard_spec().value().shard_shape;
@@ -190,7 +190,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             args.output_mem_config.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
             "ND Sharded output and inputs must have the same grid.");
         TT_FATAL(
-            args.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED,
             "Block sharded output necessary for ND sharded tensors concat");
         // if nd sharded ends
     } else if (shard_first) {
