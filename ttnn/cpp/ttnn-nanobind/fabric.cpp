@@ -5,7 +5,9 @@
 #include "fabric.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
@@ -127,7 +129,10 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("fabric_tensix_config") = nb::cast(tt::tt_fabric::FabricTensixConfig::DISABLED),
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
         nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
-        nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
+        nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}),
+        nb::arg("custom_mesh_graph_desc_path") = nb::none(),
+        nb::arg("logical_mesh_chip_id_to_physical_chip_id_mapping") =
+            nb::cast(std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>{}));
 
     mod.def(
         "setup_fabric_connection",

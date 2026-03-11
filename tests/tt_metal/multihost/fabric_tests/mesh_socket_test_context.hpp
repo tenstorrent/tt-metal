@@ -70,6 +70,10 @@ private:
     MeshId local_mesh_id_;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
 
+    // Custom fabric topology (populated if physical_mesh_config is specified)
+    std::optional<std::string> custom_mesh_graph_desc_path_;
+    std::map<tt::tt_fabric::FabricNodeId, ChipId> custom_logical_to_physical_mapping_;
+
     // Random number generation
     std::mt19937 gen_;
 

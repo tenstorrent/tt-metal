@@ -227,7 +227,7 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
 
 // Verifies that ControlPlane APIs return values derived from the post-solving mapping (MappedChipInfo in
 // fabric_node_id_to_mapping_), not from pre-solved mesh_graph, PSD, or local bindings. Uses discovery path
-// (no set_custom_fabric_topology). Run with:
+// (no custom_mesh_graph_desc_path). Run with:
 //   tt-run --mock-cluster-rank-binding
 //   tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml
 //   --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--allow-run-as-root"

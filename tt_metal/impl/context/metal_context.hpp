@@ -118,9 +118,6 @@ public:
 
     // System mesh accessor — lazily initialized, reset when control plane is reset.
     distributed::SystemMesh& get_system_mesh();
-    void set_custom_fabric_topology(
-        const std::string& mesh_graph_desc_file,
-        const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_fabric_config(
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode =
@@ -129,7 +126,9 @@ public:
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
-        tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
+        tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{},
+        std::optional<std::string> custom_mesh_graph_desc_path = std::nullopt,
+        const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping = {});
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;

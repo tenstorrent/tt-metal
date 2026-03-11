@@ -1970,9 +1970,13 @@ protected:
 
         // Use t3k_2x2 mesh descriptor (2 meshes, inter-mesh connectivity → VC1 enabled)
         const auto& [mesh_graph_desc_path, mesh_graph_eth_coords] = t3k_mesh_descriptor_chip_mappings[2];
-        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-            mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig::DISABLED,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            mesh_graph_desc_path,
+            get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     }
 
     void TearDown() override {

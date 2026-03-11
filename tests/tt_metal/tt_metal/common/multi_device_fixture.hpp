@@ -153,7 +153,11 @@ protected:
                 tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                 std::nullopt,
                 config_.fabric_tensix_config,
-                config_.fabric_udm_mode);
+                config_.fabric_udm_mode,
+                tt_fabric::FabricManagerMode::DEFAULT,
+                tt_fabric::FabricRouterConfig{},
+                custom_mesh_graph_desc_path_,
+                custom_logical_to_physical_mapping_);
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
@@ -180,6 +184,11 @@ protected:
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     uint32_t max_cbs_{};
+
+    // Optional custom fabric topology override. Set these before calling SetUp()
+    // to use a custom mesh graph descriptor instead of auto-discovery.
+    std::optional<std::string> custom_mesh_graph_desc_path_;
+    std::map<tt_fabric::FabricNodeId, ChipId> custom_logical_to_physical_mapping_;
 
 private:
     Config config_;

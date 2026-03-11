@@ -453,7 +453,9 @@ void SetFabricConfig(
     FabricTensixConfig fabric_tensix_config,
     FabricUDMMode fabric_udm_mode,
     FabricManagerMode fabric_manager,
-    FabricRouterConfig router_config) {
+    FabricRouterConfig router_config,
+    std::optional<std::string> custom_mesh_graph_desc_path,
+    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         fabric_config,
         reliability_mode,
@@ -461,7 +463,9 @@ void SetFabricConfig(
         fabric_tensix_config,
         fabric_udm_mode,
         fabric_manager,
-        router_config);
+        router_config,
+        std::move(custom_mesh_graph_desc_path),
+        logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

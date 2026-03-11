@@ -12,6 +12,8 @@
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <umd/device/types/core_coordinates.hpp>
+#include <map>
+#include <string>
 #include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
@@ -144,6 +146,16 @@ tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscData
  * available routing planes, num_routing_planes can be left unspecified.
  * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
  *
+ * Topology discovery:
+ * If custom_mesh_graph_desc_path is not specified, the fabric topology will be determined through
+ * automatic discovery based on the physical system descriptor. To override auto-discovery, provide a
+ * custom mesh graph descriptor path and an optional logical-to-physical chip ID mapping.
+ *
+ * NOTE: The TT_MESH_GRAPH_DESC_PATH environment variable, if set, will override the
+ * custom_mesh_graph_desc_path specified here.
+ *
+ * When specifying a custom topology, this must be called with no devices currently active.
+ *
  * Return value: void
  *
  * | Argument             | Description                      | Data type              | Required |
@@ -155,6 +167,8 @@ tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscData
  * | fabric_udm_mode     | Unified DataMovement mode        | FabricUDMMode          | No       |
  * | fabric_manager      | Fabric manager mode              | FabricManagerMode      | No       |
  * | router_config       | Router-level configuration       | FabricRouterConfig     | No       |
+ * | custom_mesh_graph_desc_path | Path to custom mesh graph descriptor | optional<string> | No |
+ * | logical_mesh_chip_id_to_physical_chip_id_mapping | Logical to physical chip mapping | map | No |
  */
 void SetFabricConfig(
     FabricConfig fabric_config,
@@ -163,7 +177,9 @@ void SetFabricConfig(
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
     FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
     FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
-    FabricRouterConfig router_config = FabricRouterConfig{});
+    FabricRouterConfig router_config = FabricRouterConfig{},
+    std::optional<std::string> custom_mesh_graph_desc_path = std::nullopt,
+    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping = {});
 
 FabricConfig GetFabricConfig();
 
