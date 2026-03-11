@@ -120,6 +120,7 @@ class ModelOptimizations:
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
+                or base_model_name.startswith("Meta-Llama-3")
             ):
                 if model_name.startswith("phi-4"):
                     logger.info(
@@ -462,6 +463,8 @@ class ModelArgs:
         "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
         "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
         "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
+        "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+        "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -2380,7 +2383,7 @@ class ModelArgs:
             local_params = "LLAMA3_2_1B_PARAMS"
         elif "3.2-3B" in model_name:
             local_params = "LLAMA3_2_3B_PARAMS"
-        elif "3.1-8B" in model_name:
+        elif "3.1-8B" in model_name or "Meta-Llama-3-8B" in model_name:
             local_params = "LLAMA3_1_8B_PARAMS"
         elif "3.2-11B" in model_name:
             local_params = "LLAMA3_2_11B_PARAMS"
