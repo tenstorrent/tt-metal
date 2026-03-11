@@ -210,11 +210,11 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    // risc_init();
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();

@@ -274,8 +274,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - workflow: "all-post-commit-workflows.yaml"
-            name: "All Post Commit Workflows"
+          - workflow: "sanity-tests.yaml"
+            name: "Sanity tests"
             should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
           - workflow: "blackhole-post-commit.yaml"
             name: "Blackhole Post Commit"
@@ -499,10 +499,10 @@ jobs:
           RESULTS=""
 
           if [ "$SHOULD_RUN_WH" = "true" ]; then
-            if check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows"; then
-              RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
+            if check_workflow "sanity-tests.yaml" "Sanity tests"; then
+              RESULTS+="- $(check_workflow "sanity-tests.yaml" "Sanity tests")"$'\n'
             else
-              RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
+              RESULTS+="- $(check_workflow "sanity-tests.yaml" "Sanity tests")"$'\n'
               ALL_PASSED=false
             fi
           fi
@@ -590,14 +590,14 @@ jobs:
           if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
             # Get Wormhole workflow results (filter by PR creation time if not recheck)
             if [ "${{ inputs.recheck_tests }}" = "true" ]; then
-              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+              WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
-              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+              WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
             fi
 
             if [ "$WH_RUNS" != "empty" ]; then
               WH_URL=$(echo "$WH_RUNS" | jq -r '.url // ""')
-              TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
+              TEST_STATUS+="- ✅ **Sanity tests** passed: [View run]($WH_URL)"$'\n'
             fi
           fi
 

@@ -260,6 +260,12 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
+    if (!rtoptions.get_watcher_enabled() &&
+        !rtoptions.get_lightweight_kernel_asserts() &&
+        rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENV_LLK_INFRA ";
+    }
+
     if (rtoptions.get_disable_sfploadmacro()) {
         this->defines_ += "-DDISABLE_SFPLOADMACRO ";
     }
@@ -535,7 +541,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
@@ -615,7 +621,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
@@ -661,7 +667,8 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
         }
 
         auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
-        tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+        tt::jit_build::utils::run_command(
+            cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, env_.get_rtoptions().get_dump_build_commands());
     }
 }
 

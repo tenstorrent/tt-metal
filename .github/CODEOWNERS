@@ -97,17 +97,18 @@ tt_metal/kernels/ @abhullar-tt @tenstorrent/codeowner-bypass # these should go a
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ebanerjeeTT @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
-tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
+tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/test @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @ihamer-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/codeowner-bypass
 tt_metal/tools/mem_bench @nhuang-tt @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
+tt_metal/tools/precompile_fw @ruizhangTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
-tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
-tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
-tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
-tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
+tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
+tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
+tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
+tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 tt_metal/impl/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
@@ -259,6 +260,7 @@ tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/nightly/t3000/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
+tests/nightly/t3000/ccl/test_ring_joint_attention.py @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/nightly/tg/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
 tests/sweep_framework/sweeps @tenstorrent/codeowner-bypass @stevendae @cmaryanTT @ntarafdar @bbradelTT
 tests/sweep_framework/sweeps/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
@@ -324,7 +326,7 @@ models/demos/wormhole @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeown
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
-models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
+models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen25_vl @gwangTT @ssanjayTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen3_vl @ssanjayTT @gwangTT @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
@@ -363,7 +365,7 @@ models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat @tenstorr
 models/experimental/bevformer/ @mbezuljTT @ddjekicTT @tenstorrent/codeowner-bypass
 models/experimental/oft @mbezuljTT @pavlepopovic @ianastasijevicTT @ddjekicTT @tenstorrent/codeowner-bypass
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @tenstorrent/codeowner-bypass
-models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
+models/demos/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
 models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass

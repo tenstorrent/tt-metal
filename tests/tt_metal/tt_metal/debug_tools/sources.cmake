@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
+    dprint/test_dprint_mesh_coords.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
     dprint/test_mute_device.cpp
@@ -16,6 +17,8 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     dprint/test_print_config_register.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
+    watcher/test_mcast_wrap_around.cpp
+    watcher/test_mcast_wrap_around_device.cpp
     watcher/test_noc_sanitize_delays.cpp
     watcher/test_sanitize.cpp
     watcher/test_pause.cpp
