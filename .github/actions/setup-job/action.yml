@@ -25,6 +25,10 @@ inputs:
     description: 'Enable LLK asserts'
     default: false
     type: boolean
+  enable-llk-asserts-temp:
+    description: 'Enable LLK temporary asserts'
+    default: false
+    type: boolean
   enable-kernel-ccache:
     description: 'Enable kernel ccache for JIT compilation at runtime'
     default: false
@@ -111,6 +115,14 @@ runs:
       run: |
         echo "Enabling TT Metal LLK Asserts"
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for LLK temporary asserts
+      if: ${{ inputs.enable-llk-asserts-temp == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal LLK Temporary Asserts"
+        echo "TT_METAL_LLK_ASSERTS_TEMP=1" >> $GITHUB_ENV
       shell: bash
 
     # Kernel ccache configuration for JIT compilation at test runtime

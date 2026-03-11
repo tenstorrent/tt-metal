@@ -68,6 +68,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-asserts-temp:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK temporary asserts"
       ref:
         required: false
         type: string
@@ -163,6 +168,11 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      enable-llk-asserts-temp:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK temporary asserts"
       ref:
         required: false
         type: string
@@ -277,6 +287,7 @@ jobs:
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       ref: ${{ inputs.ref || github.sha }}
 
   # FD Model Tests
@@ -299,6 +310,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       ref: ${{ inputs.ref || github.sha }}
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
@@ -322,6 +334,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
@@ -346,6 +359,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
@@ -359,6 +373,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
@@ -381,4 +396,5 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       ref: ${{ inputs.ref || github.sha }}

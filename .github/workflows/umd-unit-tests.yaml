@@ -28,6 +28,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-asserts-temp:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts (temporary)"
 
 jobs:
   umd-unit-tests:
@@ -65,6 +70,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

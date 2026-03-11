@@ -31,6 +31,10 @@ on:
         description: 'Enable LLK asserts'
         default: false
         type: boolean
+      enable-llk-asserts-temp:
+        description: 'Enable LLK asserts (temporary)'
+        default: false
+        type: boolean
       ref:
         required: false
         type: string
@@ -82,6 +86,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp }}
           auto-triage: ${{ !inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}

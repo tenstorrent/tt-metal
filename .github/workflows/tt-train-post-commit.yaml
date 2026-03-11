@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable-llk-asserts-temp:
+        description: 'Enable LLK asserts (temporary)'
+        required: false
+        type: boolean
+        default: false
       gtest_filter:
         required: false
         default: "*"
@@ -93,6 +98,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests

@@ -27,6 +27,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable-llk-asserts-temp:
+        description: 'Enable LLK asserts (temporary)'
+        required: false
+        type: boolean
+        default: false
       merge-gate-call:
         required: false
         type: boolean
@@ -132,6 +137,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
           enable-kernel-ccache: true
           # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
           # This allows different retention policies for runtime JIT vs. C++ build artifacts

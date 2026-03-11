@@ -33,6 +33,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-asserts-temp:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts (temporary)"
 
 jobs:
   generate-matrix:
@@ -188,6 +193,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:

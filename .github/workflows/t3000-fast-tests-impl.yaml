@@ -26,6 +26,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable-llk-asserts-temp:
+        description: 'Enable LLK asserts (temporary)'
+        required: false
+        type: boolean
+        default: false
       timeout:
         required: false
         type: number
@@ -89,6 +94,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts-temp: ${{ inputs.enable-llk-asserts-temp || false }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
         timeout-minutes: 20
