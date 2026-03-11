@@ -13,6 +13,9 @@ torch>=2.0.0
 # Logging
 loguru
 
+# Video processing (for video input support)
+molmo-utils[torchcodec]
+
 # Testing
 pytest>=7.0.0
 pytest-xdist  # For parallel test execution
