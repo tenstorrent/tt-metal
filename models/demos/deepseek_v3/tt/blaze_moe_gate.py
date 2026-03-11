@@ -393,16 +393,6 @@ class BlazeMoeGate(AbstractModule):
             # change the memory config of the logits
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
-            # create the bias
-            scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-            scores_correction_bias = ttnn.repeat(
-                scores_correction_bias, ttnn.Shape((batch_size_per_device + padding_size, 1))
-            )
-            scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
-            scores_correction_bias = ttnn.to_memory_config(
-                scores_correction_bias, memory_config=input_output_mem_config
-            )
-
             # create the output tensor, input indices and output indices
             ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
             ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device + padding_size, 1, 1))
@@ -414,63 +404,15 @@ class BlazeMoeGate(AbstractModule):
             ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device + padding_size, 1, 1))
             ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
-            ###
-            input_shard_shape = (32, 32)
-            logits_shard_shape = (32, 32)
-            output_shard_shape = (32, 32)
-            input_tile = ttnn.Tile(input_shard_shape)
-            logits_tile = ttnn.Tile(logits_shard_shape)
-            output_tile = ttnn.Tile(output_shard_shape)
-
             # create the bias
             scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-            scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((32, 1)))
-            scores_correction_bias = ttnn.reshape(scores_correction_bias, (32, 16, 16))
+            scores_correction_bias = ttnn.repeat(
+                scores_correction_bias, ttnn.Shape((batch_size_per_device + padding_size, 1))
+            )
+            scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
             scores_correction_bias = ttnn.to_memory_config(
                 scores_correction_bias, memory_config=input_output_mem_config
             )
-            import pdb
-
-            pdb.set_trace()
-
-            # create the output buffer
-            torch_output = torch.zeros((128, 1, 16), dtype=torch.bfloat16)
-            ttnn_output_tensor = ttnn.from_torch(
-                torch_output,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-                memory_config=input_output_mem_config,
-                tile=output_tile,
-            )
-
-            torch_input_indices = torch.arange(16 * 16, dtype=torch.int32)
-            torch_input_indices = torch_input_indices.unsqueeze(0).expand(128, -1)
-            torch_input_indices = torch_input_indices.reshape((128, 16, 16))
-            torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
-            ttnn_input_indices = ttnn.from_torch(
-                torch_input_indices,
-                dtype=ttnn.uint16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-                memory_config=input_output_mem_config,
-                tile=input_tile,
-            )
-
-            torch_output_indices = torch.zeros((128, 1, 16), dtype=torch.uint16)
-            ttnn_output_indices = ttnn.from_torch(
-                torch_output_indices,
-                dtype=ttnn.uint16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-                memory_config=input_output_mem_config,
-                tile=output_tile,
-            )
-
-            ###
 
             eps = 1e-20
             scaling_factor = cfg["routed_scaling_factor"]
