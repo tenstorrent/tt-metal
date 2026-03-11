@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/softmax",
   "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
   "layout": "TILE_LAYOUT",
-  "current_stage_index": 3,
-  "last_passing_commit": "23cb7ce39749b14323db492d0624d7522d4bddc4",
+  "current_stage_index": 4,
+  "last_passing_commit": "7a4d812f809d2ab110c1aff089669dbb429656a3",
   "stages": [
     {
       "name": "data_pipeline",
@@ -197,8 +197,8 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
+      "status": "passed",
+      "commit": "7a4d812f809d2ab110c1aff089669dbb429656a3",
       "attempts": 0,
       "free_retries": 0,
       "max_attempts": 6,

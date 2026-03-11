@@ -38,12 +38,17 @@ void kernel_main() {
         // ============================================================
         // Phase 1: Find max along inner dimension using reduce helper
         // ============================================================
+#ifdef DIM_W
+        constexpr auto phase1_shape = compute_kernel_lib::ReduceInputBlockShape::row(inner_dim);
+#endif
+#ifdef DIM_H
+        constexpr auto phase1_shape = compute_kernel_lib::ReduceInputBlockShape::col(inner_dim);
+#endif
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-            cb_input, cb_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(inner_dim));
+            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(cb_input, cb_scaler, cb_max, phase1_shape);
 
         cb_wait_front(cb_max, 1);
 
@@ -59,7 +64,7 @@ void kernel_main() {
             sub_tiles_bcast<BroadcastType::COL>(cb_input, cb_max, 0, 0, 0);
 #endif
 #ifdef DIM_H
-            sub_bcast_rows_init_short(cb_input, cb_max);
+            add_bcast_rows_init_short(cb_input, cb_max);
             sub_tiles_bcast<BroadcastType::ROW>(cb_input, cb_max, 0, 0, 0);
 #endif
             exp_tile_init<false>();
@@ -80,6 +85,12 @@ void kernel_main() {
         // All inner_dim exp tiles are now in c_4.
         // reduce helper consumes them and produces 1 recip_sum tile.
         // ============================================================
+#ifdef DIM_W
+        constexpr auto phase2b_shape = compute_kernel_lib::ReduceInputBlockShape::row(inner_dim);
+#endif
+#ifdef DIM_H
+        constexpr auto phase2b_shape = compute_kernel_lib::ReduceInputBlockShape::col(inner_dim);
+#endif
         compute_kernel_lib::reduce<
             PoolType::SUM,
             REDUCE_DIM,
@@ -88,7 +99,7 @@ void kernel_main() {
             cb_exp,
             cb_scaler,
             cb_recip_sum,
-            compute_kernel_lib::ReduceInputBlockShape::row(inner_dim),
+            phase2b_shape,
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
             [](uint32_t dst_idx) {
@@ -111,7 +122,7 @@ void kernel_main() {
             sub_tiles_bcast<BroadcastType::COL>(cb_input, cb_max, 0, 0, 0);
 #endif
 #ifdef DIM_H
-            sub_bcast_rows_init_short(cb_input, cb_max);
+            add_bcast_rows_init_short(cb_input, cb_max);
             sub_tiles_bcast<BroadcastType::ROW>(cb_input, cb_max, 0, 0, 0);
 #endif
             exp_tile_init<false>();
