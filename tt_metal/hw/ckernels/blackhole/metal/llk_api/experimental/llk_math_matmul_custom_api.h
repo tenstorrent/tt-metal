@@ -34,12 +34,12 @@ inline void llk_math_matmul_init_no_mop(
         in0_tile_c_dim,
         in1_tile_r_dim,
         in1_tile_c_dim,
-        in0_dst_format,
-        in1_dst_format,
         partial_face,
         transpose,
         ct_dim,
-        rt_dim);
+        rt_dim,
+        in0_dst_format,
+        in1_dst_format);
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>

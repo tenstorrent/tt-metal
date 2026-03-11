@@ -9,6 +9,8 @@
 namespace tt::tt_metal::unit_tests::compute::matmul {
 
 TEST(BlackholeMatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
+    constexpr std::uint32_t format_extra_bit = 1u << ckernel::DATA_FORMAT_BIT_COUNT;
+
     EXPECT_TRUE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
         ckernel::MathFidelity::HiFi3, ::DataFormat::Float16_b, ::DataFormat::Bfp4_b));
     EXPECT_EQ(
@@ -23,6 +25,10 @@ TEST(BlackholeMatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
             static_cast<std::uint32_t>(::DataFormat::Float16_b),
             static_cast<std::uint32_t>(::DataFormat::Bfp4_b)),
         2u);
+    EXPECT_TRUE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
+        ckernel::MathFidelity::HiFi3,
+        static_cast<std::uint32_t>(::DataFormat::Float16_b) | format_extra_bit,
+        static_cast<std::uint32_t>(::DataFormat::Bfp4_b) | format_extra_bit));
 }
 
 TEST(BlackholeMatmulFidelitySchedule, KeepsStandardHiFi3ScheduleForNonBfp4Inputs) {
