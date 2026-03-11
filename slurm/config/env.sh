@@ -37,7 +37,13 @@ export DEFAULT_DOCKER_IMAGE="${GHCR_REPO}/${DOCKER_IMAGE_OS}-${DOCKER_IMAGE_VARI
 # ---------------------------------------------------------------------------
 # In-container paths and build variables
 # ---------------------------------------------------------------------------
-export TT_METAL_HOME="${TT_METAL_HOME:-${CONTAINER_WORKDIR}}"
+# In native (NO_DOCKER) mode, paths resolve to the host workspace;
+# in Docker mode, they resolve to CONTAINER_WORKDIR (/work).
+if [[ "${NO_DOCKER:-0}" == "1" ]]; then
+    export TT_METAL_HOME="${TT_METAL_HOME:-${WORKSPACE:-$(pwd)}}"
+else
+    export TT_METAL_HOME="${TT_METAL_HOME:-${CONTAINER_WORKDIR}}"
+fi
 export PYTHONPATH="${PYTHONPATH:-${TT_METAL_HOME}}"
 export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
 export LOGURU_LEVEL="${LOGURU_LEVEL:-INFO}"

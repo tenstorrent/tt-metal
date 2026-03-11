@@ -27,11 +27,15 @@ native_run() {
         source "${WORKSPACE:-.}/python_env/bin/activate"
     fi
 
-    export TT_METAL_HOME="${WORKSPACE:-.}"
-    export LD_LIBRARY_PATH="${WORKSPACE:-.}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    local ws="${WORKSPACE:-.}"
+    export TT_METAL_HOME="${ws}"
+    export PYTHONPATH="${ws}:${ws}/ttnn:${ws}/tools"
+    export LD_LIBRARY_PATH="${ws}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
     export LOGURU_LEVEL="${LOGURU_LEVEL:-INFO}"
 
+    log_info "TT_METAL_HOME=${TT_METAL_HOME}"
+    log_info "PYTHONPATH=${PYTHONPATH}"
     log_info "Running: ${commands}"
 
     (cd "${WORKSPACE:-.}" && bash -c "set -euo pipefail; $commands")
