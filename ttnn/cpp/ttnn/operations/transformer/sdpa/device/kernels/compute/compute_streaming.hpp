@@ -139,7 +139,13 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
  * Per-row-group max reduction with optional eltwise_max against prev values.
  * Reads from in0_cb at row group offset, writes to out_cb sequentially.
  */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t ROW_STRIDE = cols>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t scale_cb,
+    uint32_t cols,
+    uint32_t ROW_STRIDE = cols,
+    bool respect_trigger = false>
 void reduce_c_row_group(
     uint32_t in0_cb,
     uint32_t out_cb,
@@ -147,17 +153,13 @@ void reduce_c_row_group(
     uint32_t row_group_index,
     bool do_eltwise_max,
     uint32_t SBH,
-    uint32_t reduce_cols = cols,
-    bool respect_trigger = false) {
+    uint32_t reduce_cols = cols) {
     const uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
     // ROW_STRIDE: physical row width in the CB (may exceed cols on the reduced path).
     const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * ROW_STRIDE;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
-
-    // scale_cb assumed ready (waited once at kernel init)
-    // cb_wait_front(scale_cb, 1);
 
     tile_regs_acquire();
 
@@ -174,16 +176,25 @@ void reduce_c_row_group(
     // with in0_cb data arrival.
     // When respect_trigger=true, the unpack MOP is split into two halves with a
     // HW semaphore wait in between, so we don't need cb_wait_front here.
-    if (!respect_trigger) {
+    if constexpr (!respect_trigger) {
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+    if (reduce_cols == cols) {
+        reduce_block_max_row_init<cols, respect_trigger>();
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
+            reduce_block_max_row<cols, respect_trigger>(in0_cb, scale_cb, input_tile_start, i);
+        }
+        reduce_block_max_row_uninit<false, respect_trigger>(in0_cb);
+    } else {
+        reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
+            reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+        }
+        reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
     }
-    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -645,7 +656,8 @@ template <
     uint32_t cb_recip_scratch = 0,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0,
-    uint32_t KT_stride = Sk_chunk_t>
+    uint32_t KT_stride = Sk_chunk_t,
+    bool reduce_trigger = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -654,7 +666,6 @@ static void sdpa_inner_loop_step(
     [[maybe_unused]] const bool apply_mask = false,
     const uint32_t lw_partial_tile_idx = 0,
     const uint32_t active_Sk = Sk_chunk_t,
-    const bool reduce_trigger = false,
     const SubblockDecomp kt_decomp = {
         Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0}) {
     (void)kt_decomp;
@@ -852,15 +863,14 @@ static void sdpa_inner_loop_step(
 #endif
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, KT_stride>(
-                cb_qkt_im,
-                cur.max,
-                prev.max,
-                q_subblock,
-                !is_first_iter /*do_eltwise_max*/,
-                subblock_h,
-                active_Sk,
-                reduce_trigger);
+            reduce_c_row_group<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                cb_identity_scale_in,
+                Sk_chunk_t,
+                KT_stride,
+                reduce_trigger>(
+                cb_qkt_im, cur.max, prev.max, q_subblock, !is_first_iter /*do_eltwise_max*/, subblock_h, active_Sk);
             cb_push_back(cur.max, subblock_h);
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur.max, actual_sbw)));
@@ -1217,9 +1227,20 @@ void sdpa_standard_v2(
         AccumulatorHalf cur = {cb_sum_B, cb_max_B, cb_out_im_B};
 
         // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
-        // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded last chunk).
         constexpr bool can_reduce_trigger =
             (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
+
+        // Trigger condition for padded last chunk: even-split width must divide evenly,
+        // active tile count must be even (MOP split), and at least 2 subblocks for overlap.
+        constexpr uint32_t padded_actual_sbw = (last_chunk_Sk < Sk_chunk_t && last_chunk_Sk % qkt_subblock_w != 0)
+                                                   ? largest_factor_le(last_chunk_Sk, qkt_subblock_w)
+                                                   : qkt_subblock_w;
+        constexpr uint32_t padded_num_subblocks = last_chunk_Sk / padded_actual_sbw;
+        constexpr bool can_trigger_partial =
+            (padded_k_tiles_inner > 0) && (last_chunk_Sk % 2 == 0) && (padded_num_subblocks > 1);
+
+        constexpr bool trigger_full = can_reduce_trigger;
+        constexpr bool trigger_padded = can_reduce_trigger && can_trigger_partial;
 
         // Subblock decomposition for the non-padded (common) case — compile-time constants.
         constexpr SubblockDecomp full_decomp = {
@@ -1233,7 +1254,7 @@ void sdpa_standard_v2(
                              bool is_last,
                              bool is_first,
                              uint32_t active_Sk,
-                             bool reduce_trigger,
+                             auto trigger_tag,
                              const SubblockDecomp& decomp) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
@@ -1259,7 +1280,9 @@ void sdpa_standard_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
+                cb_mask_in,
+                Sk_chunk_t,
+                decltype(trigger_tag)::value>(
                 prev,
                 cur,
                 is_last,
@@ -1267,7 +1290,6 @@ void sdpa_standard_v2(
                 false,  // apply_mask
                 0,      // lw_partial_tile_idx
                 active_Sk,
-                reduce_trigger,
                 decomp);
         };
 
@@ -1277,14 +1299,23 @@ void sdpa_standard_v2(
 
             bool is_padded = is_last && padded_k_tiles_inner > 0;
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
-            bool chunk_reduce_trigger = can_reduce_trigger && !is_padded;
-            call_step(
-                std::false_type{},
-                is_last,
-                is_first,
-                chunk_active_Sk,
-                chunk_reduce_trigger,
-                is_padded ? padded_decomp : full_decomp);
+            if (is_padded) {
+                call_step(
+                    std::false_type{},
+                    is_last,
+                    is_first,
+                    chunk_active_Sk,
+                    std::bool_constant<trigger_padded>{},
+                    padded_decomp);
+            } else {
+                call_step(
+                    std::false_type{},
+                    is_last,
+                    is_first,
+                    chunk_active_Sk,
+                    std::bool_constant<trigger_full>{},
+                    full_decomp);
+            }
 
             // Post-iteration cleanup
             if (!is_first) {
@@ -1477,40 +1508,45 @@ void sdpa_ring_v2(
                     ? SubblockDecomp{active_Sk_param / qkt_subblock_w, active_Sk_param % qkt_subblock_w, (active_Sk_param % qkt_subblock_w) > 0}
                     : full_decomp;
 
-            sdpa_inner_loop_step<
-                false,  // PROFILING_ENABLED
-                Sq_chunk_t,
-                Sk_chunk_t,
-                Skt,
-                DHt,
-                vDHt,
-                scale_fp32,
-                subblock_h,
-                qkt_subblock_w,
-                false,  // use_padded_mask — ring uses ring mask instead
-                true,   // ring_mode
-                true,   // use_ring_mask
+            auto ring_call_step = [&](auto trigger_tag) {
+                sdpa_inner_loop_step<
+                    false,  // PROFILING_ENABLED
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    Skt,
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    subblock_h,
+                    qkt_subblock_w,
+                    false,  // use_padded_mask — ring uses ring mask instead
+                    true,   // ring_mode
+                    true,   // use_ring_mask
 
-                uniform_dataformat,
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out,
-                cb_mask_in>(
-                q_prev,
-                q_cur,
-                is_last,
-                is_first,
-                apply_mask,
-                lw_partial_tile_idx,
-                active_Sk_param,
-                can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
-                chunk_decomp);
+                    uniform_dataformat,
+                    cb_q_in,
+                    cb_kt_in,
+                    cb_v_in,
+                    cb_qkt_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out,
+                    cb_mask_in,
+                    Sk_chunk_t,
+                    decltype(trigger_tag)::value>(
+                    q_prev, q_cur, is_last, is_first, apply_mask, lw_partial_tile_idx, active_Sk_param, chunk_decomp);
+            };
+            if constexpr (can_reduce_trigger) {
+                if (!is_padded_chunk) {
+                    ring_call_step(std::true_type{});
+                } else {
+                    ring_call_step(std::false_type{});
+                }
+            } else {
+                ring_call_step(std::false_type{});
+            }
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
