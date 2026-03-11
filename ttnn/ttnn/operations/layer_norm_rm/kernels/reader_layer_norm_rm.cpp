@@ -20,8 +20,8 @@ constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
 constexpr uint32_t has_beta = get_compile_time_arg_val(2);
 constexpr auto input_tensor_args = TensorAccessorArgs<3>();
 
-// Number of passes per tile-row: currently 2 (mean + subtract)
-constexpr uint32_t NUM_PASSES = 2;
+// Number of passes per tile-row: 3 (mean, variance, normalize)
+constexpr uint32_t NUM_PASSES = 3;
 
 void kernel_main() {
     // Runtime args
