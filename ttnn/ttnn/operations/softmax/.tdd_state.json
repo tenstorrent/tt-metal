@@ -1,0 +1,173 @@
+{
+  "op_name": "softmax",
+  "op_path": "ttnn/ttnn/operations/softmax",
+  "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline_w",
+      "description": "Reader+Writer infrastructure for dim=-1 with identity passthrough compute. Validates data movement from DRAM through CBs back to DRAM.",
+      "kernel_files": [
+        "reader_w.cpp",
+        "compute_w.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline_w.py",
+      "reference_body": "input",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "exp_w",
+      "description": "Compute applies exp() to each tile for dim=-1. Tests SFPU exp operation.",
+      "kernel_files": [
+        "compute_w.cpp"
+      ],
+      "test_file": "test_stage_exp_w.py",
+      "reference_body": "torch.exp(input)",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.05
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_unstable_w",
+      "description": "Full unstable softmax for dim=-1: exp + reduce_sum + recip + mul. No max subtraction.",
+      "kernel_files": [
+        "compute_w.cpp"
+      ],
+      "test_file": "test_stage_softmax_unstable_w.py",
+      "reference_body": "torch.nn.functional.softmax(input, dim=-1)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", numeric_stable=False",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_stable_w",
+      "description": "Full numerically-stable softmax for dim=-1: max + sub_max + exp + reduce_sum + recip + mul.",
+      "kernel_files": [
+        "compute_w.cpp"
+      ],
+      "test_file": "test_stage_softmax_stable_w.py",
+      "reference_body": "torch.nn.functional.softmax(input, dim=-1)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_stable_h",
+      "description": "Full numerically-stable softmax for dim=-2: max + sub_max + exp + reduce_sum + recip + mul along height dimension.",
+      "kernel_files": [
+        "reader_h.cpp",
+        "compute_h.cpp"
+      ],
+      "test_file": "test_stage_softmax_stable_h.py",
+      "reference_body": "torch.nn.functional.softmax(input, dim=-2)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 128, 64)",
+        "(1, 1, 64, 128)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", dim=-2",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
