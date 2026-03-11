@@ -24,10 +24,6 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      tier:
-        required: true
-        type: string
-        description: "Model tier to filter tests (1, 2, or 3)"
 
 jobs:
   load-test-matrix:
@@ -140,7 +136,7 @@ jobs:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.tier }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
           if [ -f "$DEVICE_PERF_REPORT_FILENAME" ]; then
             python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" CHECK
@@ -175,7 +171,7 @@ jobs:
         if: ${{ !cancelled() && steps.generate-device-perf-report.outputs.device_perf_report_filename != '' }}
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
-          echo "ARTIFACT_NAME=device-perf-report-csv-${{ inputs.tier }}-${{ matrix.test-group.sku }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-group.sku }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
       - name: Upload device perf report
         timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
