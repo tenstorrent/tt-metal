@@ -243,7 +243,7 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
 <thead>
 <tr>
   <th>ID</th><th>Date</th><th>Prompt</th><th>Base Branch</th><th>Run Branch</th>
-  <th>Score</th><th>Golden</th><th>Rating</th>
+  <th>Score</th><th>Golden</th><th>Duration</th><th>Rating</th>
 </tr>
 </thead>
 <tbody>
@@ -282,6 +282,15 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
         else:
             golden_html = '<span style="color:#9ca3af">--</span>'
 
+        # Duration
+        dur = run.get("duration_seconds")
+        if dur is not None:
+            dur_min = dur // 60
+            dur_sec = dur % 60
+            duration_html = f"{dur_min}m {dur_sec:02d}s"
+        else:
+            duration_html = '<span style="color:#9ca3af">--</span>'
+
         # Annotation
         if run["annotation_score"]:
             stars = "&#9733;" * run["annotation_score"] + "&#9734;" * (5 - run["annotation_score"])
@@ -301,14 +310,14 @@ def _html_runs_table(runs: list, run_details: dict) -> str:
             f"  <td>{rid}</td><td>{ts}</td><td>{prompt}{golden_badge}</td>"
             f'  <td>{base_branch} <span style="color:#9ca3af;font-size:0.8em">({commit_short})</span></td>'
             f"  <td>{created_branch}</td>"
-            f"  <td>{score_html}</td><td>{golden_html}</td><td>{ann_html}</td>"
+            f"  <td>{score_html}</td><td>{golden_html}</td><td>{duration_html}</td><td>{ann_html}</td>"
             f"</tr>"
         )
 
         # Detail row
         detail = _html_run_detail(rid, run_details.get(rid, {}))
         rows.append(
-            f'<tr class="detail-row" id="detail-{rid}">' f'  <td class="detail-cell" colspan="8">{detail}</td>' f"</tr>"
+            f'<tr class="detail-row" id="detail-{rid}">' f'  <td class="detail-cell" colspan="9">{detail}</td>' f"</tr>"
         )
 
     return header + "\n".join(rows) + "\n</tbody>\n</table>"

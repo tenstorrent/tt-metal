@@ -108,11 +108,18 @@ def ingest_run(
     score_total = None
     score_grade = None
     criteria = []
+    duration_seconds = None
     if score_json_path and score_json_path.exists():
         score_data = json.loads(score_json_path.read_text())
         score_total = score_data.get("total_score")
         score_grade = score_data.get("grade")
         criteria = score_data.get("criteria", [])
+        # Extract duration from execution_time criterion
+        for c in criteria:
+            if c.get("name") == "execution_time":
+                sub = c.get("sub_scores", {})
+                duration_seconds = sub.get("overall_duration_s")
+                break
 
     # Read test results if available
     test_results = []
@@ -136,6 +143,7 @@ def ingest_run(
         golden_passed=golden_passed,
         golden_total=golden_total,
         golden_name=golden_name,
+        duration_seconds=duration_seconds,
     )
 
     if test_results:

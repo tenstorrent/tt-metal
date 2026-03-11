@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS runs (
     golden_total INTEGER,
     annotation_score INTEGER,
     annotation_notes TEXT,
-    golden_name TEXT
+    golden_name TEXT,
+    duration_seconds INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS test_results (
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 MIGRATIONS = [
     "ALTER TABLE runs ADD COLUMN golden_name TEXT",
+    "ALTER TABLE runs ADD COLUMN duration_seconds INTEGER",
 ]
 
 
@@ -114,13 +116,15 @@ def insert_run(
     golden_passed=None,
     golden_total=None,
     golden_name=None,
+    duration_seconds=None,
 ) -> int:
     """Insert a run and return its ID. Caller must commit."""
     cur = conn.execute(
         """INSERT INTO runs
            (timestamp, prompt_name, run_number, starting_branch, starting_commit,
-            created_branch, score_total, score_grade, golden_passed, golden_total, golden_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            created_branch, score_total, score_grade, golden_passed, golden_total,
+            golden_name, duration_seconds)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             timestamp,
             prompt_name,
@@ -133,6 +137,7 @@ def insert_run(
             golden_passed,
             golden_total,
             golden_name,
+            duration_seconds,
         ),
     )
     return cur.lastrowid
