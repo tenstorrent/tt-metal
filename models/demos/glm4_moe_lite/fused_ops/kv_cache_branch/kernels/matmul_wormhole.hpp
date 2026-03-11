@@ -23,9 +23,9 @@
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tile_move_copy.h"
 #endif
 
 namespace glm4_matmul {

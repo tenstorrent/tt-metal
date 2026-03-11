@@ -1,6 +1,6 @@
 # Status: GLM-4.7-Flash Modularization
 
-## Current Phase: Phase 2 (Profile Baseline)
+## Current Phase: Phase 4 (Optimize)
 
 ## Phase 1: UNDERSTAND (done)
 
@@ -40,12 +40,41 @@
 4. `model_tt.py` (2685 lines) mixes weight loading, trace capture, MTP, and vLLM plumbing
 5. No separation between "what to compute" and "how to shard/place in memory"
 
-## Phase 2: PROFILE BASELINE (in progress)
+## Phase 2: PROFILE BASELINE (done)
 
-### TODO
-- [ ] Profile single layer 0 decode
-- [ ] Profile full model decode (4 tokens)
-- [ ] Record baselines in baseline.yaml
-- [ ] Identify top-5 bottleneck ops
+- [x] Profile single layer 0 decode — 106 ops, 4533 us (refactored path)
+- [x] Profile dense layers (pre-refactoring) — 1316 ops, 54.3 ms
+- [x] Profile full model decode (4 tokens) — completed on 4x Wormhole (1.98 tok/s, 504.6 ms/token)
+- [x] Record baselines in baseline.yaml
+- [x] Identify top-5 bottleneck ops
 
-## Phases 3-5: pending
+## Phase 3: MODULARIZE (done)
+
+- [x] Extract runtime_config.py
+- [x] Extract linear_helpers.py
+- [x] Extract attention_decode.py
+- [x] Extract mlp_decode.py
+- [x] Wire into decoder_layer_tt.py (2113 -> 1098 lines)
+- [x] Extract mtp_forward.py and decode_trace_state.py
+- [x] Hardware validation: layer 0 decode PCC > 0.999, MoE layer 1 PASS
+
+## Phase 4: OPTIMIZE (in progress)
+
+### Full Model Baseline (4x Wormhole)
+- Decode: **1.98 tok/s** (504.6 ms/token)
+- Device kernel: 44.2 ms/device (8.8% of latency)
+- Host dispatch overhead: **91.2%**
+
+### Top Optimization Targets (from full model profile)
+1. **Host dispatch overhead (91.2%)**: Enable metal trace capture/replay — single biggest win
+2. **Data movement ops (24.5% of kernel)**: FillPad 10.5%, Permute 4.9%, Repeat 4.5%, Clone 3.4%, Transpose 3.3%
+3. **Layout conversion (9.9% of kernel)**: TilizeDeviceOperation — pre-tilize inputs
+4. **MoE ops (8.6% of kernel)**: SparseMatmul 5.7% + ExpertRemap 2.9% — fuse kernels
+5. **Binary/Unary element-wise (9.2% of kernel)**: 328 ops, 4084 us — may be inherent
+
+### Detailed Report
+- `experiments/glm4_full_model_profile_report.md`
+- `experiments/glm4_full_model_ops_profile.csv` (7,496 ops, all devices)
+- `experiments/glm4_full_model_ops_summary.csv` (per-op summary)
+
+## Phase 5: INTEGRATE — pending

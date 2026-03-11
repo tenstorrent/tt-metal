@@ -1,54 +1,68 @@
 # Resume State
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 **Task:** GLM-4.7-Flash modularization and optimization
-**Current phase:** Phase 2 (Profile Baseline)
+**Current phase:** Phase 4 (Optimize) — full model profiled, baseline established
 
 ## Current State
 
-- **Phase 1 (Understand):** Complete. Architecture documented in status.md.
-- **Phase 2 (Profile):** Partial. Tracy profiled dense layers (1316 ops, 54.3 ms). Full model OOM on MoE expert weights.
-- **Code state:** Unmodified (no refactoring started yet)
-- **Venv/build:** Done and working
+- **Phase 1 (Understand):** Complete.
+- **Phase 2 (Profile):** Complete. Full model profiled on 4x Wormhole.
+- **Phase 3 (Modularize):** Complete. All modules extracted, hardware validated.
+- **Phase 4 (Optimize):** In progress. Full model baseline: **1.98 tok/s**, 504.6 ms/token.
+- **Code state:** Refactored and validated on hardware.
+- **Venv/build:** Done and working.
+
+## Full Model Performance Baseline
+
+| Metric | Value |
+|--------|-------|
+| Decode throughput | 1.98 tok/s |
+| Decode latency | 504.6 ms/token |
+| Device kernel time | 44.2 ms/device |
+| Host dispatch overhead | 91.2% of latency |
+| Devices | 4x Wormhole (mesh 1,4) |
 
 ## What Has Been Done
 
 | # | Step | Status |
 |---|------|--------|
-| 1 | Read and document model architecture | Done |
-| 2 | Create op-mapping table | Done |
-| 3 | Identify modularity problems | Done |
-| 4 | Set up agentic workflow files | Done |
+| 1 | Architecture analysis and op mapping | Done |
+| 2 | Set up agentic workflow | Done |
+| 3-8 | Extract 6 modules (config, linear, attn, mlp, mtp, trace) | Done |
+| 9 | Wire modules into decoder_layer_tt.py (2113→1098 lines) | Done |
+| 10 | Hardware validation (layer 0 + MoE) | Done |
+| 11 | Single-layer Tracy profile | Done |
+| 12 | Full model 4-device profile | Done |
+| 13 | Per-op CSV and detailed report | Done |
 
-## Next Steps Queue
+## Per-Op Profile Summary (full model, device 0)
+
+| Op | Count | Kernel (us) | % |
+|---|---|---|---|
+| MatmulDeviceOperation | 206 | 12,754 | 28.8 |
+| FillPadDeviceOperation | 75 | 4,662 | 10.5 |
+| TilizeDeviceOperation | 21 | 4,376 | 9.9 |
+| BinaryNgDeviceOperation | 242 | 2,702 | 6.1 |
+| SparseMatmulDeviceOperation | 62 | 2,521 | 5.7 |
+| PermuteDeviceOperation | 24 | 2,174 | 4.9 |
+| RepeatDeviceOperation | 48 | 1,975 | 4.5 |
+| Other | 1,192 | 13,061 | 29.5 |
+| **Total** | **1,870** | **44,225** | **100** |
+
+## Next Steps Queue (Phase 4: Optimize)
 
 | # | Step | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | Build venv and validate existing tests pass | Done | |
-| 2 | Profile dense layers with Tracy | Done | 1316 ops, 54.3 ms. Full model OOM on MoE experts. |
-| 3 | Record baselines in baseline.yaml | Done | Partial — dense layer baselines recorded |
-| 4 | Extract runtime_config.py | Done | Created tt/runtime_config.py with Glm4RuntimeConfig dataclass |
-| 5 | Extract linear_helpers.py | Done | Created tt/linear_helpers.py with 6 functions |
-| 5b | Extract attention_decode.py | Done | kv_cache_update, q_projection, flash_mla_and_output |
-| 5c | Extract mlp_decode.py | Done | dense_mlp_forward, moe_mlp_forward |
-| 5d | Wire modules into decoder_layer_tt.py | Done | 2113 -> 1098 lines. Decode fn body: ~1040 -> ~100 lines |
-| 5e | Split model_tt.py | Done | Created mtp_forward.py (212 lines) and decode_trace_state.py (60 lines) |
-| 6 | Hardware validation | **NEXT** | Run tests on device to confirm PCC after refactoring |
-| 6 | Extract linear_helpers.py | pending | Prerequisite for attention/mlp |
-| 7 | Extract attention/ package | pending | Core modularity improvement |
-| 8 | Extract mlp/ package | pending | Core modularity improvement |
-| 9 | Simplify decoder_layer_tt.py | pending | Assembly of extracted modules |
-| 10 | Split model_tt.py | pending | Final modularity step |
+| 1 | Enable metal trace capture/replay | **NEXT** | Host dispatch is 91.2% of latency — this is the single biggest win |
+| 2 | Reduce data movement ops | pending | FillPad+Permute+Repeat+Clone+Transpose = 24.5% of kernel time |
+| 3 | Eliminate Tilize overhead | pending | 9.9% of kernel time — pre-tilize or maintain tile layout |
+| 4 | Optimize MoE kernel fusion | pending | SparseMatmul+Remap = 8.6% — fuse to reduce dispatch |
+| 5 | DRAM-sharded matmuls for small projections | pending | Attention projections using few cores |
 
-## Before Next Experiment
+## Output Files
 
-1. Build venv: `cd /home/ubuntu/agent/agentic/tt-metal && ./create_venv.sh`
-2. Activate: `source python_env/bin/activate`
-3. Run smoke test to verify environment works
-4. Then proceed to profiling
-
-## Key Files (for refactoring)
-
-- `models/demos/glm4_moe_lite/tt/decoder_layer_tt.py` (2113 lines -> target ~150)
-- `models/demos/glm4_moe_lite/tt/model_tt.py` (2685 lines -> target ~500)
-- `models/demos/glm4_moe_lite/tt/moe_tt.py` (1768 lines -> split into router + experts)
+- `experiments/glm4_full_model_profile_report.md` — detailed analysis with bottlenecks and recommendations
+- `experiments/glm4_full_model_ops_profile.csv` — raw per-op data (7,496 rows, all devices)
+- `experiments/glm4_full_model_ops_summary.csv` — per-op summary by device
+- `experiments/baseline.yaml` — all baseline numbers
