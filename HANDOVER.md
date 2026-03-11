@@ -10,94 +10,91 @@
 ### What's Working
 - **dispatch** (`all_to_all_dispatch_metadata`): PCC pass on all devices
 - **dispatch_compute** (`moe_gpt`): PCC ~0.990 on all 32 devices
-- **selective_reduce_combine at ring_pos=0**: PCC ~0.987
+- **dispatch_compute_combine** (`selective_reduce_combine`): PCC ~0.987 on ALL 32 devices (all ring positions)
+- **E2E test** (`test_moe_gpt_e2e.py`): All 5 subtests PASS, ring_pos>0 failures are now blocking (not silently skipped)
 
-### What's NOT Working
-- **selective_reduce_combine at ring_pos>0**: Produces wrong data
-  - E2E tests (`test_moe_gpt_e2e.py`) **mask this as a non-blocking warning** — the tests pass but ring_pos>0 combine results are silently skipped (see lines 676-687 in `run_test_dispatch_compute_combine`)
-  - Component test (`test_modules.py`) gets **PCC ~0.665** instead of ~0.99, because only 1/4 of tokens (ring_pos=0) have correct combine results
-- **all_reduce**: Not yet wired into pipeline
+### What's Partially Working
+- **test_decoder fused_experts** (`test_modules.py`): PCC = 0.732
+  - The e2e kernel pipeline is correct (0.987 PCC), but the full module test including
+    score weighting, K-dimension sum, and all_reduce gets 0.732
+  - **Root cause**: PR #39543 (combine semaphore signaling fix) is NOT in our branch
+  - See "Missing PR #39543" section below
 
-## Latest Commits
-- `58992963b6` — Remove unused moe_gpt_fused operation
-- `8b7cda4869` — Fix global expert IDs, per-device weight sharding, bias zeroing, output gathering
-- `ec8d57b8e5` — Fix e_t format, dynamic activations_stride, combine verification, fused decode pipeline
+### Upstream PRs
+| PR | Status | What it fixes |
+|---|---|---|
+| #38542 (Selective combine fast follow) | **Merged in branch** | K-indexed output shape |
+| #39380 (linearized_mesh_coord bug fix) | **Merged in branch** | Device ID mapping |
+| #39543 (combine semaphore signaling) | **NOT in branch** | Race conditions in combine writer |
 
-## Open Issue: ring_pos>0 Combine Failure
+### Missing PR #39543: Combine Semaphore Signaling Fix
 
-### Root Cause Analysis (in progress)
-**Likely cause**: Token distribution mismatch between moe_gpt's combine kernel and selective_reduce_combine's reader.
+PR #39543 fixes three bugs in `selective_reduce_combine/writer.cpp`:
 
-- **moe_gpt combine** (`matmul_dm1.cpp`, now deleted but was read): Writes W2 output into BLOCK_SHARDED combine buffer. Each expert writes exactly `TOKENS_PER_CHUNK=32` tokens per shard. The combine output has shard shape `[128, 960]` with `COMBINE_H=4, COMBINE_W=3` (12 cores). Each shard contains ALL 4 experts: expert `e` occupies rows `[e*32, (e+1)*32)`.
+1. **Termination sync wait count** (line 258): Currently waits for
+   `(num_token_parallel_cores * num_data_parallel_cores) - 1` signals,
+   should be `num_data_parallel_cores - 1`. With COMBINE_H=4, COMBINE_W=3,
+   this means waiting for 11 signals instead of 2.
 
-- **selective_reduce_combine reader** (`reader.cpp`): Uses `token_work_split_even` which distributes tokens with floor division + spread remainder:
-  ```cpp
-  chunk = count / NumTokenParallelCores;
-  rem = count % NumTokenParallelCores;
-  // core c gets: (c < rem) ? chunk+1 : chunk
-  ```
+2. **`num_mux_workers` vs `num_mux_workers_per_link`**: The `close_direction_connections`
+   template arg uses total workers across all links instead of per-link count.
+   Program factory sets `num_mux_workers = num_links * neighbors.size()` but
+   should be just `neighbors.size()`.
 
-- **moe_gpt verify_device_output** reveals it uses `div_up` (ceiling division):
-  ```python
-  max_tph = (count + H - 1) // H  # div_up
-  # shard k gets tokens [k*max_tph, min((k+1)*max_tph, count))
-  ```
+3. **Missing `noc_async_atomic_barrier()`**: Uses `noc_async_write_barrier()` instead,
+   which doesn't synchronize atomic operations properly before the global semaphore wait.
 
-When token counts aren't exact multiples of COMBINE_H, these produce different token-to-core mappings:
-- Example: count=5, H=4 -> moe_gpt: [2,2,1,0] vs selective_reduce_combine: [2,1,1,1]
+These bugs cause race conditions in the combine writer, producing corrupted output
+on some tokens. The isolated e2e test (simpler sync pattern) gets 0.987, but the
+full module test with score weighting and all_reduce amplifies the errors to 0.732.
 
-This means selective_reduce_combine reads tokens from wrong offsets for ring_pos>0 devices. Only ring_pos=0 gets correct data (by luck with seed 42), giving ~1/4 correct + 3/4 garbage = PCC ~0.665.
+**Next step**: Cherry-pick or rebase onto a commit that includes PR #39543, then
+re-run `test_decoder --test-modules=fused_experts` to verify PCC improvement.
 
-### What Was Confirmed
-- Writer routing logic (fabric send, get_route, manhattan_distance) is correct for axis=0
-- Fabric connections (NORTH/SOUTH) correctly set up by `get_neighbors`
-- BLOCK_SHARDED shard layout: all experts per shard, not one expert per shard
-- Worker core ordering with `row_wise=True` matches shard assignment
-- DeepSeek's fused test passes with cluster_axis=0 but only verifies final output after reduce_scatter, not per-ring-position combine PCC
+## Bugs Fixed in This Branch
 
-### What Was NOT Yet Confirmed
-- Need to verify moe_gpt's actual token-to-shard distribution in the combine output
-  - `matmul_dm1.cpp` wrote `TOKENS_PER_CHUNK=32` rows per expert (constant), so the mismatch may only matter when per-expert token counts vary
-  - The metadata from dispatch tells each ring core how many tokens each expert has
-  - The combine writer wrote ALL 32 rows regardless of actual token count (padding with garbage?)
-  - selective_reduce_combine's reader uses `token_work_split_even` on the ACTUAL token count, so it may read fewer rows than what was written
-- NOTE: `moe_gpt_fused` folder was deleted in latest commit. The relevant combine kernel code is in the **moe_gpt** (non-fused) kernel at `ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/`
+1. **Token distribution mismatch** (dm1.cpp floor+remainder fix):
+   moe_gpt's combine writer used `div_up` (ceiling division) to distribute tokens
+   across height shards, but `selective_reduce_combine` uses floor+remainder.
+   Fixed moe_gpt to match. This was the same fix as upstream PR #38542 applied
+   to DeepSeek's `moe_compute/dm1.cpp`.
 
-### Next Steps
-1. **Read moe_gpt (non-fused) combine kernel** to understand how per-expert token counts flow into the combine output layout
-2. **Compare** how moe_gpt pads/distributes tokens vs how selective_reduce_combine expects them
-3. **Fix the mismatch** — either:
-   - Change `token_work_split_even` to use `div_up` to match moe_gpt, OR
-   - Change moe_gpt's combine output to match selective_reduce_combine's expected layout
-4. **Remove the ring_pos>0 masking** in `test_moe_gpt_e2e.py` (lines 676-687) and verify all ring positions pass
-5. **Wire all_reduce** into pipeline (after selective_reduce_combine)
-6. **Clean up** remaining scratch files in repo root
+2. **ring_pos>0 masking removed**: E2E test no longer silently skips ring_pos>0
+   combine failures. All ring positions must pass.
 
-## Key Files
-| File | Purpose |
-|------|---------|
-| `tests/ttnn/nightly/.../test_moe_gpt_e2e.py` | E2E pipeline test (5 subtests, ring_pos>0 masked) |
-| `models/demos/gpt_oss/tests/unit/test_modules.py` | Component test (PCC ~0.665 issue) |
-| `models/demos/gpt_oss/tt/experts_throughput/weights.py` | Weight sharding + expert mapping |
-| `models/demos/gpt_oss/tt/experts_throughput/fused_decode.py` | Fused pipeline forward |
-| `ttnn/.../moe_gpt/device/kernels/` | moe_gpt ring kernels (combine output writer) |
-| `ttnn/.../selective_reduce_combine/device/kernels/dataflow/reader.cpp` | Combine reader (token_work_split_even) |
-| `ttnn/.../selective_reduce_combine/device/kernels/dataflow/writer.cpp` | Combine writer (fabric send) |
-| `tests/ttnn/nightly/.../test_moe_gpt_single_device.py` | Single-device test with verify_device_output |
+3. **Global expert IDs**: Test uses global expert IDs (0..127) instead of local.
 
-## Useful Commands
+4. **Bias zeroing**: Reference model biases zeroed since moe_gpt doesn't add bias.
+
+5. **Output gathering**: Proper per-row concat across mesh rows.
+
+6. **moe_gpt_fused cleanup**: Deleted unused 21-file moe_gpt_fused operation.
+
+7. **shard-to-core mismatch**: `corerange_to_cores()` with `row_wise=True` to
+   match BLOCK_SHARDED ShardOrientation::ROW_MAJOR.
+
+## How to Run Tests
+
 ```bash
-# SSH to machine
+# SSH and activate
 ssh ubuntu@UF-EV-B4-GWH02
-
-# Activate env
 cd /data/handrews/tt-metal && source python_env/bin/activate
 
-# Run e2e tests
+# E2E pipeline tests (all 5 subtests)
+pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py -xvs
+
+# E2E just combine test
 pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py -xvs -k "dispatch_compute_combine"
 
-# Run component test
-pytest models/demos/gpt_oss/tests/unit/test_modules.py -xvs -k "fused_throughput"
+# Module test: fused experts (requires 4x8 mesh + decode_high_throughput for use_throughput_experts=True)
+HF_MODEL=/data/tt_dnn-models/openai/gpt-oss-120b \
+TT_CACHE_PATH=/data/huggingface/tt_cache/openai--gpt-oss-120b \
+pytest models/demos/gpt_oss/tests/unit/test_modules.py::test_decoder -xvs \
+  -k "layer_1-mesh_4x8-decode_high_throughput" \
+  --test-modules=fused_experts
+
+# NOTE: decode_low_latency (batch=1,seq=1) has use_throughput_experts=False
+# because batch*seq=1 is not >1. Must use decode_high_throughput (batch=128,seq=1).
 
 # IPMI reset (if devices hang)
 sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF  # then wait 90s
@@ -106,6 +103,18 @@ sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF  # then wait 90s
 cp build/ttnn/_ttnn.so ttnn/ttnn/_ttnn.so
 ```
 
+## Key Files
+| File | Purpose |
+|------|---------|
+| `tests/ttnn/nightly/.../test_moe_gpt_e2e.py` | E2E pipeline test (5 subtests) |
+| `models/demos/gpt_oss/tests/unit/test_modules.py` | Component test (fused_experts PCC 0.732) |
+| `models/demos/gpt_oss/tt/experts_throughput/fused_decode.py` | Fused pipeline forward |
+| `models/demos/gpt_oss/tt/experts_throughput/weights.py` | Weight sharding + expert mapping |
+| `ttnn/.../moe_gpt/device/kernels/dm1.cpp` | moe_gpt ring kernel (combine output writer) |
+| `ttnn/.../selective_reduce_combine/.../reader.cpp` | Combine reader (token_work_split_even) |
+| `ttnn/.../selective_reduce_combine/.../writer.cpp` | Combine writer (needs PR #39543 fix) |
+| `ttnn/.../selective_reduce_combine/.../*_program_factory.cpp` | Combine program factory (needs PR #39543 fix) |
+
 ## Scratch Files to Clean Up
-Many debug/diagnostic scripts in repo root: `diagnose_*.py`, `fix_*.py`, `*_hang*.txt`, etc.
+Debug/diagnostic scripts in repo root: `diagnose_*.py`, `fix_*.py`, `*_hang*.txt`, etc.
 These are NOT committed and can be deleted.
