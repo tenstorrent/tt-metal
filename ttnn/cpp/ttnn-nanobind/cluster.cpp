@@ -52,6 +52,28 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
                 >>> print(f"Cluster descriptor saved to: {descriptor_path}")
         )doc");
+
+    mod.def(
+        "get_mesh_shape",
+        &ttnn::cluster::get_mesh_shape,
+        R"doc(
+            Get the default mesh shape from the mesh graph descriptor for the current cluster type.
+
+            This returns the shape defined in the default textproto:
+            - Galaxy: 8x4 (32 chips)
+            - T3K: 2x4 (8 chips)
+            - P300: 1x2 (2 chips)
+
+            This API can be called before open_mesh_device() as it reads from the static mesh graph descriptor.
+
+            Returns:
+                ttnn.MeshShape: The default mesh shape for the cluster.
+
+            Example:
+                >>> import ttnn
+                >>> mesh_shape = ttnn.cluster.get_mesh_shape()
+                >>> print(f"Mesh shape: {mesh_shape.x}x{mesh_shape.y}")
+        )doc");
 }
 
 }  // namespace
@@ -75,7 +97,11 @@ void py_cluster_module_types(nb::module_& mod) {
         .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2")
         .value("P300", tt::tt_metal::ClusterType::P300, "Production P300")
         .value("BLACKHOLE_GALAXY", tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "Blackhole Galaxy, all chips with mmio")
-        .value("P300_X2", tt::tt_metal::ClusterType::P300_X2, "2 P300 cards");
+        .value("P300_X2", tt::tt_metal::ClusterType::P300_X2, "2 P300 cards")
+        .value(
+            "CUSTOM",
+            tt::tt_metal::ClusterType::CUSTOM,
+            "Custom cluster type, used for boards with custom fabric mesh graph descriptor path specified");
 }
 
 void py_cluster_module(nb::module_& mod) { bind_ttnn_cluster(mod); }
