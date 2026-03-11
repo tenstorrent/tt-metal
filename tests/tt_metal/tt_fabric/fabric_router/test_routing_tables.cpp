@@ -172,7 +172,7 @@ TEST(MeshGraphValidation, TestMGDConnections) {
 
 TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     // Reset MetalContext's control plane to ensure a clean state
-    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::detail::ReleaseOwnership();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -224,7 +224,7 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
-    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::detail::ReleaseOwnership();
 
     // Delete any existing mapping file to ensure we check the one written by the test's ControlPlane
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -395,7 +395,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
 
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
     // This prevents MetalContext from creating an auto-discovery control plane that writes a mapping file first
-    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::detail::ReleaseOwnership();
 
     // Delete any existing mapping file to ensure we check the one written by the test's ControlPlane
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();

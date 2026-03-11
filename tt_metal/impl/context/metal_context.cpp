@@ -546,37 +546,6 @@ distributed::SystemMesh& MetalContext::get_system_mesh() {
     return *system_mesh_;
 }
 
-void MetalContext::set_custom_fabric_topology(
-    const std::string& mesh_graph_desc_file,
-    const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    TT_FATAL(
-        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
-        "Modifying control plane requires no devices to be active");
-    // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
-    custom_mesh_graph_desc_path_ = mesh_graph_desc_file;
-    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-}
-
-void MetalContext::set_default_fabric_topology() {
-    TT_FATAL(
-        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
-        "Modifying control plane requires no devices to be active");
-    // Reset the system mesh and control plane, since they were initialized with custom parameters.
-    system_mesh_.reset();
-    control_plane_.reset();
-    // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
-    // mapping.
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
-
-    if (rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions().get_custom_fabric_mesh_graph_desc_path();
-    } else {
-        custom_mesh_graph_desc_path_ = std::nullopt;
-    }
-    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-}
-
 void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
@@ -592,10 +561,28 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricTensixConfig fabric_tensix_config,
     tt_fabric::FabricUDMMode fabric_udm_mode,
     tt_fabric::FabricManagerMode fabric_manager,
-    tt_fabric::FabricRouterConfig router_config) {
+    tt_fabric::FabricRouterConfig router_config,
+    std::optional<std::string> custom_mesh_graph_desc_path,
+    const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
+
+    if (custom_mesh_graph_desc_path.has_value()) {
+        TT_FATAL(
+            !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
+            "Setting custom fabric topology requires no devices to be active");
+        if (rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
+            log_warning(
+                tt::LogMetal,
+                "TT_MESH_GRAPH_DESC_PATH is set to '{}', overriding programmatic custom mesh graph descriptor '{}'",
+                rtoptions().get_custom_fabric_mesh_graph_desc_path(),
+                custom_mesh_graph_desc_path.value());
+        } else {
+            custom_mesh_graph_desc_path_ = std::move(custom_mesh_graph_desc_path);
+        }
+        logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
+    }
 
     // Export channel trimming capture data before fabric config changes.
     // Must happen while fabric_config_ is still active and fabric context is alive.

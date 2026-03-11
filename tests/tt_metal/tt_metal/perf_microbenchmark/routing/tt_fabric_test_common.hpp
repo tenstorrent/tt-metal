@@ -1789,6 +1789,11 @@ private:
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
     mutable bool frequency_validated_ = false;
 
+    // Custom fabric topology (populated if physical_mesh_config is specified)
+    std::optional<std::string> custom_mesh_graph_desc_path_;
+    std::map<FabricNodeId, ChipId> custom_logical_to_physical_mapping_;
+    std::optional<MeshId> expected_local_mesh_id_;
+
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
         const char* mesh_id_str = std::getenv("TT_MESH_ID");
         TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set");
@@ -1796,7 +1801,6 @@ private:
         const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-        // ethernet coordinate chip mapping, which should be migrated away from
         std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
         for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
             if (mesh_id == *local_mesh_id) {
@@ -1808,19 +1812,9 @@ private:
                 }
             }
         }
-        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-            physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
-
-        // ensure user specified matches what control plane sees
-        const auto user_mesh_id =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
-        TT_FATAL(
-            *user_mesh_id == *local_mesh_id,
-            "Local mesh id {} does not not match user mesh id {}",
-            *user_mesh_id,
-            *local_mesh_id);
-
-        local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
+        custom_mesh_graph_desc_path_ = physical_mesh_config.mesh_descriptor_path;
+        custom_logical_to_physical_mapping_ = std::move(chip_to_eth_coord_mapping);
+        expected_local_mesh_id_ = local_mesh_id;
     }
 
     void open_devices_internal(
@@ -1842,12 +1836,24 @@ private:
             fabric_tensix_config,
             tt::tt_fabric::FabricUDMMode::DISABLED,
             tt::tt_fabric::FabricManagerMode::DEFAULT,
-            router_config);
+            router_config,
+            custom_mesh_graph_desc_path_,
+            custom_logical_to_physical_mapping_);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
-        // first need to re-init contorl plane so that it checks out the latest fabric config.
+        // first need to re-init control plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
         local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
+
+        if (expected_local_mesh_id_.has_value()) {
+            const auto user_mesh_id =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
+            TT_FATAL(
+                *user_mesh_id == *expected_local_mesh_id_.value(),
+                "Local mesh id {} does not not match user mesh id {}",
+                *user_mesh_id,
+                *expected_local_mesh_id_.value());
+        }
 
         // Initialize mesh and device info that was deferred from init()
         const auto user_meshes =

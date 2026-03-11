@@ -120,8 +120,8 @@ void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
             }
         }
     }
-    tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
+    custom_mesh_graph_desc_path_ = physical_mesh_config.mesh_descriptor_path;
+    custom_logical_to_physical_mapping_ = std::move(chip_to_eth_coord_mapping);
 }
 
 void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
@@ -161,7 +161,16 @@ void MeshSocketTestContext::setup_fabric_configuration() {
         default: TT_THROW("Unsupported fabric topology, must be Mesh");
     }
 
-    tt::tt_fabric::SetFabricConfig(fabric_config);
+    tt::tt_fabric::SetFabricConfig(
+        fabric_config,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        std::nullopt,
+        tt::tt_fabric::FabricTensixConfig::DISABLED,
+        tt::tt_fabric::FabricUDMMode::DISABLED,
+        tt::tt_fabric::FabricManagerMode::DEFAULT,
+        tt::tt_fabric::FabricRouterConfig{},
+        custom_mesh_graph_desc_path_,
+        custom_logical_to_physical_mapping_);
 }
 
 void MeshSocketTestContext::expand_test_configurations() {

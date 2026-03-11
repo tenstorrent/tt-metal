@@ -418,7 +418,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
     TT_FATAL(
         local_mesh_binding_.mesh_ids.size() == 1,
         "Multi-mesh-per-host systems are not supported by this algorithm, please use custom fabric topology via "
-        "MetalContext::set_custom_fabric_topology");
+        "SetFabricConfig with a custom_mesh_graph_desc_path");
 
     generate_mapping_locally_ = (mesh_graph_.get_all_mesh_ids().size() == 1) &&
                                 (mesh_graph_.get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);

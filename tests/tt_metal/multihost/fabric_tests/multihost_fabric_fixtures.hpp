@@ -14,8 +14,13 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
+struct CustomFabricTopology {
+    std::string mesh_graph_desc_path;
+    std::map<FabricNodeId, ChipId> logical_to_physical_mapping;
+};
+
 template <typename Fixture>
-void validate_and_setup_control_plane_config(Fixture* fixture) {
+CustomFabricTopology get_validated_control_plane_config(Fixture* fixture) {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
 
@@ -25,15 +30,18 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
         tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
     std::string custom_mesh_graph_path =
         tt::tt_metal::MetalContext::instance().rtoptions().get_custom_fabric_mesh_graph_desc_path();
-    tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
-        chip_to_eth_coord_mapping);
+
     TT_FATAL(
         !tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().empty(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
         "Multi-Host Routing tests require multiple hosts in the system");
+
+    return CustomFabricTopology{
+        .mesh_graph_desc_path =
+            custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
+        .logical_to_physical_mapping = std::move(chip_to_eth_coord_mapping)};
 }
 
 inline const std::vector<EthCoord>& get_eth_coords_for_2x4_t3k() {
@@ -101,8 +109,14 @@ public:
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
 
-        validate_and_setup_control_plane_config(this);
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        auto topology = get_validated_control_plane_config(this);
+        this->DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig::DISABLED,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            std::move(topology.mesh_graph_desc_path),
+            topology.logical_to_physical_mapping);
     }
 
     void TearDown() override {
@@ -134,7 +148,9 @@ public:
         if (not system_supported()) {
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
-        validate_and_setup_control_plane_config(this);
+        auto topology = get_validated_control_plane_config(this);
+        this->custom_mesh_graph_desc_path_ = std::move(topology.mesh_graph_desc_path);
+        this->custom_logical_to_physical_mapping_ = std::move(topology.logical_to_physical_mapping);
         tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
     }
 

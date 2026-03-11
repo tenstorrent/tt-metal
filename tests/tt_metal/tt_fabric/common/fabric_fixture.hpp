@@ -79,7 +79,9 @@ public:
         tt_fabric::FabricConfig fabric_config,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
-        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED) {
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
+        std::optional<std::string> custom_mesh_graph_desc_path = std::nullopt,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping = {}) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -108,7 +110,15 @@ public:
             ids.push_back(id);
         }
         tt::tt_fabric::SetFabricConfig(
-            fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
+            fabric_config,
+            reliability_mode,
+            num_routing_planes,
+            fabric_tensix_config,
+            fabric_udm_mode,
+            tt::tt_fabric::FabricManagerMode::DEFAULT,
+            tt::tt_fabric::FabricRouterConfig{},
+            std::move(custom_mesh_graph_desc_path),
+            logical_mesh_chip_id_to_physical_chip_id_mapping);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -310,9 +320,13 @@ public:
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-            mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig::DISABLED,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            mesh_graph_desc_file,
+            logical_mesh_chip_id_to_physical_chip_id_mapping);
     }
 
 private:
@@ -320,7 +334,7 @@ private:
 
     void TearDown() override {
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+        tt::tt_metal::detail::ReleaseOwnership();
     }
 };
 
@@ -348,8 +362,12 @@ protected:
             "Galaxy1x32Fabric1DFixture requires mesh graph descriptor {} but it was not found",
             mesh_graph_desc_path.string());
 
-        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(mesh_graph_desc_path.string(), {});
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_1D,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig::DISABLED,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            mesh_graph_desc_path.string());
     }
 
     static void TearDownTestSuite() {
@@ -357,7 +375,7 @@ protected:
             return;
         }
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+        tt::tt_metal::detail::ReleaseOwnership();
     }
 
     void SetUp() override {
