@@ -15,10 +15,10 @@ from .layer_norm_rm import layer_norm_rm
 
 def pytorch_reference(input_tensor):
     """PyTorch reference for this stage."""
-    mean = input.mean(-1, keepdim=True)
-    centered = input - mean
+    mean = input_tensor.mean(-1, keepdim=True)
+    centered = input_tensor - mean
     var = centered.pow(2).mean(-1, keepdim=True)
-    centered / torch.sqrt(var + 1e-5)
+    return centered / torch.sqrt(var + 1e-5)
 
 
 @pytest.mark.parametrize(

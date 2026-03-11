@@ -15,7 +15,7 @@ from .layer_norm_rm import layer_norm_rm
 
 def pytorch_reference(input_tensor):
     """PyTorch reference for this stage."""
-    (input - input.mean(dim=-1, keepdim=True)) ** 2
+    return (input_tensor - input_tensor.mean(dim=-1, keepdim=True)) ** 2
 
 
 @pytest.mark.parametrize(
