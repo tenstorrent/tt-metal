@@ -187,7 +187,7 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
+    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
@@ -200,7 +200,7 @@ test_suite_wh_6u_llama_long_stress_tests() {
     verify_llama_dir_
 
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
-    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test" --timeout 1000
 }
 
 test_suite_bh_ttnn_stress_tests() {
