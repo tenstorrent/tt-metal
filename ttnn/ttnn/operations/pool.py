@@ -247,7 +247,6 @@ def golden_upsample(
     input_tensor: ttnn.Tensor,
     scale_factor,
     mode: str = "nearest",
-    align_corners: bool = None,
     **_,
 ):
     """
@@ -257,7 +256,6 @@ def golden_upsample(
         input_tensor: Input tensor in (N, H, W, C) format
         scale_factor: Upsampling scale factor - int, float, [int, int], or [float, float]
         mode: Interpolation mode ("nearest" or "bilinear")
-        align_corners: Whether to align corners (only for bilinear mode)
 
     Returns:
         Output tensor in (N, H, W, C) format
@@ -269,9 +267,7 @@ def golden_upsample(
         scale_factor = (scale_factor, scale_factor)
 
     input_nchw = input_tensor.permute(0, 3, 1, 2)
-    output_nchw = torch.nn.functional.interpolate(
-        input_nchw, scale_factor=scale_factor, mode=mode, align_corners=align_corners
-    )
+    output_nchw = torch.nn.functional.interpolate(input_nchw, scale_factor=scale_factor, mode=mode)
     return output_nchw.permute(0, 2, 3, 1)
 
 

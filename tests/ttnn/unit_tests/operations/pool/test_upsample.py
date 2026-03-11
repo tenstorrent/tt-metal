@@ -122,7 +122,7 @@ def upsample_multicore_common(
     scale_w,
     shard_strategy,
     shard_orientation,
-    mode=None,
+    mode="nearest",
     core_range=None,
     math_fidelity=None,
     math_approx_mode=None,
@@ -138,14 +138,11 @@ def upsample_multicore_common(
 
     ## golden reference using golden function
     scale_factor = (scale_h, scale_w)
-    mode_str = "bilinear" if mode == "bilinear" else "nearest"
-    align_corners = False if mode == "bilinear" else None
 
     torch_result = golden_upsample(
         input_tensor=torch_input_nhwc,
         scale_factor=scale_factor,
-        mode=mode_str,
-        align_corners=align_corners,
+        mode=mode,
     )
 
     tt_input = torch_input_nhwc
