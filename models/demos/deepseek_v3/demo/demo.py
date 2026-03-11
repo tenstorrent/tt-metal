@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime
 from glob import glob
 from pathlib import Path
 
@@ -68,72 +67,6 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
         print(f"\n{label} saved to '{path}'\n")
     except Exception as e:
         raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
-
-
-def _build_compare_log(
-    baseline: dict,
-    baseline_path: Path,
-    current_prompts: list[str],
-    current_generations: list[dict],
-    current_output_path: Path,
-) -> dict:
-    baseline_prompts = baseline.get("prompts", [])
-    baseline_generations = baseline.get("generations", [])
-
-    mismatch_reason = None
-    if baseline_prompts and baseline_prompts != current_prompts:
-        mismatch_reason = "Output mismatch: baseline and current prompts differ."
-    if mismatch_reason is None and (
-        len(baseline_generations) != len(current_generations) or len(current_prompts) != len(current_generations)
-    ):
-        mismatch_reason = (
-            "Baseline/current generation counts do not match prompt count "
-            f"({len(baseline_generations)} baseline vs {len(current_generations)} current vs {len(current_prompts)} prompts)."
-        )
-
-    max_len = max(len(baseline_generations), len(current_generations), len(current_prompts))
-    compare_entries = []
-    for i in range(max_len):
-        base_gen = baseline_generations[i] if i < len(baseline_generations) else {}
-        cur_gen = current_generations[i] if i < len(current_generations) else {}
-        base_prompt = base_gen.get("prompt")
-        if base_prompt is None and i < len(baseline_prompts):
-            base_prompt = baseline_prompts[i]
-        cur_prompt = current_prompts[i] if i < len(current_prompts) else None
-        base_text = base_gen.get("text") if base_gen else None
-        cur_text = cur_gen.get("text") if cur_gen else None
-        prompt_match = None
-        text_match = None
-        if base_prompt is not None and cur_prompt is not None:
-            prompt_match = base_prompt == cur_prompt
-        if base_text is not None and cur_text is not None:
-            text_match = base_text == cur_text
-        if mismatch_reason is None:
-            if prompt_match is False:
-                mismatch_reason = f"Output mismatch at generation {i}: baseline and current prompts differ."
-            elif text_match is False:
-                mismatch_reason = f"Output mismatch at generation {i}: baseline and current text differ."
-        compare_entries.append(
-            {
-                "index": i + 1,
-                "baseline_prompt": base_prompt,
-                "current_prompt": cur_prompt,
-                "baseline_text": base_text,
-                "current_text": cur_text,
-                "prompt_match": prompt_match,
-                "text_match": text_match,
-            }
-        )
-
-    return {
-        "baseline_path": str(baseline_path),
-        "current_output_path": str(current_output_path),
-        "baseline_count": len(baseline_generations),
-        "current_count": len(current_generations),
-        "prompt_count": len(current_prompts),
-        "mismatch_reason": mismatch_reason,
-        "entries": compare_entries,
-    }
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -247,11 +180,6 @@ def create_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="If set, require MTP accept rate to be at least this value.",
-    )
-    p.add_argument(
-        "--compare-output",
-        type=str,
-        help="Path to a baseline output JSON to compare against (prompt+generated text only).",
     )
     p.add_argument(
         "--repeat-batches",
@@ -689,7 +617,8 @@ def main() -> None:
 
     saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
 
-    # If prompts were loaded from a JSON file, save output to JSON file instead of printing
+    # If prompts were loaded from a JSON file, save output to JSON file instead of printing.
+    # Only host rank 0 writes the shared file to avoid rank races corrupting the JSON.
     if prompts_file_path and saved_output_path is not None:
         output_data = _build_output_data(
             prompts=args.prompts,
@@ -697,7 +626,8 @@ def main() -> None:
             statistics=results.get("statistics", {}),
             random_weights=bool(args.random_weights),
         )
-        _write_json_output(saved_output_path, output_data, "Results")
+        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+            _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before
         print("\n===== Generated =====\n")
@@ -720,37 +650,6 @@ def main() -> None:
 
     # Print performance metrics if available
     _print_performance_metrics(results)
-
-    if args.compare_output:
-        baseline_path = Path(args.compare_output)
-        if not baseline_path.exists():
-            raise SystemExit(f"Baseline output file does not exist: '{baseline_path}'")
-        try:
-            with open(baseline_path, "r", encoding="utf-8") as f:
-                baseline = json.load(f)
-        except Exception as e:
-            raise SystemExit(f"Failed to read baseline output '{baseline_path}': {e}")
-        current_generations = results.get("generations", [])
-        current_prompts = args.prompts or []
-        compare_base_path = saved_output_path
-        if compare_base_path is None:
-            logs_dir = Path("logs")
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            compare_base_path = logs_dir / f"deepseek_compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        compare_log_path = compare_base_path.parent / f"{compare_base_path.stem}_compare.json"
-
-        compare_log = _build_compare_log(
-            baseline=baseline,
-            baseline_path=baseline_path,
-            current_prompts=current_prompts,
-            current_generations=current_generations,
-            current_output_path=compare_base_path,
-        )
-        _write_json_output(compare_log_path, compare_log, "Comparison log")
-
-        if compare_log["mismatch_reason"] is not None:
-            raise SystemExit(compare_log["mismatch_reason"])
-        logger.info("Output comparison passed: prompt+generated text content matches exactly.")
 
 
 if __name__ == "__main__":
