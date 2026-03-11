@@ -1,14 +1,15 @@
 # Project State
 
 ## Current Position
-- **Milestone:** v1.0 complete
-- **Status:** Milestone shipped 2026-03-11
-- **Next:** Plan next milestone or add phases
+- **Phase:** 02-silicon-data-transfer-validation
+- **Current Plan:** 2 of ? in Phase
+- **Status:** Plan 01 complete, ready for Plan 02
+- **Next:** Execute Plan 02 (multicast families)
 
 ## Project Reference
 
-**Core value:** Transparent auto-packetization for fabric APIs — callers send any size, chunking is invisible
-**Current focus:** Milestone complete — ready for next milestone or additional work
+**Core value:** Transparent auto-packetization for fabric APIs -- callers send any size, chunking is invisible
+**Current focus:** Silicon data-transfer validation for all 9 auto-packetizing families
 
 ## Decisions
 - _single_packet suffix for renamed APIs; wrappers keep original names
@@ -18,10 +19,13 @@
 - Fused ops: intermediate chunks as regular writes, atomic_inc only on final chunk
 - Tests compiled into fabric_unit_tests binary
 - detail::CompileProgram for device kernel compile-only validation
+- L1 direct I/O via WriteToDeviceL1/ReadFromDeviceL1 for BaseFabricFixture tests
+- GlobalSemaphore created fresh per test call for per-chip MeshDevice pattern
+- family_kernel_path() maps all 9 families including future multicast kernels
 
 ## Blockers
 None
 
 ## Last Session
 - **Timestamp:** 2026-03-11
-- **Stopped At:** Milestone v1.0 complete
+- **Stopped At:** Completed 02-01-PLAN.md (unicast silicon tests)
