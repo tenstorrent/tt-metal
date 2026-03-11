@@ -522,28 +522,28 @@ std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
         case NodeType::P300_QB_GE: return std::make_unique<P300QBGENode>();
 
         case NodeType::BH_GALAXY:
-            if (get_node_type_from_system() == NodeType::BH_GALAXY_REV_C) {
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCNode>();
             } else {
                 return std::make_unique<BHGalaxyRevABNode>();
             }
         
         case NodeType::BH_GALAXY_X_TORUS:
-            if (get_node_type_from_system() == NodeType::BH_GALAXY_REV_C) {
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCXTorusNode>();
             } else {
                 return std::make_unique<BHGalaxyRevABXTorusNode>();
             }
         
         case NodeType::BH_GALAXY_Y_TORUS:
-            if (get_node_type_from_system() == NodeType::BH_GALAXY_REV_C) {
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCYTorusNode>();
             } else {
                 return std::make_unique<BHGalaxyRevABYTorusNode>();
             }
         
         case NodeType::BH_GALAXY_XY_TORUS:
-            if (get_node_type_from_system() == NodeType::BH_GALAXY_REV_C) {
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCXYTorusNode>();
             } else {
                 return std::make_unique<BHGalaxyRevABXYTorusNode>();
@@ -571,7 +571,7 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
     return node->create();
 }
 
-NodeType get_node_type_from_system() {
+NodeType get_bh_glx_rev_from_system() {
     std::vector<int> pci_devices = tt::umd::PCIDevice::enumerate_devices();
     if (pci_devices.empty()) {
         log_warning(
