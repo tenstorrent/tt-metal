@@ -58,7 +58,7 @@ jobs:
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]')
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
