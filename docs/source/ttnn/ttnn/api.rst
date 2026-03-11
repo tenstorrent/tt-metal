@@ -232,6 +232,7 @@ Pointwise Unary
    ttnn.trunc
    ttnn.unary_chain
    ttnn.var_hw
+   ttnn.xielu
 
 Pointwise Binary
 ================

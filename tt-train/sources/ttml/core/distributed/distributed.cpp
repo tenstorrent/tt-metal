@@ -16,7 +16,7 @@
 
 namespace ttml::core::distributed {
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t>& cluster_axes) {
+ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes) {
     auto* device = &autograd::ctx().get_device();
     if (cluster_axes.size() == 0) {
         return tensor;
@@ -43,7 +43,7 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
         return;
     }
     const auto& pctx = autograd::ctx().get_parallelism_context();
-    ttnn::SmallVector<uint32_t> cluster_axes;
+    ttsl::SmallVector<uint32_t> cluster_axes;
     if (pctx.is_cp_enabled()) {
         cluster_axes.push_back(pctx.get_cp_axis().value());
     }
