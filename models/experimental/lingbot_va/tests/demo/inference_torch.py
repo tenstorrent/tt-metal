@@ -784,6 +784,116 @@ def _decode_one_video(models, latents, output_type="np"):
     return video
 
 
+def _decode_one_video_ttnn(models, latents, mesh_device, output_type="np"):
+    """Decode latents to video using the TTNN VAE decoder on TT hardware.
+
+    Drop-in replacement for _decode_one_video() that runs the VAE on device.
+    """
+    import ttnn
+    from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.utils import cache as tt_cache
+    from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels
+
+    vae = models["vae"]
+    t_start = time.time()
+
+    # --- 1. De-normalize latents (host) ---
+    latents = latents.to(vae.dtype)
+    latents_mean = (
+        torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+    )
+    latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1).to(
+        latents.device, latents.dtype
+    )
+    latents = latents / latents_std + latents_mean
+    print(f"  De-normalized latents: {latents.shape} ({time.time() - t_start:.1f}s)")
+
+    # --- 2. Build ttnn decoder (first call only) ---
+    if not hasattr(_decode_one_video_ttnn, "_tt_vae"):
+        from models.experimental.lingbot_va.tt.vae_decoder import LingbotVAEDecoder
+
+        vae_parallel_config = VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            width_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        )
+        ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+        tt_vae = LingbotVAEDecoder(
+            base_dim=vae.config.base_dim,
+            decoder_base_dim=getattr(vae.config, "decoder_base_dim", None),
+            z_dim=vae.config.z_dim,
+            dim_mult=list(vae.config.dim_mult),
+            num_res_blocks=vae.config.num_res_blocks,
+            attn_scales=list(vae.config.attn_scales),
+            temperal_downsample=list(vae.config.temperal_downsample),
+            out_channels=vae.config.out_channels,
+            patch_size=getattr(vae.config, "patch_size", 1) or 1,
+            latents_mean=list(vae.config.latents_mean),
+            latents_std=list(vae.config.latents_std),
+            mesh_device=mesh_device,
+            parallel_config=vae_parallel_config,
+            ccl_manager=ccl_manager,
+        )
+
+        # Load weights from the torch VAE
+        tt_cache.load_model(
+            tt_vae,
+            model_name="lingbot-va",
+            subfolder="vae",
+            parallel_config=vae_parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            get_torch_state_dict=lambda: vae.state_dict(),
+        )
+        _decode_one_video_ttnn._tt_vae = tt_vae
+        _decode_one_video_ttnn._vae_parallel_config = vae_parallel_config
+        _decode_one_video_ttnn._ccl_manager = ccl_manager
+        print(f"  Built and loaded TTNN VAE decoder ({time.time() - t_start:.1f}s)")
+
+    tt_vae = _decode_one_video_ttnn._tt_vae
+    vae_parallel_config = _decode_one_video_ttnn._vae_parallel_config
+
+    # --- 3. Prepare latents for device ---
+    # BCTHW → BTHWC, pad channels and height
+    tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)  # [B, T, H, W, C]
+    tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
+    tt_latents_BTHWC, logical_h = conv_pad_height(tt_latents_BTHWC, vae_parallel_config.height_parallel.factor)
+
+    tt_latents_BTHWC = ttnn.from_torch(
+        tt_latents_BTHWC,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+    )
+    print(f"  Latents on device: {tt_latents_BTHWC.shape} ({time.time() - t_start:.1f}s)")
+
+    # --- 4. Run decoder on device ---
+    tt_video_BCTHW, new_logical_h = tt_vae(tt_latents_BTHWC, logical_h)
+    ttnn.synchronize_device(mesh_device)
+    print(f"  Decoder done ({time.time() - t_start:.1f}s)")
+
+    # --- 5. Back to host ---
+    video_torch = ttnn.to_torch(tt_video_BCTHW)  # [B, C_out, T_out, H_out, W_out]
+    video_torch = video_torch[:, :, :, :new_logical_h, :]
+
+    # Unpatchify if needed
+    ps = getattr(vae.config, "patch_size", None)
+    if ps and ps > 1:
+        B, Cp, T_out, H_out, W_out = video_torch.shape
+        channels = Cp // (ps * ps)
+        video_torch = video_torch.view(B, channels, ps, ps, T_out, H_out, W_out)
+        video_torch = video_torch.permute(0, 1, 4, 5, 3, 6, 2).contiguous()
+        video_torch = video_torch.view(B, channels, T_out, H_out * ps, W_out * ps)
+
+    video_torch = video_torch.clamp(-1.0, 1.0)
+
+    # Post-process
+    video_processor = VideoProcessor(vae_scale_factor=1)
+    video = video_processor.postprocess_video(video_torch, output_type=output_type)
+    print(f"  Total decode time: {time.time() - t_start:.1f}s")
+    return video
+
+
 def _load_init_obs(config, input_img_path):
     obs_cam_keys = config.obs_cam_keys
     imf_dict = {v: np.array(Image.open(os.path.join(input_img_path, f"{v}.png")).convert("RGB")) for v in obs_cam_keys}
@@ -832,10 +942,12 @@ def run_generate(
     prompt: str,
     save_dir: str | Path,
     num_chunks: int = 10,
+    ttnn_decode: bool = False,
 ) -> str:
     """
     Run multi-chunk video generation (same behavior as VA_Server.generate).
     Loads init obs from images_dir, runs num_chunks of inference, decodes to video, saves demo.mp4.
+    If ttnn_decode=True, uses the TTNN VAE decoder on TT hardware instead of torch.
     """
     checkpoint_path = Path(checkpoint_path).resolve()
     images_dir = Path(images_dir).resolve()
@@ -892,7 +1004,18 @@ def run_generate(
 
     if getattr(config, "enable_offload", True):
         models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
-    decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+
+    if ttnn_decode:
+        import ttnn
+
+        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        mesh_device.enable_program_cache()
+        print("Decoding with TTNN VAE decoder...")
+        decoded_video = _decode_one_video_ttnn(models, pred_latent, mesh_device, "np")[0]
+        ttnn.close_mesh_device(mesh_device)
+    else:
+        decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+
     export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     return str(Path(save_dir) / "demo.mp4")
 
@@ -954,6 +1077,11 @@ def main() -> None:
         default=2,
         help="Number of chunks for generate() (only used with --generate). Default: 10.",
     )
+    parser.add_argument(
+        "--ttnn-decode",
+        action="store_true",
+        help="Use TTNN VAE decoder on TT hardware instead of torch (only with --generate).",
+    )
     args = parser.parse_args()
 
     save_dir = args.save_dir or str(_SCRIPT_DIR / "out_inference")
@@ -986,6 +1114,7 @@ def main() -> None:
             args.prompt,
             save_dir,
             num_chunks=args.num_chunks,
+            ttnn_decode=args.ttnn_decode,
         )
         print("Generated video saved to:", out_path)
         return

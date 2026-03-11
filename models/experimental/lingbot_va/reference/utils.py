@@ -322,10 +322,12 @@ def load_tokenizer(tokenizer_path):
 
 
 def load_transformer(transformer_path, torch_dtype, torch_device):
+    # Override attn_mode: checkpoints may use "flex" which is not implemented here; use "torch".
     model = WanTransformer3DModel.from_pretrained(
         _local_path(transformer_path),
         torch_dtype=torch_dtype,
         local_files_only=True,
+        attn_mode="torch",
     )
     return model.to(torch_device)
 

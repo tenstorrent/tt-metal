@@ -25,6 +25,7 @@ def _ntuple(x, n):
 def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+        # ── Wan 2.1 VAE (base_dim=96, z_dim=4) ──
         (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
         (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
         (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
@@ -35,6 +36,23 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
         (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
         (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
         (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+        # ── Lingbot-VA VAE decoder (decoder_base_dim=256, z_dim=48) ──
+        # conv_in: z_dim=48 (padded to 64) → 1024
+        (64, 1024, (3, 3, 3)): (64, 128, 1, 8, 8),
+        # mid_block and up_block resnets: 1024 → 1024
+        (1024, 1024, (3, 3, 3)): (128, 128, 1, 4, 4),
+        # up_block cross-dim resnets
+        (1024, 512, (3, 3, 3)): (128, 128, 1, 4, 4),
+        (512, 512, (3, 3, 3)): (128, 128, 1, 8, 4),
+        (512, 256, (3, 3, 3)): (128, 128, 1, 8, 4),
+        (256, 256, (3, 3, 3)): (128, 128, 1, 16, 2),
+        # conv_out: 256 → 12 (padded to 32)
+        (256, 32, (3, 3, 3)): (256, 32, 1, 2, 2),
+        # WanResample upsampler convs (1x3x3 kernel)
+        (1024, 1024, (1, 3, 3)): (128, 128, 1, 8, 4),
+        (512, 512, (1, 3, 3)): (128, 128, 1, 16, 2),
+        # WanResample temporal convs (3x1x1 kernel)
+        (1024, 2048, (3, 1, 1)): (128, 256, 1, 8, 4),
     }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
