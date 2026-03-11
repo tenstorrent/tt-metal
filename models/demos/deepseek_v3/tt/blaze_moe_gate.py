@@ -159,6 +159,7 @@ class BlazeMoeGate(AbstractModule):
                 "ttnn_input_indices": ttnn_input_indices,
                 "ttnn_output_indices": ttnn_output_indices,
             },
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -244,11 +245,6 @@ class BlazeMoeGate(AbstractModule):
                     dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
-                # "input_memory_config": ttnn.create_sharded_memory_config(  # Bad PCC
-                #         shape=(USERS_PER_ROW, HIDDEN_SIZE),
-                #         core_grid=ttnn.CoreGrid(y=7, x=8),
-                #         strategy=ttnn.ShardStrategy.WIDTH,
-                #     ),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
@@ -374,8 +370,8 @@ class BlazeMoeGate(AbstractModule):
                 row_wise=True,
             )
 
-            input_output_shard_shape = (32 * 4, 32)
-            reshaped_input_shape = (num_cores, batch_size_per_core, 16, 16)
+            input_output_shard_shape = (32 * batch_size_per_device, 32)
+            reshaped_input_shape = (batch_size_per_device, 16, 16)
 
             # currently we cannot convert the tile size of logits and input indices to 16*16,
             # but the memory layout is the same since the length is 256
@@ -404,16 +400,13 @@ class BlazeMoeGate(AbstractModule):
 
             # create the output tensor, input indices and output indices
             ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-            ttnn_output_tensor = ttnn.unsqueeze(ttnn_output_tensor, dim=0)
-            ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (num_cores, batch_size_per_core, 1, 1))
+            ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device, 1, 1))
             ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
             ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-            ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
-            ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (num_cores, batch_size_per_core, 1, 1))
+            ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_device, 1, 1))
             ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
             ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-            ttnn_output_indices = ttnn.unsqueeze(ttnn_output_indices, dim=0)
-            ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (num_cores, batch_size_per_core, 1, 1))
+            ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device, 1, 1))
             ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
             eps = 1e-20
@@ -458,6 +451,8 @@ class BlazeMoeGate(AbstractModule):
         topk_experts_weights = ttnn.unsqueeze(topk_experts_weights, dim=0)
         topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
         topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
+        topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=cfg["output_memory_config"])
+        topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=cfg["output_memory_config"])
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
         topk_experts_indices = topk_experts_indices[:, :, :, :8]
 

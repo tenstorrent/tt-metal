@@ -69,6 +69,14 @@ def test_forward_pass(
 ):
     """Test forward pass against reference model."""
 
+    # IMPORTANT: Initialize bias to zeros to avoid uninitialized memory values
+    # The default model has uninitialized bias which causes non-deterministic behavior
+    if hasattr(reference_model, "e_score_correction_bias"):
+        reference_model.e_score_correction_bias.data = torch.zeros_like(reference_model.e_score_correction_bias.data)
+
+    reference_model.eval()
+    reference_model.to(torch.bfloat16)
+
     # Get state dict from actual model - pass directly to convert_weights
     state_dict = add_inv_scale_to_state_dict(
         reference_model.state_dict(),
@@ -79,8 +87,6 @@ def test_forward_pass(
     torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
-    reference_model.eval()
-    reference_model.to(torch.bfloat16)
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
@@ -121,9 +127,7 @@ def test_forward_pass(
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
 
     # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    tt_output = run_module_forward(
-        MoE, mode, tt_input, run_config, handle_tensor_parallel=True, use_unoptimized_gate=True
-    )
+    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

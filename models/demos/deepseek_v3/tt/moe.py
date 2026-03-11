@@ -258,9 +258,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def forward(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_unoptimized_gate: bool = False
-    ) -> ttnn.Tensor:
+    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -269,7 +267,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
             return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_impl(x, cfg, use_unoptimized_gate=use_unoptimized_gate)
+        return cls._forward_impl(x, cfg)
 
     @classmethod
     def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
@@ -290,9 +288,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def _forward_impl(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_unoptimized_gate: bool = False
-    ) -> ttnn.Tensor:
+    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
         mesh_device = cfg.get("mesh_device")
@@ -318,9 +314,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Note: all_gather is handled by the caller (decoder block or test)
 
         # MoE Gate
-        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(
-            x, cfg, use_unoptimized_gate=use_unoptimized_gate
-        )
+        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # Repeat + Permute Expert weights
 
@@ -343,15 +337,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         return post_combine_output_tensor
 
     @classmethod
-    def _fwd_moe_gate(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, use_unoptimized_gate: bool = False
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        if use_unoptimized_gate:
-            from models.demos.deepseek_v3.tt.moe_gate import MoEGate
-
-            return MoEGate.forward(x, cfg["moe_gate"])
-        else:
-            return BlazeMoeGate.forward(x, cfg["moe_gate"])
+    def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        return BlazeMoeGate.forward(x, cfg["moe_gate"])
 
     @classmethod
     def _fwd_repeat_permute_expert_weights(
@@ -513,14 +500,13 @@ class MoE(SharedStateAddOn, AbstractModule):
         x: ttnn.Tensor,
         cfg: RunPrefillConfig,
         handle_tensor_parallel: bool = False,
-        use_unoptimized_gate: bool = False,
     ) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward(x, cfg, use_unoptimized_gate=use_unoptimized_gate)
+        output = cls.forward(x, cfg)
 
         # Handle reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
@@ -535,14 +521,13 @@ class MoE(SharedStateAddOn, AbstractModule):
         x: ttnn.Tensor,
         cfg: RunDecodeConfig,
         handle_tensor_parallel: bool = False,
-        use_unoptimized_gate: bool = False,
     ) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward(x, cfg, use_unoptimized_gate=use_unoptimized_gate)
+        output = cls.forward(x, cfg)
 
         # Handle reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:

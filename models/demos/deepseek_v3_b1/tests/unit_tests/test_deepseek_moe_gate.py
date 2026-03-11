@@ -125,9 +125,7 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
 
     # Run Deepseek Moe Gate operation
     logger.info("Running Deepseek Moe Gate operation...")
-    import pdb
 
-    pdb.set_trace()
     ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
         ttnn_input,
         ttnn_bias,
