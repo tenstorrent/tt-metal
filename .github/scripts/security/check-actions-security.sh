@@ -21,7 +21,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=25
+MAX_CHECK_NUM=31
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -75,6 +75,12 @@ Checks:
  23  self-hosted runners on untrusted triggers (HIGH)
  24  Write-capable permissions on untrusted triggers (MEDIUM)
  25  Mutable container and docker:// image references (MEDIUM)
+ 26  fromJSON() with attacker-controlled input (MEDIUM)
+ 27  Dynamic expression interpolation in 'uses:' (HIGH)
+ 28  Cache key injection patterns (MEDIUM)
+ 29  Artifact path expressions (MEDIUM)
+ 30  URL construction in HTTP clients (MEDIUM)
+ 31  Container volume mount expressions (MEDIUM)
 EOF
     exit 0
 }
@@ -1138,6 +1144,270 @@ check_25() {
     fi
 
     [[ $found -eq 0 ]]
+}
+
+# =============================================================================
+# Check 26: fromJSON() with attacker-controlled input
+# =============================================================================
+check_26_description="fromJSON() with attacker-controlled input"
+check_26_severity="MEDIUM"
+
+example_check_26() {
+    cat <<'EOF'
+# BEFORE (risky - fromJSON parses attacker-controlled JSON):
+  runs-on: ${{ fromJSON(inputs.runner-label) }}
+# AFTER (safe - validate inputs before parsing):
+  env:
+    LABEL_JSON: ${{ inputs.runner-label }}
+  run: |
+    # Validate JSON structure before use
+    echo "$LABEL_JSON" | jq -e 'type == "array"' || exit 1
+EOF
+}
+
+check_26() {
+    local file="$1"
+    local risky_fromjson
+
+    # Look for fromJSON() containing potentially attacker-controlled inputs
+    risky_fromjson=$(grep -nE '\$\{\{.*fromJSON\([^)]*(inputs\.|github\.event\.|matrix\.)' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_fromjson" ]]; then
+        log_issue "MEDIUM" "$file" "fromJSON() used with potentially attacker-controlled input (inputs.*, github.event.*, or matrix.*) - validate JSON before parsing"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 27: Dynamic expression interpolation in 'uses:'
+# =============================================================================
+check_27_description="dynamic expression interpolation in 'uses:'"
+check_27_severity="HIGH"
+
+example_check_27() {
+    cat <<'EOF'
+# BEFORE (unsafe - path traversal via expression):
+  uses: ./.github/workflows/${{ inputs.workflow }}.yaml
+# AFTER (safe - hardcoded workflow reference with input validation):
+  uses: ./.github/workflows/build.yaml
+# Or use a switch/if pattern with validated, hardcoded paths
+EOF
+}
+
+check_27() {
+    local file="$1"
+    local dynamic_uses
+
+    # Look for ${{ }} expressions in uses: statements
+    dynamic_uses=$(awk '
+        /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*\$\{\{/ ||
+        /^[[:space:]]*uses:[[:space:]]*\$\{\{/ {
+            print
+            next
+        }
+        /^[[:space:]]*-[[:space:]]*uses:.*\$\{\{/ ||
+        /^[[:space:]]*uses:.*\$\{\{/ {
+            print
+        }
+    ' "$file" 2>/dev/null || true)
+
+    if [[ -n "$dynamic_uses" ]]; then
+        log_issue "HIGH" "$file" "Uses statement contains expression interpolation - can lead to path traversal or execution of unintended workflows"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 28: Cache key injection patterns
+# =============================================================================
+check_28_description="cache key injection patterns"
+check_28_severity="MEDIUM"
+
+example_check_28() {
+    cat <<'EOF'
+# BEFORE (risky - attacker controls cache key):
+  - uses: actions/cache@v4
+    with:
+      key: ${{ inputs.cache-key }}-deps
+# AFTER (safe - use commit SHA or validated identifier):
+  - uses: actions/cache@v4
+    with:
+      key: ${{ github.sha }}-${{ hashFiles('**/lockfiles') }}-deps
+EOF
+}
+
+check_28() {
+    local file="$1"
+    local risky_cache
+
+    # Look for actions/cache or cache-related actions with inputs/github.event in keys
+    risky_cache=$(awk '
+        /^[[:space:]]*-[[:space:]]*uses:.*actions\/cache/ ||
+        /^[[:space:]]*uses:.*actions\/cache/ {
+            in_cache = 1
+            next
+        }
+        in_cache && /^[[:space:]]*-( |$)/ { in_cache = 0 }
+        in_cache && /key:/ && /\$\{\{.*(inputs\.|github\.event\.)/ {
+            print
+            in_cache = 0
+        }
+    ' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_cache" ]]; then
+        log_issue "MEDIUM" "$file" "Cache key contains potentially attacker-controlled input - can enable cache poisoning attacks"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 29: Artifact path expressions
+# =============================================================================
+check_29_description="artifact path expressions"
+check_29_severity="MEDIUM"
+
+example_check_29() {
+    cat <<'EOF'
+# BEFORE (risky - path traversal via expression):
+  - uses: actions/upload-artifact@v4
+    with:
+      path: ${{ inputs.artifact-path }}
+# AFTER (safe - use validated, hardcoded paths with optional filters):
+  - uses: actions/upload-artifact@v4
+    with:
+      path: ./build/
+EOF
+}
+
+check_29() {
+    local file="$1"
+    local risky_artifact
+
+    # Look for upload-artifact or download-artifact with expressions in path
+    risky_artifact=$(awk '
+        /^[[:space:]]*-[[:space:]]*uses:.*actions\/(upload|download)-artifact/ ||
+        /^[[:space:]]*uses:.*actions\/(upload|download)-artifact/ {
+            in_artifact = 1
+            next
+        }
+        in_artifact && /^[[:space:]]*-( |$)/ { in_artifact = 0 }
+        in_artifact && /path:/ && /\$\{\{.*(inputs\.|github\.event\.)/ {
+            print
+            in_artifact = 0
+        }
+    ' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_artifact" ]]; then
+        log_issue "MEDIUM" "$file" "Artifact path contains expression interpolation - can lead to path traversal or unintended file access"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 30: URL construction in HTTP clients
+# =============================================================================
+check_30_description="URL construction in HTTP clients"
+check_30_severity="MEDIUM"
+
+example_check_30() {
+    cat <<'EOF'
+# BEFORE (risky - SSRF via expression in URL):
+  run: curl -sSL "${{ inputs.download-url }}" -o file.tar.gz
+# AFTER (safe - validate URL before use):
+  env:
+    DOWNLOAD_URL: ${{ inputs.download-url }}
+  run: |
+    # Validate URL pattern before download
+    if [[ ! "$DOWNLOAD_URL" =~ ^https://trusted\.example\.com/ ]]; then
+      echo "Invalid URL"
+      exit 1
+    fi
+    curl -sSL "$DOWNLOAD_URL" -o file.tar.gz
+EOF
+}
+
+check_30() {
+    local file="$1"
+    local risky_curl
+
+    # Look for curl/wget with expression interpolation in URL construction
+    # Check both single-line and multi-line run blocks
+    # Note: run: can appear as "run:" or "- run:" (in steps list)
+    risky_curl=$(awk '
+        BEGIN { in_run_block = 0; run_indent = 0 }
+        /^[[:space:]]*-?[[:space:]]*run:[[:space:]]*\|/ {
+            match($0, /^[[:space:]]*/); run_indent = RLENGTH; in_run_block = 1; next
+        }
+        /^[[:space:]]*-?[[:space:]]*run:/ {
+            # Single-line run statement
+            if (/curl.*\$\{\{/ || /wget.*\$\{\{/) {
+                print
+            }
+            next
+        }
+        in_run_block {
+            if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_run_block = 0; next }
+            match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+            if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_run_block = 0; next }
+            if (/curl.*\$\{\{/ || /wget.*\$\{\{/) {
+                print
+            }
+        }
+    ' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_curl" ]]; then
+        log_issue "MEDIUM" "$file" "curl/wget command contains expression interpolation in URL - can lead to SSRF or downloading from attacker-controlled servers"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 31: Container volume mount expressions
+# =============================================================================
+check_31_description="container volume mount expressions"
+check_31_severity="MEDIUM"
+
+example_check_31() {
+    cat <<'EOF'
+# BEFORE (risky - container escape via expression):
+  container:
+    image: ubuntu:latest
+    volumes:
+      - ${{ inputs.mount-path }}:/workspace
+# AFTER (safe - hardcoded volume mounts):
+  container:
+    image: ubuntu:latest
+    volumes:
+      - /workspace:/workspace
+EOF
+}
+
+check_31() {
+    local file="$1"
+    local risky_volume
+
+    # Look for volumes: sections with expression interpolation
+    risky_volume=$(awk '
+        /^[[:space:]]*volumes:/ {
+            in_volumes = 1
+            next
+        }
+        in_volumes && /^[[:space:]]*-[[:space:]]*\$\{\{/ {
+            print
+        }
+        in_volumes && /^[[:space:]]*[a-z_-]+:/ && !/volumes:/ { in_volumes = 0 }
+    ' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_volume" ]]; then
+        log_issue "MEDIUM" "$file" "Container volume mount contains expression interpolation - can lead to container escape or unauthorized host filesystem access"
+        return 1
+    fi
+    return 0
 }
 
 # =============================================================================
