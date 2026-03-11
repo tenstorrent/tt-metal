@@ -683,7 +683,7 @@ TEST_F(SDPABackwardTest, SmallBatch) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, NanoGPTConfig) {
+TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
     // Match nano_gpt training config
     SDPABackwardTestConfig config{
         .batch_size = 64U,
@@ -699,7 +699,7 @@ TEST_F(SDPABackwardTest, NanoGPTConfig) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, LargerSequence) {
+TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -785,7 +785,7 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_NanoGPTConfig) {
+TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,
@@ -801,7 +801,7 @@ TEST_F(SDPABackwardTest, CausalMask_NanoGPTConfig) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
+TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
