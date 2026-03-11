@@ -66,8 +66,8 @@ class ttMLA:
         )
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
-            q_chunk_size=32,
-            k_chunk_size=32,
+            q_chunk_size=256,
+            k_chunk_size=128,
             exp_approx_mode=False,
         )
 

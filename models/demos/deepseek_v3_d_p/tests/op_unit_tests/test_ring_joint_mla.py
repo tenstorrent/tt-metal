@@ -469,8 +469,12 @@ def run_ring_joint_sdpa(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            ttnn.Topology.Linear,
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            },
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
@@ -566,9 +570,9 @@ def test_mla_sdpa(
 
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
-    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size",
+    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, q_chunk_size, k_chunk_size",
     [
-        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128),
+        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, 256, 128),
     ],
 )
 @pytest.mark.timeout(1200)
@@ -584,8 +588,8 @@ def test_mla_sdpa(
     "device_params, all_gather_topology",
     [
         (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            ttnn.Topology.Linear,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
@@ -595,19 +599,20 @@ def test_mla_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 8)],
+    [(8, 4)],
     ids=["4x8"],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "rp_axis, rp_factor, up_axis, up_factor",
     [
-        [1, 8, 0, 4],
+        [0, 8, 1, 4],
     ],
     ids=[
         "8rpx4up",
     ],
 )
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
 def test_mla_sdpa_bh_galaxy(
     mesh_device,
     b,
@@ -649,7 +654,9 @@ def test_mla_sdpa_bh_galaxy(
     joint_seq_len = 0  # causality is enabled only for non-joint cases
 
     # Setup cache directory for tensor data
-    cache_path = pathlib.Path(f"/tmp/ttnn_tensor_cache/test_mla_sdpa_bh_galaxy_{base_seq_len}")
+    cache_path = pathlib.Path(
+        f"/tmp/ttnn_tensor_cache/test_mla_sdpa_bh_galaxy_{base_seq_len}_{submesh.shape[0]}x{submesh.shape[1]}"
+    )
     cache_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Using tensor cache directory: {cache_path}")
 

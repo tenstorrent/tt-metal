@@ -92,7 +92,7 @@ def random_weights(config_only):
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("seq_len", [32 * 1024], ids=["seq8k"])
+@pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq8k"])
 @pytest.mark.parametrize("skip_check", [False, True], ids=["pcc_check", "skip_check"])
 # @pytest.mark.timeout(900)  # Increase timeout to 15 minutes for large sequence lengths
 def test_mla(use_pretrained, request, mesh_device, seq_len, skip_check):
