@@ -2,8 +2,8 @@
 
 ## Current Position
 - **Phase:** 01-fabric-auto-packetization
-- **Current Plan:** 07 (next to execute)
-- **Status:** In Progress
+- **Current Plan:** 07 (checkpoint pending)
+- **Status:** Checkpoint - Hardware verification pending
 
 ## Progress
 - Plan 01: COMPLETE (test infrastructure scaffolding)
@@ -12,7 +12,7 @@
 - Plan 04: COMPLETE (mesh/api.h unicast + multicast renames)
 - Plan 05: COMPLETE (mesh/api.h scatter + fused-scatter renames)
 - Plan 06: COMPLETE (mesh/api.h new addrgen overloads)
-- Plan 07: PENDING (integration test execution)
+- Plan 07: IN PROGRESS (Task 1 complete, Task 2 checkpoint pending)
 
 ## Decisions
 - Used (c) 2025 Tenstorrent AI ULC copyright for new test files
@@ -27,6 +27,8 @@
 - Addrgen internal calls updated to _single_packet to avoid wrapper indirection
 - Large-page scatter fallback delegates to existing unicast_write and fused_unicast_with_atomic_inc addrgen overloads
 - _with_state scatter large-page path sets noc_send_type to NOC_UNICAST_WRITE before fallback
+- Raw-size kernels pass NOC address components to device, compute 64-bit addr on-device via safe_get_noc_addr
+- Reused rx_addrgen.cpp receiver kernel for completion signaling (protocol-agnostic semaphore wait)
 
 ## Blockers
 None
@@ -41,7 +43,8 @@ None
 | 01    | 03   | 4min     | 2     | 1     |
 | 01    | 05   | 6min     | 2     | 1     |
 | 01    | 06   | 5min     | 2     | 1     |
+| 01    | 07   | 7min     | 1     | 5     |
 
 ## Last Session
-- **Timestamp:** 2026-03-11T01:44:00Z
-- **Stopped At:** Completed 01-06-PLAN.md
+- **Timestamp:** 2026-03-11T01:51:43Z
+- **Stopped At:** 01-07-PLAN.md Task 2 checkpoint (hardware verification pending)
