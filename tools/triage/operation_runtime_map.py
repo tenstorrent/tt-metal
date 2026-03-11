@@ -26,6 +26,7 @@ from inspector_data import run as get_inspector_data, InspectorData
 script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data"],
+    priority=ScriptPriority.HIGH,
 )
 
 
