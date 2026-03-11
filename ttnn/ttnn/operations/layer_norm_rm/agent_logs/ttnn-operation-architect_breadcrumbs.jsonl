@@ -7,3 +7,5 @@
 {"event":"design_decision","phase":"reduce","choice":"SUM reduce with 1/W scaler for mean","rationale":"prepare_reduce_scaler allows runtime W. Using SUM with 1/W scaler is equivalent to AVG.","ts":"2026-03-11T17:22:38+00:00"}
 {"event":"action","type":"write_design","file":"op_design.md","line_count":260,"ts":"2026-03-11T17:25:45+00:00"}
 {"event":"result","type":"tdd_pipeline","success":true,"stages_registered":4,"stage_names":["data_pipeline","center_and_square","normalize","affine"],"ts":"2026-03-11T17:25:45+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: layer_norm_rm","ts":"2026-03-11T17:27:36+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["design"],"final_commit":"be9f35cd2f","ts":"2026-03-11T17:27:36+00:00"}
