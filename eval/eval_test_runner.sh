@@ -6,7 +6,7 @@
 # - TT_METAL_OPERATION_TIMEOUT_SECONDS for hang detection
 # - Hang plugin to skip remaining parametrizations after hang
 # - Failure classification into categories
-# - Device reset after hangs
+# - Device reset after every run
 # - flock for device serialization
 #
 # Usage: eval/eval_test_runner.sh <test_dir> <output_dir>
@@ -74,9 +74,17 @@ fi
 
 # --- Acquire device lock ---
 exec 9>"$LOCK_FILE"
+LOCK_TIMEOUT=300
 echo "EVAL_RUNNER: Waiting for device lock..." >&2
-flock 9
+if ! flock -w "$LOCK_TIMEOUT" 9; then
+    echo "EVAL_RUNNER: ERROR - Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
+    exit 1
+fi
 echo "EVAL_RUNNER: Device lock acquired" >&2
+
+# Signal to child processes (e.g. conftest device lock plugin) that the lock
+# is already held — they must not re-acquire it or they will deadlock.
+export TT_DEVICE_LOCK_HELD=1
 
 # --- Check if device needs reset from previous run ---
 if [[ -f "$DIRTY_FLAG" ]]; then
@@ -141,26 +149,27 @@ if [[ -s "$TRIAGE_LOG" ]]; then
     IS_HANG=true
 fi
 
-# Kill any orphan child processes (pytest may leave them after a hang).
+# Kill any orphan child processes and their descendants.
 # Critical: children inherit fd 9 (flock fd). If orphans survive, exec 9>&-
 # won't release the lock and all subsequent runners deadlock.
-pkill -9 -P $$ 2>/dev/null || true
+for child_pid in $(pgrep -P $$ 2>/dev/null); do
+    pkill -9 -P "$child_pid" 2>/dev/null || true
+    kill -9 "$child_pid" 2>/dev/null || true
+done
+
+# Always reset device after every run to guarantee a clean slate.
+echo "EVAL_RUNNER: Resetting device..." >&2
+if tt-smi -r; then
+    sleep 2
+    rm -f "$DIRTY_FLAG"
+    echo "EVAL_RUNNER: Device reset complete" >&2
+else
+    echo "EVAL_RUNNER: WARNING - device reset failed, leaving dirty flag" >&2
+fi
 
 if [[ "$IS_HANG" == true ]]; then
-    echo "EVAL_RUNNER: Hang detected (triage log produced), resetting device..." >&2
-    if tt-smi -r; then
-        sleep 2
-        rm -f "$DIRTY_FLAG"
-        echo "EVAL_RUNNER: Device reset complete" >&2
-    else
-        echo "EVAL_RUNNER: WARNING - device reset failed, leaving dirty flag" >&2
-    fi
-elif [[ -f "$JUNIT_XML" ]]; then
-    # pytest ran to completion (even if tests failed). Normal test failures
-    # (numerical, signature, import, etc.) don't corrupt the device.
-    rm -f "$DIRTY_FLAG"
+    echo "EVAL_RUNNER: Hang detected (triage log produced)" >&2
 fi
-# else: no XML + no triage = unknown crash. Leave dirty flag for next runner.
 
 rm -f "$TRIAGE_LOG"
 
