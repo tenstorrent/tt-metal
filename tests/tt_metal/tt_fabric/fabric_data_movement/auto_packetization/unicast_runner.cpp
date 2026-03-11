@@ -2,67 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-side test runner for raw-size unicast auto-packetization tests.
-// Dispatches the unicast_tx_writer_raw device kernel which sends a large
-// payload via the auto-packetizing fabric_unicast_noc_unicast_write wrapper,
-// then validates that all data arrives correctly at the destination.
+// Host-side test runner for raw-size unicast auto-packetization silicon tests.
+// Uses BaseFabricFixture (per-chip MeshDevice) pattern -- NOT MeshDeviceFixtureBase.
+// Dispatches the appropriate unicast device kernel based on AutoPacketFamily,
+// writes test data directly to L1, and validates byte-for-byte correctness.
 
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tests/tt_metal/tt_fabric/common/utils.hpp"
-#include "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/test_common.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <distributed/mesh_device_view_impl.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+
+#include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/test_common.hpp"
 
 namespace tt::tt_fabric::test {
 
+using fabric_router_tests::BaseFabricFixture;
+
 namespace {
 
-// Validate workload parameters
-inline bool validate_workload_or_fail(const RawTestParams& p) {
-    if ((p.tensor_bytes % 4) != 0) {
-        ADD_FAILURE() << "tensor_bytes must be a multiple of 4 (word-aligned) for verification.";
-        return false;
-    }
-    return true;
-}
-
-// Resolve forwarding link and fail early if none found.
-inline bool pick_forwarding_link_or_fail(
-    const tt::tt_fabric::FabricNodeId& src,
-    const tt::tt_fabric::FabricNodeId& dst,
-    uint32_t& out_link_idx) {
-    auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
-    if (links.empty()) {
-        ADD_FAILURE() << "No forwarding links from src to dst";
-        return false;
-    }
-    out_link_idx = links[0];
-    return true;
-}
-
-// Device lookup and basic existence check.
-inline bool lookup_devices_or_fail(
-    ChipId src_phys, ChipId dst_phys,
-    tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return false;
-    }
-    return true;
-}
-
-// Generate deterministic TX pattern.
+// Generate deterministic TX pattern: 0xA5A50000 + i
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
     for (size_t i = 0; i < n_words; ++i) {
@@ -71,16 +34,18 @@ inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     return tx;
 }
 
-// Validate RX payload equals TX payload.
-inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vector<uint32_t>& tx) {
-    if (rx.size() != tx.size()) {
-        ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
-        return;
-    }
-    for (size_t i = 0; i < rx.size(); ++i) {
-        if (rx[i] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i]
-                          << ", exp 0x" << tx[i] << std::dec << ")";
+// Validate RX payload equals TX payload word-by-word.
+inline void verify_payload_words(
+    const std::vector<uint32_t>& rx,
+    const std::vector<uint32_t>& tx,
+    size_t word_offset = 0,
+    size_t n_words = 0) {
+    size_t count = (n_words > 0) ? n_words : tx.size();
+    for (size_t i = 0; i < count; ++i) {
+        if (rx[i + word_offset] != tx[i]) {
+            ADD_FAILURE() << "Data mismatch at word " << i << " (offset " << word_offset
+                          << "): got 0x" << std::hex << rx[i + word_offset]
+                          << ", exp 0x" << tx[i] << std::dec;
             return;
         }
     }
@@ -88,15 +53,15 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 
 }  // anonymous namespace
 
-// ----------------------------------- program -----------------------------------
-void run_raw_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const RawTestParams& p) {
+// Main unicast runner: dispatches the correct device kernel for the given family
+// and verifies data correctness on silicon.
+void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
-    namespace Dist = tt::tt_metal::distributed;
 
-    // Check if fabric is 2D and create defines map
+    // Check if fabric is 2D
     const auto& fabric_context = cp.get_fabric_context();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
-    std::map<std::string, std::string> defines = {};
+    std::map<std::string, std::string> defines;
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "1";
     }
@@ -107,62 +72,74 @@ void run_raw_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, co
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = nullptr;
-    tt::tt_metal::IDevice* dst_dev = nullptr;
-    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
-        return;
-    }
+    // Get per-chip MeshDevice objects from BaseFabricFixture
+    auto src_mesh = fixture->get_device(src_phys);
+    auto dst_mesh = fixture->get_device(dst_phys);
+    auto* src_dev = src_mesh->get_devices()[0];
+    auto* dst_dev = dst_mesh->get_devices()[0];
 
-    if (!validate_workload_or_fail(p)) {
-        return;
-    }
-
+    // Resolve receiver NOC coordinates
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
-    // --- Mesh device + coords for per-shard IO ---
-    auto mesh = fixture->get_mesh_device();
-    auto view = mesh->get_view();
-    auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
-        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
-            if (view.impl().get_device(c)->id() == phys) {
-                return c;
-            }
-        }
-        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
-        return Dist::MeshCoordinate(0);
-    };
-    Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
-    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+    // Get L1 memory layout from worker mem map
+    const auto topology = fabric_context.get_fabric_topology();
+    auto src_mem_map = BaseFabricFixture::generate_worker_mem_map(src_mesh, topology);
+    auto dst_mem_map = BaseFabricFixture::generate_worker_mem_map(dst_mesh, topology);
 
-    // --- IO buffers & initialization (MeshBuffer style) ---
-    // Source buffer in DRAM (sender reads from it into L1 before fabric send)
-    Dist::DeviceLocalBufferConfig src_local{
-        .page_size = p.tensor_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM};
-    // Destination buffer where fabric delivers data
-    Dist::DeviceLocalBufferConfig dst_local{
-        .page_size = p.tensor_bytes,
-        .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
-    Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
-    auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
-    auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
+    const uint32_t src_l1_addr = src_mem_map.source_l1_buffer_address;
+    const uint32_t dst_l1_addr = dst_mem_map.target_address;
+
+    // Validate payload fits in L1 data space (851968 bytes available)
+    constexpr uint32_t DATA_SPACE_BYTES = 851968;
+    if (p.tensor_bytes > DATA_SPACE_BYTES) {
+        ADD_FAILURE() << "Payload " << p.tensor_bytes << " exceeds L1 data space " << DATA_SPACE_BYTES;
+        return;
+    }
+
+    // Validate word alignment
+    if ((p.tensor_bytes % 4) != 0) {
+        ADD_FAILURE() << "tensor_bytes must be a multiple of 4 for word-aligned verification.";
+        return;
+    }
 
     const size_t n_words = p.tensor_bytes / 4;
+    const bool is_scatter = family_is_scatter(p.family);
+
+    // For scatter: payload goes to two addresses, each getting half
+    uint32_t scatter_half_bytes = 0;
+    uint32_t scatter_offset = 0;
+    if (is_scatter) {
+        scatter_half_bytes = p.tensor_bytes / 2;
+        // Place second scatter chunk after the first in destination L1
+        scatter_offset = scatter_half_bytes;
+    }
+
+    // Generate test data pattern
     auto tx = make_tx_pattern(n_words);
     std::vector<uint32_t> zeros(n_words, 0u);
 
-    auto& mcq = mesh->mesh_command_queue();
-    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
-    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    // Write source data directly to sender L1
+    tt::tt_metal::detail::WriteToDeviceL1(
+        src_dev, p.sender_core, src_l1_addr, tx, CoreType::WORKER);
 
-    // --- Global semaphore for completion signaling ---
-    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
-    tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
-    static std::optional<tt::tt_metal::GlobalSemaphore> gsem;
-    if (!gsem) {
-        gsem = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_set, /*initial_value=*/0);
+    // Zero destination L1 buffer
+    tt::tt_metal::detail::WriteToDeviceL1(
+        dst_dev, p.receiver_core, dst_l1_addr, zeros, CoreType::WORKER);
+
+    // If scatter, also zero the second half region
+    if (is_scatter) {
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dst_dev, p.receiver_core, dst_l1_addr + scatter_offset, zeros, CoreType::WORKER);
     }
 
-    // --- Receiver kernel: waits for semaphore bump, then exits ---
+    // --- Global semaphore for completion signaling ---
+    tt::tt_metal::CoreRangeSet rx_core_set(
+        tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
+    auto gsem = tt::tt_metal::CreateGlobalSemaphore(
+        dst_mesh.get(), rx_core_set, /*initial_value=*/0);
+
+    // --- Receiver program: wait for semaphore bump ---
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
     const std::string RX_KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
@@ -173,60 +150,101 @@ void run_raw_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, co
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .defines = defines});
 
-    // Receiver waits for 1 atomic inc (sent after all data)
-    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, p.receiver_core, {gsem->address(), 1u});
+    // Fused families fire atomic_inc once on final chunk. Non-fused get separate atomic_inc.
+    const uint32_t sem_wait_value = 1u;
+    tt::tt_metal::SetRuntimeArgs(
+        receiver_prog, rx_wait_k, p.receiver_core, {gsem.address(), sem_wait_value});
 
-    // --- Sender program: single kernel on RISCV_1 ---
+    // --- Sender program: single writer kernel on RISCV_1 ---
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
 
-    const std::string TX_KDIR =
-        "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/kernels/";
-
+    std::string kernel_path = family_kernel_path(p.family);
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        TX_KDIR + "unicast_tx_writer_raw.cpp",
+        kernel_path,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .defines = defines});
 
-    // Writer runtime args: pass address components (device kernel computes NOC addr)
-    std::vector<uint32_t> writer_rt = {
-        (uint32_t)src_buf->address(),                 // 0: src_l1_addr
-        (uint32_t)p.tensor_bytes,                     // 1: total_size
-        (uint32_t)dst_buf->address(),                 // 2: dst_base_addr
-        (uint32_t)p.mesh_id,                          // 3: dst_mesh_id
-        (uint32_t)p.dst_chip,                         // 4: dst_dev_id
-        (uint32_t)rx_xy.x,                            // 5: rx_noc_x
-        (uint32_t)rx_xy.y,                            // 6: rx_noc_y
-        (uint32_t)gsem->address(),                    // 7: sem_l1_addr
-    };
+    // Build runtime args -- layout depends on family
+    std::vector<uint32_t> writer_rt;
+
+    if (is_scatter) {
+        // Scatter kernels: src_l1_addr, total_size, dst_base_addr, dst_mesh_id, dst_dev_id,
+        //                  rx_noc_x, rx_noc_y, sem_l1_addr, scatter_offset
+        writer_rt = {
+            src_l1_addr,
+            p.tensor_bytes,
+            dst_l1_addr,
+            p.mesh_id,
+            static_cast<uint32_t>(p.dst_chip),
+            rx_xy.x,
+            rx_xy.y,
+            gsem.address(),
+            scatter_offset,
+        };
+    } else {
+        // Non-scatter kernels: src_l1_addr, total_size, dst_base_addr, dst_mesh_id, dst_dev_id,
+        //                      rx_noc_x, rx_noc_y, sem_l1_addr
+        writer_rt = {
+            src_l1_addr,
+            p.tensor_bytes,
+            dst_l1_addr,
+            p.mesh_id,
+            static_cast<uint32_t>(p.dst_chip),
+            rx_xy.x,
+            rx_xy.y,
+            gsem.address(),
+        };
+    }
 
     // Append fabric connection runtime args
-    uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx)) {
+    auto forwarding_links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
+    if (forwarding_links.empty()) {
+        ADD_FAILURE() << "No forwarding links from src to dst";
         return;
     }
+    uint32_t link_idx = forwarding_links[0];
     tt::tt_fabric::append_fabric_connection_rt_args(
         src, dst, link_idx, sender_prog, p.sender_core, writer_rt);
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
-    // --- Execute ---
-    Dist::MeshWorkload receiver_workload;
-    Dist::MeshWorkload sender_workload;
-    receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
-    sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
+    // --- Execute: receiver first (so it's ready), then sender ---
+    fixture->RunProgramNonblocking(dst_mesh, receiver_prog);
+    fixture->RunProgramNonblocking(src_mesh, sender_prog);
+    fixture->WaitForSingleProgramDone(src_mesh, sender_prog);
+    fixture->WaitForSingleProgramDone(dst_mesh, receiver_prog);
 
-    // Receiver first (so it's ready), then sender
-    Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
-    Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
+    // --- Read back and verify ---
+    if (is_scatter) {
+        // Scatter: verify two halves at dst_l1_addr and dst_l1_addr + scatter_offset
+        size_t half_words = scatter_half_bytes / 4;
 
-    // --- Verify ---
-    std::vector<uint32_t> rx(n_words, 0u);
-    Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
-    verify_payload_words(rx, tx);
+        std::vector<uint32_t> rx_half0(half_words, 0u);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dst_dev, p.receiver_core, dst_l1_addr, scatter_half_bytes, rx_half0, CoreType::WORKER);
+
+        std::vector<uint32_t> rx_half1(half_words, 0u);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dst_dev, p.receiver_core, dst_l1_addr + scatter_offset, scatter_half_bytes, rx_half1, CoreType::WORKER);
+
+        // First half of TX goes to addr0, second half to addr1
+        std::vector<uint32_t> tx_half0(tx.begin(), tx.begin() + half_words);
+        std::vector<uint32_t> tx_half1(tx.begin() + half_words, tx.end());
+
+        verify_payload_words(rx_half0, tx_half0);
+        verify_payload_words(rx_half1, tx_half1);
+    } else {
+        // Non-scatter: verify full payload at dst_l1_addr
+        std::vector<uint32_t> rx(n_words, 0u);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dst_dev, p.receiver_core, dst_l1_addr, p.tensor_bytes, rx, CoreType::WORKER);
+
+        verify_payload_words(rx, tx);
+    }
 }
 
 }  // namespace tt::tt_fabric::test
