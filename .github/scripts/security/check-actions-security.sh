@@ -15,8 +15,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GITHUB_DIR="$REPO_ROOT/.github"
 
 STRICT_MODE=false
+MACHINE_OUTPUT=false
+SKIP_AGGREGATE=false
+FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
+CURRENT_CHECK=""
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -34,10 +38,13 @@ usage() {
 Usage: ./check-actions-security.sh [OPTIONS] [FILE...]
 
 Options:
-  -h, --help           Show this help message and exit
-  -c, --checks LIST    Run only specified checks (comma-separated, supports ranges)
-                       Example: -c 1-3,19 runs checks 1, 2, 3, and 19
-  --strict             Exit with error code if any issues found
+  -h, --help              Show this help message and exit
+  -c, --checks LIST       Run only specified checks (comma-separated, supports ranges)
+                          Example: -c 1-3,19 runs checks 1, 2, 3, and 19
+  --strict                Exit with error code if any issues found
+  --machine-output        Output tab-delimited format for parallel processing
+  --skip-aggregate        Skip aggregate checks (5, 6) for parallel workers
+  --format-results FILE   Read results file and display with deduplicated examples
 
 If no FILEs are provided, scans all .yml/.yaml files in .github/workflows and .github/actions.
 
@@ -130,6 +137,22 @@ while [[ $# -gt 0 ]]; do
             STRICT_MODE=true
             shift
             ;;
+        --machine-output)
+            MACHINE_OUTPUT=true
+            shift
+            ;;
+        --skip-aggregate)
+            SKIP_AGGREGATE=true
+            shift
+            ;;
+        --format-results)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --format-results requires a file argument" >&2
+                exit 1
+            fi
+            FORMAT_RESULTS_FILE="$2"
+            shift 2
+            ;;
         *)
             FILES+=("$1")
             shift
@@ -150,13 +173,17 @@ log_issue() {
     local severity="$1"
     local file="$2"
     local message="$3"
-    local color="$YELLOW"
 
-    if [[ "$severity" == "CRITICAL" ]] || [[ "$severity" == "HIGH" ]]; then
-        color="$RED"
+    if [[ "$MACHINE_OUTPUT" == "true" ]]; then
+        # Tab-delimited: CHECK<tab>SEVERITY<tab>FILE<tab>MESSAGE
+        printf '%s\t%s\t%s\t%s\n' "$CURRENT_CHECK" "$severity" "$file" "$message"
+    else
+        local color="$YELLOW"
+        if [[ "$severity" == "CRITICAL" ]] || [[ "$severity" == "HIGH" ]]; then
+            color="$RED"
+        fi
+        echo -e "${color}[$severity]${NC} $file: $message"
     fi
-
-    echo -e "${color}[$severity]${NC} $file: $message"
     ((ISSUES_FOUND++)) || true
 }
 
@@ -853,7 +880,18 @@ run_check() {
     local check_fn="check_${check_num}"
     local found=0
 
-    echo "Checking for ${!desc_var}..."
+    # Set global for log_issue to use
+    CURRENT_CHECK="$check_num"
+
+    # Skip aggregate checks if requested
+    if [[ "$SKIP_AGGREGATE" == "true" && "${!agg_var:-}" == "true" ]]; then
+        return
+    fi
+
+    # Only print status in normal mode
+    if [[ "$MACHINE_OUTPUT" != "true" ]]; then
+        echo "Checking for ${!desc_var}..."
+    fi
 
     if [[ "${!agg_var:-}" == "true" ]]; then
         if ! "$check_fn" "${FILES[@]}"; then
@@ -867,46 +905,130 @@ run_check() {
         done
     fi
 
-    if [[ $found -eq 1 ]]; then
+    # Only print examples in normal mode
+    if [[ $found -eq 1 && "$MACHINE_OUTPUT" != "true" ]]; then
         log_fix_example "check_${check_num}" "$($example_fn)"
     fi
+}
+
+# =============================================================================
+# Format Results (for parallel post-processing)
+# =============================================================================
+
+format_results() {
+    local results_file="$1"
+    local -A checks_with_issues=()
+    local total_issues=0
+
+    if [[ ! -f "$results_file" ]]; then
+        echo "Error: Results file not found: $results_file" >&2
+        exit 1
+    fi
+
+    # First pass: print all issues, track which checks had failures
+    while IFS=$'\t' read -r check severity file message; do
+        [[ -z "$check" ]] && continue
+
+        local color="$YELLOW"
+        if [[ "$severity" == "CRITICAL" ]] || [[ "$severity" == "HIGH" ]]; then
+            color="$RED"
+        fi
+        echo -e "${color}[$severity]${NC} $file: $message"
+
+        checks_with_issues[$check]=1
+        ((total_issues++)) || true
+    done < "$results_file"
+
+    # Second pass: print one example per unique failed check
+    for check_num in "${!checks_with_issues[@]}"; do
+        local example_fn="example_check_${check_num}"
+        if declare -f "$example_fn" > /dev/null 2>&1; then
+            log_fix_example "check_${check_num}" "$($example_fn)"
+        fi
+    done
+
+    echo ""
+    echo "=========================================="
+    echo "Scan Complete"
+    echo "=========================================="
+    echo ""
+
+    if [[ $total_issues -eq 0 ]]; then
+        echo -e "${GREEN}No security issues found!${NC}"
+    else
+        echo -e "${YELLOW}Found $total_issues potential security issues${NC}"
+        echo ""
+        echo "Remediation guidance:"
+        echo "  - CRITICAL: Fix immediately - allows arbitrary code execution or secret exfiltration"
+        echo "  - HIGH: Fix immediately - direct shell injection risk"
+        echo "  - MEDIUM: Fix soon - potential injection or supply chain risk"
+        echo "  - LOW: Defense in depth - address in regular maintenance"
+    fi
+
+    # Set exit code based on issues found
+    if [[ "$STRICT_MODE" == "true" && $total_issues -gt 0 ]]; then
+        exit 1
+    fi
+    exit 0
 }
 
 # =============================================================================
 # Main Execution
 # =============================================================================
 
-echo "=========================================="
-echo "GitHub Actions Security Lint Check"
-echo "=========================================="
-echo ""
+# Handle --format-results mode: read and display results from parallel run
+if [[ -n "$FORMAT_RESULTS_FILE" ]]; then
+    echo "=========================================="
+    echo "GitHub Actions Security Lint Check"
+    echo "=========================================="
+    echo ""
+    format_results "$FORMAT_RESULTS_FILE"
+    # format_results exits, so this line is never reached
+fi
+
+# Print banner only in normal mode
+if [[ "$MACHINE_OUTPUT" != "true" ]]; then
+    echo "=========================================="
+    echo "GitHub Actions Security Lint Check"
+    echo "=========================================="
+    echo ""
+fi
 
 for i in "${CHECKS_TO_RUN[@]}"; do
     run_check "$i"
 done
 
-echo ""
-echo "=========================================="
-echo "Scan Complete"
-echo "=========================================="
-echo ""
-
-if [[ $ISSUES_FOUND -eq 0 ]]; then
-    echo -e "${GREEN}No security issues found!${NC}"
-    exit 0
-else
-    echo -e "${YELLOW}Found $ISSUES_FOUND potential security issues${NC}"
+# Print summary only in normal mode
+if [[ "$MACHINE_OUTPUT" != "true" ]]; then
     echo ""
-    echo "Remediation guidance:"
-    echo "  - CRITICAL: Fix immediately - allows arbitrary code execution or secret exfiltration"
-    echo "  - HIGH: Fix immediately - direct shell injection risk"
-    echo "  - MEDIUM: Fix soon - potential injection or supply chain risk"
-    echo "  - LOW: Defense in depth - address in regular maintenance"
+    echo "=========================================="
+    echo "Scan Complete"
+    echo "=========================================="
     echo ""
-    echo "For more details, see the security remediation plan."
 
-    if [[ "$STRICT_MODE" == "true" ]]; then
-        exit 1
+    if [[ $ISSUES_FOUND -eq 0 ]]; then
+        echo -e "${GREEN}No security issues found!${NC}"
+        exit 0
+    else
+        echo -e "${YELLOW}Found $ISSUES_FOUND potential security issues${NC}"
+        echo ""
+        echo "Remediation guidance:"
+        echo "  - CRITICAL: Fix immediately - allows arbitrary code execution or secret exfiltration"
+        echo "  - HIGH: Fix immediately - direct shell injection risk"
+        echo "  - MEDIUM: Fix soon - potential injection or supply chain risk"
+        echo "  - LOW: Defense in depth - address in regular maintenance"
+        echo ""
+        echo "For more details, see the security remediation plan."
+
+        if [[ "$STRICT_MODE" == "true" ]]; then
+            exit 1
+        fi
+        exit 0
     fi
-    exit 0
 fi
+
+# In machine output mode, exit with appropriate code
+if [[ "$STRICT_MODE" == "true" && $ISSUES_FOUND -gt 0 ]]; then
+    exit 1
+fi
+exit 0

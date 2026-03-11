@@ -100,7 +100,7 @@ repos:
   hooks:
     - id: check-github-actions-security
       name: Check GitHub Actions for security anti-patterns
-      entry: bash .github/scripts/security/check-actions-security.sh --strict
+      entry: bash .github/scripts/security/check-actions-security-parallel.sh --strict
       language: system
-      pass_filenames: false
+      pass_filenames: true
       files: ^\.github/.*\.(yaml|yml)$
