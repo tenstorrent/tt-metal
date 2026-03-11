@@ -172,7 +172,7 @@ jobs:
         run: npm install
       - name: Download previous workflow data artifact (if any)
         if: ${{ steps.prev.outputs.run_id != '' }}
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-data
           path: ${{ github.workspace }}/prev
@@ -196,32 +196,32 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download workflow data
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-data
           path: ${{ github.workspace }}
       - name: Download annotations (if any)
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-annotations
           path: ${{ github.workspace }}/annotations
       - name: Download gtest logs (if any)
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-gtest-logs
           path: ${{ github.workspace }}/logs/gtest
       - name: Download other logs (if any)
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-other-logs
           path: ${{ github.workspace }}/logs/other
       - name: Download commits index
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: commits-main
           path: ${{ github.workspace }}
       - name: Download last success timestamps
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: last-success-timestamps
           path: ${{ github.workspace }}
@@ -268,7 +268,7 @@ jobs:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
       - name: Download regression notification inputs
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-regression-notification-inputs
           path: ${{ github.workspace }}/regression-notification-inputs
@@ -315,7 +315,7 @@ jobs:
         working-directory: .github/actions/trigger-auto-triage-for-regressions
         run: npm install
       - name: Download regression notification inputs
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-regression-notification-inputs
           path: ${{ github.workspace }}/regression-notification-inputs
