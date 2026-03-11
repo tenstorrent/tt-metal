@@ -116,8 +116,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             memory_config text,
             device_id int,
             address int,
-            buffer_type text,
-            buffer_type_value int,
+            buffer_type int,
             size int
         )
     """
@@ -142,8 +141,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             device_id int,
             address int,
             max_size_per_bank int,
-            buffer_type text,
-            buffer_type_value int,
+            buffer_type int,
             buffer_layout int
         )
     """
@@ -838,17 +836,13 @@ def import_graph(
             )
             if real_bufs is not None:
                 for buf in real_bufs:
-                    bt_val = buf.get("buffer_type", 0)
-                    bt_names = {0: "DRAM", 1: "L1", 2: "SYSTEM_MEMORY", 3: "L1_SMALL", 4: "TRACE"}
-                    bt_name = bt_names.get(bt_val, str(bt_val))
                     buffers_batch.append(
                         (
                             operation_id,
                             buf.get("device_id", 0),
                             buf.get("address", 0),
                             buf.get("max_size_per_bank", 0),
-                            bt_name,
-                            bt_val,
+                            buf.get("buffer_type", 0),
                             buf.get("buffer_layout", 0),
                         )
                     )
@@ -873,8 +867,10 @@ def import_graph(
                     layout = layout.replace("::", ".")
                 device_id = _int_param(params, "device_id")
                 address = _int_param(params, "address")
-                buffer_type = _strip_enum_prefix(params.get("buffer_type"))
-                buffer_type_value = _int_param(params, "buffer_type_value")
+                buffer_type = _int_param(params, "buffer_type_value")
+                if buffer_type is None:
+                    bt_name = _strip_enum_prefix(params.get("buffer_type"))
+                    buffer_type = _BUFFER_TYPE_MAP.get(bt_name, 0) if bt_name else 0
                 size = _int_param(params, "size")
 
                 tensors_batch.append(
@@ -887,7 +883,6 @@ def import_graph(
                         device_id,
                         address,
                         buffer_type,
-                        buffer_type_value,
                         size,
                     )
                 )
@@ -906,10 +901,10 @@ def import_graph(
             size = _int_param(params, "size") or 0
             page_size = _int_param(params, "page_size") or 0
             num_cores = _int_param(params, "num_cores") or 0
-            buffer_type = _strip_enum_prefix(params.get("exact_buffer_type") or params.get("type", "DRAM"))
-            buffer_type_value = _int_param(params, "buffer_type_value")
-            if buffer_type_value is None:
-                buffer_type_value = _BUFFER_TYPE_MAP.get(buffer_type, 0)
+            buffer_type = _int_param(params, "buffer_type_value")
+            if buffer_type is None:
+                bt_name = _strip_enum_prefix(params.get("exact_buffer_type") or params.get("type", "DRAM"))
+                buffer_type = _BUFFER_TYPE_MAP.get(bt_name, 0)
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
@@ -921,12 +916,12 @@ def import_graph(
                 max_size_per_bank = _compute_max_size_per_bank(
                     size,
                     page_size,
-                    buffer_type_value,
+                    buffer_type,
                     layout,
                     num_cores,
                     device_bank_info.get(device_id, {}),
                 )
-            active_buffers.append((device_id, address, max_size_per_bank, buffer_type, buffer_type_value, layout_int))
+            active_buffers.append((device_id, address, max_size_per_bank, buffer_type, layout_int))
 
         elif node_type == "buffer_deallocate":
             # Resolve address: prefer direct param, fall back to connected buffer_allocate
@@ -945,7 +940,7 @@ def import_graph(
             dealloc_tensor_id = None
             if dealloc_address is not None:
                 for t in tensors_batch:
-                    tid, _, _, _, _, _, addr, _, _, _ = t
+                    tid, _, _, _, _, _, addr, _, _ = t
                     if addr == dealloc_address:
                         dealloc_tensor_id = _tid_int(tid)
                         break
@@ -1005,7 +1000,7 @@ def import_graph(
 
     filtered_tensors = []
     for t in tensors_batch:
-        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, btv, sz = t
+        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, sz = t
         tid_int = _tid_int(tid)
         if dev_id is None:
             if tid_int in referenced_tids:
@@ -1029,19 +1024,21 @@ def import_graph(
     if missing_tids:
         addr_to_tensor = {}
         for t in tensors_batch:
-            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, btv, sz = t
+            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, sz = t
             if addr is not None and addr not in addr_to_tensor:
                 addr_to_tensor[addr] = t
         for mtid in missing_tids:
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
-                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, btv, sz = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, btv, sz))
+                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, sz = addr_to_tensor[addr]
+                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, sz))
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
-                bt_text = _strip_enum_prefix(p.get("buffer_type"))
                 btv = _int_param(p, "buffer_type_value")
+                if btv is None:
+                    bt_name = _strip_enum_prefix(p.get("buffer_type"))
+                    btv = _BUFFER_TYPE_MAP.get(bt_name, 0) if bt_name else 0
                 sz_val = _int_param(p, "size")
                 tensors_batch.append(
                     (
@@ -1052,7 +1049,6 @@ def import_graph(
                         str(p.get("memory_config", "")),
                         _int_param(p, "device_id"),
                         _int_param(p, "address"),
-                        bt_text,
                         btv,
                         sz_val,
                     )
@@ -1124,11 +1120,11 @@ def import_graph(
     if output_tensors_batch:
         cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?)""", output_tensors_batch)
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
     if device_tensors_batch:
         cursor.executemany("""INSERT INTO device_tensors VALUES (?, ?, ?)""", device_tensors_batch)
     if buffers_batch:
-        cursor.executemany("""INSERT INTO buffers VALUES (?, ?, ?, ?, ?, ?, ?)""", buffers_batch)
+        cursor.executemany("""INSERT INTO buffers VALUES (?, ?, ?, ?, ?, ?)""", buffers_batch)
     if errors_batch:
         cursor.executemany("""INSERT INTO errors VALUES (?, ?, ?, ?)""", errors_batch)
 
