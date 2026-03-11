@@ -81,7 +81,11 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
 
     // Create compile args for the program
     const auto tensors = std::vector<const Tensor*>{
-        &tensor_args.input_tensor, &tensor_args.w_tensor, &tensor_args.rope_tensor, &tensor_args.output_tensor};
+        &tensor_args.input_tensor,
+        &tensor_args.w_a_tensor,
+        &tensor_args.wq_b_tensor,
+        &tensor_args.rope_tensor,
+        &tensor_args.output_tensor};
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
@@ -184,7 +188,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         runtime_args[0] = dram_bank;
         runtime_args[1] = vchannel;
         runtime_args[2] = (uint32_t)((core.x == collector_core.x) && (core.y == collector_core.y));
-        // runtime_args[3-6] are already set to tensor addresses and runtime_args[7] stores pos
+        // runtime_args[3-7] are already set to tensor addresses and runtime_args[8] stores pos
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
@@ -217,14 +221,15 @@ void MlaWqkvAbProgramFactory::override_runtime_arguments(
 
     // Update runtime args for all kernels with new tensor addresses/position.
     // Runtime args layout:
-    // [3] = input_tensor address, [4] = w_tensor address, [5] = rope_tensor address, [6] = output_tensor address,
-    // [7] = pos
+    // [3] = input_tensor address, [4] = w_a_tensor address, [5] = wq_b_tensor address, [6] = rope_tensor address,
+    // [7] = output_tensor address, [8] = pos
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-            runtime_args[4] = tensor_args.w_tensor.buffer()->address();
-            runtime_args[5] = tensor_args.rope_tensor.buffer()->address();
-            runtime_args[7] = operation_attributes.pos;
+            runtime_args[4] = tensor_args.w_a_tensor.buffer()->address();
+            runtime_args[5] = tensor_args.wq_b_tensor.buffer()->address();
+            runtime_args[6] = tensor_args.rope_tensor.buffer()->address();
+            runtime_args[8] = operation_attributes.pos;
         }
     }
 }

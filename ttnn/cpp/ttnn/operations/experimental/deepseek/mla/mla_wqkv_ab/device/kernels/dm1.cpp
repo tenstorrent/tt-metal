@@ -17,8 +17,9 @@ void kernel_main() {
     constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
-    constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    constexpr auto rope_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto w_a_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    constexpr auto wq_b_args = TensorAccessorArgs<w_a_args.next_compile_time_args_offset()>();
+    constexpr auto rope_args = TensorAccessorArgs<wq_b_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<rope_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
@@ -27,7 +28,8 @@ void kernel_main() {
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto is_collector = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w_addr = get_arg_val<uint32_t>(argidx++);
+    const auto w_a_addr = get_arg_val<uint32_t>(argidx++);
+    const auto wq_b_addr = get_arg_val<uint32_t>(argidx++);
     const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto pos = get_arg_val<uint32_t>(argidx++);

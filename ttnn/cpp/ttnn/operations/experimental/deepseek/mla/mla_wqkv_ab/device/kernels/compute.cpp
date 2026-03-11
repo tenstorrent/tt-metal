@@ -32,7 +32,8 @@ void kernel_main() {
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto is_collector = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w_addr = get_arg_val<uint32_t>(argidx++);
+    const auto w_a_addr = get_arg_val<uint32_t>(argidx++);
+    const auto wq_b_addr = get_arg_val<uint32_t>(argidx++);
     const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto pos = get_arg_val<uint32_t>(argidx++);
@@ -47,17 +48,30 @@ void kernel_main() {
     constexpr auto cb_w2c_x2 = tt::CBIndex::c_6;
 
     // Constants for MLA WqkvAb
-    constexpr uint32_t k_tiles = 7168 / 32;
+    constexpr uint32_t w_a_k_tiles = 7168 / tt::constants::TILE_WIDTH;
     constexpr uint32_t n_tiles_this_core = 6;
+    constexpr uint32_t num_w_a_tiles = w_a_k_tiles * n_tiles_this_core;
 
     //-------------------------------------------------------------------------
-    // W reading constants
+    // W_a reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t w_txns_per_block = 6;
-    constexpr uint32_t w_tiles_per_txn = 7;
-    constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    constexpr uint32_t num_w_tiles = k_tiles * n_tiles_this_core;
-    const uint32_t w_num_blocks = num_w_tiles / w_tiles_per_block;
+    constexpr uint32_t w_a_txns_per_block = 6;
+    constexpr uint32_t w_a_tiles_per_txn = 7;
+    constexpr uint32_t w_a_tiles_per_block = w_a_tiles_per_txn * w_a_txns_per_block;
+    constexpr uint32_t w_a_num_blocks = num_w_a_tiles / w_a_tiles_per_block;
+
+    //-------------------------------------------------------------------------
+    // Constants for MLA Wq_b
+    constexpr uint32_t wq_b_k_tiles = 49;
+    constexpr uint32_t wq_b_n_tiles_this_core = 8;
+    constexpr uint32_t num_wq_b_tiles = wq_b_k_tiles * wq_b_n_tiles_this_core;
+    //-------------------------------------------------------------------------
+    // Wq-b reading constants
+    //-------------------------------------------------------------------------
+    constexpr uint32_t wq_b_txns_per_block = 4;
+    constexpr uint32_t wq_b_tiles_per_txn = 7;
+    constexpr uint32_t wq_b_tiles_per_block = wq_b_tiles_per_txn * wq_b_txns_per_block;
+    constexpr uint32_t wq_b_num_blocks = num_wq_b_tiles / wq_b_tiles_per_block;
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -82,11 +96,11 @@ void kernel_main() {
 
     uint32_t in0_index = 0;
 
-    for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
-        cb_wait_front(cb_r2c_w, w_tiles_per_block);
+    for (uint32_t block_id = 0; block_id < w_a_num_blocks; ++block_id) {
+        cb_wait_front(cb_r2c_w, w_a_tiles_per_block);
 
         // Process each block in ct_dim chunks, similar to matmul_wo.
-        for (uint32_t k = 0; k < w_tiles_per_block; k += n_tiles_this_core) {
+        for (uint32_t k = 0; k < w_a_tiles_per_block; k += n_tiles_this_core) {
             matmul_block(
                 cb_s2c_in,
                 cb_r2c_w,
@@ -99,7 +113,7 @@ void kernel_main() {
                 /*kt_dim=*/1);
         }
 
-        cb_pop_front(cb_r2c_w, w_tiles_per_block);
+        cb_pop_front(cb_r2c_w, w_a_tiles_per_block);
     }
 
     //-------------------------------------------------------------------------
@@ -223,7 +237,15 @@ void kernel_main() {
     }
     tile_regs_release();
 
+    //-------------------------------------------------------------------------
+    // Compute: input @ wq_b -> output
+    //-------------------------------------------------------------------------
+    for (uint32_t block_id = 0; block_id < wq_b_num_blocks; ++block_id) {
+        cb_wait_front(cb_r2c_w, w_a_tiles_per_block);
+        cb_pop_front(cb_r2c_w, w_a_tiles_per_block);
+    }
+
     // We have one extra slot reserved, which we won't use, drain it.
-    cb_wait_front(cb_r2c_w, w_tiles_per_block);
-    cb_pop_front(cb_r2c_w, w_tiles_per_block);
+    cb_wait_front(cb_r2c_w, w_a_tiles_per_block);
+    cb_pop_front(cb_r2c_w, w_a_tiles_per_block);
 }

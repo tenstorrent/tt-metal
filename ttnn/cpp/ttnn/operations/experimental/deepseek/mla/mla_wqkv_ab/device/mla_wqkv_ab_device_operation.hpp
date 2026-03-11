@@ -30,7 +30,8 @@ struct MlaWqkvAbDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const Tensor& w_tensor,
+        const Tensor& w_a_tensor,
+        const Tensor& wq_b_tensor,
         const Tensor& rope_tensor,
         const Tensor& output_tensor,
         uint32_t layer_id,

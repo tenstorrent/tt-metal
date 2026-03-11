@@ -29,7 +29,8 @@ MlaWqkvAbDeviceOperation::tensor_return_value_t MlaWqkvAbDeviceOperation::create
 std::tuple<MlaWqkvAbDeviceOperation::operation_attributes_t, MlaWqkvAbDeviceOperation::tensor_args_t>
 MlaWqkvAbDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const Tensor& w_tensor,
+    const Tensor& w_a_tensor,
+    const Tensor& wq_b_tensor,
     const Tensor& rope_tensor,
     const Tensor& output_tensor,
     const uint32_t layer_id,
@@ -38,7 +39,8 @@ MlaWqkvAbDeviceOperation::invoke(
         operation_attributes_t{.layer_id = layer_id, .pos = pos},
         tensor_args_t{
             .input_tensor = input_tensor,
-            .w_tensor = w_tensor,
+            .w_a_tensor = w_a_tensor,
+            .wq_b_tensor = wq_b_tensor,
             .rope_tensor = rope_tensor,
             .output_tensor = output_tensor}};
 }

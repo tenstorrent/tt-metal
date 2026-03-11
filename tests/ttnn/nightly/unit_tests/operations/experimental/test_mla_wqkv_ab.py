@@ -20,6 +20,10 @@ PCC_THRESHOLD = 0.996
 The kernel reads 7 tiles per transaction.
 """
 W_TILES_PER_TXN = 7
+WQ_B_K = 1536
+WQ_B_N = 16 * 192
+WQ_B_K_TILES_PER_TXN = 7
+WQ_B_N_TILES_PER_GROUP = 4
 
 """
 # SMALL_N_TILES_PER_CORE and LARGE_N_TILES_PER_CORE explain core groupings used for splitting the N dimension
@@ -202,6 +206,61 @@ def prepare_w_tensor(torch_w, L, K, N, num_dram_banks):
     return torch.stack(each_shard, dim=1)
 
 
+def prepare_wq_b_tensor(torch_wq_b, L, K, N, num_dram_banks):
+    """
+    Prepare wq_b tensor shards for 7x4 (KxN tiles) read order.
+
+    Args:
+        torch_wq_b: Weight tensor of shape (L, K, N)
+        L: Number of layers
+        K: Input dimension
+        N: Output dimension
+        num_dram_banks: Number of DRAM banks / worker cores
+
+    Returns:
+        Tensor of shape (num_dram_banks, L, H, W), where:
+          - W = 4 tiles (128)
+          - H = (N_tiles_per_core/4) * padded_K_tiles * 32
+        and padded_K_tiles is K padded up to a multiple of 7 tiles.
+    """
+    Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
+    n_tiles_per_core = Nt // num_dram_banks
+
+    # K must be padded to full 7-tile transactions (e.g., 48 -> 49 tiles).
+    padded_k_tiles = math.ceil(Kt / WQ_B_K_TILES_PER_TXN) * WQ_B_K_TILES_PER_TXN
+    n_groups_per_core = n_tiles_per_core // WQ_B_N_TILES_PER_GROUP
+
+    w_tile_view = torch_wq_b.view(L, Kt, ttnn.TILE_SIZE, Nt, ttnn.TILE_SIZE)
+    each_shard = []
+    current_n_tile = 0
+
+    for _ in range(num_dram_banks):
+        this_core_tiles = w_tile_view[:, :, :, current_n_tile : current_n_tile + n_tiles_per_core, :]
+
+        # Reorder as requested:
+        # 1) Consume one 4-tile-wide N group at a time.
+        # 2) For each group, pack all K tiles (padded to 7-tile transaction multiple).
+        # 3) Stack next 4-tile-wide group below the previous one.
+        this_core_groups = []
+        for group_idx in range(n_groups_per_core):
+            group_n_start = group_idx * WQ_B_N_TILES_PER_GROUP
+            group_n_end = group_n_start + WQ_B_N_TILES_PER_GROUP
+            group_tiles = this_core_tiles[:, :, :, group_n_start:group_n_end, :].reshape(
+                L, Kt, ttnn.TILE_SIZE, WQ_B_N_TILES_PER_GROUP * ttnn.TILE_SIZE
+            )
+
+            pad_k_tiles = padded_k_tiles - Kt
+            group_padding = torch.zeros(
+                L, pad_k_tiles, ttnn.TILE_SIZE, WQ_B_N_TILES_PER_GROUP * ttnn.TILE_SIZE, dtype=torch_wq_b.dtype
+            )
+            this_core_groups.append(torch.cat([group_tiles, group_padding], dim=1))
+
+        each_shard.append(torch.cat(this_core_groups, dim=1))
+        current_n_tile += n_tiles_per_core
+
+    return torch.stack(each_shard, dim=1)
+
+
 def prepare_output_tensor(tt_output, num_dram_banks):
     """
     Prepare output by extracting the valid 5/6 N tiles per core.
@@ -283,15 +342,27 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
     )
 
     # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w
+    # Create DRAM shard spec for w_a
     # Tensor shape: (L, K, N) -> sharded over cores with fixed max shard shape.
     # ------------------------------------------------------------------------
-    w_shard_height = K
-    w_shard_width = MAX_N_TILES_PER_CORE * ttnn.TILE_SIZE
+    w_a_shard_height = K
+    w_a_shard_width = MAX_N_TILES_PER_CORE * ttnn.TILE_SIZE
 
-    w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    w_a_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (w_a_shard_height, w_a_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w_a_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_a_shard_spec)
 
-    w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+    # ------------------------------------------------------------------------
+    # Create DRAM shard spec for wq_b
+    # Tensor shape: (L, K, N) -> sharded over cores with fixed max shard shape.
+    # ------------------------------------------------------------------------
+    wq_b_shard_height = 2 * 49 * ttnn.TILE_SIZE
+    wq_b_shard_width = 4 * ttnn.TILE_SIZE
+    wq_b_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (wq_b_shard_height, wq_b_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    wq_b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, wq_b_shard_spec)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for rope table.
@@ -339,18 +410,27 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
     # --------------------------------------------------------------------------
     if check_accuracy:
         torch_input = create_torch_input(L, in0_num_cores, M, K)
-        torch_w = create_torch_w(L, K, N)
+        torch_w_a = create_torch_w(L, K, N)
+        torch_wq_b = create_torch_w(L, WQ_B_K, WQ_B_N)
 
         # ------------------------------------------------------------------------
         # Prepare w tensor (padded, and reordered)
-        torch_w_reordered = prepare_w_tensor(torch_w, L, K, N, num_dram_banks)
-        # Create tt_w tensor with DRAM sharding
-        tt_w = ttnn.from_torch(
-            torch_w_reordered,
+        torch_w_a_reordered = prepare_w_tensor(torch_w_a, L, K, N, num_dram_banks)
+        torch_wq_b_reordered = prepare_wq_b_tensor(torch_wq_b, L, WQ_B_K, WQ_B_N, num_dram_banks)
+
+        tt_w_a = ttnn.from_torch(
+            torch_w_a_reordered,
             dtype=w_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=w_mem_config,
+            memory_config=w_a_mem_config,
+        )
+        tt_wq_b = ttnn.from_torch(
+            torch_wq_b_reordered,
+            dtype=w_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=wq_b_mem_config,
         )
 
         # ------------------------------------------------------------------------
@@ -379,12 +459,19 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=input_sharded_mem_config,
         )
-        tt_w = ttnn.empty(
-            (num_dram_banks, L, w_shard_height, w_shard_width),
+        tt_w_a = ttnn.empty(
+            (num_dram_banks, L, w_a_shard_height, w_a_shard_width),
             dtype=w_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=w_mem_config,
+            memory_config=w_a_mem_config,
+        )
+        tt_wq_b = ttnn.empty(
+            (num_dram_banks, L, wq_b_shard_height, wq_b_shard_width),
+            dtype=w_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=wq_b_mem_config,
         )
         tt_rope = ttnn.empty(
             (num_dram_banks, rope_shard_height, rope_shard_width),
@@ -413,7 +500,8 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
 
         ttnn.experimental.deepseek.mla.mla_wqkv_ab(
             tt_input,
-            w_tensor=tt_w,
+            w_a_tensor=tt_w_a,
+            wq_b_tensor=tt_wq_b,
             rope_tensor=tt_rope,
             output_tensor=tt_output,
             layer_id=layer_id,
@@ -428,7 +516,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
     if check_accuracy:
         with torch.no_grad():
             torch_input_ref = torch_input[:, 0, ...]
-            torch_mm_out = torch_input_ref @ torch_w
+            torch_mm_out = torch_input_ref @ torch_w_a
 
             # Apply rope to the last 64 values of each row
             k_pe_rope_input = torch_mm_out[:, :, -64:]
@@ -483,7 +571,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2112, 1, 0): 76,
+    (32, 7168, 2112, 1, 0): 95,
 }
 
 
