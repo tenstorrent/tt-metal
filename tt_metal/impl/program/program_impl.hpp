@@ -216,7 +216,7 @@ public:
     void compile(IDevice* device, bool force_slow_dispatch = false);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
-    // Always used in conjuction with validate_circular_buffer_region and compile
+    // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     bool is_finalized() const;
@@ -401,7 +401,7 @@ private:
     void finalize_single_dfb_config(
         std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
         const CoreCoord& core,
-        bool use_remapper);
+        bool core_has_remapper);
 
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 

@@ -20,6 +20,23 @@ from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+
+
+def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
+    """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+    The global KV cache is written in round-robin device_chunk_size blocks:
+      [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+    ShardTensor2dMesh splits dim-2 contiguously, so each device would
+    receive the wrong data.  This function reorders to:
+      [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+    so that after the contiguous split each device gets its own chunks.
+    """
+    b, h, seq, d = kv.shape
+    num_chunks = seq // device_chunk_size
+    chunks_per_device = num_chunks // num_devices
+    return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
 
 
 def create_fabric_router_config(max_payload_size):
@@ -269,12 +286,14 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
+    # TODO: Reduce to 3 slots
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
-    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
+    # Matches flash_mla's cb_out_im sizing: 68 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 68 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_shard_height = 40  # 5 tile-rows of [8, 32]
-    sdpa_out_interm_shard_width = 544  # 17 tile-cols of [8, 32]
+    sdpa_out_interm_num_slots = 4
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
+    sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
 
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
@@ -362,7 +381,7 @@ def test_pre_sdpa(
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
-    torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
+    torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
@@ -371,13 +390,15 @@ def test_pre_sdpa(
     total_qrope_heads = num_tp * NUM_QROPE_HEADS
     total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
     total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
-    torch_matmul2_weights_full_unshuffled = torch.randn(
+    torch_matmul2_weights_full_unshuffled = generate_mm_weights(
         (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
     # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # Each TP slice of 64 heads is height-sharded on 64 cores per device.
-    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    torch_matmul3_weights = generate_mm_weights(
+        (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
+    )
 
     # kv_b2_proj weights (placeholder — not consumed by pre-SDPA but required by the fused buffer)
     torch_kv_b2_proj_weights = torch.zeros(
@@ -385,7 +406,7 @@ def test_pre_sdpa(
     )
 
     # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+    torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
     torch_o_proj_weights = torch.zeros((num_tp * 8192, 7168), dtype=torch.bfloat16)
@@ -651,23 +672,6 @@ def test_pre_sdpa(
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
 
-    def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
-        """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
-
-        The global KV cache is written in round-robin device_chunk_size blocks:
-          [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
-        ShardTensor2dMesh splits dim-2 contiguously, so each device would
-        receive the wrong data.  This function reorders to:
-          [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
-        so that after the contiguous split each device gets its own chunks.
-        """
-        b, h, seq, d = kv.shape
-        num_chunks = seq // device_chunk_size
-        chunks_per_device = num_chunks // num_devices
-        return (
-            kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
-        )
-
     dcs = program_config.device_chunk_size
     num_sp = mesh_rows
     torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
@@ -893,7 +897,7 @@ def test_pre_sdpa(
             )
             continue
 
-        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.84)
+        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.94)
         logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {sdpa_pcc}")
         assert (
             passing

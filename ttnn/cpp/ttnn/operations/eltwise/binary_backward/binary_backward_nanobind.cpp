@@ -1142,7 +1142,7 @@ void py_module(nb::module_& mod) {
     bind_binary_backward_rsub(
         mod,
         ttnn::rsub_bw,
-        R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
+        R"doc(Performs backward operations for subtraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_binary_backward_ops(
