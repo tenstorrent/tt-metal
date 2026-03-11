@@ -36,34 +36,63 @@ void MAIN {
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_out);
 
     for (uint32_t unit = 0; unit < num_units; ++unit) {
-        // ================================================================
-        // Phase 2 (unstable): exp(input) -> c_exp
-        // Read tiles one at a time from c_0, apply exp, write to c_25
-        // ================================================================
-        copy_tile_to_dst_init_short(cb_input);
-        exp_tile_init();
+        if constexpr (numeric_stable) {
+            // ==============================================================
+            // STABLE SOFTMAX: max -> sub+exp -> sum+recip -> mul
+            // ==============================================================
 
-        for (uint32_t wt = 0; wt < Wt; ++wt) {
-            cb_wait_front(cb_input, 1);
+            // Phase 1: reduce_max(input, REDUCE_ROW) -> c_max
+            // Explicit wait for NoWaitNoPop; c_0 tiles persist for Phase 2
+            cb_wait_front(cb_input, Wt);
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                cb_input, cb_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::of(1, Wt, 1));
 
-            tile_regs_acquire();
-            copy_tile(cb_input, 0, 0);
-            exp_tile(0);
-            tile_regs_commit();
+            // Phase 2: sub(input - max) + exp -> c_exp
+            // c_0: Wt tiles, already waited from Phase 1, pop at end
+            // c_max: 1 tile (COL vector from REDUCE_ROW), wait+pop
+            compute_kernel_lib::sub<
+                compute_kernel_lib::BroadcastDim::COL,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryOutputPolicy::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                cb_input, cb_max, cb_exp, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt), [](uint32_t dst_idx) {
+                    exp_tile_init();
+                    exp_tile(dst_idx);
+                });
+        } else {
+            // ==============================================================
+            // UNSTABLE SOFTMAX: exp only -> c_exp
+            // ==============================================================
+            copy_tile_to_dst_init_short(cb_input);
+            exp_tile_init();
 
-            tile_regs_wait();
-            cb_reserve_back(cb_exp, 1);
-            pack_tile(0, cb_exp);
-            cb_push_back(cb_exp, 1);
-            tile_regs_release();
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                cb_wait_front(cb_input, 1);
 
-            cb_pop_front(cb_input, 1);
+                tile_regs_acquire();
+                copy_tile(cb_input, 0, 0);
+                exp_tile(0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                cb_reserve_back(cb_exp, 1);
+                pack_tile(0, cb_exp);
+                cb_push_back(cb_exp, 1);
+                tile_regs_release();
+
+                cb_pop_front(cb_input, 1);
+            }
         }
 
-        // ================================================================
+        // ==============================================================
         // Phase 3: reduce_sum(exp, REDUCE_ROW) + recip -> c_recip
-        // c_exp has Wt tiles waited upfront (persist for Phase 4)
-        // ================================================================
+        // c_exp has Wt tiles (persist for Phase 4)
+        // ==============================================================
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -80,12 +109,12 @@ void MAIN {
                 recip_tile(dst_idx);
             });
 
-        // ================================================================
+        // ==============================================================
         // Phase 4: mul(exp, recip_sum, COL broadcast) -> c_out
         // REDUCE_ROW output is COL-shaped (col0 valid, per-row values)
         // c_exp: Wt tiles, already waited, pop at end
         // c_recip: 1 tile (COL vector), wait+pop per tile
-        // ================================================================
+        // ==============================================================
         compute_kernel_lib::mul<
             compute_kernel_lib::BroadcastDim::COL,
             compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
