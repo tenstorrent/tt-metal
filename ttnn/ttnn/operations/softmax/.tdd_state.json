@@ -1,0 +1,144 @@
+{
+  "op_name": "softmax",
+  "op_path": "ttnn/ttnn/operations/softmax",
+  "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader sends input tiles to CB, compute copies them to output CB, writer writes to DRAM. Verifies end-to-end data path works.",
+      "kernel_files": [
+        "reader_softmax.cpp",
+        "compute_softmax.cpp",
+        "writer_softmax.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "x",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 3, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "exp_only",
+      "description": "Compute applies exp_tile to each input tile. Verifies SFPU exp works and tiles flow correctly through single-pass pipeline.",
+      "kernel_files": [
+        "compute_softmax.cpp"
+      ],
+      "test_file": "test_stage_exp_only.py",
+      "reference_body": "torch.exp(x)",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.05
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 3, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_dim_w",
+      "description": "Full softmax pipeline for dim=-1 (width). 3-pass reader, 6-phase compute (max, reduce, sub+exp+sum, reduce_sum+recip, final_mul), writer.",
+      "kernel_files": [
+        "reader_softmax.cpp",
+        "compute_softmax.cpp",
+        "writer_softmax.cpp"
+      ],
+      "test_file": "test_stage_softmax_dim_w.py",
+      "reference_body": "F.softmax(x, dim=-1)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 3, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "dim=-1",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_dim_h",
+      "description": "Full softmax pipeline for dim=-2 (height). Reader sends tiles in column-major order, compute uses REDUCE_COL + ROW broadcast.",
+      "kernel_files": [
+        "reader_softmax.cpp",
+        "compute_softmax.cpp",
+        "writer_softmax.cpp"
+      ],
+      "test_file": "test_stage_softmax_dim_h.py",
+      "reference_body": "F.softmax(x, dim=-2)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 128, 64)",
+        "(1, 1, 256, 32)",
+        "(2, 3, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "dim=-2",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
