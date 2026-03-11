@@ -57,6 +57,18 @@ class MoEGatePrefill:
             device=mesh_device,
         )
 
+        self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
+            shape=(config.sp_dim // 64, self.topk),
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def reshard_expert_indices(self, expert_indices: ttnn.Tensor):
+        expert_indices = ttnn.to_layout(expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+        expert_indices = ttnn.to_memory_config(expert_indices, self.expert_index_sharded_mem_config)
+        return expert_indices
+
     def linear(self, x: ttnn.Tensor):
         return ttnn.matmul(
             x, self.weight, compute_kernel_config=self.mm_compute_config, program_config=self.mm_program_config
@@ -117,9 +129,17 @@ class MoEGatePrefill:
         # global_onehot_experts = self.get_onehot_expert_selection(ttnn_top_k_experts_indices)
         # expert_histograms = ttnn.sum(global_onehot_experts, dim=0)
 
-        ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-        expert_histograms = ttnn.moe_dispatch_offsets(ttnn_top_k_experts_indices, self.n_routed_experts)
+        # ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        # expert_histograms = ttnn.moe_dispatch_offsets(ttnn_top_k_experts_indices, self.n_routed_experts)
+
+        ttnn_top_k_experts_indices = self.reshard_expert_indices(ttnn_top_k_experts_indices)
+        expert_histograms = ttnn.masked_bincount(ttnn_top_k_experts_indices, self.n_routed_experts)
+        # device_hist = ttnn.get_device_tensors(expert_histograms)[0]
+        # device_hist2 = ttnn.get_device_tensors(expert_histograms2)[0]
+        # device_hist_torch = ttnn.to_torch(device_hist)
+        # device_hist_torch2 = ttnn.to_torch(device_hist2)
         # dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
+
         dispatch_offsets = ttnn.offset_cumsum(
             expert_histograms,
             cluster_axis=self.ccl_config["DISPATCH_AXIS"],
