@@ -111,6 +111,19 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 }
 
 // ============================================================================
+// CB read-pointer utilities (TRISC only)
+// ============================================================================
+
+#if defined(COMPILE_FOR_TRISC)
+
+// Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
+FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
+    get_local_cb_interface(cb_id).fifo_rd_ptr = byte_address >> cb_addr_shift;
+}
+
+#endif  // COMPILE_FOR_TRISC
+
+// ============================================================================
 // CB reconfig utilities
 // ============================================================================
 
@@ -162,6 +175,7 @@ FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t 
 }
 
 FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
+#if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(UCK_CHLKC_UNPACK) or defined(UCK_CHLKC_PACK)
 #if defined(COMPILE_FOR_NCRISC)
     constexpr bool do_read = true;
     constexpr bool do_write = true;
@@ -178,10 +192,6 @@ FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
     constexpr bool do_read = false;
     constexpr bool do_write = true;
     constexpr bool do_reset_stream_regs = false;
-#else
-    constexpr bool do_read = false;
-    constexpr bool do_write = false;
-    constexpr bool do_reset_stream_regs = false;
 #endif
 
     volatile uint32_t tt_l1_ptr* reconfig_sem = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]);
@@ -191,6 +201,27 @@ FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
     reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[257], 32);
 
     sync_riscs_exit(reconfig_sem);
+#else
+    return;
+#endif
 }
+
+#if defined(COMPILE_FOR_TRISC)
+// Helper functions to manipulate CB read pointer (from bmm_large_block_zm_fused_bias_activation_gathered.cpp)
+FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_rd_ptr;
+}
+
+FORCE_INLINE uint32_t get_local_cb_page_size(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_page_size;
+}
+
+FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_rd_ptr = val;
+}
+#endif
 
 }  // namespace unified_kernels

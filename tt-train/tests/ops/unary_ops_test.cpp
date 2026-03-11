@@ -8,7 +8,6 @@
 #include <sys/random.h>
 
 #include <algorithm>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <limits>
 #include <random>
@@ -82,7 +81,7 @@ TEST_F(UnaryOpsTest, GlobalMean) {
     auto shape = ttnn::Shape({2, 1, 1, 4});
     auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
 
-    auto tensor_ptr = autograd::create_tensor(tensor);
+    auto tensor_ptr = autograd::create_tensor(tensor, /* requires_grad */ true);
 
     auto result = mean(tensor_ptr);
     auto result_data = core::to_vector(result->get_value());
@@ -102,7 +101,7 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
     auto tensor = core::from_vector(test_data, ttnn::Shape({2, 1, 1, 4}), device);
-    auto tensor_ptr = autograd::create_tensor(tensor);
+    auto tensor_ptr = autograd::create_tensor(tensor, /* requires_grad */ true);
     auto result = log_softmax_moreh(tensor_ptr, 3);
     auto result_data = core::to_vector(result->get_value());
     std::vector<float> expected_data = {
@@ -132,8 +131,10 @@ TEST_F(UnaryOpsTest, Silu) {
     load_random_data_from_os(std::span{a.data(), a.size()});
 
     // Create two input tensors - one for kernel implementation, one for composite
-    auto a_kernel = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
-    auto a_composite = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
+    auto a_kernel =
+        autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto a_composite =
+        autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()), /* requires_grad */ true);
 
     // Forward pass - both use same forward implementation (ttnn::silu)
     // but will use different backward implementations

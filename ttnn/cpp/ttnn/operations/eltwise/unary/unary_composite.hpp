@@ -91,6 +91,10 @@ struct ExecuteUnaryCompositeOpWithInt {
     }
 };
 
+struct Lgamma {
+    static Tensor invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
@@ -139,9 +143,7 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
-constexpr auto lgamma = ttnn::register_operation<
-    "ttnn::lgamma",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LGAMMA>>();
+constexpr auto lgamma = ttnn::register_operation<"ttnn::lgamma", operations::unary::Lgamma>();
 constexpr auto multigammaln = ttnn::register_operation<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
