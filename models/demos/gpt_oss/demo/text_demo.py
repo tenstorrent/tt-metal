@@ -517,7 +517,7 @@ def test_gpt_oss_demo(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
 
-    # Calculate ISL (Input Sequence Length) in tokens, not characters
+    # Calculate ISL in tokens
     max_isl = max(len(tokenizer.encode(p)) for p in real_prompts)
     logger.info(f"Max ISL (Input Sequence Length): {max_isl} tokens")
 
