@@ -253,12 +253,11 @@ class TtQwen3CoderNextMoELayer(LightweightModule):
         # Build per-expert, per-token weights using TTNN scatter on device.
         T_len = batch_seq
         num_experts = self._num_experts
-        expert_input = ttnn.from_torch(
-            torch.zeros((1, 1, T_len, num_experts), dtype=torch.bfloat16),
+        expert_input = ttnn.zeros(
+            (1, 1, T_len, num_experts),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         expert_weights = ttnn.scatter(
