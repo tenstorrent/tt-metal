@@ -315,6 +315,7 @@ void MetalContext::teardown() {
 }
 
 bool MetalContext::instance_exists(ContextId context_id) {
+    check_context_id(context_id);
     return g_instances[context_id.get()].load(std::memory_order_acquire) != nullptr;
 }
 
@@ -332,7 +333,7 @@ MetalContext& MetalContext::instance(ContextId context_id) {
     // Check again in case another thread created the instance while we were waiting for the lock.
     instance = g_instances[index].load(std::memory_order_acquire);
     if (!instance) {
-        // SILICON_CONTEXT_ID is implictly created to match legacy behaviour
+        // SILICON_CONTEXT_ID is implicitly created to match legacy behaviour
         TT_FATAL(
             context_id == DEFAULT_CONTEXT_ID,
             "No MetalContext instance for context_id {}. Create one via create_instance().",

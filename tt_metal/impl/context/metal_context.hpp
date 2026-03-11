@@ -58,7 +58,7 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
 
     // Access the MetalContext for a given context id.
-    // The context can be created beforehand using MetalContext::create_context(). Otherwise an exception is thrown.
+    // The context can be created beforehand using MetalContext::create_instance(). Otherwise an exception is thrown.
     // NOTE: To maintain legacy behavior, the default context id is automatically created if not already initialized
     static MetalContext& instance(ContextId context_id = DEFAULT_CONTEXT_ID);
 
@@ -216,8 +216,9 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
-    // The MetalEnv is owned by the user.
-    // For the legacy code, we initialize it in the MetalContext constructor.
+    // The MetalEnv is normally owned by the user
+    // For the legacy code, we will initialize it in the MetalContext constructor and own the env
+    // This means MetalContext will delete the env in the MetalContext destructor.
     tt::tt_metal::MetalEnv* env_;
     bool env_owned_ = false;
     ContextId context_id_;

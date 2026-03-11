@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <memory>
 #include <thread>
 #include <cstdlib>
 #include <sys/wait.h>
@@ -25,6 +26,7 @@ TEST_F(MetalContextTest, CreateSiliconInstance) {
     MetalEnv env;
     ContextId context_id = MetalContext::create_instance(env);
     EXPECT_EQ(context_id, DEFAULT_CONTEXT_ID);
+    MetalContext::destroy_instance(false, context_id);
 }
 
 TEST_F(MetalContextTest, AccessInvalidContextId) {
@@ -37,6 +39,7 @@ TEST_F(MetalContextTest, MultipleSiliconInstancesSameEnv) {
     ContextId context_id = MetalContext::create_instance(env);
     EXPECT_EQ(context_id, DEFAULT_CONTEXT_ID);
     EXPECT_THROW(MetalContext::create_instance(env), std::runtime_error);
+    MetalContext::destroy_instance(false, context_id);
 }
 
 TEST_F(MetalContextTest, LegacyImplicitSiliconInstance) {
@@ -53,6 +56,9 @@ TEST_F(MetalContextTest, CreateMockInstances) {
     MetalEnv env_bh{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value())};
     ContextId context_id_bh = MetalContext::create_instance(env_bh);
     EXPECT_EQ(context_id_bh, ContextId{2});
+
+    MetalContext::destroy_instance(false, context_id_wh);
+    MetalContext::destroy_instance(false, context_id_bh);
 }
 
 TEST_F(MetalContextTest, CreateSiliconInstanceWithMockInstances) {
@@ -68,6 +74,10 @@ TEST_F(MetalContextTest, CreateSiliconInstanceWithMockInstances) {
 
     ASSERT_EQ(MetalContext::instance(context_id_wh).get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
     ASSERT_EQ(MetalContext::instance(context_id_bh).get_cluster().arch(), tt::ARCH::BLACKHOLE);
+
+    MetalContext::destroy_instance(false, context_id);
+    MetalContext::destroy_instance(false, context_id_wh);
+    MetalContext::destroy_instance(false, context_id_bh);
 }
 
 TEST_F(MetalContextTest, DestroyInstanceExplicit) {
@@ -93,7 +103,7 @@ TEST_F(MetalContextTest, CreateImplicitAfterDestroy) {
 
 TEST_F(MetalContextTest, ThreadIsolation) {
     ContextId mock_context_id{};
-    ContextId DEFAULT_CONTEXT_ID{};
+    ContextId phy_context_id{};
     bool mock_ok{false};
     bool silicon_ok{false};
 
@@ -108,7 +118,7 @@ TEST_F(MetalContextTest, ThreadIsolation) {
     std::thread silicon_thread([&]() {
         MetalEnv env;
         ContextId id = MetalContext::create_instance(env);
-        DEFAULT_CONTEXT_ID = id;
+        phy_context_id = id;
         silicon_ok = (id == DEFAULT_CONTEXT_ID) && !MetalContext::instance(id).rtoptions().get_mock_enabled();
         MetalContext::destroy_instance(false, id);
     });
@@ -118,7 +128,7 @@ TEST_F(MetalContextTest, ThreadIsolation) {
 
     EXPECT_TRUE(mock_ok);
     EXPECT_TRUE(silicon_ok);
-    EXPECT_EQ(DEFAULT_CONTEXT_ID, DEFAULT_CONTEXT_ID);
+    EXPECT_EQ(phy_context_id, DEFAULT_CONTEXT_ID);
     EXPECT_GE(mock_context_id, ContextId{1});
 }
 
@@ -171,6 +181,8 @@ TEST_F(MetalContextTest, ForkIsolation) {
 
     EXPECT_TRUE(MetalContext::instance(parent_mock_id).rtoptions().get_mock_enabled());
     EXPECT_EQ(MetalContext::instance(parent_mock_id).get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
+
+    MetalContext::destroy_instance(false, parent_mock_id);
 }
 
 TEST_F(MetalContextTest, MaxContexts) {
@@ -178,12 +190,18 @@ TEST_F(MetalContextTest, MaxContexts) {
     context_ids.reserve(MAX_CONTEXT_COUNT - 1);
 
     auto mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
+    std::vector<std::unique_ptr<MetalEnv>> envs;
+    envs.reserve(MAX_CONTEXT_COUNT);
     for (int i = 0; i < MAX_CONTEXT_COUNT - 1; ++i) {
-        MetalEnv env{MetalEnvDescriptor(mock_cluster_desc_path)};
-        context_ids.push_back(MetalContext::create_instance(env));
+        envs.push_back(std::make_unique<MetalEnv>(MetalEnvDescriptor(mock_cluster_desc_path)));
+        context_ids.push_back(MetalContext::create_instance(*envs.back()));
     }
-    MetalEnv env{MetalEnvDescriptor(mock_cluster_desc_path)};
-    EXPECT_THROW(MetalContext::create_instance(env), std::runtime_error);
+    envs.push_back(std::make_unique<MetalEnv>(MetalEnvDescriptor(mock_cluster_desc_path)));
+    EXPECT_THROW(MetalContext::create_instance(*envs.back()), std::runtime_error);
+
+    for (auto id : context_ids) {
+        MetalContext::destroy_instance(false, id);
+    }
 }
 
 TEST_F(MetalContextTest, ReuseEnvAfterDestroy) {
@@ -193,6 +211,7 @@ TEST_F(MetalContextTest, ReuseEnvAfterDestroy) {
     MetalContext::destroy_instance(false, id);
     ContextId id2 = MetalContext::create_instance(env);
     EXPECT_EQ(MetalContext::instance(id2).get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
+    MetalContext::destroy_instance(false, id2);
 }
 
 }  // namespace tt::tt_metal
