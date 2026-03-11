@@ -435,6 +435,19 @@ void py_module_types(nb::module_& mod) {
                     global_circular_buffer: The GlobalCircularBuffer to associate with this CB.
             )pbdoc")
         .def(
+            "set_global_circular_buffer_from_cb",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
+                self.global_circular_buffer = other.global_circular_buffer;
+            },
+            nb::keep_alive<1, 2>(),
+            nb::arg("other"),
+            R"pbdoc(
+                Copy GlobalCircularBuffer pointer from another CBDescriptor.
+
+                Args:
+                    other: The CBDescriptor to copy the GlobalCircularBuffer from.
+            )pbdoc")
+        .def(
             "set_buffer_from_cb",
             [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
                 self.buffer = other.buffer;

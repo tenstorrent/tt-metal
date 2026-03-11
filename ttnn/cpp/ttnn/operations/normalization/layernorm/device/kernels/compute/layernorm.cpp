@@ -65,11 +65,11 @@ void kernel_main() {
     constexpr uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
 #endif
     experimental::CircularBuffer cb_xmm_obj(cb_xmm);
-    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
+    constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");          // E[x]
+    constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");        // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = get_named_compile_time_arg_val("cb_xmm2");      // xmm^2
+    constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");    // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
     experimental::CircularBuffer cb_eps_obj(cb_eps);
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_inb_obj(cb_inb);
