@@ -745,6 +745,7 @@ void add_rank_binding_constraints(
         // Constraint: each host's ASICs must all map to fabric nodes of the same rank
         // (same-host same-rank). We add UNSET ASICs to all unclaimed ranks' pools and
         // set a same-rank-groups constraint so the solver rejects splits during DFS.
+        // If large meshes hit DFS limits, consider pruning (e.g., host↔rank matching).
         // -----------------------------------------------------------------------
         if (!unset_hosts.empty()) {
             std::vector<MeshHostRankId> unclaimed_ranks;
@@ -768,6 +769,7 @@ void add_rank_binding_constraints(
 
             // Same-group: target_groups = one set of fabric nodes per rank; global_groups = one set per UNSET host
             std::vector<std::set<FabricNodeId>> target_groups;
+            target_groups.reserve(rank_to_fabric_nodes.size());
             for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
                 target_groups.push_back(fabric_nodes);
             }

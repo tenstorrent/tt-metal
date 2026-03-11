@@ -1299,13 +1299,13 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
     // Convert same-group constraint from node-based to index-based
     const auto& target_groups_node = constraints.get_same_rank_target_groups();
     const auto& global_groups_node = constraints.get_same_rank_global_groups();
-    target_to_group_.resize(graph_data.n_target, SIZE_MAX);
-    global_to_same_rank_group_.resize(graph_data.n_global, -1);
+    target_to_group.resize(graph_data.n_target, SIZE_MAX);
+    global_to_same_rank_group.resize(graph_data.n_global, -1);
     for (size_t group_id = 0; group_id < target_groups_node.size(); ++group_id) {
         for (const auto& target_node : target_groups_node[group_id]) {
             auto idx_it = graph_data.target_to_idx.find(target_node);
             if (idx_it != graph_data.target_to_idx.end()) {
-                target_to_group_[idx_it->second] = group_id;
+                target_to_group[idx_it->second] = group_id;
             }
         }
     }
@@ -1315,10 +1315,10 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
             auto idx_it = graph_data.global_to_idx.find(global_node);
             if (idx_it != graph_data.global_to_idx.end()) {
                 group_indices.insert(idx_it->second);
-                global_to_same_rank_group_[idx_it->second] = static_cast<int>(group_id);
+                global_to_same_rank_group[idx_it->second] = static_cast<int>(group_id);
             }
         }
-        same_rank_groups_.push_back(std::move(group_indices));
+        same_rank_groups.push_back(std::move(group_indices));
     }
 }
 
@@ -1329,15 +1329,19 @@ bool ConstraintIndexData<TargetNode, GlobalNode>::check_same_rank_constraint(
     // map to globals in the same global group. Multiple target groups may share a global group
     // (e.g. {1},{2} -> {1,3,2} is fine). Splitting a target group across global groups is invalid
     // (e.g. [1,2,3] mapping to globals spanning [3,4,5] when 3,4 and 5 are in different groups).
-    if (global_to_same_rank_group_.empty() || global_idx >= global_to_same_rank_group_.size()) {
+    bool no_same_rank_groups =
+        global_to_same_rank_group.empty() || global_idx >= global_to_same_rank_group.size();
+    if (no_same_rank_groups) {
         return true;
     }
-    int group_id = global_to_same_rank_group_[global_idx];
-    if (group_id < 0 || static_cast<size_t>(group_id) >= same_rank_groups_.size()) {
+    int group_id = global_to_same_rank_group[global_idx];
+    bool group_id_out_of_range = group_id < 0 || static_cast<size_t>(group_id) >= same_rank_groups.size();
+    if (group_id_out_of_range) {
         return true;
     }
-    size_t my_group = target_idx < target_to_group_.size() ? target_to_group_[target_idx] : SIZE_MAX;
-    if (my_group == SIZE_MAX) {
+    size_t my_group = target_idx < target_to_group.size() ? target_to_group[target_idx] : SIZE_MAX;
+    bool target_not_in_any_group = (my_group == SIZE_MAX);
+    if (target_not_in_any_group) {
         return true;
     }
     // Check: any other target in our group already assigned must be in the same global group
@@ -1345,14 +1349,14 @@ bool ConstraintIndexData<TargetNode, GlobalNode>::check_same_rank_constraint(
         if (t == target_idx || mapping[t] < 0) {
             continue;
         }
-        if (t >= target_to_group_.size() || target_to_group_[t] != my_group) {
+        if (t >= target_to_group.size() || target_to_group[t] != my_group) {
             continue;
         }
         size_t other_global_idx = static_cast<size_t>(mapping[t]);
-        if (other_global_idx >= global_to_same_rank_group_.size()) {
+        if (other_global_idx >= global_to_same_rank_group.size()) {
             continue;
         }
-        int other_global_group = global_to_same_rank_group_[other_global_idx];
+        int other_global_group = global_to_same_rank_group[other_global_idx];
         if (other_global_group != group_id) {
             return false;  // Would split our target group across global boundaries
         }
@@ -1879,7 +1883,9 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
         }
 
         // Check same-rank groups (UNSET host: all ASICs from a host must map to same rank)
-        if (!constraint_data.check_same_rank_constraint(target_idx, global_idx, state_.mapping, state_.used)) {
+        bool violates_same_host_same_rank =
+            !constraint_data.check_same_rank_constraint(target_idx, global_idx, state_.mapping, state_.used);
+        if (violates_same_host_same_rank) {
             continue;  // Would violate same-host same-rank
         }
 

@@ -598,9 +598,9 @@ struct ConstraintIndexData {
     std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>> cardinality_constraints;
 
     // Same-group: target_idx/global_idx -> group_id (-1 or SIZE_MAX if not in any group)
-    std::vector<int> global_to_same_rank_group_;
-    std::vector<std::set<size_t>> same_rank_groups_;
-    std::vector<size_t> target_to_group_;
+    std::vector<int> global_to_same_rank_group;
+    std::vector<std::set<size_t>> same_rank_groups;
+    std::vector<size_t> target_to_group;
 
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
@@ -651,8 +651,9 @@ struct ConstraintIndexData {
     /**
      * @brief Check if assigning (target_idx, global_idx) satisfies same-rank groups constraint
      *
-     * For global in a same-rank group: all already-assigned globals in that group must
-     * be mapped to targets with the same trait as target_idx.
+     * Ensures no target-group boundary splitting: all other targets in target_idx's group
+     * that are already assigned must map to globals in the same global group as global_idx.
+     * Multiple target groups may share a global group.
      */
     bool check_same_rank_constraint(
         size_t target_idx, size_t global_idx, const std::vector<int>& mapping, const std::vector<bool>& used) const;

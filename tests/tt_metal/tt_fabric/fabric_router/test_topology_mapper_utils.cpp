@@ -120,7 +120,7 @@ protected:
     template <typename NodeType>
     static auto build_grid_adjacency(const std::vector<NodeType>& nodes, size_t rows, size_t cols) {
         std::map<NodeType, std::vector<NodeType>> adj;
-        auto idx = [cols](size_t r, size_t c) { return r * cols + c; };
+        auto idx = [cols](size_t r, size_t c) { return (r * cols) + c; };
 
         for (size_t r = 0; r < rows; ++r) {
             for (size_t c = 0; c < cols; ++c) {
@@ -148,7 +148,7 @@ protected:
     template <typename NodeType>
     static auto build_torus_adjacency(const std::vector<NodeType>& nodes, size_t rows, size_t cols) {
         std::map<NodeType, std::vector<NodeType>> adj;
-        auto idx = [cols](size_t r, size_t c) { return r * cols + c; };
+        auto idx = [cols](size_t r, size_t c) { return (r * cols) + c; };
 
         for (size_t r = 0; r < rows; ++r) {
             for (size_t c = 0; c < cols; ++c) {
@@ -2916,7 +2916,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_NoHost
             if (rank_it != fabric_node_id_to_mesh_rank[mesh0].end() && rank_it->second.get() == rank) {
                 // Find which host this ASIC belongs to
                 for (const auto& [hostname, host_asics] : config.hostname_to_asics) {
-                    if (host_asics.find(asic_id) != host_asics.end()) {
+                    if (host_asics.contains(asic_id)) {
                         hosts_for_rank.insert(hostname);
                         break;
                     }
