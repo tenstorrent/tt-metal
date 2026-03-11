@@ -269,7 +269,7 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // Channel servicing flags
 // ============================================================================
 // Flat array (kept for internal slicing only)
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced_flat_ = {
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced_flat_ = {
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_2_SERVICED")),
@@ -361,7 +361,7 @@ constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_O
 // Per-VC arrays (preferred) are created below; flat aliases kept for backward compat
 // with functions not yet converted to per-VC (see per_vc_conversion_remaining_todos.md)
 // ============================================================================
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_skip_all_ = {
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_skip_all_ = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_LIVE_CHECK_SKIP")),
@@ -388,7 +388,7 @@ constexpr auto& get_sender_ch_live_check_skip() {
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
 // This attribute is necessary to support bubble flow control.
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel_all_ = {
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel_all_ = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_INJECTION")),
@@ -414,7 +414,7 @@ constexpr auto& get_sender_channel_is_traffic_injection() {
 }
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
 
-static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_2_ACK_NOC_ID")),
@@ -437,7 +437,7 @@ constexpr auto& get_sender_channel_ack_noc_ids() {
     }
 }
 
-static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids_all_ = {
+constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_2_ACK_CMD_BUF_ID")),
@@ -708,7 +708,7 @@ constexpr std::array<size_t, NumChannels> build_remote_num_slots_array() {
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     build_num_slots_array<channel_allocs, SENDER_TO_ENTRY_IDX, NUM_SENDER_CHANNELS>();
 // Per-VC sender buffer count arrays (pad to MAX first, then slice per VC)
-static constexpr auto SENDER_NUM_BUFFERS_PADDED_ =
+constexpr auto SENDER_NUM_BUFFERS_PADDED_ =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, NUM_SENDER_CHANNELS, size_t>(SENDER_NUM_BUFFERS_ARRAY);
 constexpr auto SENDER_NUM_BUFFERS_VC0 = slice_sender_channels_for_vc<0>(SENDER_NUM_BUFFERS_PADDED_);
 constexpr auto SENDER_NUM_BUFFERS_VC1 = slice_sender_channels_for_vc<1>(SENDER_NUM_BUFFERS_PADDED_);

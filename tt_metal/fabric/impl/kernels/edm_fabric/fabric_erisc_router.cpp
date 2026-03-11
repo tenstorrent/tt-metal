@@ -325,9 +325,9 @@ static_assert(sender_channel_free_slots_stream_ids[6] == 28);
 static_assert(sender_channel_free_slots_stream_ids[7] == 29);
 
 // Per-VC sender channel free slots stream IDs
-static constexpr auto sender_channel_free_slots_stream_ids_vc0 =
+constexpr auto sender_channel_free_slots_stream_ids_vc0 =
     slice_sender_channels_for_vc<0>(sender_channel_free_slots_stream_ids);
-static constexpr auto sender_channel_free_slots_stream_ids_vc1 =
+constexpr auto sender_channel_free_slots_stream_ids_vc1 =
     slice_sender_channels_for_vc<1>(sender_channel_free_slots_stream_ids);
 template <size_t vc>
 constexpr auto& get_sender_channel_free_slots_stream_ids() {
@@ -1374,11 +1374,34 @@ FORCE_INLINE void establish_edm_connection(
     local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
 
+template <size_t vc>
+constexpr bool all_sender_num_buffers_entries_same() {
+    const auto& arr = get_sender_num_buffers<vc>();
+    if (arr.size() == 0) {
+        return true;
+    }
+    const auto first = arr[0];
+    for (size_t i = 1; i < std::size(arr); ++i) {
+        if (arr[i] != first) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <size_t vc, size_t N>
 bool any_vc_sender_channels_active(const std::array<uint32_t, N>& free_slots_stream_ids) {
-    for (size_t ch = 0; ch < N; ch++) {
-        if (get_ptr_val(free_slots_stream_ids[ch]) != static_cast<int32_t>(get_sender_num_buffers<vc>()[ch])) {
-            return true;
+    if constexpr (all_sender_num_buffers_entries_same<vc>()) {
+        for (size_t ch = 0; ch < N; ch++) {
+            if (get_ptr_val(free_slots_stream_ids[ch]) != static_cast<int32_t>(get_sender_num_buffers<vc>()[0])) {
+                return true;
+            }
+        }
+    } else {
+        for (size_t ch = 0; ch < N; ch++) {
+            if (get_ptr_val(free_slots_stream_ids[ch]) != static_cast<int32_t>(get_sender_num_buffers<vc>()[ch])) {
+                return true;
+            }
         }
     }
     return false;
@@ -2870,18 +2893,19 @@ void kernel_main() {
     //
 
     // Initialize stream register state for credit management across the Ethernet link.
-    // We make sure to do this before we handshake to guarantee that the registers are
-    // initialized before the other side has any possibility of modifying them.
-    init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[0]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[1]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[0]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[1]>(0);
-    // The first sender channel in the array is always for the transient/worker connection
-    // VC0 sender stream reg init
-    init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
-    if constexpr (ACTUAL_SENDER_CHANNELS_PER_VC[0] > 1) {
-        init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);
+    // Do this before handshaking to guarantee registers are set before the other side can modify them.
+    for (size_t i = 0; i < MAX_NUM_RECEIVER_CHANNELS; i++) {
+        init_ptr_val(to_receiver_packets_sent_streams[i], 0);
+    }
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+        init_ptr_val(to_sender_packets_acked_streams[i], 0);
+        init_ptr_val(to_sender_packets_completed_streams[i], 0);
+    }
+    for (size_t ch = 0; ch < ACTUAL_SENDER_CHANNELS_PER_VC[0]; ch++) {
+        init_ptr_val(get_sender_channel_free_slots_stream_ids<0>()[ch], get_sender_num_buffers<0>()[ch]);
+    }
+    for (size_t ch = 0; ch < ACTUAL_SENDER_CHANNELS_PER_VC[1]; ch++) {
+        init_ptr_val(get_sender_channel_free_slots_stream_ids<1>()[ch], get_sender_num_buffers<1>()[ch]);
     }
 
     // Init retrain sync reg
@@ -2892,29 +2916,6 @@ void kernel_main() {
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
-    }
-
-    if constexpr (is_2d_fabric) {
-        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
-        init_ptr_val<to_sender_packets_acked_streams[2]>(0);
-        init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-
-        // Initialize completion streams for flat sender channels 2-7
-        [&]<size_t... Is>(std::index_sequence<Is...>) {
-            ((init_ptr_val<to_sender_packets_completed_streams[Is + 2]>(0)), ...);
-        }(std::make_index_sequence<6>{});
-
-        // Initialize sender channel free slots per VC (channels beyond 0,1 which are already init'd)
-        // VC0 channels 2+
-        [&]<size_t... Chs>(std::index_sequence<Chs...>) {
-            ((init_ptr_val<get_sender_channel_free_slots_stream_ids<0>()[Chs + 2]>(
-                 get_sender_num_buffers<0>()[Chs + 2])),
-             ...);
-        }(std::make_index_sequence<ACTUAL_SENDER_CHANNELS_PER_VC[0] >= 2 ? ACTUAL_SENDER_CHANNELS_PER_VC[0] - 2 : 0>{});
-        // VC1 all channels
-        [&]<size_t... Chs>(std::index_sequence<Chs...>) {
-            ((init_ptr_val<get_sender_channel_free_slots_stream_ids<1>()[Chs]>(get_sender_num_buffers<1>()[Chs])), ...);
-        }(std::make_index_sequence<ACTUAL_SENDER_CHANNELS_PER_VC[1]>{});
     }
 
 #if !defined(FABRIC_2D_VC1_ACTIVE)
@@ -3056,20 +3057,19 @@ void kernel_main() {
         }
     }
 
-    //  initialize the statically allocated "semaphores" per VC
-    auto init_vc_semaphores = [&]<size_t vc, size_t... Is>(std::index_sequence<Is...>) {
-        (([&]<size_t ch>() {
-             if constexpr (get_is_sender_channel_serviced<vc, ch>()) {
-                 *reinterpret_cast<volatile uint32_t*>(
-                     local_sender_channel_connection_semaphore_addrs_flat_[VC_SENDER_CHANNEL_START[vc] + ch]) = 0;
-                 *reinterpret_cast<volatile uint32_t*>(
-                     local_sender_channel_connection_buffer_index_ids_flat_[VC_SENDER_CHANNEL_START[vc] + ch]) = 0;
-             }
-         }.template operator()<Is>()),
-         ...);
-    };
-    init_vc_semaphores.template operator()<0>(std::make_index_sequence<ACTUAL_SENDER_CHANNELS_PER_VC[0]>{});
-    init_vc_semaphores.template operator()<1>(std::make_index_sequence<ACTUAL_SENDER_CHANNELS_PER_VC[1]>{});
+    // Initialize the statically allocated "semaphores" per VC
+    for (size_t ch = 0; ch < ACTUAL_SENDER_CHANNELS_PER_VC[0]; ch++) {
+        *reinterpret_cast<volatile uint32_t*>(
+            local_sender_channel_connection_semaphore_addrs_flat_[VC_SENDER_CHANNEL_START[0] + ch]) = 0;
+        *reinterpret_cast<volatile uint32_t*>(
+            local_sender_channel_connection_buffer_index_ids_flat_[VC_SENDER_CHANNEL_START[0] + ch]) = 0;
+    }
+    for (size_t ch = 0; ch < ACTUAL_SENDER_CHANNELS_PER_VC[1]; ch++) {
+        *reinterpret_cast<volatile uint32_t*>(
+            local_sender_channel_connection_semaphore_addrs_flat_[VC_SENDER_CHANNEL_START[1] + ch]) = 0;
+        *reinterpret_cast<volatile uint32_t*>(
+            local_sender_channel_connection_buffer_index_ids_flat_[VC_SENDER_CHANNEL_START[1] + ch]) = 0;
+    }
     asm volatile("nop");
 
 #if !defined(FABRIC_2D_VC1_ACTIVE)
