@@ -1,1 +1,2 @@
-header-insertion: never
+CompileFlags:
+  CompilationDatabase: /home/pasha/projects/tt-metal/tt-train/build

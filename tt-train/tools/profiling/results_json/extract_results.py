@@ -374,11 +374,23 @@ def extract_timings(csv_path: Path) -> dict | None:
     non_marker["_ccl_type"] = non_marker["OP CODE"].map(CCL_OPS)
     raw = raw.join(non_marker[["_ccl_type"]])
 
-    # Walk consecutive marker pairs and compute durations
+    # Filter to phase-boundary markers only (skip custom/intermediate markers)
+    boundary_idents = set()
+    for a, b in PHASE_MAP:
+        boundary_idents.add(a)
+        boundary_idents.add(b)
+
+    boundary_groups = [
+        g
+        for g in groups
+        if re.sub(r"iteration_\d+", "iteration", g["ident"]) in boundary_idents
+    ]
+
+    # Walk consecutive boundary marker pairs and compute durations
     records = []
-    for gi in range(1, len(groups)):
-        prev_id = groups[gi - 1]["ident"]
-        curr_id = groups[gi]["ident"]
+    for gi in range(1, len(boundary_groups)):
+        prev_id = boundary_groups[gi - 1]["ident"]
+        curr_id = boundary_groups[gi]["ident"]
         prev_norm = re.sub(r"iteration_\d+", "iteration", prev_id)
         curr_norm = re.sub(r"iteration_\d+", "iteration", curr_id)
 
@@ -386,7 +398,9 @@ def extract_timings(csv_path: Path) -> dict | None:
         if pair not in PHASE_MAP:
             continue
 
-        between = raw.iloc[groups[gi - 1]["last"] + 1 : groups[gi]["first"]]
+        between = raw.iloc[
+            boundary_groups[gi - 1]["last"] + 1 : boundary_groups[gi]["first"]
+        ]
         between = between[~between["_is_marker"]]
 
         # Determine iteration number
@@ -397,8 +411,8 @@ def extract_timings(csv_path: Path) -> dict | None:
                 iter_num = int(m.group(1))
                 break
         if iter_num is None:
-            for j in range(gi, len(groups)):
-                m = re.match(r"iteration_(\d+)", groups[j]["ident"])
+            for j in range(gi, len(boundary_groups)):
+                m = re.match(r"iteration_(\d+)", boundary_groups[j]["ident"])
                 if m:
                     iter_num = int(m.group(1))
                     break
