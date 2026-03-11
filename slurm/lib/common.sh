@@ -144,6 +144,7 @@ parse_common_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --docker-image)  export DOCKER_IMAGE="${2:?--docker-image requires a value}"; shift 2 ;;
+            --no-docker)     export NO_DOCKER=1; shift ;;
             --arch)          export ARCH_NAME="${2:?--arch requires a value}"; shift 2 ;;
             --ref)           export GIT_REF="${2:?--ref requires a value}"; shift 2 ;;
             --pipeline-id)   export PIPELINE_ID="${2:?--pipeline-id requires a value}"; shift 2 ;;

@@ -6,7 +6,55 @@
 [[ -n "${_SLURM_CI_DOCKER_LOADED:-}" ]] && return 0
 _SLURM_CI_DOCKER_LOADED=1
 
-require_cmd docker
+if [[ "${NO_DOCKER:-0}" != "1" ]]; then
+    require_cmd docker
+fi
+
+# ---------------------------------------------------------------------------
+# native_run COMMANDS
+# ---------------------------------------------------------------------------
+# Run commands directly on the host using the local python_env venv.
+# Used when NO_DOCKER=1 — the workspace is a pre-built checkout on NFS with
+# all deps already installed by create_venv.sh.
+native_run() {
+    local commands="$1"
+
+    log_info "Running natively (NO_DOCKER=1)"
+
+    if [[ -f "${WORKSPACE:-.}/python_env/bin/activate" ]]; then
+        log_info "Activating venv: ${WORKSPACE:-.}/python_env"
+        # shellcheck disable=SC1091
+        source "${WORKSPACE:-.}/python_env/bin/activate"
+    fi
+
+    export TT_METAL_HOME="${WORKSPACE:-.}"
+    export LD_LIBRARY_PATH="${WORKSPACE:-.}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
+    export LOGURU_LEVEL="${LOGURU_LEVEL:-INFO}"
+
+    log_info "Running: ${commands}"
+
+    (cd "${WORKSPACE:-.}" && bash -c "set -euo pipefail; $commands")
+    local rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        log_error "Native run exited with code $rc"
+    fi
+    return $rc
+}
+
+# ---------------------------------------------------------------------------
+# run_test COMMANDS [extra_docker_args...]
+# ---------------------------------------------------------------------------
+# Dispatch to native_run or docker_run based on NO_DOCKER.
+run_test() {
+    local commands="$1"; shift
+    if [[ "${NO_DOCKER:-0}" == "1" ]]; then
+        native_run "$commands"
+    else
+        docker_run "${DOCKER_IMAGE:?DOCKER_IMAGE not set}" "$commands" "$@"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # docker_login [registry]
