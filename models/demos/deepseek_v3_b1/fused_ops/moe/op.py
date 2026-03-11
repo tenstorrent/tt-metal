@@ -3837,25 +3837,6 @@ class MoeOp:
             ]
             routed_ctx.reduce_packet_cb_descriptor = reduce_cb_packet_desc
             reduce_offset += reduce_packet_size
-
-            # CB 45: reduce_packet_header_cb (96 bytes)
-            reduce_packet_header_size = 96
-            reduce_cb_header_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                routed_ctx.reduce_packet_header_cb,
-                out_buf,
-                address_offset=reduce_offset,
-                total_size=reduce_packet_header_size,
-            )
-            reduce_cb_header_desc.core_ranges = reduce_all_cores_set
-            reduce_cb_header_desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=routed_ctx.reduce_packet_header_cb,
-                    data_format=ttnn.bfloat16,
-                    page_size=reduce_packet_header_size,
-                )
-            ]
-            routed_ctx.reduce_packet_header_cb_descriptor = reduce_cb_header_desc
-
             # reduce received CB: single 3-page CB backed by intermediate tensor
             reduce_payload = routed_ctx.reduce_params["payload_size_bytes"]
             routed_ctx.reduce_received_cb_descriptors = []
@@ -4385,6 +4366,7 @@ class MoeOp:
         reconfig_moe_cbs=False,
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        cb_id_context=None,
         worker_core_grid=None,
         is_torus=False,
         downstream_socket=None,
@@ -4464,7 +4446,6 @@ class MoeOp:
             cb_id_context=cb_id_context,
             residual_mcast_dst_cb=routed_ctx.residual_mcast_dst_cb,
         )
-
         if sdpa_kv_cache_buffer is not None and sdpa_out_interm_buffer is not None:
             sdpa_kv_cache_buffer_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)[0]
             sdpa_out_interm_buffer_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)[0]
@@ -4524,7 +4505,6 @@ class MoeOp:
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
         )
-
         # Shared descriptors (populated by _build_descriptors)
         self.cb_descriptors = []
         self.unified_core_descs = []
@@ -4795,6 +4775,7 @@ class MoeOp:
         is_torus=False,
         # Downstream socket for reduce aggregator to send reduced output
         downstream_socket=None,
+        cb_id_context=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4869,30 +4850,27 @@ class MoeOp:
             worker_core_grid=worker_core_grid,
             is_torus=is_torus,
             downstream_socket=downstream_socket,
+            cb_id_context=cb_id_context,
         )
 
         # ==================================================================
         # Build descriptors
         # ==================================================================
         moe._build_descriptors()
-
         # ==================================================================
         # Create per-device programs (mesh loop)
         # ==================================================================
         ctx = moe.ctx
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-
         persistent_next_iter_sem_addr = (
             int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
             if persistent_next_iter_semaphore is not None
             else 0
         )
-
         for row in range(ctx.mesh_rows):
             for col in range(ctx.mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 chip_id = row * ctx.mesh_cols + col
-
                 moe._setup_per_device_args(
                     chip_id,
                     num_iterations,
@@ -4903,7 +4881,6 @@ class MoeOp:
                     row,
                     col,
                 )
-
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",
                     core_ranges=ctx.full_device_grid,
@@ -4926,11 +4903,9 @@ class MoeOp:
                     noc_mode=moe.noc_mode,
                 )
                 kernel_result = unified_kernel.get_kernel_descriptors()
-
                 kernels = kernel_result.kernels
                 cb_descs = moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs
                 sem_descs = moe.device_sem_descs
-
                 program = ttnn.ProgramDescriptor(
                     kernels=kernels,
                     cbs=cb_descs,
@@ -4939,7 +4914,6 @@ class MoeOp:
 
                 moe._setup_fabric_connections(coord, row, col, reduce_root_coord, kernel_result, program)
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
         # Execute
         print("Running MoeOp")
         ttnn.generic_op(moe.io_tensors, mesh_program_descriptor)
