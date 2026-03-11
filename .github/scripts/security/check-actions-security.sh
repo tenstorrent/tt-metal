@@ -21,7 +21,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=31
+MAX_CHECK_NUM=36
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -81,6 +81,11 @@ Checks:
  29  Artifact path expressions (MEDIUM)
  30  URL construction in HTTP clients (MEDIUM)
  31  Container volume mount expressions (MEDIUM)
+ 32  Expression interpolation in GITHUB_ENV/PATH/OUTPUT writes (HIGH)
+ 33  Missing explicit permissions key (LOW)
+ 34  Concurrency group with attacker-controlled data (MEDIUM)
+ 35  issue_comment trigger without authorization gate (MEDIUM)
+ 36  working-directory with attacker-controlled expressions (MEDIUM)
 EOF
     exit 0
 }
@@ -228,7 +233,7 @@ has_untrusted_trigger() {
 
 AWK_RUN_BLOCK_DETECT='
     BEGIN { in_run_block = 0; run_indent = 0 }
-    /^[[:space:]]*run:[[:space:]]*\|/ {
+    /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*\|/ {
         match($0, /^[[:space:]]*/); run_indent = RLENGTH; in_run_block = 1; next
     }
     in_run_block {
@@ -271,7 +276,7 @@ check_1() {
     if grep -qE "$dangerous_patterns" "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print; next }
             in_run_block && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -527,11 +532,11 @@ EOF
 
 check_9() {
     local file="$1"
-    if grep -qE '\$\{\{.*\.(head|base)\.ref' "$file" 2>/dev/null; then
+    if grep -qE '\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)' "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /\$\{\{.*\.(head|base)\.ref/ { print; next }
-            in_run_block && /\$\{\{.*\.(head|base)\.ref/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)/ { print; next }
+            in_run_block && /\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
             log_issue "MEDIUM" "$file" "Contains head.ref/base.ref interpolation directly in run: block - use env var instead"
@@ -590,7 +595,7 @@ check_11() {
     if grep -qE '\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)' "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print; next }
             in_run_block && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -678,7 +683,7 @@ check_14() {
     if grep -qE 'toJSON\(' "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /toJSON\(/ { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /toJSON\(/ { print; next }
             in_run_block && /toJSON\(/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -751,7 +756,7 @@ check_16() {
     if grep -qE "$additional_event_fields" "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk -v pattern="$additional_event_fields" "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && $0 ~ pattern { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && $0 ~ pattern { print; next }
             in_run_block && $0 ~ pattern { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -835,7 +840,7 @@ check_18() {
     if grep -qE '\$\{\{.*secrets\.' "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /\$\{\{.*secrets\./ { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*secrets\./ { print; next }
             in_run_block && /\$\{\{.*secrets\./ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -868,7 +873,7 @@ check_19() {
     if grep -qE '\$\{\{.*matrix\.' "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /\$\{\{.*matrix\./ { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*matrix\./ { print; next }
             in_run_block && /\$\{\{.*matrix\./ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -901,7 +906,7 @@ check_20() {
     if grep -qE '\$\{\{.*(github\.repository[^_]|github\.event_name)' "$file" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
-            /^[[:space:]]*run:/ && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print; next }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print; next }
             in_run_block && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -1405,6 +1410,209 @@ check_31() {
 
     if [[ -n "$risky_volume" ]]; then
         log_issue "MEDIUM" "$file" "Container volume mount contains expression interpolation - can lead to container escape or unauthorized host filesystem access"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 32: Expression interpolation written to GITHUB_ENV/PATH/OUTPUT
+# =============================================================================
+check_32_description="expression interpolation in GITHUB_ENV/PATH/OUTPUT writes"
+check_32_severity="HIGH"
+
+example_check_32() {
+    cat <<'EOF'
+# BEFORE (unsafe - expression injected into env file enables LD_PRELOAD/BASH_ENV injection):
+  run: echo "BRANCH=${{ github.head_ref }}" >> "$GITHUB_ENV"
+# AFTER (safe - pass via env var, then write shell variable):
+  env:
+    BRANCH: ${{ github.head_ref }}
+  run: echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+EOF
+}
+
+check_32() {
+    local file="$1"
+    if ! grep -qE 'GITHUB_(ENV|PATH|OUTPUT)' "$file" 2>/dev/null; then
+        return 0
+    fi
+    if ! grep -qE '\$\{\{' "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    local unsafe_usage
+    unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print; next }
+        in_run_block && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print }
+    ' "$file" 2>/dev/null)
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Contains \${{ }} expression on line that writes to GITHUB_ENV/PATH/OUTPUT - enables environment variable injection (LD_PRELOAD, BASH_ENV)"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 33: Missing explicit permissions key (aggregate check)
+# =============================================================================
+check_33_description="missing explicit permissions key"
+check_33_severity="LOW"
+check_33_aggregate=true
+
+example_check_33() {
+    cat <<'EOF'
+# BEFORE (inherits default, potentially broad permissions):
+  on: push
+  jobs:
+    build: ...
+# AFTER (explicit least-privilege):
+  on: push
+  permissions:
+    contents: read
+  jobs:
+    build: ...
+EOF
+}
+
+check_33() {
+    local missing_count=0
+    for file in "$@"; do
+        # Only check workflow files (must have top-level 'on:' trigger), skip actions
+        if ! grep -qE '^on:|^"on":|^on$' "$file" 2>/dev/null; then
+            continue
+        fi
+        # Skip reusable workflow implementations (they inherit caller permissions)
+        if grep -qE '^\s*workflow_call:' "$file" 2>/dev/null; then
+            continue
+        fi
+        # Check for top-level permissions key
+        if ! grep -qE '^permissions:' "$file" 2>/dev/null; then
+            ((missing_count++)) || true
+        fi
+    done
+    if [[ "$missing_count" -gt 0 ]]; then
+        log_issue "LOW" "Multiple files" "Found $missing_count workflows without an explicit top-level 'permissions:' key - add permissions with least-privilege scopes"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 34: Concurrency group with attacker-controlled data
+# =============================================================================
+check_34_description="concurrency group with attacker-controlled data"
+check_34_severity="MEDIUM"
+
+example_check_34() {
+    cat <<'EOF'
+# BEFORE (risky - branch name controls cancellation group, enabling DoS):
+  concurrency:
+    group: deploy-${{ github.head_ref }}
+# AFTER (safe - use PR number or SHA):
+  concurrency:
+    group: deploy-${{ github.event.pull_request.number || github.sha }}
+EOF
+}
+
+check_34() {
+    local file="$1"
+    if ! grep -qE 'concurrency:' "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    local risky_concurrency
+    risky_concurrency=$(awk '
+        /^concurrency:/ || /^[[:space:]]+concurrency:/ { in_concurrency = 1 }
+        in_concurrency && /^[a-z]/ && !/^concurrency:/ { in_concurrency = 0 }
+        in_concurrency && /\$\{\{/ && /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch)|inputs\.)/ {
+            print
+        }
+        /^concurrency:[[:space:]]*[^{[:space:]]/ { next }
+        /^concurrency:.*\$\{\{/ && /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch)|inputs\.)/ {
+            print
+        }
+    ' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_concurrency" ]]; then
+        log_issue "MEDIUM" "$file" "Concurrency group contains attacker-controlled expression - can enable DoS by cancelling legitimate runs"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 35: issue_comment trigger without authorization gate
+# =============================================================================
+check_35_description="issue_comment trigger without authorization gate"
+check_35_severity="MEDIUM"
+
+example_check_35() {
+    cat <<'EOF'
+# BEFORE (any commenter triggers workflow):
+  on: issue_comment
+  jobs:
+    deploy:
+      runs-on: ubuntu-latest
+      steps: ...
+# AFTER (only repo members can trigger):
+  on: issue_comment
+  jobs:
+    deploy:
+      if: >-
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'OWNER'
+      runs-on: ubuntu-latest
+      steps: ...
+EOF
+}
+
+check_35() {
+    local file="$1"
+    if ! grep -qE 'issue_comment' "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Check for common authorization patterns
+    if grep -qE 'author_association' "$file" 2>/dev/null; then
+        return 0
+    fi
+    if grep -qE '/orgs/.*members|/teams/' "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    log_issue "MEDIUM" "$file" "issue_comment trigger has no author_association or org membership check - any commenter can trigger this workflow"
+    return 1
+}
+
+# =============================================================================
+# Check 36: working-directory with attacker-controlled expressions
+# =============================================================================
+check_36_description="working-directory with attacker-controlled expressions"
+check_36_severity="MEDIUM"
+
+example_check_36() {
+    cat <<'EOF'
+# BEFORE (risky - attacker can control working directory):
+  - run: make build
+    working-directory: ${{ inputs.build-dir }}
+# AFTER (safe - validate path before use):
+  env:
+    BUILD_DIR: ${{ inputs.build-dir }}
+  run: |
+    [[ "$BUILD_DIR" =~ ^[a-zA-Z0-9._/-]+$ ]] || exit 1
+    cd "$BUILD_DIR" && make build
+EOF
+}
+
+check_36() {
+    local file="$1"
+    local risky_workdir
+
+    risky_workdir=$(grep -nE 'working-directory:.*\$\{\{.*(inputs\.|github\.event\.|github\.head_ref|github\.base_ref)' "$file" 2>/dev/null || true)
+
+    if [[ -n "$risky_workdir" ]]; then
+        log_issue "MEDIUM" "$file" "working-directory contains attacker-controlled expression interpolation - can influence which directory code runs in"
         return 1
     fi
     return 0
