@@ -57,11 +57,6 @@ void kernel_main() {
     reconfig_data_format<false, true>(cb_in1, cb_in0);
     pack_reconfig_data_format<true>(cb_out);
 
-    // Init custom_mm
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = true;
-    custom_mm_block_init_short<false, split_acc, dense_packing>(cb_in0, cb_in1, cb_out, out_w);
-
     // Wait for inputs
     cb_wait_front(cb_in0, num_tiles_k);
     cb_wait_front(cb_in1, 1);
@@ -86,6 +81,8 @@ void kernel_main() {
     constexpr uint32_t total_tiles = num_tiles_k * out_w;
 
 #if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2
+    // Constexpr paths: use standard custom_mm init (no compressed MOP needed)
+    custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out, out_w);
     constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
     constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
     static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
@@ -97,6 +94,8 @@ void kernel_main() {
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #endif
 #elif COMPRESSED_MM_IMPL == 0
+    // Runtime path: use compressed MOP init (with bfp2 barriers)
+    compressed::custom_mm_compressed_block_init_short<true, true>(cb_in0, cb_in1, cb_out);
     // Runtime loop: read packed pairs from L1 tensor
     constexpr uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
     compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
@@ -112,7 +111,7 @@ void kernel_main() {
     }
     tile_regs_release();
 
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<true>();
 
     cb_push_back(cb_out, out_w);
     cb_pop_front(cb_in0, num_tiles_k);
