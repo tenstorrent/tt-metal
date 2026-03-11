@@ -330,17 +330,17 @@ class ModelOptimisations512x512:
         # region MATMUL CONFIGS
         self.matmul_versions = {
             "40_cores": {
-                "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=4,
+                "2D_FF2_SEQ_LEN_256": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 4),
+                    in0_block_w=10,
                     out_subblock_h=1,
-                    out_subblock_w=8,
-                    per_core_M=1,
-                    per_core_N=8,
+                    out_subblock_w=1,
+                    per_core_M=2,
+                    per_core_N=5,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=4,
                     out_subblock_h=1,
@@ -382,22 +382,22 @@ class ModelOptimisations512x512:
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=4,
-                    per_core_M=1,
-                    per_core_N=32,
+                    compute_with_storage_grid_size=(8, 4),
+                    in0_block_w=5,
+                    per_core_M=2,
+                    per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=8,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=4,
-                    per_core_M=1,
-                    per_core_N=32,
+                    compute_with_storage_grid_size=(8, 4),
+                    in0_block_w=5,
+                    per_core_M=2,
+                    per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=8,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
@@ -518,38 +518,38 @@ class ModelOptimisations512x512:
                 ),
                 "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=5,
+                    in0_block_w=12,
                     per_core_M=1,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=8,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=3,
+                    in0_block_w=6,
                     per_core_M=4,
                     per_core_N=4,
-                    out_subblock_h=2,
+                    out_subblock_h=1,
                     out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1280_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=4,
                     per_core_N=4,
-                    out_subblock_h=2,
+                    out_subblock_h=1,
                     out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=2,
+                    in0_block_w=3,
                     per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=1,
@@ -801,16 +801,16 @@ class ModelOptimisations512x512:
                 return self.matmul_configs["2D_TM_LINEAR_1280"]
 
         # # # ATTN OUT LINEAR # # #
-        if "attn1.to_out" in matmul_path or "attn2.to_out" in matmul_path or "attn2.to_q" in matmul_path:
-            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
-                return self.matmul_configs["2D_ATTN_OUT_LINEAR_640"]
-            else:
-                return self.matmul_configs["2D_ATTN_OUT_LINEAR_1280"]
         if "attn1.to_q" in matmul_path:
             if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
                 return self.matmul_configs["2D_ATTN_QKV_LINEAR_640"]
             else:
                 return self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"]
+        if "attn1.to_out" in matmul_path or "attn2.to_q" in matmul_path or "attn2.to_out" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_ATTN_OUT_LINEAR_640"]
+            else:
+                return self.matmul_configs["2D_ATTN_OUT_LINEAR_1280"]
         if (
             "attn1.to_k" in matmul_path
             or "attn1.to_v" in matmul_path
@@ -828,7 +828,7 @@ class ModelOptimisations512x512:
 
         # 4 occurrences
         if pattern_down_blocks_1_ff2.search(matmul_path):
-            return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
+            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
         pattern_down_blockcs_2_ff2 = re.compile(
             r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
@@ -836,14 +836,14 @@ class ModelOptimisations512x512:
 
         # 20 occurrences
         if pattern_down_blockcs_2_ff2.search(matmul_path):
-            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+            return self.matmul_configs["2D_FF2_SEQ_LEN_256"]
 
         # # # Mid block  # # #
         pattern_mid_block_ff2 = re.compile(r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.ff\.net\.2")
 
         # 10 occurrences
         if pattern_mid_block_ff2.search(matmul_path):
-            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+            return self.matmul_configs["2D_FF2_SEQ_LEN_256"]
 
         pattern_up_blocks_0_ff2 = re.compile(
             r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
@@ -851,13 +851,13 @@ class ModelOptimisations512x512:
 
         # 30 occurrences
         if pattern_up_blocks_0_ff2.search(matmul_path):
-            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+            return self.matmul_configs["2D_FF2_SEQ_LEN_256"]
 
         pattern_up_blocks_1_ff2 = re.compile(r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.ff\.net\.2")
 
         # 6 occurrences
         if pattern_up_blocks_1_ff2.search(matmul_path):
-            return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
+            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
         pattern_resnet_linear = re.compile(
             r"(down_blocks\.[012]\.resnets\.[01]\.linear|up_blocks\.[012]\.resnets\.[012]\.linear|mid_block\.resnets\.[01]\.linear)"
@@ -878,10 +878,7 @@ class ModelOptimisations512x512:
             if not "to_out" in module_path:
                 return ttnn.L1_MEMORY_CONFIG
             else:
-                if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
-                    return ttnn.L1_MEMORY_CONFIG
-                else:
-                    return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+                return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
         if "ff.net" in module_path:
             return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
         if "attentions" in module_path and "proj_in" in module_path:
