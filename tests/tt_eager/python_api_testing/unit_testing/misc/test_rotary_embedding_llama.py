@@ -707,8 +707,9 @@ def run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
         num_positions = batch
         position_ids = torch.arange(batch)
         # This code path emulates decode done as prefill instead by interchanging `seq_len=1` and `batch`
+        # as prefill expects the order [batch, nheads, seq_len, head_dim] but deepseek decode
+        # (to be emulated with prefill) is (to be) done with shape [seq_len (=1), nheads (=1), batch, head_dim]
         x_torch = (torch.rand(1, num_heads, batch, head_dim) * 2) - 1
-        cos_torch, sin_torch = compute_gather_cos_sin(dhead=head_dim, end=max_seq_len * 2, position_ids=position_ids)
     else:
         # Prefill: input (batch, num_heads, seq_len, head_dim), compare vs PyTorch (covers COS_SIN_SHARDED_RELOAD)
         num_positions = seq_len
