@@ -182,28 +182,16 @@ private:
     void init_context_descriptor(int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
     void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);
 
-    bool initialized_ = false;
-    bool force_reinit_ = false;
-
-    uint8_t num_hw_cqs_ = 0;
-    BankMapping l1_bank_remap_;
-    DispatchCoreConfig dispatch_core_config_;
+    // 8-byte fields: size_t scalars, raw pointer
     size_t worker_l1_size_ = 0;
     size_t worker_l1_unreserved_start_ = 0;
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
-    // Mutex to protect control_plane_ for thread-safe access
-    std::mutex control_plane_mutex_;
-
-    // Mutex to protect timeout detection for thread-safe access
-    std::mutex dispatch_timeout_detection_mutex_;
-    bool dispatch_timeout_detection_processed_ = false;
-
     // The MetalEnv is owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor.
     tt::tt_metal::MetalEnv* env_;
-    bool env_owned_ = false;
 
+    // 8-byte fields: unique_ptr members
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
@@ -213,38 +201,58 @@ private:
     std::unique_ptr<DataCollector> data_collector_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
+    std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
+    std::unique_ptr<distributed::SystemMesh> system_mesh_;
+
+    // 16-byte fields: shared_ptr members
     // The context descriptor used for runtime components.
     std::shared_ptr<ContextDescriptor> context_descriptor_;
     // The context descriptor used for risc firmware only. L1/trace size/fabric settings were not known
     // at the time of creating this descriptor.
     std::shared_ptr<ContextDescriptor> risc_fw_context_descriptor_;
-    std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
-    std::unordered_set<InitializerKey> risc_fw_init_done_;
-
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-    std::unique_ptr<distributed::SystemMesh> system_mesh_;
-    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
 
-    // We are using a thread_local to allow each thread to have its own command queue id stack.
-    // This not only allows consumers to set active command queue for a thread
-    // but to also easily push/pop ids to temporarily change the current cq id.
-    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
+    // Larger composite types: BankMapping, mutexes, containers
+    BankMapping l1_bank_remap_;
 
+    // Mutex to protect control_plane_ for thread-safe access
+    std::mutex control_plane_mutex_;
+
+    // Mutex to protect timeout detection for thread-safe access
+    std::mutex dispatch_timeout_detection_mutex_;
+
+    std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
+    std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    std::unordered_set<InitializerKey> risc_fw_init_done_;
+    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
+
+    // 4-byte enum fields
+    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being
     // reported. When set to false, the control plane is free to instantiate fewer routing planes
     // according to which links are available.
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-    uint8_t num_fabric_active_routing_planes_ = 0;
-    std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
-    std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
+    DispatchCoreConfig dispatch_core_config_;
+
+    // 1-byte fields: bool and uint8_t members
+    bool initialized_ = false;
+    bool force_reinit_ = false;
+    uint8_t num_hw_cqs_ = 0;
+    bool dispatch_timeout_detection_processed_ = false;
+    bool env_owned_ = false;
+    uint8_t num_fabric_active_routing_planes_ = 0;
+
+    // We are using a thread_local to allow each thread to have its own command queue id stack.
+    // This not only allows consumers to set active command queue for a thread
+    // but to also easily push/pop ids to temporarily change the current cq id.
+    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 };
 
 }  // namespace tt::tt_metal
