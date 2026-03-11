@@ -91,8 +91,6 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::UINT16,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
 
-    TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
-
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
         // but 2D padded shape

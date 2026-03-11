@@ -55,30 +55,61 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& n
 }
 
 template <typename NodeId>
-void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) const {
-    std::stringstream ss;
-    ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
-    ss << "Total nodes: " << nodes_cache_.size() << std::endl;
-
+void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, bool quiet_mode) const {
+    // Build degree histogram (counting unique neighbors only)
+    std::map<size_t, size_t> degree_hist;
     for (const auto& node : nodes_cache_) {
         const auto& neighbors = get_neighbors(node);
-        ss << fmt::format("  Node {} (degree {}): ", node, neighbors.size());
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        size_t degree = unique_neighbors.size();
+        degree_hist[degree]++;
+    }
+
+    std::string degree_hist_str = "{";
+    bool first = true;
+    for (const auto& [degree, count] : degree_hist) {
+        if (!first) {
+            degree_hist_str += ", ";
+        }
+        first = false;
+        degree_hist_str += std::to_string(degree) + ":" + std::to_string(count);
+    }
+    degree_hist_str += "}";
+
+    // Always print histogram and summary in log_info
+    std::stringstream summary_ss;
+    summary_ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
+    summary_ss << "Total nodes: " << nodes_cache_.size() << std::endl;
+    summary_ss << "Degree histogram: " << degree_hist_str << std::endl;
+    log_info(tt::LogFabric, "{}", summary_ss.str());
+
+    // Print node details based on mode
+    std::stringstream nodes_ss;
+    for (const auto& node : nodes_cache_) {
+        const auto& neighbors = get_neighbors(node);
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        nodes_ss << fmt::format("  Node {} (degree {}): ", node, unique_neighbors.size());
         if (neighbors.empty()) {
-            ss << "no neighbors";
+            nodes_ss << "no neighbors";
         } else {
             bool first = true;
             for (const auto& neighbor : neighbors) {
                 if (!first) {
-                    ss << ", ";
+                    nodes_ss << ", ";
                 }
                 first = false;
-                ss << fmt::format("{}", neighbor);
+                nodes_ss << fmt::format("{}", neighbor);
             }
         }
-        ss << std::endl;
+        nodes_ss << std::endl;
     }
-    ss << "========================================" << std::endl;
-    log_info(tt::LogFabric, "{}", ss.str());
+    nodes_ss << "========================================" << std::endl;
+
+    if (quiet_mode) {
+        log_debug(tt::LogFabric, "{}", nodes_ss.str());
+    } else {
+        log_info(tt::LogFabric, "{}", nodes_ss.str());
+    }
 }
 
 // MappingConstraints trait constraint template method implementations

@@ -1057,10 +1057,12 @@ FORCE_INLINE void noc_async_read_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1112,7 +1114,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(
-        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false, noc);
+        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.get_aligned_page_size(), -1, false, noc);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1230,10 +1232,12 @@ FORCE_INLINE void noc_async_write_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1354,12 +1358,12 @@ FORCE_INLINE void noc_async_write_tile(
         id,
         addrgen,
         0 /* offset */,
-        addrgen.page_size,
+        addrgen.get_aligned_page_size(),
         NOC_UNICAST_WRITE_VC,
         false,
         noc);
     noc_async_write_page<TensorAccessor<DSpec>, false>(
-        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+        id, addrgen, src_local_l1_addr, addrgen.get_aligned_page_size(), 0 /* offset */, noc);
 }
 
 // clang-format off
@@ -1425,12 +1429,12 @@ FORCE_INLINE void noc_async_read_shard(
         NocEventType::READ,
         dst_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
+        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
@@ -1459,12 +1463,12 @@ FORCE_INLINE void noc_async_write_shard(
         NocEventType::WRITE_,
         src_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
+        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off

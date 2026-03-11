@@ -1,6 +1,7 @@
 add_subdirectory(watcher_dump)
 add_subdirectory(lightmetal_runner)
 add_subdirectory(mem_bench)
+add_subdirectory(precompile_fw)
 
 include(sources.cmake)
 
