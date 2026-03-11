@@ -1,0 +1,33 @@
+# Quasar emulator regression tests
+#
+# Structure:
+#   <group>:            Binary name under build/test/tt_metal/
+#     - filter: <glob>  GTest filter pattern
+#       config: <NxM>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3.
+#       env:            (optional) Extra environment variables as key: value pairs
+#
+# Example test entry
+#
+# unit_tests_legacy:
+#   - filter: "*SingleDmL1Write*"
+#     config: 1x3
+#     env:
+#       TT_METAL_SOMETHING: 1
+
+unit_tests_legacy:
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+
+  - filter: "*DmLoopback*"
+    config: 1x3
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 1x3
+
+  - filter: "*Bmm"
+    config: 1x3
+    env:
+      TT_METAL_LOGGER_LEVEL: warning
+
+  - filter: "*Datacopy"
+    config: 1x3
