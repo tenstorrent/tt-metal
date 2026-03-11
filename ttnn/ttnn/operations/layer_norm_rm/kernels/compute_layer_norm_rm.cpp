@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Stage 4: 2-pass: pass1=tilize+reduce_mean, pass2=tilize+sub_mean+square+reduce_var+add_eps+rsqrt
+// Stage 5: 3-pass full layer norm
+//   Pass1: tilize + reduce_mean
+//   Pass2: tilize + sub_mean + square + reduce_var + add_eps + rsqrt
+//   Pass3: tilize + sub_mean + mul_rsqrt [+ gamma] [+ beta] + untilize
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -16,10 +19,13 @@ constexpr uint32_t cb_input_rm = 0;       // c_0: RM sticks from reader
 constexpr uint32_t cb_tilized = 1;        // c_1: Tilized tiles
 constexpr uint32_t cb_reduce_scaler = 2;  // c_2: Reduce scaler (1/W)
 constexpr uint32_t cb_eps_scalar = 3;     // c_3: Epsilon tile
+constexpr uint32_t cb_gamma = 4;          // c_4: Gamma tiles (Wt)
+constexpr uint32_t cb_beta = 5;           // c_5: Beta tiles (Wt)
 constexpr uint32_t cb_mean = 24;          // c_24: Row-reduced mean (1 tile)
 constexpr uint32_t cb_centered = 25;      // c_25: Centered tiles (x - mean)
 constexpr uint32_t cb_var = 26;           // c_26: Row-reduced variance (1 tile)
 constexpr uint32_t cb_rsqrt_var = 27;     // c_27: rsqrt(var+eps) (1 tile)
+constexpr uint32_t cb_normalized = 28;    // c_28: Normalized tiles
 constexpr uint32_t cb_output_tiles = 16;  // c_16: Pre-untilize output tiles
 constexpr uint32_t cb_output_rm = 17;     // c_17: Untilized RM output
 
@@ -50,7 +56,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
 
         // Phase 2: Reduce mean - SUM along row with 1/W scaler
-        // c_1 consumed per-tile, c_24 gets 1 tile (col vector, persists for pass 2)
+        // c_24 persists for pass2 and pass3
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile>(
                 cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
@@ -65,28 +71,24 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
 
         // Phase 4: sub(x, mean) with COL broadcast -> c_25 (centered)
-        // A=c_1 (tilized, consumed per-tile), B=c_24 (mean, NoWaitNoPop - persists)
+        // c_24 persists (NoWaitNoPop) -- needed again in pass3
         compute_kernel_lib::sub<
             compute_kernel_lib::BroadcastDim::COL,
             compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
             cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
-        // Pop mean after use (no longer needed for this tile-row)
-        cb_pop_front(cb_mean, 1);
-
-        // Phase 5: Square centered -> c_1 (reuse, c_1 is free after phase 4)
+        // Phase 5: Square centered -> c_1 (reuse freed c_1)
         compute_kernel_lib::square<compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
             cb_centered, cb_tilized, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
         // Phase 6: Reduce variance - SUM along row with 1/W scaler
-        // c_1 consumed per-tile, c_26 gets 1 tile (variance col vector)
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile>(
                 cb_tilized, cb_reduce_scaler, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         // Phase 7: add(var, eps) with SCALAR broadcast + rsqrt post-op -> c_27
-        // A=c_26 (variance, consumed), B=c_3 (epsilon, WaitUpfrontNoPop - persists across blocks)
+        // c_27 persists for pass3
         compute_kernel_lib::add<
             compute_kernel_lib::BroadcastDim::SCALAR,
             compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
@@ -100,13 +102,103 @@ void kernel_main() {
                 rsqrt_tile(dst_idx);
             });
 
-        // Untilize rsqrt_var (1 tile) -> c_17 for output
-        // For this stage, output is the rsqrt(var+eps) column vector
-        compute_kernel_lib::untilize<
-            1,
-            cb_rsqrt_var,
-            cb_output_rm,
-            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);
+        // ==================== PASS 3: Normalize ====================
+
+        // Phase 8: Tilize (re-read from reader's third pass)
+        compute_kernel_lib::tilize<
+            cb_input_rm,
+            cb_tilized,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
+
+        // Phase 9: sub(x, mean) with COL broadcast -> c_25
+        // c_24 still persists from pass1 (NoWaitNoPop)
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // Pop mean after last use
+        cb_pop_front(cb_mean, 1);
+
+        // Phase 10: mul(centered, rsqrt_var) with COL broadcast
+        // When no gamma and no beta: output directly to c_16
+        // When gamma or beta present: output to c_28
+        if constexpr (!has_gamma && !has_beta) {
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::COL,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_centered, cb_rsqrt_var, cb_output_tiles, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+        } else {
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::COL,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_centered, cb_rsqrt_var, cb_normalized, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+        }
+
+        // Pop rsqrt_var after last use
+        cb_pop_front(cb_rsqrt_var, 1);
+
+        // Phase 11 (conditional): Apply gamma
+        if constexpr (has_gamma && !has_beta) {
+            // Gamma only: c_28 * c_4 -> c_16
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_normalized, cb_gamma, cb_output_tiles, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+        } else if constexpr (has_gamma && has_beta) {
+            // Gamma + beta: c_28 * c_4 -> c_16
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_normalized, cb_gamma, cb_output_tiles, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+        }
+
+        // Phase 12 (conditional): Apply beta
+        if constexpr (has_beta && has_gamma) {
+            // c_16 + c_5 -> c_28, then need to move to c_16 for untilize
+            // Actually: add c_16 + c_5 -> c_28
+            compute_kernel_lib::add<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_output_tiles, cb_beta, cb_normalized, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+            // Untilize from c_28 instead of c_16
+            compute_kernel_lib::untilize<
+                Wt,
+                cb_normalized,
+                cb_output_rm,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);
+        } else if constexpr (has_beta && !has_gamma) {
+            // Beta only, no gamma: normalized is in c_28
+            // c_28 + c_5 -> c_16
+            compute_kernel_lib::add<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_normalized, cb_beta, cb_output_tiles, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+            // Phase 13: Untilize c_16 -> c_17
+            compute_kernel_lib::untilize<
+                Wt,
+                cb_output_tiles,
+                cb_output_rm,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);
+        } else {
+            // No beta: untilize from c_16
+            // Phase 13: Untilize c_16 -> c_17
+            compute_kernel_lib::untilize<
+                Wt,
+                cb_output_tiles,
+                cb_output_rm,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);
+        }
     }
 }
