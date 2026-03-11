@@ -68,16 +68,12 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
-      # - name: Run triage tests
-      #   timeout-minutes: ${{ inputs.timeout }}
-      #   run: |
-      #       mkdir -p generated/test_reports
-      #       uv pip install -r tools/triage/requirements.txt
-      #       TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v ./tools/tests/triage/ --ignore=./tools/tests/triage/test_hang_report.py
-      - name: Run hang report generation test
-        timeout-minutes: 5
+      - name: Run triage tests
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
-            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v ./tools/tests/triage/test_hang_report.py --timeout 120
+            mkdir -p generated/test_reports
+            uv pip install -r tools/triage/requirements.txt
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v ./tools/tests/triage/
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
