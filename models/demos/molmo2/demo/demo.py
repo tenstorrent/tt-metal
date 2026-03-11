@@ -456,7 +456,7 @@ class Molmo2Generator:
         self.mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.is_mesh_device else None
 
     def init_kv_cache(self):
-        """Initialize KV cache for generation."""
+        """Initialize KV cache, position tensors, and RoPE index tensors."""
         from models.demos.molmo2.tt.text_model import init_decode_position, init_kv_cache
 
         if self.kv_caches is None:
@@ -467,17 +467,17 @@ class Molmo2Generator:
                 num_kv_heads=8,
                 max_seq_len=self.max_seq_len,
                 head_dim=128,
-                dtype=ttnn.bfloat16,  # Use bfloat16 to match RoPE output dtype
+                dtype=ttnn.bfloat16,
             )
             self.current_pos = init_decode_position(
                 mesh_device=self.mesh_device,
                 batch_size=self.batch_size,
                 initial_pos=0,
             )
+            self.rot_mat_idxs = self.model.text_model.rotary_setup.allocate_decode_rot_idxs(initial_pos=0)
 
     def reset_kv_cache(self, start_pos: int = 0):
-        """Reset KV cache position for new generation."""
-        # Reset host-side position tracker
+        """Reset KV cache position and RoPE indices for new generation."""
         self.decode_position = start_pos
 
         if self.current_pos is not None:
@@ -490,6 +490,21 @@ class Molmo2Generator:
             )
             ttnn.copy(pos_ttnn, self.current_pos)
             ttnn.deallocate(pos_ttnn)
+
+        if self.rot_mat_idxs is not None:
+            batch = self.batch_size
+            pad_size = ((batch + 31) // 32) * 32 - batch
+            rot_idxs_tensor = torch.full((1, batch + pad_size), start_pos, dtype=torch.int32)
+            rot_idxs_ttnn = ttnn.from_torch(
+                rot_idxs_tensor,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_mapper,
+            )
+            ttnn.copy(rot_idxs_ttnn, self.rot_mat_idxs)
+            ttnn.deallocate(rot_idxs_ttnn)
 
     def _prepare_text_inputs(
         self,
@@ -1326,7 +1341,6 @@ class Molmo2Generator:
 
     def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
         """Allocate tensors needed for traced decode."""
-        # Allocate hidden states tensor [1, 1, 1, hidden_dim]
         trace_hidden_states = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, 1, hidden_dim]),
             ttnn.bfloat16,
@@ -1335,29 +1349,22 @@ class Molmo2Generator:
             ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Allocate position index tensor for traced embedding lookup
-        # Allocate position index tensor for embedding lookup
-        # This will be updated before each trace execution
-        trace_rot_idxs = self.model.text_model.rotary_setup.allocate_decode_rot_idxs(initial_pos=0)
-
         return {
             "hidden_states": trace_hidden_states,
-            "rot_idxs": trace_rot_idxs,
         }
 
     def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
         """Capture trace for decode phase (single token generation).
 
-        The embedding lookup for rot_mats is included in the trace so that
-        on execution, we only need to update the rot_idxs tensor.
+        The RoPE embedding lookup reads from self.rot_mat_idxs (managed via
+        ttnn.plus_one outside the trace). KV cache position reads from
+        self.current_pos (also managed via ttnn.plus_one outside the trace).
         """
         logger.info("Capturing decode trace...")
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        # Embedding lookup for rot_mats - this is part of the traced operations
-        # On trace execution, updating rot_idxs will cause this to produce new rot_mats
-        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(trace_tensors["rot_idxs"])
+        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
 
         logits_trace = self.model.text_model.forward_decode(
             hidden_states=trace_tensors["hidden_states"],
@@ -1377,47 +1384,15 @@ class Molmo2Generator:
         trace_tensors: dict,
         trace_output: ttnn.Tensor,
         hidden_states: ttnn.Tensor,
-        position: int,
     ) -> ttnn.Tensor:
         """Execute captured decode trace with new inputs.
 
-        Uses host tensors and copy_host_to_device_tensor to avoid allocations
-        which would be unsafe with an active trace.
-
-        The embedding lookup for rot_mats is part of the trace, so we only
-        need to update the rot_idxs tensor here.
+        Position tensors (current_pos, rot_mat_idxs) are kept on device and
+        incremented via ttnn.plus_one in run_decode_step after trace execution.
+        The trace reads their current values for RoPE and KV cache updates.
         """
-        # Copy new hidden states to trace input
         ttnn.copy(hidden_states, trace_tensors["hidden_states"])
-
-        # Update current_pos tensor using HOST tensor pattern (no device allocation)
-        # Create host tensor with device=None
-        new_pos_host = ttnn.from_torch(
-            torch.tensor([position], dtype=torch.int32),
-            dtype=ttnn.int32,
-            device=None,  # HOST tensor - no device allocation
-            mesh_mapper=self.mesh_mapper,
-        )
-        # Copy from host to pre-allocated device tensor
-        ttnn.copy_host_to_device_tensor(new_pos_host, self.current_pos)
-
-        # Update rot_idxs tensor (position index for embedding lookup in the trace)
-        # The embedding lookup is part of the traced operations, so updating
-        # rot_idxs will cause the trace to produce correct rot_mats
-        batch = self.batch_size
-        pad_size = ((batch + 31) // 32) * 32 - batch
-        position_idxs = torch.full((1, batch + pad_size), position, dtype=torch.int32)
-        rot_idxs_host = ttnn.from_torch(
-            position_idxs,
-            dtype=ttnn.uint32,
-            device=None,  # HOST tensor - no device allocation
-            mesh_mapper=self.mesh_mapper,
-        )
-        ttnn.copy_host_to_device_tensor(rot_idxs_host, trace_tensors["rot_idxs"])
-
-        # Execute trace - rot_mats embedding lookup happens inside the trace
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
-
         return trace_output
 
     def warmup_prefill(
@@ -1467,23 +1442,9 @@ class Molmo2Generator:
         start = time.perf_counter()
 
         if use_trace:
-            # Copy hidden states to trace tensor
             ttnn.copy(hidden_states, trace_tensors["hidden_states"])
 
-            # Update rot_idxs for current position (matches trace capture pattern)
-            batch = self.batch_size
-            pad_size = ((batch + 31) // 32) * 32 - batch
-            position_idxs = torch.full((1, batch + pad_size), self.decode_position, dtype=torch.int32)
-            rot_idxs_host = ttnn.from_torch(
-                position_idxs,
-                dtype=ttnn.uint32,
-                device=None,  # HOST tensor
-                mesh_mapper=self.mesh_mapper,
-            )
-            ttnn.copy_host_to_device_tensor(rot_idxs_host, trace_tensors["rot_idxs"])
-
-            # Run forward to compile with embedding lookup (same as trace capture)
-            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(trace_tensors["rot_idxs"])
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
             logits = self.model.text_model.forward_decode(
                 hidden_states=trace_tensors["hidden_states"],
                 kv_caches=self.kv_caches,
@@ -1495,6 +1456,7 @@ class Molmo2Generator:
                 hidden_states=hidden_states,
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
+                rot_mat_idxs=self.rot_mat_idxs,
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -1678,92 +1640,86 @@ class Molmo2Generator:
 
     def run_decode_step(
         self,
-        token_id: int,
+        token_id_ttnn: ttnn.Tensor,
         use_trace: bool = False,
         is_first: bool = False,
     ) -> Tuple[ttnn.Tensor, float]:
         """
-        Run single decode step.
+        Run single decode step with CPU-free forward pass.
+
+        After input prep, the entire forward pass (embed -> transformer -> logits ->
+        argmax -> position increment) runs on device with no CPU roundtrips.
 
         Args:
-            token_id: Token ID to decode
+            token_id_ttnn: Token ID on device [1, 1] uint32
             use_trace: Whether to use tracing
             is_first: Whether this is the first decode step (for warm-up)
 
         Returns:
-            Tuple of (logits, decode_time_ms)
+            Tuple of (tt_next_token on device [1, 1] uint32, decode_time_ms)
         """
-        # Get current position
-        current_pos_value = self.decode_position
-
-        # Create token tensor and get embeddings
-        token_tensor = torch.tensor([[token_id]], dtype=torch.long)
-        input_ids_ttnn = ttnn.from_torch(
-            token_tensor,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
-        hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
+        hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
 
         if use_trace:
             if self.decode_trace_id is None:
-                # Allocate trace tensors
                 logger.info("Allocating decode trace tensors...")
                 self.decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim=4096)
-
-                # Warm-up (compile)
                 compile_time = self.warmup_decode(hidden_states, self.decode_trace_tensors, use_trace=True)
-
-                # Capture trace
                 trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors)
                 self.decode_trace_id = trace_id
                 self.decode_trace_output = trace_output
 
-            # Execute trace (actual decode)
             start_time = time.perf_counter()
             logits = self._execute_decode_trace(
                 self.decode_trace_id,
                 self.decode_trace_tensors,
                 self.decode_trace_output,
                 hidden_states,
-                current_pos_value,
             )
             ttnn.synchronize_device(self.mesh_device)
             decode_time = (time.perf_counter() - start_time) * 1000
         else:
             if is_first:
-                # Warm-up (compile)
                 compile_time = self.warmup_decode(hidden_states, None, use_trace=False)
 
-            # Actual decode
             start_time = time.perf_counter()
             logits = self.model.text_model.forward_decode(
                 hidden_states=hidden_states,
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
+                rot_mat_idxs=self.rot_mat_idxs,
             )
             ttnn.synchronize_device(self.mesh_device)
             decode_time = (time.perf_counter() - start_time) * 1000
 
         ttnn.deallocate(hidden_states)
 
-        # Increment position
+        # On-device argmax (no CPU logits transfer)
+        tt_next_token = self._argmax_on_device(logits)
+
+        # On-device position increment (no CPU tensor creation)
+        ttnn.plus_one(self.current_pos)
+        ttnn.plus_one(self.rot_mat_idxs)
         self.decode_position += 1
 
-        # Update device position tensor
-        new_pos_ttnn = ttnn.from_torch(
-            torch.tensor([self.decode_position], dtype=torch.int32),
-            dtype=ttnn.int32,
-            device=self.mesh_device,
-            mesh_mapper=self.mesh_mapper,
-        )
-        ttnn.copy(new_pos_ttnn, self.current_pos)
-        ttnn.deallocate(new_pos_ttnn)
+        return tt_next_token, decode_time
 
-        return logits, decode_time
+    def _argmax_on_device(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Run argmax on device and return token as [1, 1] uint32 tensor.
+
+        Note: ttnn.argmax requires TILE_LAYOUT input -- do NOT untilize first.
+        """
+        tt_token = ttnn.argmax(logits, dim=-1, keepdim=False)
+        tt_token = ttnn.reshape(tt_token, [1, 1])
+        if tt_token.dtype != ttnn.uint32:
+            tt_token = ttnn.typecast(tt_token, dtype=ttnn.uint32)
+        return tt_token
+
+    def _read_token_from_device(self, tt_token: ttnn.Tensor) -> int:
+        """Read a single token value from device (tiny transfer for EOS check)."""
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        return ttnn.to_torch(tt_token, mesh_composer=mesh_composer)[0].item()
 
     def run_inference(
         self,
@@ -1817,7 +1773,7 @@ class Molmo2Generator:
             use_unified_trace=use_unified_trace,
         )
 
-        # Get first prediction from prefill
+        # Get first prediction from prefill (one-time CPU argmax is acceptable)
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
         if logits_torch.dim() == 2:
@@ -1828,31 +1784,34 @@ class Molmo2Generator:
         next_token = torch.argmax(next_token_logits).item()
         generated_tokens = [next_token]
 
-        # Autoregressive generation
+        # Put first token on device for CPU-free decode loop
+        tt_next_token = ttnn.from_torch(
+            torch.tensor([[next_token]], dtype=torch.long),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        # Autoregressive generation -- forward pass is fully on device
         decode_times = []
         eos_token_id = self.tokenizer.eos_token_id
 
         for i in range(max_new_tokens - 1):
-            # Check for EOS
             if next_token == eos_token_id:
                 break
 
-            # Run decode step (use_decode_trace is separate from prefill tracing)
-            logits, decode_time = self.run_decode_step(
-                next_token,
+            # CPU-free decode: embed -> forward -> argmax -> plus_one all on device
+            tt_next_token, decode_time = self.run_decode_step(
+                tt_next_token,
                 use_trace=use_decode_trace,
                 is_first=(i == 0),
             )
             decode_times.append(decode_time)
 
-            # Get next token
-            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
-            if logits_torch.dim() >= 2:
-                next_token_logits = logits_torch[-1, :]
-            else:
-                next_token_logits = logits_torch
-
-            next_token = torch.argmax(next_token_logits).item()
+            # Read back single token int for EOS check and logging
+            next_token = self._read_token_from_device(tt_next_token)
             generated_tokens.append(next_token)
 
             # Log progress
