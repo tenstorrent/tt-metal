@@ -411,11 +411,10 @@ def _attempt_vector(
         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
         p.start()
 
-    input_queue.put(test_vector)
-
-    # In main process mode, use the persistent runner that keeps device open
     if p is None and main_proc_runner is not None:
         main_proc_runner(test_vector)
+    else:
+        input_queue.put(test_vector)
 
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
