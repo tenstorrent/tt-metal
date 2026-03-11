@@ -124,7 +124,8 @@ class Qwen35ModelArgs(ModelArgs):
             return self._get_vision_state_dict_prefix(module_name, layer_num)
 
         # Text model state dict prefix
-        layer_prefix = f"model.language_model.layers.{layer_num}." if layer_num is not None else "model.language_model."
+        # Note: For AutoModelForCausalLM, keys use "model.layers" not "model.language_model.layers"
+        layer_prefix = f"model.layers.{layer_num}." if layer_num is not None else "model."
 
         module_map = {
             "Embedding": "embed_tokens",
