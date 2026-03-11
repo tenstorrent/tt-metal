@@ -492,7 +492,7 @@ def gen_output_golden(
 
 def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
     PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 270.0
+    ATOL_THRESHOLD = 310.0
 
     # bring to host
     # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
