@@ -61,18 +61,16 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply tier and model filters
+      - name: Apply model filters
         id: apply-filters
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
+          FILTERED='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by model
           if [ "${{ inputs.model }}" != "all" ]; then
             FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
           fi
           if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
+            echo "::warning::No tests found for model=${{ inputs.model }}. Pipeline will be skipped."
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
