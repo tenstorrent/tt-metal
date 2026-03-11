@@ -18,8 +18,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
-from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -103,10 +102,24 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
+    # Don't pass output_memory_config to build_op_kwargs — it would add memory_config
+    # before we can clean up sharded configs below.
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"})
 
     # Skip traced program_config: block dimensions (out_block_w, per_core_N, etc.) are computed
     # for the original device grid and don't match the local device. Let ttnn auto-compute.
+    # When program_config is skipped, sharded output/memory configs are invalid because
+    # their shard specs depend on the program_config. Clear them so ttnn auto-determines.
+    if output_memory_config is not None and "SHARDED" in str(output_memory_config):
+        output_memory_config = None
+    if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
+        del op_kwargs["memory_config"]
+    if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Use output_memory_config as fallback for memory_config in op_kwargs
+    if "memory_config" not in op_kwargs and output_memory_config is not None:
+        op_kwargs["memory_config"] = output_memory_config
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

@@ -114,6 +114,53 @@ def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] =
     )
 
 
+def _parse_shard_dim(placement_str: str) -> int:
+    """Extract shard dimension from placement string, handling negative dims."""
+    import re
+
+    shard_dims = re.findall(r"PlacementShard\((-?\d+)\)", placement_str)
+    return int(shard_dims[-1]) if shard_dims else -1
+
+
+def _is_shard_placement(tensor_placement: Optional[Dict], num_devices: int) -> bool:
+    """Check if placement is a shard placement with multiple devices."""
+    if not tensor_placement:
+        return False
+    placement_str = tensor_placement.get("placement", "")
+    # If it has both Replicate and Shard, check which comes first or treat as replicate
+    if "PlacementReplicate" in placement_str and "PlacementShard" not in placement_str:
+        return False
+    return "PlacementShard" in placement_str and num_devices > 1
+
+
+def get_mesh_composer(mesh_device, tensor_placement: Optional[Dict] = None):
+    """
+    Create a mesh composer matching the tensor placement for converting back to torch.
+
+    For sharded tensors, returns a ConcatMesh2dToTensor that reassembles shards.
+    For replicated tensors, returns None (caller should use device 0 extraction).
+
+    Args:
+        mesh_device: The mesh device
+        tensor_placement: Placement info from traced config
+
+    Returns:
+        Mesh composer or None
+    """
+    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
+    if not _is_shard_placement(tensor_placement, num_devices):
+        return None
+
+    placement_str = tensor_placement.get("placement", "")
+    shard_dim = _parse_shard_dim(placement_str)
+
+    try:
+        mesh_shape = (1, num_devices)
+        return ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape, dims=shard_dim)
+    except (TypeError, RuntimeError):
+        return None
+
+
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -138,30 +185,18 @@ def create_tensor_on_mesh(
     """
     # Determine mesh mapper based on placement
     num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    if tensor_placement:
+    if _is_shard_placement(tensor_placement, num_devices):
         placement_str = tensor_placement.get("placement", "")
+        shard_dim = _parse_shard_dim(placement_str)
 
-        if "PlacementReplicate" in placement_str:
-            # Replicate tensor across all devices
-            mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        elif "PlacementShard" in placement_str and num_devices > 1:
-            # Shard tensor across mesh (only when multiple devices available)
-            import re
-
-            shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement_str)
-            shard_dim = int(shard_dims[-1]) if shard_dims else -1
-
-            try:
-                mesh_shape = (1, num_devices)
-                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dim)
-            except (TypeError, RuntimeError):
-                # Fallback to replicate if shard mapper creation fails
-                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        else:
-            # Default to replicate (single device or unrecognized placement)
+        try:
+            mesh_shape = (1, num_devices)
+            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dim)
+        except (TypeError, RuntimeError):
+            # Fallback to replicate if shard mapper creation fails
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
-        # No placement info - default to replicate
+        # Replicate or no placement
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     # Create tensor on mesh
@@ -205,16 +240,19 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     return None
 
 
-def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None) -> torch.Tensor:
+def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
     """
     Convert a TTNN tensor (mesh or single device) to torch tensor.
 
-    For mesh tensors, this extracts one device copy (typically device 0) since
-    the model tracer tests expect the single-device result shape.
+    For replicated mesh tensors, extracts device 0's copy.
+    For sharded mesh tensors, uses the provided mesh_composer to reassemble
+    all device shards into the original full tensor.
 
     Args:
         ttnn_tensor: TTNN tensor (mesh or single device)
         mesh_device: Optional mesh device reference (can be None)
+        mesh_composer: Optional mesh composer for reassembling sharded tensors.
+                       If None, falls back to extracting device 0 only.
 
     Returns:
         torch.Tensor: Converted tensor
@@ -222,10 +260,12 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None) -> torch.Tensor:
     # Check if this is a mesh tensor by checking the device attribute
     try:
         device = ttnn_tensor.device()
-        # If device is a mesh device, extract tensor from first device
+        # If device is a mesh device, handle appropriately
         if device is not None and hasattr(device, "get_num_devices"):
-            # For mesh tensors, get the tensor from device 0 only
-            # This avoids shape mismatches from concatenation
+            # If a mesh_composer is provided, use it to reassemble shards
+            if mesh_composer is not None:
+                return ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
+            # Default: extract device 0 only (works for replicated tensors)
             device_tensors = ttnn.get_device_tensors(ttnn_tensor)
             if device_tensors and len(device_tensors) > 0:
                 return ttnn.to_torch(device_tensors[0])

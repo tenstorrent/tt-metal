@@ -135,6 +135,17 @@ def run(
         is_causal = False
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
+    # Validate program_config grid fits test device; drop if too large (TT_FATAL)
+    pc = op_kwargs.get("program_config")
+    if pc is not None:
+        try:
+            device_grid = device.compute_with_storage_grid_size()
+            pc_grid = pc.compute_with_storage_grid_size
+            if pc_grid[0] * pc_grid[1] > device_grid.x * device_grid.y:
+                del op_kwargs["program_config"]
+        except Exception:
+            del op_kwargs["program_config"]
+
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs (Q, K, V)

@@ -106,7 +106,7 @@ def run(
     shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     if arg5 is not None:
         if isinstance(arg5, dict):
-            repr_str = arg5.get("repr", "")
+            repr_str = str(arg5.get("repr", ""))
             if "BLOCK_SHARDED" in repr_str:
                 shard_scheme = ttnn.TensorMemoryLayout.BLOCK_SHARDED
             elif "WIDTH_SHARDED" in repr_str:
@@ -118,7 +118,7 @@ def run(
     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
     if arg6 is not None:
         if isinstance(arg6, dict):
-            repr_str = arg6.get("repr", "")
+            repr_str = str(arg6.get("repr", ""))
             if "COL_MAJOR" in repr_str:
                 shard_orientation = ttnn.ShardOrientation.COL_MAJOR
         elif hasattr(arg6, "name"):

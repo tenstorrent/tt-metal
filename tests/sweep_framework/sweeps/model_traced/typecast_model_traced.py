@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
@@ -82,6 +83,8 @@ def run(
 
     output_dtype = output_dtype or kwargs.get("dtype", kwargs.get("arg1", ttnn.float32))
     if isinstance(output_dtype, dict):
+        output_dtype = parse_dtype(output_dtype.get("repr", ""))
+    elif isinstance(output_dtype, str):
         output_dtype = parse_dtype(output_dtype)
     if output_dtype is None:
         output_dtype = ttnn.float32
@@ -140,9 +143,12 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Create mesh composer for sharded tensors to properly reassemble output
+    composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+
     start_time = start_measuring_time()
     output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=composer)
     e2e_perf = stop_measuring_time(start_time)
 
     if output_dtype == ttnn.uint32 or input_a_dtype == ttnn.uint32:

@@ -97,12 +97,29 @@ def run(
                 input_a_tensor_placement,
             )
         else:
+            # Fall back to DRAM if shard spec exceeds device cores
+            safe_mc = input_a_memory_config
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                try:
+                    grid = device.compute_with_storage_grid_size()
+                    num_cores = grid.x * grid.y
+                    shard_spec = input_a_memory_config.shard_spec
+                    if shard_spec is not None:
+                        shard_shape = shard_spec.shape
+                        total_rows = 1
+                        for d in torch_input_tensor_a.shape[:-1]:
+                            total_rows *= d
+                        num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
+                        if num_shards > num_cores:
+                            safe_mc = ttnn.DRAM_MEMORY_CONFIG
+                except Exception:
+                    safe_mc = ttnn.DRAM_MEMORY_CONFIG
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=safe_mc,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)

@@ -144,17 +144,38 @@ def run(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Convert to sharded using the traced config
+        # Validate shard spec fits device before calling interleaved_to_sharded (TT_FATAL can't be caught)
+        shard_ok = True
         try:
-            input_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, input_a_memory_config)
-        except (RuntimeError, ValueError) as e:
-            error_msg = str(e)
-            if "No core coordinate found" in error_msg or "core coordinate" in error_msg.lower():
-                raise ValueError(
-                    f"Invalid core coordinates in sharding config: {error_msg}. "
-                    f"This traced config uses cores that don't exist on this device."
-                )
-            raise
+            shard_spec = input_a_memory_config.shard_spec
+            if shard_spec is not None:
+                grid = device.compute_with_storage_grid_size()
+                num_cores = grid.x * grid.y
+                shard_shape = shard_spec.shape
+                total_rows = 1
+                for d in shape[:-1]:
+                    total_rows *= d
+                num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
+                if num_shards > num_cores:
+                    shard_ok = False
+        except Exception:
+            pass
+
+        if shard_ok:
+            # Convert to sharded using the traced config
+            try:
+                input_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, input_a_memory_config)
+            except (RuntimeError, ValueError) as e:
+                error_msg = str(e)
+                if "No core coordinate found" in error_msg or "core coordinate" in error_msg.lower():
+                    raise ValueError(
+                        f"Invalid core coordinates in sharding config: {error_msg}. "
+                        f"This traced config uses cores that don't exist on this device."
+                    )
+                raise
+        else:
+            # Shard spec exceeds device cores — use interleaved tensor as-is
+            input_tensor = input_tensor_interleaved
     else:
         # Input is interleaved - use the traced config directly (op supports this)
         if is_mesh_device and input_a_tensor_placement:

@@ -226,12 +226,23 @@ def run(
     output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
     # Build program_config - prefer V2 format (single dict) over V1 split params
+    # Validate that the traced grid fits the test device to avoid TT_FATAL
+    device_grid = device.compute_with_storage_grid_size()
+    device_cores = device_grid.x * device_grid.y
+
     program_config = None
     pc_dict = kwargs.get("program_config")
     if isinstance(pc_dict, dict):
-        from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
+        # Check grid size before constructing program config
+        cg = pc_dict.get("compute_with_storage_grid_size", {})
+        if isinstance(cg, dict):
+            pc_cores = int(cg.get("x", 8)) * int(cg.get("y", 8))
+        else:
+            pc_cores = 0
+        if pc_cores <= device_cores:
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
 
-        program_config = dict_to_program_config(pc_dict)
+            program_config = dict_to_program_config(pc_dict)
     elif all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
         # Legacy V1 split params fallback
         if isinstance(program_config_compute_grid, (list, tuple)) and len(program_config_compute_grid) == 2:
@@ -239,12 +250,13 @@ def run(
         else:
             grid = (8, 8)
 
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid,
-            q_chunk_size=int(program_config_q_chunk_size),
-            k_chunk_size=int(program_config_k_chunk_size),
-            exp_approx_mode=False,
-        )
+        if grid[0] * grid[1] <= device_cores:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=int(program_config_q_chunk_size),
+                k_chunk_size=int(program_config_k_chunk_size),
+                exp_approx_mode=False,
+            )
 
     # Build compute_kernel_config - prefer V2 format (single dict) over V1 split params
     compute_kernel_config = None

@@ -151,15 +151,14 @@ def run(
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
 
     # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
-    # Exclude program_config (handled above), activation (used for golden too), and
-    # memory_config (handled explicitly below after sharded config cleanup).
-    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation"})
+    # Exclude program_config (handled above), activation (used for golden too),
+    # and output_tile (a Tile object that can't be auto-parsed from dict).
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation", "output_tile"})
 
-    # When program_config can't be reconstructed (incomplete traced data), the
-    # shard_spec in memory_config/output_memory_config was computed by the
-    # original program_config and is invalid without it. Also, DRAM-sharded
-    # input B requires a matching DRAMSharded program_config. Clear all
-    # sharded configs so ttnn.linear auto-determines compatible settings.
+    # When program_config is None (grid-based configs dropped), the shard_spec in
+    # memory configs was computed for the original device and is invalid. Clear sharded
+    # configs so ttnn.linear auto-determines compatible settings.
+    # When program_config is BatchedDRAMSharded, keep DRAM-sharded input_b (required).
     if program_config is None:
         if memory_config is not None and "SHARDED" in str(memory_config):
             memory_config = None
@@ -167,6 +166,11 @@ def run(
             output_memory_config = None
         if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
             input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
+            input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        # Also clear memory_config from parsed_op_kwargs (built before cleanup)
+        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
+            del parsed_op_kwargs["memory_config"]
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -174,6 +178,19 @@ def run(
     # V2 format provides separate shapes
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
+
+    # 4D weights with batch > 1 require MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.
+    # Without it (program_config=None on single device), ttnn.linear hits TT_FATAL.
+    # Return early instead of crashing.
+    if program_config is None and len(shape_b) >= 4:
+        batch_b = 1
+        for d in shape_b[:-2]:
+            batch_b *= d
+        if batch_b > 1:
+            return [
+                (False, f"Batched weight shape {shape_b} requires DRAMSharded program_config (galaxy-only config)"),
+                0.0,
+            ]
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)

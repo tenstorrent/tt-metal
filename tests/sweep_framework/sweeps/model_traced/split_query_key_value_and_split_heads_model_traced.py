@@ -143,23 +143,17 @@ def run(
                 input_a_tensor_placement,
             )
         else:
+            # Always create as DRAM interleaved — lines below convert sharded to DRAM anyway,
+            # and traced shard specs may exceed the device's core count (TT_FATAL).
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
-
-    # Check if input has sharded memory - if so, convert to interleaved first
-    # The operation internally uses create_qkv_heads which requires tile-aligned shard shapes
-    # If traced config has non-tile-aligned shards, convert to interleaved
-    if hasattr(input_tensor_a, "memory_config"):
-        mem_config = input_tensor_a.memory_config()
-        if mem_config.is_sharded():
-            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
 
     start_time = start_measuring_time()
     # This operation splits QKV and heads - returns tuple of (Q, K, V)

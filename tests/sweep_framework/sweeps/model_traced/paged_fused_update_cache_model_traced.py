@@ -174,15 +174,40 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     # Convert to ttnn tensors
+    def _safe_mem_config(mem_config, tensor_shape):
+        """Fall back to DRAM if shard spec is incompatible with device."""
+        if mem_config is None:
+            return ttnn.DRAM_MEMORY_CONFIG
+        if not (hasattr(mem_config, "is_sharded") and mem_config.is_sharded()):
+            return mem_config
+        try:
+            shard_spec = mem_config.shard_spec
+            if shard_spec is None:
+                return mem_config
+            shard_shape = shard_spec.shape
+            tensor_width = tensor_shape[-1] if len(tensor_shape) > 0 else 0
+            if shard_shape[1] != tensor_width and str(mem_config.memory_layout) != "TensorMemoryLayout.BLOCK_SHARDED":
+                return ttnn.DRAM_MEMORY_CONFIG
+            grid = device.compute_with_storage_grid_size()
+            num_cores = grid.x * grid.y
+            total_rows = 1
+            for d in tensor_shape[:-1]:
+                total_rows *= d
+            num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
+            if num_shards > num_cores:
+                return ttnn.DRAM_MEMORY_CONFIG
+        except Exception:
+            pass
+        return mem_config
+
     def _to_ttnn(torch_tensor, dtype, layout, mem_config, placement_key="input_a_tensor_placement"):
         if not is_host:
             placement = kwargs.get(placement_key, input_a_tensor_placement)
             if is_mesh_device and placement:
                 return create_tensor_on_mesh(torch_tensor, device, dtype, layout, mem_config, placement)
             else:
-                return ttnn.from_torch(
-                    torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=mem_config
-                )
+                safe_mc = _safe_mem_config(mem_config, torch_tensor.shape)
+                return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=safe_mc)
         else:
             return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
 
