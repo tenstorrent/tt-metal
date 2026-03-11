@@ -11,3 +11,4 @@
 {"event":"complete","final_status":"SUCCESS","final_commit":"ed7dc81bd6","details":"Tilize analysis complete, focused on reader pattern, CB sizing, stick batching, and core distribution","ts":"2026-03-11T17:22:08+00:00"}
 {"event":"analysis_committed","details":"Committed untilize_analysis.md with output-stage focus. Commit 9c7733c0e9.","ts":"2026-03-11T17:22:57+00:00"}
 {"event":"action","type":"file_write","details":"Wrote comprehensive softmax_analysis.md to agent_logs directory","ts":"2026-03-11T17:25:45+00:00"}
+{"event":"complete","final_status":"SUCCESS","final_commit":"37701a586a","details":"Softmax compute-core analysis complete","ts":"2026-03-11T17:26:23+00:00"}
