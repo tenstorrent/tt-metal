@@ -86,9 +86,16 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     size_t expected_size = binary_size;  // Allocated left over is program cache
     size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
 
-    auto assert_dram_usage = [](const auto& dram_usage, size_t expected_size, size_t expected_peak_size) {
-        EXPECT_EQ(dram_usage.peak, expected_peak_size);
-        EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, expected_size);
+    // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
+    // in unpacker/packer configurations that invoke functions exclusively used for assertions.
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size += 4096;
+        expected_size += 4096;
+    }
+
+    auto assert_dram_usage = [](const auto& dram_usage, size_t exp_size, size_t exp_peak) {
+        EXPECT_EQ(dram_usage.peak, exp_peak);
+        EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, exp_size);
     };
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 
@@ -102,6 +109,10 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     expected_size = 0;
     expected_peak_size = tensor1_size + tensor2_size + result_size + binary_size;  // Binary size is still allocated
+    // LLK_ASSERTs add constant DRAM overhead for assertion-specific function code.
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size += 4096;
+    }
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 }
 
@@ -178,6 +189,12 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
     expected_peak_size +=
         compute_tensor_size(sdpa_result->get_value()) + 243712;  // All the intermediate tensors / activations
+
+    // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
+    // in unpacker/packer configurations that invoke functions exclusively used for assertions.
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size -= 4096;  // Additional program cache overhead
+    }
 
     expected_size = expected_peak_size;
 
