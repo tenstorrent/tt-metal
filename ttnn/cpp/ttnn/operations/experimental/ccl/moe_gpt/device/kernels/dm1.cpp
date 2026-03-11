@@ -196,8 +196,12 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
-        const uint32_t max_tokens_per_height_shard = (active_tokens + height_shard_dim - 1) / height_shard_dim;
+        const uint32_t tokens_per_height_shard_chunk = active_tokens / height_shard_dim;
+        const uint32_t tokens_per_height_shard_rem = active_tokens % height_shard_dim;
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
+
+        uint32_t dest_height_shard_start = 0;
+        uint32_t shard_row_start = 0;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Set NOC 1 write state at top of chunk, before waiting for compute.
@@ -244,12 +248,11 @@ void kernel_main() {
             //-----------------------------------------------------------------
             // Combine core output write for this chunk.
             // Matches moe_compute layout: tokens distributed across tp rows
-            // using div_up(active_tokens, height_shard_dim), with expert
-            // blocks separated by shard_offset_per_expert_bytes.
+            // using floor+remainder (matching selective_reduce_combine's
+            // token_work_split_even). Shard h gets (chunk+1) tokens if
+            // h < rem, else chunk tokens.
             // Tokens within a chunk can cross tp_row boundaries.
             //-----------------------------------------------------------------
-            const uint32_t dest_height_shard_start = (chunk * tokens_per_chunk_combine) / max_tokens_per_height_shard;
-            const uint32_t shard_row_start = (chunk * tokens_per_chunk_combine) % max_tokens_per_height_shard;
             const uint32_t num_tokens_block =
                 std::min(tokens_per_chunk_combine, active_tokens - chunk * tokens_per_chunk_combine);
 
@@ -292,13 +295,21 @@ void kernel_main() {
 
                     noc_async_write_one_packet_with_state<true>(source_l1_addr, dest_l1_addr);
 
-                    if (++shard_row == max_tokens_per_height_shard) {
+                    const uint32_t shard_capacity = (dest_height_shard < tokens_per_height_shard_rem)
+                                                        ? tokens_per_height_shard_chunk + 1
+                                                        : tokens_per_height_shard_chunk;
+                    if (++shard_row == shard_capacity) {
                         ++dest_height_shard;
                         shard_row = 0;
                     }
                 }
                 width_tiles_sent += width_transfer_tiles;
                 width_tiles_to_send -= width_transfer_tiles;
+
+                if (width_tiles_to_send == 0) {
+                    dest_height_shard_start = dest_height_shard;
+                    shard_row_start = shard_row;
+                }
             }
 
             noc_async_posted_writes_flushed(1);

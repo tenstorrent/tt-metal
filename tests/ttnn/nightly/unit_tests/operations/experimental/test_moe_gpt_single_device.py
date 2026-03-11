@@ -274,7 +274,7 @@ def verify_device_output(
     Verify a single device's combine output against the torch reference.
 
     The combine kernel distributes tokens across height_shard_dim height shards
-    using div_up(active_tokens, height_shard_dim) tokens per shard. This function
+    using floor+remainder (matching selective_reduce_combine). This function
     gathers tokens from all shards before comparing with the reference.
 
     tt_output_result must be the FULL output tensor {E * total_tokens, K},
@@ -323,20 +323,19 @@ def verify_device_output(
             reference = swiglu_out @ torch_w2[0, e]  # [M, K]
 
         # Gather tokens from all height shards. The combine kernel distributes
-        # tokens for expert e across height_shard_dim shards:
-        #   max_tph = div_up(active_tokens, height_shard_dim)
-        #   shard k gets tokens [k*max_tph, min((k+1)*max_tph, active_tokens))
+        # tokens for expert e across height_shard_dim shards using floor+remainder:
+        #   chunk = active_tokens // H, rem = active_tokens % H
+        #   shard k gets (chunk+1) tokens if k < rem, else chunk tokens
         # Within each shard, expert e's data starts at row e * expert_rows_per_shard.
-        max_tph = (last_chunk_tokens + height_shard_dim - 1) // height_shard_dim
+        chunk_size = last_chunk_tokens // height_shard_dim
+        remainder = last_chunk_tokens % height_shard_dim
         expert_base_row = e * expert_rows_per_shard
         gathered_rows = []
         for hs in range(height_shard_dim):
-            tok_start = hs * max_tph
-            tok_end = min(tok_start + max_tph, last_chunk_tokens)
-            if tok_start >= last_chunk_tokens:
+            n_toks = chunk_size + (1 if hs < remainder else 0)
+            if n_toks == 0:
                 break
-            n_toks = tok_end - tok_start
-            global_row = hs * shard_rows + expert_base_row + (tok_start - hs * max_tph)
+            global_row = hs * shard_rows + expert_base_row
             gathered_rows.append(tt_output_result[global_row : global_row + n_toks, :])
         tt_expert_result = torch.cat(gathered_rows, dim=0)  # [last_chunk_tokens, K]
 
