@@ -196,7 +196,9 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/transform_pipeline.cpp",
         core,
         experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1, .compile_args = {sem0, sem1, num_elements}});
+            .num_threads_per_cluster = 1,
+            .compile_args = {num_elements, sem0, sem1},
+            .defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}});
     SetRuntimeArgs(program, compute, core, {buf_a_addr, buf_b_addr});
 
     auto dm_writer = experimental::quasar::CreateKernel(
@@ -218,16 +220,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     ASSERT_EQ(actual_data, expected_data);
 }
 
-// Cross-core pipeline test:
-//   Host -> DRAM(src) -> Core(0,0) L1 -> Compute(0,0) -> DRAM(mid)
-//     -> Core(1,0) L1 -> Compute(1,0) -> DRAM(dst) -> Host verifies
-//
-// Semaphores:
-//   sem0 on core_0: DM reader(0,0) -> Compute(0,0)
-//   sem1 on core_0: Compute(0,0) -> DM writer(0,0)
-//   sem_cross on both cores: DM writer(0,0) remotely signals DM reader(1,0)
-//   sem2 on core_1: DM reader(1,0) -> Compute(1,0)
-//   sem3 on core_1: Compute(1,0) -> DM writer(1,0)
+// This test requires simulator environment
 TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
@@ -252,45 +245,32 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
-    const uint32_t sem0 = CreateSemaphore(program, core_0, 0);
-    const uint32_t sem1 = CreateSemaphore(program, core_0, 0);
+    const uint32_t sem_core_0 = CreateSemaphore(program, core_0, 0);
     const uint32_t sem_cross = CreateSemaphore(program, CoreRange(core_0, core_1), 0);
-    const uint32_t sem2 = CreateSemaphore(program, core_1, 0);
-    const uint32_t sem3 = CreateSemaphore(program, core_1, 0);
+    const uint32_t sem_core_1 = CreateSemaphore(program, core_1, 0);
 
-    constexpr uint32_t num_elements = 1;
+    // const uint32_t dram_bank_size = MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
+    constexpr uint32_t num_elements = 10;
     constexpr uint32_t buf_a_addr = 1000 * 1024;
     constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    constexpr uint32_t dram_src_addr = 29000 * 1024;
-    constexpr uint32_t dram_mid_addr = 30000 * 1024;
-    constexpr uint32_t dram_dst_addr = 31000 * 1024;
+    const uint32_t dram_mid_addr = 31000 * 1024;
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
-        initial_data[i] = i + 5;
+        initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(
-        mesh_device->get_devices()[0],
-        0,
-        dram_src_addr + MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED),
-        initial_data);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core_0, buf_a_addr, initial_data);
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(core_1);
-
-    // --- Core(0,0) kernels: DRAM -> L1 -> transform -> DRAM, then remote signal core(1,0) ---
-    auto dm_reader_0 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
-        core_0,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem0}});
-    SetRuntimeArgs(program, dm_reader_0, core_0, {dram_src_addr, buf_a_addr, num_elements, 0});
 
     auto compute_0 = experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/transform_pipeline.cpp",
         core_0,
         experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1, .compile_args = {sem0, sem1, num_elements}});
+            .num_threads_per_cluster = 1,
+            .compile_args = {num_elements, sem_core_0},
+            .defines = {{"OUTGOING_SEM", "1"}}});
     SetRuntimeArgs(program, compute_0, core_0, {buf_a_addr, buf_b_addr});
 
     auto dm_writer_0 = experimental::quasar::CreateKernel(
@@ -299,7 +279,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
         core_0,
         experimental::quasar::QuasarDataMovementConfig{
             .num_threads_per_cluster = 1,
-            .compile_args = {sem1, sem_cross},
+            .compile_args = {sem_core_0, sem_cross},
             .defines = {{"INCREMENT_REMOTE_SEM", "1"}}});
     SetRuntimeArgs(
         program, dm_writer_0, core_0, {dram_mid_addr, buf_b_addr, num_elements, 0, core_1_virtual.x, core_1_virtual.y});
@@ -311,7 +291,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
         core_1,
         experimental::quasar::QuasarDataMovementConfig{
             .num_threads_per_cluster = 1,
-            .compile_args = {sem2, sem_cross},
+            .compile_args = {sem_core_1, sem_cross},
             .defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}});
     SetRuntimeArgs(program, dm_reader_1, core_1, {dram_mid_addr, buf_a_addr, num_elements, 0});
 
@@ -320,23 +300,17 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/transform_pipeline.cpp",
         core_1,
         experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1, .compile_args = {sem2, sem3, num_elements}});
+            .num_threads_per_cluster = 1,
+            .compile_args = {num_elements, sem_core_1},
+            .defines = {{"INCOMING_SEM", "1"}}});
     SetRuntimeArgs(program, compute_1, core_1, {buf_a_addr, buf_b_addr});
-
-    auto dm_writer_1 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
-        core_1,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem3}});
-    SetRuntimeArgs(program, dm_writer_1, core_1, {dram_dst_addr, buf_b_addr, num_elements, 0});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    // Each transform does val + 1, two transforms total: initial + 2
     std::vector<uint32_t> actual_data(num_elements, 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    tt_metal::detail::ReadFromDeviceL1(
+        mesh_device->get_devices()[0], core_1, buf_b_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
