@@ -67,6 +67,7 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "operation_runtime_map"],
+    priority=ScriptPriority.HIGH,
 )
 
 # Core filtering
