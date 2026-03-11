@@ -666,7 +666,7 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
     return out_tensor
 
 
-@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64)])
+@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 32, 0)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_sampling(device, tensor_shape, dtype, layout):
