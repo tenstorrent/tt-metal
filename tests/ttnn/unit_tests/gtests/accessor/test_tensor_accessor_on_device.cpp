@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
@@ -1093,3 +1094,65 @@ INSTANTIATE_TEST_SUITE_P(
                                    .orientation = ShardOrientation::COL_MAJOR,
                                },
                        }}));
+
+class TensorAccessorArgsConstructorTests : public GenericMeshDeviceFixture {};
+
+TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMeshBuffer) {
+    MemoryConfig mem_config = MemoryConfig(
+        BufferType::L1,
+        NdShardSpec{
+            .shard_shape = tt::tt_metal::Shape{32, 32},
+            .grid = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+            .orientation = ShardOrientation::ROW_MAJOR,
+        });
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape{64, 64},
+        tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
+
+    auto mesh_tensor = MeshTensor::allocate_on_device(tensor_spec, mesh_device_.get());
+
+    const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
+    const auto args_from_mesh_buffer = TensorAccessorArgs(*mesh_tensor.mesh_buffer());
+
+    EXPECT_EQ(args_from_mesh_tensor.get_compile_time_args(), args_from_mesh_buffer.get_compile_time_args());
+    EXPECT_EQ(args_from_mesh_tensor.get_common_runtime_args(), args_from_mesh_buffer.get_common_runtime_args());
+}
+
+TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMeshBufferInterleaved) {
+    MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape{64, 128},
+        tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
+
+    auto mesh_tensor = MeshTensor::allocate_on_device(tensor_spec, mesh_device_.get());
+
+    const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
+    const auto args_from_mesh_buffer = TensorAccessorArgs(*mesh_tensor.mesh_buffer());
+
+    EXPECT_EQ(args_from_mesh_tensor.get_compile_time_args(), args_from_mesh_buffer.get_compile_time_args());
+    EXPECT_EQ(args_from_mesh_tensor.get_common_runtime_args(), args_from_mesh_buffer.get_common_runtime_args());
+}
+
+TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMeshBufferHigherRank) {
+    MemoryConfig mem_config = MemoryConfig(
+        BufferType::L1,
+        NdShardSpec{
+            .shard_shape = tt::tt_metal::Shape{1, 2, 32, 32},
+            .grid = CoreRangeSet(CoreRange({0, 0}, {2, 2})),
+            .orientation = ShardOrientation::COL_MAJOR,
+        });
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape{4, 6, 64, 64},
+        tt::tt_metal::TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), mem_config));
+
+    auto mesh_tensor = MeshTensor::allocate_on_device(tensor_spec, mesh_device_.get());
+
+    const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
+    const auto args_from_mesh_buffer = TensorAccessorArgs(*mesh_tensor.mesh_buffer());
+
+    EXPECT_EQ(args_from_mesh_tensor.get_compile_time_args(), args_from_mesh_buffer.get_compile_time_args());
+    EXPECT_EQ(args_from_mesh_tensor.get_common_runtime_args(), args_from_mesh_buffer.get_common_runtime_args());
+}
