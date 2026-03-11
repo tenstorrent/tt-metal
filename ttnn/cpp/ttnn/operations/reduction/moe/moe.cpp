@@ -20,8 +20,8 @@ Tensor moe(
     const auto& input_shape = input_tensor.logical_shape();
 
     // Zero-volume input: return zero-volume tensor with correct output shape
-    // Note: no explicit handling of scalar input is done, because torch reference also
-    // fails with scalar input and k=32 (k = 32 is currently the only supported value by ttnn.moe).
+    // Note: no explicit handling of scalar input is done, because MOE requires 4D tensors
+    // (a limitation specified in the ttnn.moe documentation).
     if (input_tensor.logical_volume() == 0) {
         ttnn::Shape desired_output_shape = input_shape;
         // The last dimension needs to be reduced to 1 to match the output shape of the torch reference.
