@@ -103,6 +103,48 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+### 12. Architect does not calibrate TDD stage tolerances for bf16 precision
+**Status**: Proposed — HIGH PRIORITY
+
+**Discovered in**: layer_norm_rm run (2026-03-11). Stage 2 (center_and_square) set atol=0.1 for a stage computing `(x - mean)^2` with bf16 reduce. The hardware reduce introduces ~0.01 mean error amplified to ~0.375 by squaring. The kernel writer spent 56 minutes and 5 hard attempts debugging what was an inherently impossible tolerance.
+
+**Root cause**: The architect has no instruction to analyze bf16 error propagation when setting tolerances. Intermediate stages involving reduce + nonlinear operations (square, power, reciprocal) amplify bf16 precision loss beyond tight tolerances.
+
+**Proposal**: Add a mandatory "Tolerance Calibration" step to the architect's TDD stage design. For each stage:
+1. Identify operations that introduce bf16 precision loss (reduce, transcendental functions)
+2. Estimate error amplification from downstream operations (squaring amplifies ~40x for unit-magnitude inputs)
+3. Set atol to at least 2x the estimated max error
+4. Default: atol >= 0.5 for any stage involving reduce + squaring/power
+
+---
+
+### 13. fp32_dest_acc_en breaks untilize when Wt exceeds halved DEST capacity
+**Status**: Proposed
+
+**Discovered in**: layer_norm_rm run (2026-03-11). The kernel writer tried fp32_dest_acc_en=True twice, each time producing zeros in the bottom half of the output (max diff 9.0). fp32 mode halves DEST from 16 to 8 tiles (bf16) or 8 to 4 tiles (fp32), breaking untilize's pack_untilize_block which requires Wt tiles in DEST simultaneously.
+
+**Root cause**: Neither the architect's design document nor the kernel writer's instructions mention the DEST capacity constraint when fp32_dest_acc_en is toggled. The Hardware Constraints Checklist mentions DEST sizes but does not connect them to untilize requirements.
+
+**Proposal**: Add to the architect's Hardware Constraints Checklist template: "If the compute kernel uses untilize and Wt > DEST_AUTO_LIMIT/2 (4 tiles for bf16 half-sync fp32, 8 tiles for bf16 half-sync), fp32_dest_acc_en MUST NOT be enabled." Add the same check to the kernel writer's debugging checklist.
+
+---
+
+### 14. Kernel writer lacks a "numerical mismatch triage" protocol
+**Status**: Proposed — HIGH PRIORITY
+
+**Discovered in**: layer_norm_rm run (2026-03-11). The kernel writer spent 5 hard attempts and ~56 minutes on a consistent numerical mismatch (max diff 0.375, same value across attempts 1, 3, 4, 5) without recognizing the pattern as an inherent precision limitation. It tried alternative scaler approaches, fp32 mode, and DPRINT diagnostics before context exhaustion forced an orchestrator intervention.
+
+**Root cause**: The kernel writer has no systematic strategy for distinguishing "implementation bug" from "inherent precision limitation." It defaults to trying code-level fixes until budget exhaustion.
+
+**Proposal**: Add a "Numerical Mismatch Triage" protocol to kernel writer instructions:
+1. After first hard attempt with numerical mismatch: check if output pattern is correct (values track reference but with systematic offset, no zeros/NaN/inf)
+2. If max diff < 1.0 and pattern is correct: run ONE diagnostic isolating error to a specific compute phase
+3. If error is in reduce/transcendental and is consistent across shapes: classify as "bf16 precision limitation"
+4. After 2 hard attempts with the same error classification and max diff: escalate to orchestrator requesting tolerance adjustment
+5. Do NOT spend more than 3 hard attempts on the same consistent numerical pattern
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +157,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | Architect tolerance calibration | HIGH | SMALL | HIGH |
+| 13 | fp32_dest_acc_en / untilize constraint | MEDIUM | SMALL | MEDIUM |
+| 14 | Kernel writer numerical triage protocol | HIGH | SMALL | HIGH |
