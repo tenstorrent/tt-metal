@@ -159,9 +159,6 @@ void kernel_main() {
     } else {
         DPRINT_DISPATCH << "Using non-1D topology fabric send" << ENDL();
     }
-#ifndef DEST_CHIP_ID
-#define DEST_CHIP_ID  // TODO
-#endif
 
 #ifdef DEST_CHIP_ID
     // Fabric is enabled - set up connections
@@ -282,8 +279,8 @@ void kernel_main() {
             auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
             auto expert_index_within_chip = routed_expert % experts_per_chip;
 
-            DPRINT << "token" << token_idx << "  Expert [" << k << "]=" << routed_expert << "  (chip=" << expert_chip_og
-                   << " =>" << expert_chip << ")" << ENDL();
+            DPRINT_DISPATCH << "token" << token_idx << "  Expert [" << k << "]=" << routed_expert
+                            << "  (chip=" << expert_chip_og << " =>" << expert_chip << ")" << ENDL();
 
             auto& offset = offsets[routed_expert];
 
@@ -296,9 +293,6 @@ void kernel_main() {
                 metadata_addr_gen.get_noc_addr(0) + page_idx * aligned_metadata_page_size * 4;  // int32 = 4 bytes
 
             if (expert_chip == linearized_mesh_coord) {
-                // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." <<
-                // ENDL(); For local dispatch, we can directly write to the output buffer without going through the
-                // fabric
                 noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
                 noc_async_writes_flushed();  // is it formally needed?
 
@@ -310,15 +304,13 @@ void kernel_main() {
                 metadata[1] = token_idx;
                 metadata[2] = k;
                 metadata[3] = routed_expert;
-                metadata[4] = weights[k];
+                metadata[4] = static_cast<int16_t>(weights[k]);
 
                 // Write metadata from CB to output tensor
                 noc_async_write_page(page_idx, metadata_addr_gen, metadata_cb_addr);
                 noc_async_writes_flushed();
 
             } else {
-                // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
-                //                 << " chip." << ENDL();
                 if constexpr (is_1d_topology<topology>()) {
                     if (true) {
                         fabric_send_chip_unicast_noc_unicast_1d<
@@ -346,7 +338,7 @@ void kernel_main() {
                     metadata[1] = token_idx;
                     metadata[2] = k;
                     metadata[3] = routed_expert;
-                    metadata[4] = weights[k];
+                    metadata[4] = static_cast<int16_t>(weights[k]);
 
                     if (true) {
                         fabric_send_chip_unicast_noc_unicast_1d<
@@ -382,6 +374,10 @@ void kernel_main() {
 
     // Release CB for next use
     cb_push_back(cb_metadata_temp_id, 1);
+
+    // Pop the offsets and dispatch table CBs that were read at the beginning
+    cb_pop_front(cb_offsets_id, offsets_pages);
+    cb_pop_front(cb_dispatch_table_id, dispatch_table_pages);
 
 #ifdef DEST_CHIP_ID
     // Close fabric connections to prevent resource conflicts with subsequent operations

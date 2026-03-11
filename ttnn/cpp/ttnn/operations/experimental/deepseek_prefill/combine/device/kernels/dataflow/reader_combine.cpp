@@ -23,7 +23,7 @@
 void zero_page_async(uint64_t noc_addr, uint32_t page_size) {
     uint32_t bytes = page_size;
     while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, (uint32_t)MEM_ZEROS_SIZE);
+        uint32_t curr_bytes = (bytes < (uint32_t)MEM_ZEROS_SIZE) ? bytes : (uint32_t)MEM_ZEROS_SIZE;
         noc_async_write(MEM_ZEROS_BASE, noc_addr, curr_bytes);
         noc_addr += curr_bytes;
         bytes -= curr_bytes;
@@ -111,7 +111,8 @@ void kernel_main() {
                    << ENDL();
     // Inline multicast loop - zeros same L1 offset on ALL bank cores simultaneously
     for (uint32_t offset = 0; offset < per_bank_bytes; offset += MEM_ZEROS_SIZE) {
-        uint32_t chunk_size = std::min((uint32_t)MEM_ZEROS_SIZE, per_bank_bytes - offset);
+        uint32_t chunk_size = ((uint32_t)MEM_ZEROS_SIZE < (per_bank_bytes - offset)) ? (uint32_t)MEM_ZEROS_SIZE
+                                                                                     : (per_bank_bytes - offset);
         uint64_t mcast_addr = get_noc_multicast_addr(
             L1_BANK_NOC_X_START, L1_BANK_NOC_Y_START, L1_BANK_NOC_X_END, L1_BANK_NOC_Y_END, output_addr + offset);
         noc_async_write_multicast(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS - 1);
@@ -141,11 +142,13 @@ void kernel_main() {
     // ==== Read experts token counter (chips/fractured ==1, experts_per_chip) ====
     const auto experts_tok_counter_addr_gen =
         TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr, aligned_experts_tok_counter_page_size);
+    // Reserve all pages upfront, then manually increment write address per page
+    cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
+    uint32_t l1_write_addr = get_write_ptr(cb_experts_tok_counter_id);
     for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
         DPRINT_COMBINE << "Fetching experts token counter; page=" << i << ENDL();
-        cb_reserve_back(cb_experts_tok_counter_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_experts_tok_counter_id);
         noc_async_read_page(i, experts_tok_counter_addr_gen, l1_write_addr);
+        l1_write_addr += aligned_experts_tok_counter_page_size;
     }
     noc_async_read_barrier();
     cb_push_back(cb_experts_tok_counter_id, experts_tok_counter_pages);

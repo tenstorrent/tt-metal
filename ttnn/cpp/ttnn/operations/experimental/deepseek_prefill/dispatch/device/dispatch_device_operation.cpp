@@ -56,17 +56,6 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be DRAM interleaved, not sharded");
-
-    // Validate dimension compatibility
-    auto input_shape = tensor_args.input_tensor.tensor_spec().logical_shape();
-    auto weights_shape = tensor_args.weights_tensor.tensor_spec().logical_shape();
-    auto indices_shape = tensor_args.indices_tensor.tensor_spec().logical_shape();
-
-    // TT_FATAL(
-    //     input_shape[-1] == weights_shape[-1],
-    //     "Input hidden dim {} must match weights hidden dim {}",
-    //     input_shape[-1],
-    //     weights_shape[-1]);
 }
 
 void DispatchDeviceOperation::validate_on_program_cache_hit(
