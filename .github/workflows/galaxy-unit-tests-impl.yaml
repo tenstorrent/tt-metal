@@ -164,7 +164,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          auto-triage: ${{ matrix.test-group.auto-triage == false && 'false' || 'true' }}
+          auto-triage: ${{ matrix.test-group.auto-triage != false }}
           hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
 
       - name: Run unit tests
