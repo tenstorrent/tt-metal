@@ -153,7 +153,7 @@ jobs:
           model_filter="${{ inputs.model }}"
           if [ "$model_filter" != "all" ]; then
             filtered_tests=$(echo "$filtered_tests" | jq -c --arg model "$model_filter" \
-              '[.[] | select(.["model-name"] == $model or .["model-name"] == null)]')
+              '[.[] | select(.["model-name"] == $model)]')
           fi
 
           echo "Filtered tests: $filtered_tests"
