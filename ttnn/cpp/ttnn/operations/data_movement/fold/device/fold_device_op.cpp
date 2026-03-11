@@ -13,18 +13,10 @@ Fold::program_factory_t Fold::select_program_factory(
     if (op_attr.is_sharded) {
         return MultiCore{};
     }
-    if (op_attr.is_dram_interleaved) {
-        return MultiCoreDRAMFold{};
-    }
-    return SingleCore{};
+    return MultiCoreDRAMFold{};
 }
 
-void validate_fold(
-    const std::vector<Tensor>& input_tensors,
-    bool is_sharded,
-    bool is_dram_interleaved,
-    uint32_t stride_h,
-    uint32_t stride_w) {
+void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, uint32_t stride_h, uint32_t stride_w) {
     const Tensor& input_tensor = input_tensors.at(0);
 
     const auto& input_shape = input_tensor.padded_shape();
@@ -41,26 +33,18 @@ void validate_fold(
             shard_shape[0] % (input_shape[2] * stride_h) == 0,
             "Fold: Shard height must be divisible by input width times stride_h for proper folding operation.");
         TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
-    } else if (is_dram_interleaved) {
-        TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
-        TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
     } else {
         TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
         TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
-        TT_FATAL(
-            (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
-            "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
     }
 }
 
 void Fold::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    validate_fold(
-        {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
+    validate_fold({tensors.input_tensor}, op_attr.is_sharded, op_attr.stride_h, op_attr.stride_w);
 }
 
 void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    validate_fold(
-        {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
+    validate_fold({tensors.input_tensor}, op_attr.is_sharded, op_attr.stride_h, op_attr.stride_w);
 }
 
 Fold::spec_return_value_t Fold::compute_output_specs(
