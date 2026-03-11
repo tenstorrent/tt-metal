@@ -66,6 +66,23 @@ FORCE_INLINE void check_worker_connections(
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_worker_connection<true, RISC_CPU_DATA_CACHE_ENABLED>();
+    } else if (channel_connection_established) {
+        // Check if the L1 connected core differs from the cached core coordinate in local memory
+        // this would indicate that we've got a "double connect" scenario
+        const auto& live_worker_info = *local_sender_channel_worker_interface.worker_location_info_ptr;
+        bool double_connection_detected = (local_sender_channel_worker_interface.cached_worker_x != live_worker_info.worker_xy.x)
+          || (local_sender_channel_worker_interface.cached_worker_y != live_worker_info.worker_xy.y);
+        ASSERT(!double_connection_detected);
+        if (double_connection_detected) {
+            DPRINT << "HAAALLLLLLP!!!!!\n";
+            WATCHER_RING_BUFFER_PUSH(0xdeaddead);
+            for (size_t i = 0; i < 1000; i++) {
+                asm volatile("nop");
+            }
+            asm volatile("ebreak");
+
+        }
+
     }
 }
 
