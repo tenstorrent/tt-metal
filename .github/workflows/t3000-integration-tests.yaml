@@ -60,7 +60,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -68,7 +69,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-integration-tests:
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

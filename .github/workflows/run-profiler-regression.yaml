@@ -44,6 +44,9 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
   workflow_dispatch:
     inputs:
       arch:
@@ -135,8 +138,10 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          POST_COMMIT_ONLY: ${{ inputs.post_commit_only }}
         run: |
-          if [[ "${{ inputs.post_commit_only }}" == "true" ]]; then
+          if [[ "$POST_COMMIT_ONLY" == "true" ]]; then
             ./tests/scripts/run_profiler_regressions.sh --post-commit
           else
             ./tests/scripts/run_profiler_regressions.sh --full

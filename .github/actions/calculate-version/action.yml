@@ -162,11 +162,16 @@ runs:
     - name: Calculate new version
       id: calculate-version
       shell: bash
+      env:
+        LATEST_SEMVER: ${{ steps.get-latest-semver.outputs.latest_semver }}
+        LATEST_RC: ${{ steps.get-latest-semver.outputs.latest_rc }}
+        BUMP_TYPE: ${{ steps.analyze-commits.outputs.bump_type }}
+        TAG_TYPE: ${{ inputs.tag-type }}
       run: |
-        latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-        latest_rc="${{ steps.get-latest-semver.outputs.latest_rc }}"
-        bump_type="${{ steps.analyze-commits.outputs.bump_type }}"
-        tag_type="${{ inputs.tag-type }}"
+        latest_tag="$LATEST_SEMVER"
+        latest_rc="$LATEST_RC"
+        bump_type="$BUMP_TYPE"
+        tag_type="$TAG_TYPE"
 
         if [ "$tag_type" = "dev" ]; then
           echo "Dev tag type - forcing minor version bump"
@@ -245,9 +250,12 @@ runs:
     - name: Format final version with tag type
       id: format-final-version
       shell: bash
+      env:
+        BASE_VERSION: ${{ steps.calculate-version.outputs.new_version }}
+        TAG_TYPE: ${{ inputs.tag-type }}
       run: |
-        baseVersion="${{ steps.calculate-version.outputs.new_version }}"
-        tagType="${{ inputs.tag-type }}"
+        baseVersion="$BASE_VERSION"
+        tagType="$TAG_TYPE"
 
         if [ "$tagType" = "rc" ]; then
           rcTags=$(git tag | grep "$baseVersion"-rc || true)

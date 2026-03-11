@@ -40,6 +40,9 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
   workflow_dispatch:
     inputs:
       arch:
@@ -86,15 +89,19 @@ jobs:
       - name: Compute tests
         shell: bash
         id: compute-tests
+        env:
+          MERGE_GATE_CALL: ${{ inputs.merge-gate-call }}
+          ARCH: ${{ inputs.arch }}
+          DEFAULT_OPS_TESTS_JSON: ${{ toJSON(matrix.default-ops-tests) }}
         run: |
           set -euo pipefail
           echo "[info] Outputing default values"
-          default_ops_tests='${{ toJSON(matrix.default-ops-tests) }}'
+          default_ops_tests="$DEFAULT_OPS_TESTS_JSON"
           echo $default_ops_tests
           echo $default_ops_tests | jq
           requested_ops_tests=$default_ops_tests
 
-          requested_ops_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" --arg arch "${{ inputs.arch }}" '[.[] | select(.merge_gate == $merge_gate_call and .arch == $arch)]' <<< "$requested_ops_tests")
+          requested_ops_tests=$(jq --argjson merge_gate_call "$MERGE_GATE_CALL" --arg arch "$ARCH" '[.[] | select(.merge_gate == $merge_gate_call and .arch == $arch)]' <<< "$requested_ops_tests")
           echo "[info] after filtering for requested workflow tests: $requested_ops_tests"
 
           # Check that we have a valid test list that's not empty

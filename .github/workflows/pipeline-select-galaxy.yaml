@@ -201,7 +201,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     needs: determine-tests
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -213,7 +214,8 @@ jobs:
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -223,7 +225,12 @@ jobs:
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -235,7 +242,8 @@ jobs:
   galaxy-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -246,7 +254,8 @@ jobs:
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -257,7 +266,11 @@ jobs:
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

@@ -30,13 +30,18 @@ runs:
     - name: Check for files
       id: check-files
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        CHECK_BW: ${{ inputs.check_bw }}
+        CHECK_LATENCY: ${{ inputs.check_latency }}
+        ARCH: ${{ inputs.arch }}
       run: |
         # Change dir to path if its set
         # Example: when running in containers the batchfile and data files are located under /work
-        cd ${{ inputs.path }}
+        cd "$INPUT_PATH"
 
-        if [ "${{ inputs.check_bw }}" == "true" ]; then
-          if [ -f "generated/fabric/bandwidth_summary_results_${{ inputs.arch }}_upload.csv" ]; then
+        if [ "$CHECK_BW" == "true" ]; then
+          if [ -f "generated/fabric/bandwidth_summary_results_${ARCH}_upload.csv" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
             echo "Benchmark files found, will upload to database"
           else
@@ -47,8 +52,8 @@ runs:
           echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
         fi
 
-        if [ "${{ inputs.check_latency }}" == "true" ]; then
-          if [ -f "generated/fabric/latency_summary_results_${{ inputs.arch }}_upload.csv" ]; then
+        if [ "$CHECK_LATENCY" == "true" ]; then
+          if [ -f "generated/fabric/latency_summary_results_${ARCH}_upload.csv" ]; then
             echo "has_latency_data=true" >> $GITHUB_OUTPUT
             echo "Latency files found, will upload to database"
           else

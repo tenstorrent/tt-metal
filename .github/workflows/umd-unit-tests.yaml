@@ -61,6 +61,8 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
-          ./build/test/umd/${{ inputs.arch }}/unit_tests
+          ./build/test/umd/${ARCH}/unit_tests
           ./build/test/umd/api/api_tests

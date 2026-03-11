@@ -25,6 +25,9 @@ on:
         type: number
         default: 30
 
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
   workflow_dispatch:
     inputs:
       arch:

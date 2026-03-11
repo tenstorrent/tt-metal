@@ -235,21 +235,26 @@ jobs:
 
       - name: Output job summary
         if: always()
+        env:
+          HAS_ISSUE: ${{ steps.select-issue.outputs.has-issue }}
+          PR_CREATED: ${{ steps.copilot-fix.outputs.pr-created }}
+          PR_URL: ${{ steps.copilot-fix.outputs.pr-url }}
+          ISSUE_CHECKER: ${{ steps.select-issue.outputs.checker }}
+          ISSUE_FILE: ${{ steps.select-issue.outputs.file }}
+          ISSUE_LINE: ${{ steps.select-issue.outputs.line }}
+          ISSUE_MESSAGE: ${{ steps.select-issue.outputs.message }}
         run: |
           SUMMARY="$GITHUB_STEP_SUMMARY"
           echo "## 🤖 Copilot Autofix ClangSA" >> "$SUMMARY"
 
-          if [ "${{ steps.select-issue.outputs.has-issue }}" != "true" ]; then
+          if [ "$HAS_ISSUE" != "true" ]; then
             echo "No unprocessed issues found." >> "$SUMMARY"
-          elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
-            echo "✅ **PR Created:** ${{ steps.copilot-fix.outputs.pr-url }}" >> "$SUMMARY"
+          elif [ "$PR_CREATED" = "true" ]; then
+            echo "✅ **PR Created:** $PR_URL" >> "$SUMMARY"
             echo "" >> "$SUMMARY"
             echo "**Issue fixed:**" >> "$SUMMARY"
-            CHECKER="${{ steps.select-issue.outputs.checker }}"
-            FILE="${{ steps.select-issue.outputs.file }}"
-            LINE="${{ steps.select-issue.outputs.line }}"
-            echo "- \`$CHECKER\` in \`$FILE:$LINE\`" >> "$SUMMARY"
-            echo "- ${{ steps.select-issue.outputs.message }}" >> "$SUMMARY"
+            echo "- \`$ISSUE_CHECKER\` in \`$ISSUE_FILE:$ISSUE_LINE\`" >> "$SUMMARY"
+            echo "- $ISSUE_MESSAGE" >> "$SUMMARY"
           else
             REPO="${{ github.repository }}"
             echo "⚠️ No PR created. Check [Copilot dashboard](https://github.com/$REPO/copilot)." >> "$SUMMARY"

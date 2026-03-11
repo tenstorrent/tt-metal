@@ -22,6 +22,9 @@ on:
         required: true
         type: string
 
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   ttnn:
     name: didt tests ${{ inputs.arch }} ${{ inputs.runner-label }}

@@ -57,7 +57,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -72,14 +73,18 @@ jobs:
     steps:
       - id: set-matrix
         shell: bash
+        env:
+          RUN_N150: ${{ inputs.run-n150 }}
+          RUN_N300: ${{ inputs.run-n300 }}
+          RUN_P150B: ${{ inputs.run-p150b }}
         run: |
           matrix_items=()
 
           # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            run_n150="${{ inputs.run-n150 }}"
-            run_n300="${{ inputs.run-n300 }}"
-            run_p150b="${{ inputs.run-p150b }}"
+            run_n150="$RUN_N150"
+            run_n300="$RUN_N300"
+            run_p150b="$RUN_P150B"
           else
             # Default to true for workflow_call and push events
             run_n150="true"
@@ -120,7 +125,8 @@ jobs:
   data-movement-unit-tests:
     uses: ./.github/workflows/tm-data-movement-unit-impl.yaml
     needs: [build-artifact, generate-matrix]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +142,6 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push') }}
     uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
     needs: build-artifact
-    secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

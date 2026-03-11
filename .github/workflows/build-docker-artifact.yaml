@@ -106,8 +106,9 @@ jobs:
 
       - name: Determine Python version
         id: python-version
+        env:
+          VERSION: ${{ steps.platform.outputs.version }}
         run: |
-          VERSION="${{ steps.platform.outputs.version }}"
           # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
           if [ "$VERSION" = "24.04" ]; then
             PYTHON_VERSION="3.12"
@@ -118,10 +119,11 @@ jobs:
           echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
 
       - name: Set environment variables
+        env:
+          DISTRO: ${{ steps.platform.outputs.distro }}
+          VERSION: ${{ steps.platform.outputs.version }}
+          ARCH: ${{ inputs.architecture || 'amd64' }}
         run: |
-          DISTRO="${{ steps.platform.outputs.distro }}"
-          VERSION="${{ steps.platform.outputs.version }}"
-          ARCH="${{ inputs.architecture || 'amd64' }}"
 
           echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
           echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
@@ -152,39 +154,44 @@ jobs:
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
         id: images
+        env:
+          DEV_TAG: ${{ steps.tags.outputs.dev-tag }}
+          BASIC_DEV_TAG: ${{ steps.tags.outputs.basic-dev-tag }}
+          BASIC_TTNN_RUNTIME_TAG: ${{ steps.tags.outputs.basic-ttnn-runtime-tag }}
+          MANYLINUX_TAG: ${{ steps.tags.outputs.manylinux-tag }}
         run: |
-          if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.dev-tag }} exists"
+          if docker manifest inspect "$DEV_TAG" > /dev/null 2>&1; then
+            echo "$DEV_TAG exists"
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
             echo "ci-test-exists=true" >> $GITHUB_OUTPUT
             echo "dev-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.dev-tag }} does not exist"
+            echo "$DEV_TAG does not exist"
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
             echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
+          if docker manifest inspect "$BASIC_DEV_TAG" > /dev/null 2>&1; then
+            echo "$BASIC_DEV_TAG exists"
             echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
+            echo "$BASIC_DEV_TAG does not exist"
             echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
           fi
-          if docker manifest inspect ${{ steps.tags.outputs.basic-ttnn-runtime-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} exists"
+          if docker manifest inspect "$BASIC_TTNN_RUNTIME_TAG" > /dev/null 2>&1; then
+            echo "$BASIC_TTNN_RUNTIME_TAG exists"
             echo "basic-ttnn-runtime-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} does not exist"
+            echo "$BASIC_TTNN_RUNTIME_TAG does not exist"
             echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if docker manifest inspect ${{ steps.tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.manylinux-tag }} exists"
+          if docker manifest inspect "$MANYLINUX_TAG" > /dev/null 2>&1; then
+            echo "$MANYLINUX_TAG exists"
             echo "manylinux-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.manylinux-tag }} does not exist"
+            echo "$MANYLINUX_TAG does not exist"
             echo "manylinux-exists=false" >> $GITHUB_OUTPUT
           fi
 

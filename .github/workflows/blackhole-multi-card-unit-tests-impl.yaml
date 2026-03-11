@@ -28,6 +28,17 @@ on:
         description: Enable watcher
         default: false
         type: boolean
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest

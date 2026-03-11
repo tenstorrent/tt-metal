@@ -102,8 +102,10 @@ jobs:
 
       - name: Check Ubuntu 22.04 images exist
         id: ubuntu-2204-check
+        env:
+          DEV_TAG: ${{ steps.ubuntu-2204-tags.outputs.dev-tag }}
         run: |
-          if docker manifest inspect ${{ steps.ubuntu-2204-tags.outputs.dev-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect $DEV_TAG > /dev/null 2>&1; then
             echo "Ubuntu 22.04 images exist"
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else
@@ -131,8 +133,10 @@ jobs:
 
       - name: Check Ubuntu 24.04 images exist
         id: ubuntu-2404-check
+        env:
+          DEV_TAG: ${{ steps.ubuntu-2404-tags.outputs.dev-tag }}
         run: |
-          if docker manifest inspect ${{ steps.ubuntu-2404-tags.outputs.dev-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect $DEV_TAG > /dev/null 2>&1; then
             echo "Ubuntu 24.04 images exist"
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else
@@ -151,8 +155,10 @@ jobs:
 
       - name: Check ManyLinux image exists
         id: manylinux-check
+        env:
+          MANYLINUX_TAG: ${{ steps.manylinux-tags.outputs.manylinux-tag }}
         run: |
-          if docker manifest inspect ${{ steps.manylinux-tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect $MANYLINUX_TAG > /dev/null 2>&1; then
             echo "ManyLinux image exists"
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else

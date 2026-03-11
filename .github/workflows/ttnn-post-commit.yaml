@@ -42,6 +42,11 @@ on:
         default: 0
         description: If > 0, skip time budget verification and use this as job timeout
           (e.g. 240 for APC watcher, 120 for BHPC watcher).
+    secrets:
+      REDIS_CCACHE_PASSWORD:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -71,16 +76,21 @@ jobs:
             "sanity"
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter matrix by merge_gate
         id: filter-matrix
+        env:
+          MERGE_GATE_CALL: ${{ inputs.merge-gate-call }}
+          BUILD_MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          merge_gate="${{ inputs.merge-gate-call }}"
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          merge_gate="$MERGE_GATE_CALL"
+          matrix="$BUILD_MATRIX"
           filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then

@@ -49,6 +49,9 @@ on:
         type: string
         default: ""
         description: "Git ref to checkout (defaults to github.sha if not provided)"
+    secrets:
+      REDIS_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       platform:
@@ -94,7 +97,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -112,7 +116,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:

@@ -9,10 +9,12 @@ runs:
   using: "composite"
   steps:
     - name: Set CPU governor to ${{ inputs.governor }}
+      env:
+        GOVERNOR: ${{ inputs.governor }}
       run: |
         set -euo pipefail
 
-        governor="${{ inputs.governor }}"
+        governor="$GOVERNOR"
         echo "🔧 Setting CPU governor to: $governor for all cores"
 
         # Check if scaling_governor exists (may not on VMs)

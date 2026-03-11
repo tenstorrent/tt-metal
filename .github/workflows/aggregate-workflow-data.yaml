@@ -183,8 +183,10 @@ jobs:
           run-id: ${{ steps.prev.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Echo selected previous run id
+        env:
+          PREV_RUN_ID: ${{ steps.prev.outputs.run_id }}
         run: |
-          echo "Selected previous run id: ${{ steps.prev.outputs.run_id }}"
+          echo "Selected previous run id: $PREV_RUN_ID"
       - name: List artifacts for selected previous run (debug)
         if: ${{ steps.prev.outputs.run_id != '' }}
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
@@ -295,8 +297,10 @@ jobs:
         if: ${{ always() }}
         id: slack-status
         shell: bash
+        env:
+          SLACK_TS: ${{ steps.slack-report.outputs.slack_ts }}
         run: |
-          slack_ts="${{ steps.slack-report.outputs.slack_ts }}"
+          slack_ts="$SLACK_TS"
           if [ -n "$slack_ts" ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else

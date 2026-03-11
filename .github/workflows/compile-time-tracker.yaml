@@ -103,6 +103,9 @@ jobs:
           path: metrics-repo
 
       - name: 📊 Append compile time to CSV and push
+        env:
+          COMPILE_WALL_TIME: ${{ steps.compile.outputs.wall_time }}
+          COMPILE_CPU_TIME: ${{ steps.compile.outputs.cpu_time }}
         run: |
           cd metrics-repo
           git config user.name "github-actions[bot]"
@@ -110,8 +113,8 @@ jobs:
 
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           COMMIT_SHA="${{ github.sha }}"
-          WALL_TIME="${{ steps.compile.outputs.wall_time }}"
-          CPU_TIME="${{ steps.compile.outputs.cpu_time }}"
+          WALL_TIME="${COMPILE_WALL_TIME}"
+          CPU_TIME="${COMPILE_CPU_TIME}"
           BRANCH="${{ github.ref_name }}"
           RUN_ID="${{ github.run_id }}"
 

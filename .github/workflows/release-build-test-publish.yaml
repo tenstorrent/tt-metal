@@ -33,6 +33,15 @@ on:
         default: ""
         type: string
 
+    secrets:
+      PYPI_BUCKET:
+        required: false
+      PYPI_REGION:
+        required: false
+      PYPI_ROLE:
+        required: false
+      REDIS_PASSWORD:
+        required: false
 permissions:
   contents: write
   packages: write
@@ -55,7 +64,8 @@ jobs:
           sparse-checkout-cone-mode: false
       - id: parse
         uses: ./.github/actions/parse-platform
-        with:
+        secrets:
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           platform: ${{ inputs.platform }}
 
   build-artifact-tracy:
@@ -64,13 +74,15 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
       tracy: true
       fetch-depth: 0
-      skip-tt-train: false
+      secrets:
+        REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
       enable-lto: false
 
   build-artifact-release:
@@ -79,7 +91,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
@@ -95,8 +108,11 @@ jobs:
     steps:
       - name: Select SKUs based on platform
         id: select-skus
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          MAIN_PLATFORM: ${{ inputs.main-platform }}
         run: |
-          if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
+          if [[ "$PLATFORM" == "$MAIN_PLATFORM" ]]; then
             # Main platform runs all tests including multi-card
             echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p100,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
           else
@@ -107,7 +123,12 @@ jobs:
   release-demo-tests:
     needs: [build-artifact-tracy, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
-    secrets: inherit
+    secrets:
+      HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
@@ -130,7 +151,6 @@ jobs:
           docker-image-tag: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           new-tag: ${{ inputs.tag-version || 'latest' }}
-
   create-docker-release-image:
     strategy:
       matrix:
@@ -139,7 +159,6 @@ jobs:
       - build-artifact-release
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
     if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     with:
       platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
@@ -150,7 +169,7 @@ jobs:
       image: ${{ matrix.image }}
 
   # Only run docs release once per run on the main platform
-  release-docs:
+  docs-release:
     needs: [build-artifact-release, parse-platform]
     if: ${{ inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     uses: ./.github/workflows/docs-latest-public.yaml
@@ -159,7 +178,6 @@ jobs:
       docker-image: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
-    secrets: inherit
 
   publish-wheels:
     name: "Publish wheels to internal PyPI"

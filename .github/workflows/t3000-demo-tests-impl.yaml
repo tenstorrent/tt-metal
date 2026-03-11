@@ -23,6 +23,15 @@ on:
         type: boolean
         default: true
         description: Set to false to allow write access to MLPerf mount
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest

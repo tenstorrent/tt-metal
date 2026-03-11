@@ -121,6 +121,8 @@ runs:
     - name: Set up kernel ccache
       if: ${{ inputs.enable-kernel-ccache == 'true' && github.event_name != 'pull_request' }}
       working-directory: ${{ inputs.path }}
+      env:
+        REDIS_CCACHE_STORAGE: ${{ inputs.redis-ccache-storage }}
       run: |
         echo "Enabling TT Metal kernel ccache"
         echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
@@ -129,11 +131,11 @@ runs:
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
 
-        if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
+        if [ -z "$REDIS_CCACHE_STORAGE" ]; then
           echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
           exit 1
         fi
-        echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
+        echo "CCACHE_REMOTE_STORAGE=$REDIS_CCACHE_STORAGE" >> $GITHUB_ENV
 
         mkdir -p /tmp/ccache
       shell: bash
@@ -141,11 +143,13 @@ runs:
     - name: Set up env vars for auto-triage
       if: ${{ inputs.auto-triage == 'true' }}
       working-directory: ${{ inputs.path }}
+      env:
+        HANG_DETECTION_TIMEOUT: ${{ inputs.hang-detection-timeout }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
         TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
         echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH 1>&2" >> $GITHUB_ENV
-        echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}" >> $GITHUB_ENV
+        echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=$HANG_DETECTION_TIMEOUT" >> $GITHUB_ENV
         echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> $GITHUB_ENV
         echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
         echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH" >> $GITHUB_ENV

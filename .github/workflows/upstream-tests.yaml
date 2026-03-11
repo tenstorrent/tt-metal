@@ -55,7 +55,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -87,8 +88,10 @@ jobs:
         run: echo "image-tag-suffix=$(git describe)" >> "$GITHUB_OUTPUT"
       - name: Set image tags
         id: set-image-tags
+        env:
+          IMAGE_TAG_SUFFIX: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
         run: |
-          image_suffix="${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}"
+          image_suffix="$IMAGE_TAG_SUFFIX"
           echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
           echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
@@ -424,6 +427,8 @@ jobs:
       - name: Calculate images to publish
         id: calculate-images
         shell: bash
+        env:
+          REQUEST_FORCE_PUBLISH: ${{ inputs.request-force-publish || 'passing-only' }}
         run: |
           set -euo pipefail
 
@@ -466,8 +471,7 @@ jobs:
           images_to_push_array=()
 
           # Parse the request-force-publish input
-          # Single-quotes because of the doubles in this string for JSON
-          request_input='${{ inputs.request-force-publish || 'passing-only' }}'
+          request_input="$REQUEST_FORCE_PUBLISH"
 
           echo "Processing request: $request_input"
 

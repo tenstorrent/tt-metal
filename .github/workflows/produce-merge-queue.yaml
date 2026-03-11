@@ -64,9 +64,9 @@ jobs:
       - name: Fetch merged PRs
         env:
           GH_TOKEN: ${{ github.token }}
+          LOOKBACK: ${{ steps.time.outputs.LOOKBACK }}
         run: |
           set -euo pipefail
-          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
 
           # NOTE:
           # Limited to first:100 results.
@@ -97,9 +97,9 @@ jobs:
       - name: Fetch closed PRs
         env:
           GH_TOKEN: ${{ github.token }}
+          LOOKBACK: ${{ steps.time.outputs.LOOKBACK }}
         run: |
           set -euo pipefail
-          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
 
           # NOTE:
           # Limited to first:100 results.

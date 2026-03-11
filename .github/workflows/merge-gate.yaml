@@ -59,13 +59,11 @@ jobs:
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
 
   # Build all Docker images ONCE at the start, then share with all downstream jobs
   docker-images:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/build-all-docker-images.yaml
-    secrets: inherit
 
   code-analysis:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
@@ -74,7 +72,9 @@ jobs:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     needs: docker-images
     uses: ./.github/workflows/code-analysis.yaml
-    secrets: inherit
+    secrets:
+      CLANGSA_RESULTS_PAT: ${{ secrets.CLANGSA_RESULTS_PAT }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: "Ubuntu 24.04"
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
@@ -115,7 +115,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: Release
       build-wheel: true
@@ -139,7 +140,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: TSan
       platform: "Ubuntu 24.04"
@@ -162,7 +164,8 @@ jobs:
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       ubuntu-2204-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ubuntu-2204-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
@@ -228,7 +231,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ASan
       platform: "Ubuntu 22.04"
@@ -291,7 +295,9 @@ jobs:
       needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
@@ -307,7 +313,9 @@ jobs:
       needs.find-changes.outputs.tt-nn-changed == 'true' ||
       needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -327,7 +335,8 @@ jobs:
       needs.find-changes.outputs.tt-nn-changed == 'true' ||
       needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -345,7 +354,8 @@ jobs:
     if: ${{ github.ref_name == 'main' ||
       needs.find-changes.outputs.any-code-changed == 'true'
       }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:

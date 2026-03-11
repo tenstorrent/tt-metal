@@ -27,6 +27,9 @@ on:
         description: "If true, do not upload tag."
         default: false
         type: boolean
+    secrets:
+      TT_METAL_RELEASE_TOKEN:
+        required: false
     outputs:
       version:
         description: "New version"

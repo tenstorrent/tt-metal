@@ -124,11 +124,14 @@ jobs:
       - name: Get workflow run_id attempt number to analyze
         id: get-run-id-and-attempt
         shell: bash
+        env:
+          INPUT_TEST_WORKFLOW_RUN_ID: ${{ inputs.test_workflow_run_id }}
+          INPUT_TEST_WORKFLOW_RUN_ATTEMPT: ${{ inputs.test_workflow_run_attempt }}
         run: |
           event_name="${{ github.event_name }}"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
-            run_id="${{ inputs.test_workflow_run_id }}"
-            attempt_number="${{ inputs.test_workflow_run_attempt }}"
+            run_id="$INPUT_TEST_WORKFLOW_RUN_ID"
+            attempt_number="$INPUT_TEST_WORKFLOW_RUN_ATTEMPT"
           elif [[ "$event_name" == "workflow_run" ]]; then
             run_id="${{ github.event.workflow_run.id }}"
             attempt_number="${{ github.event.workflow_run.run_attempt }}"
@@ -153,17 +156,21 @@ jobs:
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.get-run-id-and-attempt.outputs.run-id }}
+          ATTEMPT_NUMBER: ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
         run: |
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${RUN_ID}/attempts/${ATTEMPT_NUMBER} | tee workflow.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.get-run-id-and-attempt.outputs.run-id }}
+          ATTEMPT_NUMBER: ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
         run: |
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id "$RUN_ID" --attempt-number "$ATTEMPT_NUMBER"
           find generated/cicd/ -type f
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:

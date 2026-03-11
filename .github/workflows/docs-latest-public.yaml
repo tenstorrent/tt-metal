@@ -61,9 +61,11 @@ jobs:
         run: |
           ./tests/scripts/run_build_docs.sh
       - name: Prepare artifact - move output
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           mkdir gh_pages
-          mv docs/build/html gh_pages/${{ inputs.version }}
+          mv docs/build/html gh_pages/${VERSION}
       - name: Upload docs artifact (skipped for dry run)
         if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

@@ -30,6 +30,17 @@ on:
         description: "URL to gist containing release_tests.yaml (optional, falls back
           to local file if not provided). Security: Only GitHub gist/raw URLs allowed,
           validated before download."
+    secrets:
+      HUGGINGFACE_TOKEN:
+        required: false
+      SFTP_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -47,8 +58,10 @@ jobs:
           pip3 install PyYAML
       - name: Validate tests YAML URL (security check)
         if: ${{ inputs.tests-yaml-gist-url != '' }}
+        env:
+          TESTS_YAML_GIST_URL: ${{ inputs.tests-yaml-gist-url }}
         run: |
-          URL="${{ inputs.tests-yaml-gist-url }}"
+          URL="$TESTS_YAML_GIST_URL"
 
           # Only allow GitHub gist URLs or raw.githubusercontent.com URLs
           if [[ ! "$URL" =~ ^https://gist\.githubusercontent\.com/ ]] && \
@@ -61,9 +74,11 @@ jobs:
           echo "URL validation passed: $URL"
       - name: Download tests YAML from gist (if provided)
         if: ${{ inputs.tests-yaml-gist-url != '' }}
+        env:
+          TESTS_YAML_GIST_URL: ${{ inputs.tests-yaml-gist-url }}
         run: |
-          echo "Downloading tests YAML from gist: ${{ inputs.tests-yaml-gist-url }}"
-          curl -fsSL "${{ inputs.tests-yaml-gist-url }}" -o "${{ env.TESTS_YAML_PATH }}"
+          echo "Downloading tests YAML from gist: $TESTS_YAML_GIST_URL"
+          curl -fsSL "$TESTS_YAML_GIST_URL" -o "${{ env.TESTS_YAML_PATH }}"
           echo "Downloaded tests YAML:"
           head -n 20 "${{ env.TESTS_YAML_PATH }}"
       - name: Verify test timeouts against budget
@@ -76,23 +91,28 @@ jobs:
             "demo"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
+        env:
+          BUILD_MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          MODEL: ${{ inputs.model }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.model }}" = "all" ]; then
+          MATRIX="$BUILD_MATRIX"
+          if [ "$MODEL" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.["model-name"] == $m)]')
+            FILTERED=$(echo "$MATRIX" | jq -c --arg m "$MODEL" '[.[] | select(.["model-name"] == $m)]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for model '${{ inputs.model }}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              echo "::error::No tests found for model '$MODEL'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT

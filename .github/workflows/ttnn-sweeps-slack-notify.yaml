@@ -25,8 +25,15 @@ jobs:
       - name: Determine if notification should be sent
         id: check
         env:
-          # Required for `gh api` to fetch workflow run details when triggered via workflow_dispatch
           GH_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ github.event.inputs.run_id }}
+          WF_RUN_ID: ${{ github.event.workflow_run.id }}
+          WF_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          WF_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WF_RUN_NAME: ${{ github.event.workflow_run.name }}
+          WF_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WF_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WF_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           # Default values
           SHOULD_NOTIFY="false"
@@ -40,7 +47,7 @@ jobs:
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             # Manual trigger - fetch source run details and apply same gating as workflow_run
-            RUN_ID="${{ github.event.inputs.run_id }}"
+            RUN_ID="$INPUT_RUN_ID"
 
             # Get workflow run details
             WORKFLOW_INFO=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
@@ -73,13 +80,13 @@ jobs:
 
           elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
             # Triggered by workflow_run event
-            RUN_ID="${{ github.event.workflow_run.id }}"
-            RUN_NUMBER="${{ github.event.workflow_run.run_number }}"
-            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
-            RUN_NAME="${{ github.event.workflow_run.name }}"
-            EVENT_TYPE="${{ github.event.workflow_run.event }}"
-            SOURCE_GIT_SHA="${{ github.event.workflow_run.head_sha }}"
-            SOURCE_GIT_BRANCH="${{ github.event.workflow_run.head_branch }}"
+            RUN_ID="$WF_RUN_ID"
+            RUN_NUMBER="$WF_RUN_NUMBER"
+            CONCLUSION="$WF_RUN_CONCLUSION"
+            RUN_NAME="$WF_RUN_NAME"
+            EVENT_TYPE="$WF_RUN_EVENT"
+            SOURCE_GIT_SHA="$WF_RUN_HEAD_SHA"
+            SOURCE_GIT_BRANCH="$WF_RUN_HEAD_BRANCH"
 
             echo "Workflow run event: name='$RUN_NAME', event='$EVENT_TYPE', conclusion='$CONCLUSION'"
 

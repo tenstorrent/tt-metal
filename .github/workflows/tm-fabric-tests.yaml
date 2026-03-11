@@ -92,7 +92,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -108,20 +109,30 @@ jobs:
     steps:
       - id: set-matrix
         shell: bash
+        env:
+          INPUT_RUN_WH_N300_FABRIC_TESTS: ${{ inputs.run-wh-n300-fabric-tests }}
+          INPUT_RUN_WH_T3K_FABRIC_TESTS: ${{ inputs.run-wh-t3k-fabric-tests }}
+          INPUT_RUN_WH_6U_FABRIC_TESTS: ${{ inputs.run-wh-6u-fabric-tests }}
+          INPUT_RUN_BH_MULTI_CARD_UNIT_TESTS: ${{ inputs.run-bh-multi-card-unit-tests }}
+          INPUT_BH_RUNNER_LLMBOX: ${{ inputs.bh-runner-llmbox }}
+          INPUT_BH_RUNNER_DESKBOX: ${{ inputs.bh-runner-deskbox }}
+          INPUT_BH_RUNNER_LOUDBOX: ${{ inputs.bh-runner-loudbox }}
+          INPUT_BH_RUNNER_P300: ${{ inputs.bh-runner-p300 }}
+          INPUT_BH_RUNNER_QB_GE: ${{ inputs.bh-runner-qb-ge }}
         run: |
           matrix_items=()
 
           # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
-            run_wh_t3k="${{ inputs.run-wh-t3k-fabric-tests }}"
-            run_wh_6u="${{ inputs.run-wh-6u-fabric-tests }}"
-            run_bh="${{ inputs.run-bh-multi-card-unit-tests }}"
-            bh_llmbox="${{ inputs.bh-runner-llmbox }}"
-            bh_deskbox="${{ inputs.bh-runner-deskbox }}"
-            bh_loudbox="${{ inputs.bh-runner-loudbox }}"
-            bh_p300="${{ inputs.bh-runner-p300 }}"
-            bh_qb_ge="${{ inputs.bh-runner-qb-ge }}"
+            run_wh_n300="$INPUT_RUN_WH_N300_FABRIC_TESTS"
+            run_wh_t3k="$INPUT_RUN_WH_T3K_FABRIC_TESTS"
+            run_wh_6u="$INPUT_RUN_WH_6U_FABRIC_TESTS"
+            run_bh="$INPUT_RUN_BH_MULTI_CARD_UNIT_TESTS"
+            bh_llmbox="$INPUT_BH_RUNNER_LLMBOX"
+            bh_deskbox="$INPUT_BH_RUNNER_DESKBOX"
+            bh_loudbox="$INPUT_BH_RUNNER_LOUDBOX"
+            bh_p300="$INPUT_BH_RUNNER_P300"
+            bh_qb_ge="$INPUT_BH_RUNNER_QB_GE"
           else
             # Default to true for workflow_call and push events
             run_wh_n300="true"
@@ -186,7 +197,11 @@ jobs:
           echo "Generated matrix: $matrix_json"
   fabric-tests:
     needs: [build-artifact, generate-fabric-matrix]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -208,7 +223,11 @@ jobs:
   fabric-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

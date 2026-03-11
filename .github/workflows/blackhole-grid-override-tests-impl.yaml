@@ -21,6 +21,9 @@ on:
         type: string
         default: blackhole
         description: Architecture name to use
+    secrets:
+      SLACK_WEBHOOK_URL:
+        required: false
 jobs:
   reduced-core-count-tests:
     strategy:

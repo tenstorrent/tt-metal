@@ -31,6 +31,8 @@ jobs:
     steps:
       - name: Generate test matrix
         id: generate
+        env:
+          INPUT_MODEL: ${{ inputs.model }}
         run: |
           # Owner mapping:
           # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama models
@@ -304,10 +306,10 @@ jobs:
           ]'
 
           # Filter matrix based on model selection
-          if [ "${{ inputs.model }}" = "all" ]; then
+          if [ "$INPUT_MODEL" = "all" ]; then
             matrix="$all_tests"
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"$INPUT_MODEL\")]")
           fi
 
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT

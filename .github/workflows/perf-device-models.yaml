@@ -72,7 +72,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
@@ -81,7 +82,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   device-perf:
     needs: build-artifact-profiler
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}

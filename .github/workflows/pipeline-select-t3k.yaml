@@ -157,15 +157,23 @@ jobs:
     steps:
       - name: Determine test execution
         id: logic
+        env:
+          TRIGGER_TYPE: ${{ inputs.trigger_type }}
+          T3000_UNIT_ENABLED: ${{ inputs.t3000-unit != 'disabled' }}
+          T3000_DEMO_ENABLED: ${{ inputs.t3000-demo != 'disabled' }}
+          T3000_PERF_ENABLED: ${{ inputs.t3000-perf != 'disabled' }}
+          T3000_INTEGRATION_ENABLED: ${{ inputs.t3000-integration != 'disabled' }}
+          T3000_E2E: ${{ inputs.t3000-e2e }}
+          T3000_PROFILER: ${{ inputs.t3000-profiler }}
         run: |
-          case "${{ inputs.trigger_type }}" in
+          case "$TRIGGER_TYPE" in
             "manual")
-              echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-perf=${{ inputs.t3000-perf != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-integration=${{ inputs.t3000-integration != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-e2e=${{ inputs.t3000-e2e }}" >> $GITHUB_OUTPUT
-              echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
+              echo "run-unit=$T3000_UNIT_ENABLED" >> $GITHUB_OUTPUT
+              echo "run-demo=$T3000_DEMO_ENABLED" >> $GITHUB_OUTPUT
+              echo "run-perf=$T3000_PERF_ENABLED" >> $GITHUB_OUTPUT
+              echo "run-integration=$T3000_INTEGRATION_ENABLED" >> $GITHUB_OUTPUT
+              echo "run-e2e=$T3000_E2E" >> $GITHUB_OUTPUT
+              echo "run-profiler=$T3000_PROFILER" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-unit=true" >> $GITHUB_OUTPUT
@@ -188,7 +196,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     needs: determine-tests
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -199,7 +208,8 @@ jobs:
   t3000-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox"
@@ -210,7 +220,8 @@ jobs:
   t3000-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox_perf"
@@ -221,7 +232,11 @@ jobs:
   t3000-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox_perf"
@@ -232,7 +247,11 @@ jobs:
   t3000-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox"
@@ -243,7 +262,8 @@ jobs:
   t3000-e2e-tests:
     if: ${{ needs.determine-tests.outputs.run-e2e == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox"
@@ -253,7 +273,8 @@ jobs:
   t3000-profiler-tests:
     if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}

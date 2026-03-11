@@ -43,8 +43,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Extract Ubuntu version
         id: extract-version
+        env:
+          PLATFORM: ${{ inputs.platform }}
         run: |
-          PLATFORM="${{ inputs.platform }}"
           UBUNTU_VERSION="${PLATFORM#ubuntu-}"
           echo "version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
       - name: Set up Docker Buildx
@@ -61,9 +62,14 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
+        env:
+          EXTRACT_VERSION: ${{ steps.extract-version.outputs.version }}
+          PLATFORM: ${{ inputs.platform }}
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          UBUNTU_VERSION="${{ steps.extract-version.outputs.version }}"
+          UBUNTU_VERSION="$EXTRACT_VERSION"
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
           # Determine Python version based on Ubuntu version
@@ -74,9 +80,9 @@ jobs:
           fi
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_ENV
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_OUTPUT
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${PLATFORM}-${IMAGE}-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
-          TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
+          TAG_NAME=$REPO_IMAGE_NAME:${VERSION}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
@@ -98,9 +104,11 @@ jobs:
       - name: Get image digest
         if: ${{ !inputs.dry-run }}
         id: get-digest
+        env:
+          DIGEST: ${{ steps.build-push.outputs.digest }}
         run: |
           # Output format: repo@sha256:digest
-          IMAGE_ID="${{ env.REPO_IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}"
+          IMAGE_ID="${{ env.REPO_IMAGE_NAME }}@${DIGEST}"
           echo "Built image: $IMAGE_ID"
           echo "IMAGE_DIGEST=$IMAGE_ID" >> $GITHUB_OUTPUT
 
@@ -170,16 +178,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag latest if this is a major version release
+        env:
+          TAG_LATEST: ${{ inputs.tag-latest }}
+          PLATFORM: ${{ inputs.platform }}
+          IMAGE: ${{ inputs.image }}
         run: |
           set -eu # basic shell hygiene
           LATEST_TAG=latest
-          if [ "${{ inputs.tag-latest }}" = "true" ]; then
+          if [ "$TAG_LATEST" = "true" ]; then
             LATEST_TAG=latest
           else
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${PLATFORM}-${IMAGE}-amd64
           # Pull by digest to ensure we tag the exact image we built and tested
           IMAGE_DIGEST="${{ needs.create-docker-release-image.outputs.image_digest }}"
           docker pull "$IMAGE_DIGEST"

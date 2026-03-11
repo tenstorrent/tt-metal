@@ -13,6 +13,9 @@ on:
         required: true
         type: string
 
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   fd-frequent:
     strategy:

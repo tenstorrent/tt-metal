@@ -78,6 +78,13 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+    secrets:
+      REDIS_CCACHE_PASSWORD:
+        required: false
+      REDIS_PASSWORD:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
   workflow_dispatch:
     inputs:
       runner-label:
@@ -181,9 +188,11 @@ jobs:
     steps:
       - id: set-matrix
         shell: bash
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label || '["P150"]' }}
         run: |
           # Store runner-label with fallback in a variable for reuse
-          runner_label='${{ inputs.runner-label || '["P150"]' }}'
+          runner_label="$RUNNER_LABEL"
 
           # Check if this is a scheduled P100-only run at 7:00 UTC (daily)
           if [[ "${{ github.event_name }}" = "schedule" && "${{ github.event.schedule }}" = "0 7 * * *" ]]; then
@@ -223,14 +232,16 @@ jobs:
           echo "Final matrix values:"
           echo "matrix: $matrix"
           echo "civ2_matrix: $civ2_matrix"
-          echo "civ2_viommu_matrix: $civ2_viommu_matrix"
+          secrets:
+            REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
 
   build-artifact:
     if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -249,34 +260,40 @@ jobs:
       wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
     steps:
       - id: resolve
+        env:
+          INPUT_DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
+          INPUT_BUILD_ARTIFACT_NAME: ${{ inputs.build-artifact-name }}
+          INPUT_WHEEL_ARTIFACT_NAME: ${{ inputs.wheel-artifact-name }}
         run: |
           # Validate pre-built artifact inputs - all three must be provided together
-          if [[ -n "${{ inputs.dev-docker-image }}" || -n "${{ inputs.build-artifact-name }}" || -n "${{ inputs.wheel-artifact-name }}" ]]; then
-            if [[ -z "${{ inputs.dev-docker-image }}" || -z "${{ inputs.build-artifact-name }}" || -z "${{ inputs.wheel-artifact-name }}" ]]; then
+          if [[ -n "$INPUT_DEV_DOCKER_IMAGE" || -n "$INPUT_BUILD_ARTIFACT_NAME" || -n "$INPUT_WHEEL_ARTIFACT_NAME" ]]; then
+            if [[ -z "$INPUT_DEV_DOCKER_IMAGE" || -z "$INPUT_BUILD_ARTIFACT_NAME" || -z "$INPUT_WHEEL_ARTIFACT_NAME" ]]; then
               echo "Error: When using pre-built artifacts, all three inputs must be provided:"
-              echo "  - dev-docker-image: '${{ inputs.dev-docker-image }}'"
-              echo "  - build-artifact-name: '${{ inputs.build-artifact-name }}'"
-              echo "  - wheel-artifact-name: '${{ inputs.wheel-artifact-name }}'"
+              echo "  - dev-docker-image: '$INPUT_DEV_DOCKER_IMAGE'"
+              echo "  - build-artifact-name: '$INPUT_BUILD_ARTIFACT_NAME'"
+              echo "  - wheel-artifact-name: '$INPUT_WHEEL_ARTIFACT_NAME'"
               exit 1
             fi
           fi
 
           # Use provided artifacts if available, otherwise use built artifacts
-          if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
-            echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
-            echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
-            echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$INPUT_DEV_DOCKER_IMAGE" ]]; then
+            echo "dev-docker-image=$INPUT_DEV_DOCKER_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=$INPUT_BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=$INPUT_WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           else
             echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
-            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+            secrets:
+              SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           fi
 
   run-profiler-regression:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || github.event_name == 'schedule') }}
     uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -292,7 +309,8 @@ jobs:
   umd-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || github.event_name == 'schedule') }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
       fail-fast: false
@@ -300,14 +318,12 @@ jobs:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: blackhole
-      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || github.event_name == 'schedule') }}
-    secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
     strategy:
       fail-fast: false
@@ -316,14 +332,16 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      timeout: 20
+      secrets:
+        SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || github.event_name == 'schedule') }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
       fail-fast: false
@@ -331,14 +349,18 @@ jobs:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      secrets:
+        REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+        SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
   ops-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || github.event_name == 'schedule') }}
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -349,14 +371,16 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      secrets:
+        SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || github.event_name == 'schedule') }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     strategy:
       fail-fast: false
@@ -366,14 +390,16 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      secrets:
+        SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
     if: ${{ always() && !cancelled() && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule' || inputs.run-blackhole-multi-card-fast-unit-tests == true) }}
     needs: [resolve-artifacts, generate-matrix]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false

@@ -35,6 +35,9 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   fabric-tests:
     strategy:

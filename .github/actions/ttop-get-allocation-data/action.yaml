@@ -18,12 +18,14 @@ runs:
     - name: Get ranks
       shell: bash
       id: get-ranks
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
         echo "Getting ranks..."
 
         # Get all nodes with allocation.tenstorrent.com/allocated-by = allocationName
         nodes_json=$(kubectl get nodes -o json \
-          --selector "allocation.tenstorrent.com/allocated-by=${{ inputs.allocationName }}")
+          --selector "allocation.tenstorrent.com/allocated-by=${ALLOCATION_NAME}")
         ranks_json=$(echo $nodes_json | jq '.items | map({(.metadata.name): .metadata.labels["allocation.tenstorrent.com/allocation-rank"]}) | add ')
         echo "ranksData=$(echo $ranks_json | jq -c)" >> $GITHUB_OUTPUT
         echo "Node ranks:"

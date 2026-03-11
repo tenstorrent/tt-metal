@@ -18,6 +18,9 @@ on:
         required: false
         type: string
         default: all
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest

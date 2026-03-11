@@ -34,20 +34,26 @@ runs:
         echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
     - name: Parse image
       shell: bash
+      env:
+        WORKER_IMAGE: ${{ inputs.workerImage }}
       run: |
-        IFS=':' read -r REPOSITORY TAG <<< "${{ inputs.workerImage }}"
+        IFS=':' read -r REPOSITORY TAG <<< "$WORKER_IMAGE"
         echo "WORKER_REPOSITORY=$REPOSITORY" >> $GITHUB_ENV
         echo "WORKER_TAG=$TAG" >> $GITHUB_ENV
     - name: Construct Environment manifest
       shell: bash
       id: explicit
+      env:
+        ENVIRONMENT_NAME: ${{ inputs.environmentName }}
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
+        SHARED_VOLUME_ENABLED: ${{ inputs.sharedVolumeEnabled }}
       run: |
         cat <<EOF >> $GITHUB_ENV
         ENVIRONMENT_MANIFEST<<ENVIRONMENT_EOF
         apiVersion: helm.toolkit.fluxcd.io/v2
         kind: HelmRelease
         metadata:
-          name: ${{ inputs.environmentName }}
+          name: ${ENVIRONMENT_NAME}
         spec:
           interval: 5m
           chart:
@@ -59,7 +65,7 @@ runs:
                 name: tt-orchestration
           values:
             nodeSelector:
-              allocation.tenstorrent.com/allocated-by: ${{ inputs.allocationName }}
+              allocation.tenstorrent.com/allocated-by: ${ALLOCATION_NAME}
             image:
               repository: ${{ env.WORKER_REPOSITORY }}
               tag: ${{ env.WORKER_TAG }}
@@ -69,7 +75,7 @@ runs:
             cardsPerHost: $TT_CARDS_PER_HOST
             clientAuthorizedKeys: $SSH_PUBLIC_KEY
             volume:
-              enabled: ${{ inputs.sharedVolumeEnabled }}
+              enabled: ${SHARED_VOLUME_ENABLED}
               pvcName: $HOSTNAME
               mountPath: "/ci"
         ENVIRONMENT_EOF
@@ -83,12 +89,17 @@ runs:
 
     - name: Wait for environment
       shell: bash
+      env:
+        ENVIRONMENT_NAME: ${{ inputs.environmentName }}
+        TIMEOUT: ${{ inputs.timeout }}
       run: |
         echo "Waiting for environment to be ready..."
-        kubectl -nttop wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
+        kubectl -nttop wait --for=condition=Ready helmrelease/${ENVIRONMENT_NAME} --timeout=${TIMEOUT}
 
     - name: Connect to the environment
       shell: bash
+      env:
+        ENVIRONMENT_NAME: ${{ inputs.environmentName }}
       run: |
         echo "Connecting to environment..."
-        /home/runner/ttop/ssh-setup.sh "${{ inputs.environmentName }}"
+        /home/runner/ttop/ssh-setup.sh "$ENVIRONMENT_NAME"

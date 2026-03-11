@@ -19,4 +19,11 @@ jobs:
   trigger-post-commit:
     if: ${{ github.event.pull_request.head.repo.fork == true }}
     uses: ./.github/workflows/sanity-tests.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}

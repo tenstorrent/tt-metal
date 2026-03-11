@@ -38,6 +38,9 @@ on:
         default: "*"
         type: string
         description: Filter for gtest
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   cpp-unit-tests-slow-dispatch:
     strategy:

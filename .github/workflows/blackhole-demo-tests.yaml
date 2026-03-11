@@ -102,6 +102,8 @@ jobs:
     steps:
       - name: Set matrix
         id: set-matrix
+        env:
+          SYSTEM_TYPE: ${{ inputs.system-type || 'all' }}
         run: |
           all_systems='[
             {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
@@ -113,7 +115,7 @@ jobs:
             {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
-          selected_system_type="${{ inputs.system-type || 'all' }}"
+          selected_system_type="$SYSTEM_TYPE"
           if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
@@ -131,7 +133,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
@@ -140,7 +143,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-demo-tests:
     needs: [build-artifact, generate-card-matrix]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false

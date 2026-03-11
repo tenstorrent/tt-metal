@@ -48,6 +48,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+    secrets:
+      CLANGSA_RESULTS_PAT:
+        required: false
+      REDIS_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       architecture:
@@ -155,7 +160,6 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -169,7 +173,8 @@ jobs:
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan == 'true' }}
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -191,7 +196,8 @@ jobs:
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -212,7 +218,8 @@ jobs:
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -233,7 +240,8 @@ jobs:
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -331,10 +339,12 @@ jobs:
           echo "✅ Generated $PLIST_COUNT plist files"
 
       - name: Generate JSON and HTML reports from analysis results
+        env:
+          ANALYZE_OUTPUT: ${{ steps.codechecker.outputs.analyze-output }}
         run: |
           set -euo pipefail
 
-          OUTPUT_DIR="${{ steps.codechecker.outputs.analyze-output }}"
+          OUTPUT_DIR="$ANALYZE_OUTPUT"
           JSON_OUTPUT="/work/.build/codechecker_issues.json"
           HTML_OUTPUT="/work/.build/codechecker_html"
 

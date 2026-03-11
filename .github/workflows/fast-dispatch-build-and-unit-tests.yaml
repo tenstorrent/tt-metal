@@ -30,6 +30,9 @@ on:
         description: Enable LLK asserts
         default: false
         type: boolean
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   fd-tests:
     strategy:

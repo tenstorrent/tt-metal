@@ -28,6 +28,9 @@ on:
         default: false
         type: boolean
 
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 jobs:
   smoke:
     timeout-minutes: 30
@@ -87,9 +90,11 @@ jobs:
 
       - name: Install packages
         timeout-minutes: 10
+        env:
+          PRODUCT: ${{ inputs.product }}
         run: |
-          # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+          # Ideally only ${PRODUCT}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${PRODUCT}_*.deb ./pkgs/${PRODUCT}-validation_*.deb
 
       - name: Prepare coverage directory
         run: |
@@ -103,9 +108,10 @@ jobs:
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           # TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
+          PRODUCT: ${{ inputs.product }}
         run: |
           # Run a single test to warm up caches before the full test suite
-          /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
+          /usr/bin/${PRODUCT}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
       - name: Clear coverage from warmup
         if: ${{ inputs.upload-coverage }}
@@ -128,8 +134,9 @@ jobs:
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           TT_METAL_WATCHER_TEST_MODE: 1
+          PRODUCT: ${{ inputs.product }}
         run: |
-          /usr/bin/${{ inputs.product }}-validation-smoke
+          /usr/bin/${PRODUCT}-validation-smoke
 
       - name: Merge LLVM coverage
         if: ${{ inputs.upload-coverage }}
@@ -144,6 +151,8 @@ jobs:
 
       - name: Export LCOV (llvm-cov)
         if: ${{ inputs.upload-coverage }}
+        env:
+          PRODUCT: ${{ inputs.product }}
         run: |
           if [ -f /work/coverage/coverage.profdata ]; then
             objects=(
@@ -151,7 +160,7 @@ jobs:
               /usr/lib/libtt_stl.so
               /usr/lib/_ttnncpp.so
             )
-            test_bin="/usr/bin/${{ inputs.product }}-validation-smoke"
+            test_bin="/usr/bin/${PRODUCT}-validation-smoke"
             llvm-cov-17 export -format=lcov \
               -instr-profile=/work/coverage/coverage.profdata \
               "$test_bin" "${objects[@]}" > /work/coverage/coverage.info || {

@@ -54,7 +54,7 @@ on:
         description: "Name of the test branch created"
         value: ${{ jobs.setup.outputs.test-branch-name }}
       all-post-commit-result:
-        description: 'Result of Sanity tests (status:url format)'
+        description: "Result of Sanity tests (status:url format)"
 
         value: ${{ jobs.run-tests.outputs.all-post-commit-result }}
       blackhole-result:
@@ -121,9 +121,9 @@ jobs:
       - name: Cancel any previous spawned workflows
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+          MIRRORED_BRANCH: ${{ inputs.mirrored_branch }}
         run: |
           echo "🔍 Proactively cancelling any previous spawned workflows for this branch..."
-          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
           SPAWNED_WORKFLOWS=("sanity-tests.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
           STATUSES=("queued" "in_progress")
 
@@ -175,8 +175,9 @@ jobs:
 
       - name: Setup test branch and parent repository
         id: check-branch
+        env:
+          MIRRORED_BRANCH: ${{ inputs.mirrored_branch }}
         run: |
-          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
           TEST_BRANCH_NAME="test-llk-$MIRRORED_BRANCH-$(date +%s)"
           SUBMODULE_PATH="${{ env.SUBMODULE_PATH }}"
           cd "$SUBMODULE_PATH"
@@ -281,6 +282,8 @@ jobs:
           MAX_RETRIES: 3
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
+          RUN_ALL_POST_COMMIT: ${{ inputs.run_all_post_commit }}
+          RUN_BLACKHOLE_POST_COMMIT: ${{ inputs.run_blackhole_post_commit }}
         run: |
           WORKFLOW="${{ matrix.workflow }}"
           DISPLAY_NAME="${{ matrix.name }}"
@@ -291,9 +294,9 @@ jobs:
 
           # Build architecture parameter dynamically if needed
           if [ "$ARCH_TYPE" = "dynamic" ]; then
-            if [ "${{ inputs.run_all_post_commit }}" = "true" ] && [ "${{ inputs.run_blackhole_post_commit }}" = "true" ]; then
+            if [ "$RUN_ALL_POST_COMMIT" = "true" ] && [ "$RUN_BLACKHOLE_POST_COMMIT" = "true" ]; then
               ARCH_PARAM='["wormhole_b0", "blackhole"]'
-            elif [ "${{ inputs.run_all_post_commit }}" = "true" ]; then
+            elif [ "$RUN_ALL_POST_COMMIT" = "true" ]; then
               ARCH_PARAM='["wormhole_b0"]'
             else
               ARCH_PARAM='["blackhole"]'
@@ -487,18 +490,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
+          MIRRORED_BRANCH: ${{ inputs.mirrored_branch }}
+          RUN_ALL_POST_COMMIT: ${{ inputs.run_all_post_commit }}
+          RUN_BLACKHOLE_POST_COMMIT: ${{ inputs.run_blackhole_post_commit }}
+          RUN_ALL_POST_COMMIT_DISPLAY: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}
+          RUN_BLACKHOLE_POST_COMMIT_DISPLAY: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}
+          SHOULD_RUN_L2_AND_PERF: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
         run: |
           echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** ${{ inputs.mirrored_branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** $MIRRORED_BRANCH" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.setup.outputs.branch-exists }}" = "true" ]; then
             echo "**Test Branch:** ${{ needs.setup.outputs.test-branch-name }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Test Configuration:**" >> $GITHUB_STEP_SUMMARY
-            echo "- Sanity tests: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Blackhole Post-Commit Tests: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Sanity tests: $RUN_ALL_POST_COMMIT_DISPLAY" >> $GITHUB_STEP_SUMMARY
+            echo "- Blackhole Post-Commit Tests: $RUN_BLACKHOLE_POST_COMMIT_DISPLAY" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
             echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
@@ -548,10 +557,10 @@ jobs:
             }
 
             # Check results for each workflow type
-            check_workflow_result "sanity-tests.yaml" "Sanity tests" "${{ inputs.run_all_post_commit }}"
-            check_workflow_result "blackhole-post-commit.yaml" "Blackhole Post-Commit Tests" "${{ inputs.run_blackhole_post_commit }}"
-            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly Tests and Sanity" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
-            check_workflow_result "perf-device-models.yaml" "Device Perf Regressions" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
+            check_workflow_result "sanity-tests.yaml" "Sanity tests" "$RUN_ALL_POST_COMMIT"
+            check_workflow_result "blackhole-post-commit.yaml" "Blackhole Post-Commit Tests" "$RUN_BLACKHOLE_POST_COMMIT"
+            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly Tests and Sanity" "$SHOULD_RUN_L2_AND_PERF"
+            check_workflow_result "perf-device-models.yaml" "Device Perf Regressions" "$SHOULD_RUN_L2_AND_PERF"
 
             echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -567,7 +576,7 @@ jobs:
             fi
 
           else
-            echo "❌ **Branch Setup:** Mirrored branch '${{ inputs.mirrored_branch }}' does not exist" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Branch Setup:** Mirrored branch '${MIRRORED_BRANCH}' does not exist" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Please ensure the branch has been mirrored using the mirror workflow first." >> $GITHUB_STEP_SUMMARY
           fi

@@ -23,6 +23,9 @@ on:
         type: string
         default: "in-service"
 
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   profiler-tests:
     strategy:

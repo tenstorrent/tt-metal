@@ -60,18 +60,27 @@ on:
         type: boolean
         default: true
         description: Run tests on BH-QB-GE
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   # Wormhole N300 - Fabric tests
   wh-n300-fabric-tests:
     if: ${{ inputs.run-wh-n300-fabric-tests }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
         test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -80,7 +89,8 @@ jobs:
   # Wormhole T3K - Fabric tests
   wh-t3k-fabric-tests:
     if: ${{ inputs.run-wh-t3k-fabric-tests }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ inputs.docker-image }}
@@ -249,27 +259,33 @@ jobs:
     steps:
       - id: set-runner-matrix
         shell: bash
+        env:
+          BH_RUNNER_LLMBOX: ${{ inputs.bh-runner-llmbox }}
+          BH_RUNNER_DESKBOX: ${{ inputs.bh-runner-deskbox }}
+          BH_RUNNER_LOUDBOX: ${{ inputs.bh-runner-loudbox }}
+          BH_RUNNER_P300: ${{ inputs.bh-runner-p300 }}
+          BH_RUNNER_QB_GE: ${{ inputs.bh-runner-qb-ge }}
         run: |
           runner_items=()
 
           # Check which runner labels should be included
-          if [[ "${{ inputs.bh-runner-llmbox }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_LLMBOX" == "true" ]]; then
             runner_items+=('{"name":"LLMBox unit tests","runner-label":"BH-LLMBox"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-deskbox }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_DESKBOX" == "true" ]]; then
             runner_items+=('{"name":"DeskBox unit tests","runner-label":"BH-DeskBox"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-loudbox }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_LOUDBOX" == "true" ]]; then
             runner_items+=('{"name":"LoudBox unit tests","runner-label":"BH-LoudBox"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-p300 }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_P300" == "true" ]]; then
             runner_items+=('{"name":"P300 unit tests","runner-label":"P300-viommu"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-qb-ge }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_QB_GE" == "true" ]]; then
             runner_items+=('{"name":"QuietBox Global Edition unit tests","runner-label":"BH-QB-GE"}')
           fi
 

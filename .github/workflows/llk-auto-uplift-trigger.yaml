@@ -116,10 +116,13 @@ jobs:
       - name: Analyze changes
         id: analyze
         if: steps.update.outputs.has-changes == 'true'
+        env:
+          UPDATE_OLD_SHA: ${{ steps.update.outputs.old-sha }}
+          UPDATE_NEW_SHA: ${{ steps.update.outputs.new-sha }}
         run: |
           cd ${{ env.SUBMODULE_PATH }}
-          OLD_SHA="${{ steps.update.outputs.old-sha }}"
-          NEW_SHA="${{ steps.update.outputs.new-sha }}"
+          OLD_SHA="${UPDATE_OLD_SHA}"
+          NEW_SHA="${UPDATE_NEW_SHA}"
 
           # Get analysis data
           CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
@@ -295,11 +298,12 @@ jobs:
         if: matrix.should-run == 'true'
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+          WORKFLOW_TIMEOUT_INPUT: ${{ inputs.workflow_timeout || env.WORKFLOW_TIMEOUT }}
         run: |
           PR_NUMBER="${{ needs.update-submodule.outputs.pr-number }}"
           WORKFLOW="${{ matrix.workflow }}"
           DISPLAY_NAME="${{ matrix.name }}"
-          TIMEOUT_MINUTES="${{ inputs.workflow_timeout || env.WORKFLOW_TIMEOUT }}"
+          TIMEOUT_MINUTES="${WORKFLOW_TIMEOUT_INPUT}"
 
           # Helper function for workflow monitoring
           monitor_workflow() {
@@ -559,11 +563,14 @@ jobs:
       - name: Finalize PR
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+          PR_NUMBER_RESOLVED: ${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}
+          DRAFT: ${{ inputs.draft }}
+          RECHECK_TESTS: ${{ inputs.recheck_tests }}
         run: |
-          PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
+          PR_NUMBER="${PR_NUMBER_RESOLVED}"
 
           # Mark as ready if needed
-          if [ "${{ inputs.draft }}" = "true" ] || [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          if [ "$DRAFT" = "true" ] || [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             echo "Marking PR as ready for review"
             if gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" 2>/dev/null; then
               echo "ℹ️ PR converted to ready-for-review"
@@ -574,22 +581,22 @@ jobs:
           # Build test status for PR body update
           TEST_STATUS="### 🧪 Test Status"$'\n'
 
-          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+          if [ "$RECHECK_TESTS" = "true" ]; then
             TEST_STATUS+="**Workflow Results (Re-checked):**"$'\n'
           else
             TEST_STATUS+="**Workflow Results:**"$'\n'
           fi
 
           # Get PR creation time to filter runs created after PR
-          if [ "${{ inputs.recheck_tests }}" != "true" ]; then
+          if [ "$RECHECK_TESTS" != "true" ]; then
             PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
             echo "PR created at: $PR_CREATED_AT"
           fi
 
           # Collect workflow results
-          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "$RECHECK_TESTS" = "true" ]; then
             # Get Wormhole workflow results (filter by PR creation time if not recheck)
-            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            if [ "$RECHECK_TESTS" = "true" ]; then
               WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
               WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
@@ -601,9 +608,9 @@ jobs:
             fi
           fi
 
-          if [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+          if [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "$RECHECK_TESTS" = "true" ]; then
             # Get Blackhole workflow results (filter by PR creation time if not recheck)
-            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            if [ "$RECHECK_TESTS" = "true" ]; then
               BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
               BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
@@ -615,9 +622,9 @@ jobs:
             fi
           fi
 
-          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "$RECHECK_TESTS" = "true" ]; then
             # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
-            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            if [ "$RECHECK_TESTS" = "true" ]; then
               L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
               L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
@@ -629,7 +636,7 @@ jobs:
             fi
 
             # Get Device Perf Regressions workflow results (filter by PR creation time if not recheck)
-            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            if [ "$RECHECK_TESTS" = "true" ]; then
               PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
             else
               PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
@@ -642,7 +649,7 @@ jobs:
           fi
 
           # If no workflows were run
-          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "false" ] && [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "false" ] && [ "${{ inputs.recheck_tests }}" != "true" ]; then
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "false" ] && [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "false" ] && [ "$RECHECK_TESTS" != "true" ]; then
             TEST_STATUS+="- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole tests were run"$'\n'
           fi
 
@@ -660,7 +667,7 @@ jobs:
 
           # Enable auto-merge
           echo "🔄 Enabling auto-merge for PR #$PR_NUMBER"
-          if [ "${{ inputs.recheck_tests }}" != "true" ]; then
+          if [ "$RECHECK_TESTS" != "true" ]; then
             gh pr merge "$PR_NUMBER" --auto --squash --subject "chore: update LLK submodule to ${{ needs.update-submodule.outputs.new-sha }}" --repo "${{ github.repository }}" || echo "⚠️ Could not enable auto-merge (may require additional permissions)"
           else
             gh pr merge "$PR_NUMBER" --auto --squash --repo "${{ github.repository }}" || echo "⚠️ Could not enable auto-merge (may require additional permissions)"

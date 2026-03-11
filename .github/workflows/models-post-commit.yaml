@@ -37,6 +37,9 @@ on:
         default: ""
         description: "Commit SHA to test (default: HEAD)"
 
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   models:
     strategy:

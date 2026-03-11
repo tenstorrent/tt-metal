@@ -18,6 +18,15 @@ on:
         required: false
         type: string
         default: all
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -46,18 +55,21 @@ jobs:
             "perf"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter test matrix by model
         id: filter-matrix
         if: inputs.model != 'all'
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          MODEL: ${{ inputs.model }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          filtered=$(echo "$MATRIX" | jq -c --arg model "$MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

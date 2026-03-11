@@ -73,9 +73,10 @@ jobs:
     steps:
       - name: Resolve SKU selection
         id: resolve
+        env:
+          SKU_INPUT: ${{ inputs.sku || 'all' }}
         run: |
           ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
-          SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           else
@@ -87,7 +88,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -95,7 +97,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:
     needs: [build-artifact, resolve-skus]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

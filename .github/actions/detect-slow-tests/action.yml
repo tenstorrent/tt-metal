@@ -17,5 +17,8 @@ runs:
     - name: Find changed files
       id: find-changed-files
       shell: bash
+      env:
+        REPORT_DIR: ${{ inputs.report-dir }}
+        THRESHOLD: ${{ inputs.threshold }}
       run: |
-        python3 ${GITHUB_ACTION_PATH}/detect-slow-tests.py ${{ inputs.report-dir }} ${{ inputs.threshold }}
+        python3 ${GITHUB_ACTION_PATH}/detect-slow-tests.py "$REPORT_DIR" "$THRESHOLD"

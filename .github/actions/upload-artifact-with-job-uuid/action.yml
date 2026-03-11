@@ -16,9 +16,11 @@ runs:
     - name: Generate artifact name
       id: generate-artifact-name
       shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
       run: |
         uuid=$(uuidgen)
-        artifact_name="${{ inputs.prefix }}$uuid"
+        artifact_name="${PREFIX}$uuid"
         echo "[UPLOAD-ARTIFACT-UUID] $artifact_name"
         echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

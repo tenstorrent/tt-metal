@@ -100,10 +100,12 @@ jobs:
           fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
           out-file-path: /tmp/ttsim
       - name: Install ttsim
+        env:
+          TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
+          mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: Build and Run Metal Examples
         timeout-minutes: 3
@@ -250,10 +252,12 @@ jobs:
           fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
           out-file-path: /tmp/ttsim
       - name: Install ttsim
+        env:
+          TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
+          mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.arch.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: Install pytest-xdist for parallel execution
         run: uv pip install pytest-xdist
@@ -276,13 +280,12 @@ jobs:
           # If a worker crashes, pytest-xdist only reports "worker crashed"
           # which is useless for debugging. Re-run the failures serially to
           # get actionable output.
-          if ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}; then
+          if $TEST_CMD -n 4 $SKIP_ARGS; then
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          ${{ matrix.test-group.cmd }} --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
+          $TEST_CMD --lf --lfnf=all --tb=long -v $SKIP_ARGS || true
           exit 1
-
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
@@ -338,10 +341,12 @@ jobs:
           fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
           out-file-path: /tmp/ttsim
       - name: Install ttsim
+        env:
+          TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
+          mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: C++ tests
         timeout-minutes: 5
@@ -423,10 +428,12 @@ jobs:
           fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
           out-file-path: /tmp/ttsim
       - name: Install ttsim
+        env:
+          TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
+          mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: C++ tests
         timeout-minutes: 5

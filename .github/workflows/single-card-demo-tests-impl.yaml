@@ -34,6 +34,15 @@ on:
         type: boolean
         default: false
         description: Enable Tracy ops recording for all tests
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   define-demo-tests:
     runs-on: ubuntu-latest
@@ -329,19 +338,23 @@ jobs:
       - name: Compute tests
         shell: bash
         id: compute-tests
+        env:
+          REQUESTED_MODELS_JSON: ${{ toJSON(inputs.requested-models) }}
+          RUN_PERF_TESTS: ${{ inputs.run-perf-tests }}
+          DEFAULT_DEMO_TESTS_JSON: ${{ toJSON(matrix.default-demo-tests) }}
         run: |
           set -euo pipefail
 
           echo "[info] Outputing default values"
-          default_demo_tests='${{ toJSON(matrix.default-demo-tests) }}'
+          default_demo_tests="$DEFAULT_DEMO_TESTS_JSON"
           echo $default_demo_tests
           echo "[info] Outputing default values via jq"
           echo $default_demo_tests | jq
           requested_demo_tests=$default_demo_tests
 
-          requested_models=${{ toJSON(inputs.requested-models) }}
+          requested_models="$REQUESTED_MODELS_JSON"
           echo "[info] requested-models: $requested_models"
-          run_perf_tests=${{ inputs.run-perf-tests }}
+          run_perf_tests="$RUN_PERF_TESTS"
           echo "[info] run-perf-tests: $run_perf_tests"
 
           if [[ "$requested_models" != "all" ]]; then

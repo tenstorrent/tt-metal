@@ -43,23 +43,28 @@ jobs:
             "perf"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
+        env:
+          BUILD_MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          MODEL: ${{ inputs.model }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.model }}" = "all" ]; then
+          MATRIX="$BUILD_MATRIX"
+          if [ "$MODEL" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
+            FILTERED=$(echo "$MATRIX" | jq -c --arg m "$MODEL" '[.[] | select(.model == $m)]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for model '${{ inputs.model }}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              echo "::error::No tests found for model '${MODEL}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT

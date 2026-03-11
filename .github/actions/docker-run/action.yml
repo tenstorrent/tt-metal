@@ -45,8 +45,10 @@ runs:
     - name: Set docker image tag
       if: ${{ inputs.docker_image }}
       shell: bash
+      env:
+        DOCKER_IMAGE: ${{ inputs.docker_image }}
       run: |
-        echo "TT_METAL_DOCKER_IMAGE_TAG=${{ inputs.docker_image }}" >> $GITHUB_ENV
+        echo "TT_METAL_DOCKER_IMAGE_TAG=$DOCKER_IMAGE" >> $GITHUB_ENV
     - name: Determine docker image tag
       if: ${{ ! inputs.docker_image }}
       uses: ./.github/actions/generate-docker-tag
@@ -54,10 +56,12 @@ runs:
         image: ${{ inputs.docker_os_arch || 'docker-image-unresolved!'}}
     - name: Set
       shell: bash
+      env:
+        FORWARD_CIV2_PROXY_ENV_VARS: ${{ inputs.forward_civ2_proxy_env_vars }}
       run: |
         echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
         echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
-        if [ "${{ inputs.forward_civ2_proxy_env_vars }}" == "true" ]; then
+        if [ "$FORWARD_CIV2_PROXY_ENV_VARS" == "true" ]; then
           echo "CIV2_HTTP_PROXY=$HTTP_PROXY" >> $GITHUB_ENV
           echo "CIV2_http_proxy=$http_proxy" >> $GITHUB_ENV
           echo "CIV2_HTTPS_PROXY=$HTTPS_PROXY" >> $GITHUB_ENV

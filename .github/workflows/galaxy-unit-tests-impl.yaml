@@ -23,6 +23,9 @@ on:
         required: false
         type: string
         default: topology-6u
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   galaxy-umd-tests:
     strategy:

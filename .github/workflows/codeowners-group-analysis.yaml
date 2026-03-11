@@ -260,10 +260,12 @@ jobs:
     steps:
       - name: Find PR for branch
         id: find-pr
+        env:
+          INPUT_BRANCH: ${{ github.event.inputs.branch }}
         run: |
           # Determine branch and PR based on trigger type
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            BRANCH="${{ github.event.inputs.branch }}"
+            BRANCH="$INPUT_BRANCH"
             echo "Manual trigger - Looking for PR associated with branch: $BRANCH"
 
             # Use GitHub API to find PR for the branch
@@ -867,6 +869,11 @@ jobs:
     steps:
       - name: Generate comment data
         id: generate-comment
+        env:
+          INPUT_CREATE_NEW_COMMENT: ${{ github.event.inputs.create-new-comment }}
+          INPUT_PING_PENDING_OWNERS: ${{ github.event.inputs.ping-pending-owners }}
+          INPUT_SEND_SLACK_NOTIFICATION: ${{ github.event.inputs.send-slack-notification }}
+          INPUT_AUTHOR_NOTES: ${{ github.event.inputs.author-notes }}
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           # Handle cases where analyze-codeowners job might be skipped (direct ping)
@@ -880,10 +887,10 @@ jobs:
 
           # Determine parameters based on trigger type
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
-            PING_OWNERS="${{ github.event.inputs.ping-pending-owners }}"
-            SEND_SLACK="${{ github.event.inputs.send-slack-notification }}"
-            AUTHOR_NOTES="${{ github.event.inputs.author-notes }}"
+            CREATE_NEW="$INPUT_CREATE_NEW_COMMENT"
+            PING_OWNERS="$INPUT_PING_PENDING_OWNERS"
+            SEND_SLACK="$INPUT_SEND_SLACK_NOTIFICATION"
+            AUTHOR_NOTES="$INPUT_AUTHOR_NOTES"
           else
             # Comment trigger - use parsed parameters
             CREATE_NEW="${{ needs.parse-comment.outputs.create-new-comment }}"
@@ -1197,11 +1204,11 @@ jobs:
             } >> $GITHUB_OUTPUT
 
       - name: Post comment to PR
+        env:
+          PR_NUMBER: ${{ steps.generate-comment.outputs.pr-number }}
+          COMMENT: ${{ steps.generate-comment.outputs.comment }}
+          CREATE_NEW: ${{ steps.generate-comment.outputs.create-new }}
         run: |
-          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
-          COMMENT="${{ steps.generate-comment.outputs.comment }}"
-          CREATE_NEW="${{ steps.generate-comment.outputs.create-new }}"
-
           # Get existing comments to find if we should edit or create new (with pagination)
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
           ALL_COMMENTS="[]"
@@ -1764,8 +1771,9 @@ jobs:
       - name: Setup for notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         id: setup-notifications
+        env:
+          PR_NUMBER: ${{ steps.generate-comment.outputs.pr-number }}
         run: |
-          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
           CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
 
           # Validate PR_NUMBER
@@ -1871,6 +1879,9 @@ jobs:
       - name: Select owners for notification
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         id: select-owners
+        env:
+          MOREH_TEAM_MEMBERS: ${{ steps.setup-notifications.outputs.moreh-team-members }}
+          PR_AUTHOR_LOGIN: ${{ steps.setup-notifications.outputs.pr-author-login }}
         run: |
           # Read TEAM_MEMBERS from file (saved in generate-comment step)
           TEAM_MEMBERS=$(cat "${RUNNER_TEMP}/team_members.txt")
@@ -1880,8 +1891,6 @@ jobs:
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
-          MOREH_TEAM_MEMBERS="${{ steps.setup-notifications.outputs.moreh-team-members }}"
-          PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
 
           # Helper function to check if user is in thirdparty-moreh team
           is_moreh_member() {
@@ -2323,15 +2332,15 @@ jobs:
 
       - name: Send notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
+        env:
+          PING_OWNERS: ${{ steps.generate-comment.outputs.ping-owners }}
+          SEND_SLACK: ${{ steps.generate-comment.outputs.send-slack }}
+          SELECTED_OWNERS: ${{ steps.select-owners.outputs.selected-owners }}
+          PR_AUTHOR_LOGIN: ${{ steps.setup-notifications.outputs.pr-author-login }}
+          PR_AUTHOR_NAME: ${{ steps.setup-notifications.outputs.pr-author-name }}
+          AUTHOR_NOTES: ${{ steps.generate-comment.outputs.author-notes }}
+          PR_NUMBER: ${{ steps.generate-comment.outputs.pr-number }}
         run: |
-          PING_OWNERS="${{ steps.generate-comment.outputs.ping-owners }}"
-          SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
-          SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
-          PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
-          PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
-          AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
-          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
-
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
           PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
@@ -2403,15 +2412,16 @@ jobs:
 
       - name: Send Slack notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
+        env:
+          SEND_SLACK: ${{ steps.generate-comment.outputs.send-slack }}
+          SELECTED_OWNERS: ${{ steps.select-owners.outputs.selected-owners }}
+          SELECTED_SLACK_GROUPS: ${{ steps.select-owners.outputs.selected-slack-groups }}
+          NO_OWNERS_AVAILABLE: ${{ steps.select-owners.outputs.no-owners-available }}
+          PR_AUTHOR_LOGIN: ${{ steps.setup-notifications.outputs.pr-author-login }}
+          PR_AUTHOR_NAME: ${{ steps.setup-notifications.outputs.pr-author-name }}
+          AUTHOR_NOTES: ${{ steps.generate-comment.outputs.author-notes }}
+          PR_NUMBER: ${{ steps.generate-comment.outputs.pr-number }}
         run: |
-          SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
-          SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
-          SELECTED_SLACK_GROUPS="${{ steps.select-owners.outputs.selected-slack-groups }}"
-          NO_OWNERS_AVAILABLE="${{ steps.select-owners.outputs.no-owners-available }}"
-          PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
-          PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
-          AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
-          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
           # ... existing code ...
           TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
           TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"

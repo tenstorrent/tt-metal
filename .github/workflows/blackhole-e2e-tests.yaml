@@ -99,7 +99,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -113,6 +114,8 @@ jobs:
     steps:
       - name: Set matrix
         id: set-matrix
+        env:
+          BH_MULTI_CARD_SYSTEM_TYPE: ${{ inputs.bh_multi_card_system_type || 'all' }}
         run: |
           all_systems='[
             {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
@@ -122,7 +125,7 @@ jobs:
             {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
-          selected_system_type="${{ inputs.bh_multi_card_system_type || 'all' }}"
+          selected_system_type="$BH_MULTI_CARD_SYSTEM_TYPE"
           if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
@@ -139,7 +142,12 @@ jobs:
   blackhole-multi-card-unit-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests }}
     needs: [build-artifact, blackhole-multi-card-tests-matrix]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
@@ -154,7 +162,12 @@ jobs:
   blackhole-grid-override-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/blackhole-grid-override-tests-impl.yaml
     with:
       arch_name: blackhole
@@ -165,7 +178,8 @@ jobs:
   blackhole-ttnn-stress-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
     strategy:
       fail-fast: false

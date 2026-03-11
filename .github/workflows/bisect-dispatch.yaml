@@ -139,7 +139,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            echo "Redis password is missing. Did you forget to pass secrets explicitly?"
             exit 1
           fi
           # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails

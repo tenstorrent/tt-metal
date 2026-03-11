@@ -91,7 +91,10 @@ on:
         type: boolean
         default: true
 
-# This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
+    # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 env:
   TEST_BUDGET_SECONDS: 600
 

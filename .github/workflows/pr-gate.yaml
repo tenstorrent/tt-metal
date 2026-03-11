@@ -97,7 +97,6 @@ jobs:
   build-docker-images:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: amd64
@@ -109,7 +108,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
@@ -153,7 +153,8 @@ jobs:
       matrix:
         platform: ["N150-viommu"]
     uses: ./.github/workflows/smoke.yaml
-    secrets: inherit
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
@@ -175,7 +176,8 @@ jobs:
       matrix:
         platform: ["N150-viommu"]
     uses: ./.github/workflows/smoke.yaml
-    secrets: inherit
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
@@ -189,7 +191,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
@@ -295,7 +298,6 @@ jobs:
           needs.find-changed-files.outputs.docs-changed == 'true' }}
     needs: [find-changed-files, build]
     uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}

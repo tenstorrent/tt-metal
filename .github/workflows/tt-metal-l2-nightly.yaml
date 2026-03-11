@@ -100,7 +100,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -120,8 +121,10 @@ jobs:
       matrix-blackhole-only: ${{ steps.parse.outputs.matrix-blackhole-only }}
     steps:
       - id: parse
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
         run: |
-          arch='${{ inputs.architecture }}'
+          arch=''"$ARCHITECTURE"''
 
           # Default to running all if empty or not provided (scheduled runs)
           if [[ -z "$arch" || "$arch" == "" ]]; then
@@ -237,7 +240,8 @@ jobs:
   tt-metal-l2-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: ${{ needs.generate-arch-matrix.outputs.matrix-l2-tests != '[]' }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
     strategy:
       fail-fast: false
@@ -272,7 +276,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,')) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/ttnn-ops-docs-check.yaml
     strategy:
       fail-fast: false
@@ -290,7 +295,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_didt_tests) &&
       needs.generate-arch-matrix.outputs.matrix-l2-tests != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/didt-tests.yaml
     strategy:
       fail-fast: false
@@ -309,7 +315,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_cpp_tests) &&
       needs.generate-arch-matrix.outputs.matrix-cpp-tests != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -328,7 +335,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_metal_iommu_tests) &&
       needs.generate-arch-matrix.outputs.matrix-blackhole-only != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -346,7 +354,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -364,7 +373,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_fd_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -381,7 +391,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tutorials_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tutorials != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
     strategy:
       fail-fast: false
@@ -398,7 +409,6 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_profiler_regression) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
-    secrets: inherit
     strategy:
       fail-fast: false
       matrix:
@@ -415,7 +425,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -433,7 +444,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_models_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
@@ -450,7 +462,8 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:

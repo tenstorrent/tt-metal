@@ -22,12 +22,14 @@ runs:
       id: verify
       shell: bash
       continue-on-error: true
+      env:
+        INPUT_PATH: ${{ inputs.path }}
       run: |
-        cd "${{ inputs.path }}"
+        cd "$INPUT_PATH"
         shopt -s nullglob
         deb_files=(*.deb)
         if [ ${#deb_files[@]} -eq 0 ]; then
-          echo "::error::No .deb files found in ${{ inputs.path }}"
+          echo "::error::No .deb files found in $INPUT_PATH"
           exit 1
         fi
         for deb in "${deb_files[@]}"; do
@@ -42,9 +44,11 @@ runs:
     - name: Clear corrupted packages
       if: steps.verify.outcome == 'failure'
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
       run: |
         echo "::warning::Package verification failed, retrying download..."
-        rm -f "${{ inputs.path }}"/*.deb
+        rm -f "$INPUT_PATH"/*.deb
 
     - name: Retry download
       if: steps.verify.outcome == 'failure'
@@ -56,8 +60,10 @@ runs:
     - name: Verify packages after retry
       if: steps.verify.outcome == 'failure'
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
       run: |
-        cd "${{ inputs.path }}"
+        cd "$INPUT_PATH"
         shopt -s nullglob
         deb_files=(*.deb)
         if [ ${#deb_files[@]} -eq 0 ]; then

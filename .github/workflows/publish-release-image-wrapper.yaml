@@ -22,7 +22,8 @@ jobs:
     permissions:
       packages: write
       contents: read
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-wheel: true
       platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
@@ -47,7 +48,6 @@ jobs:
     needs:
       - build-artifact
       - create-image-tag-name
-    secrets: inherit
     with:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       tag-latest: ${{ inputs.tag-latest }}

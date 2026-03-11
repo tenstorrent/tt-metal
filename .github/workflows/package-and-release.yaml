@@ -79,14 +79,16 @@ jobs:
           fetch-depth: 0
       - name: Set default release-type for cron job
         id: set-release-type
+        env:
+          RELEASE_TYPE_INPUT: ${{ inputs.release-type }}
         run: |
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             echo "Cron job detected, setting default release-type to 'dev'"
             echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
             echo "Using release-type: dev"
           else
-            echo "RELEASE_TYPE=${{ inputs.release-type }}" >> "$GITHUB_ENV"
-            echo "Using release-type: ${{ inputs.release-type }}"
+            echo "RELEASE_TYPE=$RELEASE_TYPE_INPUT" >> "$GITHUB_ENV"
+            echo "Using release-type: $RELEASE_TYPE_INPUT"
           fi
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
@@ -115,6 +117,8 @@ jobs:
 
       - name: Get should-create-release
         id: get-should-create-release
+        env:
+          RC_FLAG: ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
         run: |
           # Skip this check for manual dispatches
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -124,8 +128,8 @@ jobs:
           fi
 
           # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          ./scripts/build_scripts/get_should_create_release.sh $RC_FLAG
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh $RC_FLAG)
           if [ "$shouldCreateRelease" != "true" ]; then
             echo "should-create-release is false, no release needed. Exiting workflow."
             exit 1
@@ -134,8 +138,9 @@ jobs:
 
   create-tag:
     needs: release-precheck
-    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@main
-    secrets: inherit
+    uses: ./.github/workflows/release-verify-or-create-tag.yaml
+    secrets:
+      TT_METAL_RELEASE_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     with:
       fetch_depth: 0
       bump_each_commit: false
@@ -148,7 +153,11 @@ jobs:
   build-test-publish:
     needs: [create-tag, release-precheck]
     uses: ./.github/workflows/release-build-test-publish.yaml
-    secrets: inherit
+    secrets:
+      PYPI_BUCKET: ${{ secrets.PYPI_BUCKET }}
+      PYPI_REGION: ${{ secrets.PYPI_REGION }}
+      PYPI_ROLE: ${{ secrets.PYPI_ROLE }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -302,6 +311,7 @@ jobs:
         id: check-release-conditions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           TAG_NAME="${{ needs.create-tag.outputs.version }}"
 
@@ -313,7 +323,7 @@ jobs:
           if [[ "${{ github.ref }}" == "refs/heads/main" ]] || \
              [[ "${{ github.ref }}" == "refs/heads/stable" ]] || \
              [[ "${{ github.ref }}" == refs/tags/v* ]] || \
-             [[ "${{ inputs.dry-run }}" == "true" ]]; then
+             [[ "$DRY_RUN" == "true" ]]; then
             should_create_for_ref=true
             echo "✓ Git ref condition met: ${{ github.ref }}"
           else
@@ -576,8 +586,10 @@ jobs:
           echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
       - name: Check for new commits since latest release
         id: check-new-commits
+        env:
+          LATEST_RELEASE_VERSION: ${{ steps.get-latest-release.outputs.latest-release-version }}
         run: |
-          latestReleaseVersion="${{ steps.get-latest-release.outputs.latest-release-version }}"
+          latestReleaseVersion="$LATEST_RELEASE_VERSION"
           echo "Latest release version: $latestReleaseVersion"
 
           # Get the commit hash of the latest release tag
