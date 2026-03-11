@@ -93,9 +93,10 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
-    // When cos/sin are sharded: fast path (seq_per_core==1) uses globally-allocated L1 view;
-    // reload path (seq_per_core>1) reads each row via TensorAccessor.
-    const bool cos_sin_sharded_reload = cos_sin_sharded && (seq_per_core > 1);
+    // When cos/sin are sharded: fast path (seq_per_core==1, shard covers all cores) uses globally-allocated L1 view;
+    // reload path reads each row via TensorAccessor (used when seq_per_core>1 or shard count < num_cores).
+    const bool cos_sin_sharded_reload =
+        cos_sin_sharded && (seq_per_core > 1 || cos.shard_spec()->grid.num_cores() < num_cores);
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
@@ -160,8 +161,11 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     uint32_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
+    // Globally-allocated CB for trans_mat requires shard grid to cover all cores.
+    // When shard count < num_cores, fall back to TensorAccessor reads (the non-sharded kernel path).
+    const bool trans_mat_use_global_cb = trans_mat_sharded && trans_mat.shard_spec()->grid.num_cores() >= num_cores;
     std::optional<CBHandle> cb_trans_mat_handle;
-    if (trans_mat_sharded) {
+    if (trans_mat_use_global_cb) {
         auto tm_cb_cfg =
             tt_metal::CircularBufferConfig(
                 num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
@@ -218,7 +222,7 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)freq_per_head,
-        (std::uint32_t)trans_mat_sharded,
+        (std::uint32_t)trans_mat_use_global_cb,
         (std::uint32_t)cos_sin_sharded,
         (std::uint32_t)cos_sin_sharded_reload,
     };

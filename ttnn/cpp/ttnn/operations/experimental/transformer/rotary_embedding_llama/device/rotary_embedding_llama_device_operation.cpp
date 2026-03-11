@@ -155,14 +155,6 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
                 "HEIGHT_SHARDED cos/sin in prefill RoPE requires head-broadcast (cos.shape[1]==1), got {}",
                 cos.logical_shape()[1]);
             uint32_t head_dim_padded = input_tensor.padded_shape()[-1];
-            uint32_t device_num_cores =
-                ref_device->compute_with_storage_grid_size().x * ref_device->compute_with_storage_grid_size().y;
-            TT_FATAL(
-                cos.shard_spec()->grid.num_cores() >= device_num_cores,
-                "HEIGHT_SHARDED cos/sin shard grid must cover all device cores. cos has {} shards, device has {} "
-                "cores",
-                cos.shard_spec()->grid.num_cores(),
-                device_num_cores);
             TT_FATAL(
                 cos.shard_spec()->shape[0] == TILE_HEIGHT,
                 "HEIGHT_SHARDED cos shard height must equal TILE_HEIGHT for prefill RoPE");
@@ -194,14 +186,6 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
         if (trans_mat_sharded) {
             TT_FATAL(
                 trans_mat.shard_spec().has_value(), "HEIGHT_SHARDED trans_mat must have shard_spec for prefill RoPE");
-            uint32_t device_num_cores =
-                ref_device->compute_with_storage_grid_size().x * ref_device->compute_with_storage_grid_size().y;
-            TT_FATAL(
-                trans_mat.shard_spec()->grid.num_cores() >= device_num_cores,
-                "HEIGHT_SHARDED trans_mat shard grid must cover all device cores. trans_mat has {} shards, device "
-                "has {} cores",
-                trans_mat.shard_spec()->grid.num_cores(),
-                device_num_cores);
             TT_FATAL(
                 trans_mat.shard_spec()->shape[0] == TILE_HEIGHT,
                 "HEIGHT_SHARDED trans_mat shard height must equal TILE_HEIGHT for prefill RoPE");
