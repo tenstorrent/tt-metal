@@ -1,0 +1,144 @@
+{
+  "op_name": "rms_norm",
+  "op_path": "ttnn/ttnn/operations/rms_norm",
+  "spec_path": "ttnn/ttnn/operations/rms_norm/op_design.md",
+  "layout": [
+    "TILE_LAYOUT",
+    "ROW_MAJOR_LAYOUT"
+  ],
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads input, tilize (if RM), identity pass-through, untilize (if RM), writer outputs. Verifies data movement for both layouts.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "return input_tensor",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", layout=layout",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "[\"bfloat16\"]",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "square_reduce_rsqrt",
+      "description": "Adds square, reduce-sum (mean via 1/W scaler), add-epsilon, and rsqrt phases. Output is rsqrt(mean(x^2, dim=-1, keepdim=True) + eps) with reduced W dimension.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_square_reduce_rsqrt.py",
+      "reference_body": "return torch.rsqrt(torch.mean(input_tensor.float()**2, dim=-1, keepdim=True) + 1e-6).to(input_tensor.dtype)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", layout=layout",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[:,:,:,0:1]",
+      "dtype_parametrize": "[\"bfloat16\"]",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "normalize",
+      "description": "Adds normalize-multiply phase: x * rsqrt(mean(x^2) + eps). Output is rms_norm without gamma, full input shape restored.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_normalize.py",
+      "reference_body": "return (input_tensor.float() * torch.rsqrt(torch.mean(input_tensor.float()**2, dim=-1, keepdim=True) + 1e-6)).to(input_tensor.dtype)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", layout=layout",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "[\"bfloat16\"]",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "gamma",
+      "description": "Adds gamma multiply phase. Output is full rms_norm: x * rsqrt(mean(x^2) + eps) * gamma. Reader loads and tilizes gamma tensor.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_gamma.py",
+      "reference_body": "return (input_tensor.float() * torch.rsqrt(torch.mean(input_tensor.float()**2, dim=-1, keepdim=True) + 1e-6) * gamma.float()).to(input_tensor.dtype)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", gamma=ttnn_gamma, layout=layout",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, shape[-1], dtype=torch_dtype)",
+      "extra_ttnn_setup": "ttnn_gamma = ttnn.from_torch(gamma, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "[\"bfloat16\"]",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
