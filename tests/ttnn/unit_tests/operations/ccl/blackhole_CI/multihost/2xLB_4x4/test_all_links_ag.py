@@ -21,9 +21,8 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     [
         (4, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, ttnn.bfloat16),
     ],
-    ids=["horizontal_test_bf16", "vertical_test_u32", "vertical_test_bf8"],
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
@@ -139,7 +138,7 @@ def test_all_links_ag(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["dram_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",

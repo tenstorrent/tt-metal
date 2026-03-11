@@ -1,0 +1,5 @@
+tt-run \
+   --tcp-interface enp194s0f0np0 \
+   --rank-binding $TT_METAL_HOME/tests/tt_metal/distributed/config/dual_bh_lb_rank_bindings.yaml \
+   --mpi-args "--host bh-lb-02,bh-lb-03" \
+   bash -c "export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 && source setup.sh && pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/multihost/2xLB_4x4/test_vertical_multihost.py"
