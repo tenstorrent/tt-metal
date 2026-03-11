@@ -103,6 +103,48 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+## Hardware Compatibility Issues
+
+### 12. fp32_dest_acc_en + reduce helpers incompatibility on Wormhole B0
+**Status**: Proposed — HIGH PRIORITY
+
+The architect recommends `fp32_dest_acc_en=True` based on reference analyses (e.g., softmax uses fp32 accumulation). However, the softmax reference achieves fp32 precision via `matmul_tiles`-based reduction, not via `compute_kernel_lib::reduce` helpers. The reduce helpers use a hardware reduce LLK path that has a known MOVD2B/MOVB2D transpose bug on Wormhole B0 when fp32_dest_acc_en is enabled. This causes partial tile packing: 8 valid rows, 8 zeros, repeating.
+
+**Observed in**: layer_norm_rm run1 (2026-03-11), reduce_mean stage. Cost: 1 hard attempt + ~11 minutes debugging.
+
+**Root cause**: The architect's hardware constraints checklist does not include this incompatibility. The architect sees "softmax uses fp32_dest_acc_en=True" and applies it without checking that the reduction method differs.
+
+**Proposal**: Add to the architect's hardware constraints checklist: "When using compute_kernel_lib::reduce helpers (not matmul-based reduction), fp32_dest_acc_en MUST be False on WH B0." Alternatively, create a hardware incompatibility database that the architect consults before finalizing ComputeConfig.
+
+---
+
+### 13. Stage test generation produces broken Python files
+**Status**: Proposed — HIGH PRIORITY
+
+The tdd_orchestrator (or architect's stage test template) generates test files with two classes of bugs:
+
+1. **Relative imports**: `from .layer_norm_rm import layer_norm_rm` — tests live in `tests/` directory, not co-located with operation code. Should be `from ttnn.operations.layer_norm_rm import layer_norm_rm`.
+2. **Broken reference functions**: The `reference_body` expression from `.tdd_state.json` is injected as a bare expression without `return` and using the shorthand variable name `x` instead of the function parameter `input_tensor`.
+
+The builder has to fix these every run, costing ~3 minutes per pipeline execution.
+
+**Observed in**: layer_norm_rm run1 (2026-03-11), builder phase. Also documented in builder execution log Recommendation 2.
+
+**Proposal**: Fix the test template in tdd_orchestrator to: (a) use absolute imports, (b) wrap reference_body in proper `return` statement with parameter mapping, (c) validate generated Python syntax before writing.
+
+---
+
+### 14. Final TDD stage does not test optional parameter combinations
+**Status**: Proposed
+
+When an operation has optional parameters (gamma/beta for normalization, weight/bias for linear ops), the final TDD stage test only exercises the "all defaults" path. For layer_norm_rm, the compute kernel has 4 compile-time code paths (no-gamma-no-beta, gamma-only, gamma+beta, beta-only) but only the first is tested.
+
+**Observed in**: layer_norm_rm run1 (2026-03-11). The full_normalize test only calls `layer_norm_rm(input)` without gamma or beta.
+
+**Proposal**: Require the final TDD stage to include parametrized test cases covering all combinations of optional parameters. Add `extra_test_cases` support to stage definitions in `.tdd_state.json`.
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +157,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | fp32_dest_acc_en + reduce helpers WH B0 | HIGH | SMALL | HIGH |
+| 13 | Stage test generation broken | HIGH | MEDIUM | HIGH |
+| 14 | No optional param test coverage | MEDIUM | MEDIUM | MEDIUM |
