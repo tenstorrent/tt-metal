@@ -6,8 +6,8 @@
     "TILE_LAYOUT",
     "ROW_MAJOR_LAYOUT"
   ],
-  "current_stage_index": 1,
-  "last_passing_commit": "bc1663400afaf6db308797b847950849f305829b",
+  "current_stage_index": 2,
+  "last_passing_commit": "ab26b592a2e74bf47576d37114e7b82f18323f8f",
   "stages": [
     {
       "name": "data_pipeline",
@@ -70,12 +70,86 @@
       "output_shape_expr": "list(shape[:-1]) + [32]",
       "compare_slice": "[:,:,:,0:1]",
       "dtype_parametrize": "bfloat16",
-      "status": "in_progress",
-      "commit": null,
-      "attempts": 0,
+      "status": "passed",
+      "commit": "ab26b592a2e74bf47576d37114e7b82f18323f8f",
+      "attempts": 4,
       "free_retries": 0,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "runtime_error",
+          "summary": "TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:",
+          "details": {
+            "error_type": "TypeError",
+            "message": "__getitem__(): incompatible function arguments. The following argument types are supported:"
+          },
+          "suggested_action": "Check runtime args indexing. Verify tensor addresses and buffer sizes. Look for off-by-one errors in tile counting.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_mean",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_unknown",
+          "summary": "Hang detected (stuck: unknown)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": "inactive",
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check triage log at /tmp/tt-test-triage-dev0.log for more details. Verify all three kernels (reader/compute/writer) are making progress.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_mean",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_cb_deadlock",
+          "summary": "unknown RISC-V stuck at cb_wait_front(inactive)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": "inactive",
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check CB sync: total pushes must equal total pops. Verify the stuck CB is fed by its producer. Do NOT add CB ops around helpers.",
+          "attempt": 3,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_mean",
+          "remaining_attempts": 3,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_cb_deadlock",
+          "summary": "unknown RISC-V stuck at cb_wait_front(inactive)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": "inactive",
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check CB sync: total pushes must equal total pops. Verify the stuck CB is fed by its producer. Do NOT add CB ops around helpers.",
+          "attempt": 4,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_mean",
+          "remaining_attempts": 2,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "rms_norm_no_gamma",
@@ -104,7 +178,7 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "bfloat16",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,

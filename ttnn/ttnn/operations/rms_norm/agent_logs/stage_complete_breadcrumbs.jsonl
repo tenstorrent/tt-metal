@@ -1,0 +1,1 @@
+{"stage":"square_reduce_mean","result":"pass","hard_attempts":5,"free_retries":0,"upstream_fixes":["cb_xsq 1 page to Wt pages","compute_kernel_hw_startup conditional on IS_INPUT_RM","output_shape list comprehension for ttnn.Shape"],"ts":"2026-03-11T18:14:02+00:00"}

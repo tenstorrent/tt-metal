@@ -41,8 +41,9 @@ def rms_norm(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    # Output shape matches input shape
-    output_shape = list(input_tensor.shape)
+    # Output shape: reduced for intermediate stages, same as input for final
+    # Stage 2 (square_reduce_mean): W -> 32 (one tile width)
+    output_shape = [input_tensor.shape[i] for i in range(len(input_tensor.shape) - 1)] + [32]
 
     # CRITICAL: allocate_tensor_on_device requires POSITIONAL args
     output_tensor = ttnn.allocate_tensor_on_device(

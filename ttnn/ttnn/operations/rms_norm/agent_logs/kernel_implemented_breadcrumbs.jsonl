@@ -1,0 +1,1 @@
+{"stage":"square_reduce_mean","kernel":"rms_norm_compute.cpp","approach":"Fixed compute_kernel_hw_startup to be conditional on IS_INPUT_RM: RM path uses (cb_in,cb_in,cb_x) to match first op tilize, TILE path uses (cb_in,cb_in,cb_xsq) to match first op square","ts":"2026-03-11T18:09:21+00:00"}

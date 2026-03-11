@@ -1,0 +1,1 @@
+{"stage":"square_reduce_mean","file":"rms_norm_program_descriptor.py","change":"cb_xsq from 1 page to Wt pages","reason":"square writes all Wt tiles sequentially before reduce starts consuming on same compute thread. With 1 page, cb_reserve_back blocks after 1st tile causing deadlock.","ts":"2026-03-11T18:12:35+00:00"}

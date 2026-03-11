@@ -48,6 +48,10 @@ def create_program_descriptor(
     Wt = W // 32
     Ht = H // 32
 
+    # Output Wt may differ from input Wt (e.g., reduced-shape intermediate stages)
+    output_W = output_tensor.shape[-1]
+    output_Wt = output_W // 32
+
     # Total tile-rows: N * C * ... * Ht
     # For rank >= 2, batch dims are everything before last 2
     num_batch = 1
@@ -172,10 +176,10 @@ def create_program_descriptor(
             )
         )
 
-    # cb_out (c_16): Wt pages, tile-sized pages (for untilize compatibility in RM path)
+    # cb_out (c_16): output_Wt pages, tile-sized pages (for untilize compatibility in RM path)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=Wt * tile_size,
+            total_size=output_Wt * tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -202,10 +206,12 @@ def create_program_descriptor(
         )
     )
 
-    # cb_xsq (c_25): 1 page, intermediate format (streaming)
+    # cb_xsq (c_25): Wt pages, intermediate format
+    # Needs Wt pages because square writes all Wt tiles sequentially
+    # before reduce starts consuming them (both run on same compute thread)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=1 * intermed_tile_size,
+            total_size=Wt * intermed_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -367,7 +373,9 @@ def create_program_descriptor(
     )
 
     # --- Writer kernel ---
-    writer_ct_args = [stick_size]
+    # Writer stick_size uses output page size (may differ from input for reduced-shape stages)
+    output_stick_size = output_W * output_tensor.element_size() if is_input_rm else ttnn.tile_size(output_tensor.dtype)
+    writer_ct_args = [output_stick_size]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()
@@ -380,7 +388,7 @@ def create_program_descriptor(
                     output_tensor.buffer_address(),  # dst_addr
                     tiles_per_core_g1,  # num_rows
                     current_row,  # start_row_id
-                    Wt,  # Wt
+                    output_Wt,  # Wt (output tiles per row)
                 ]
                 current_row += tiles_per_core_g1
 
@@ -391,7 +399,7 @@ def create_program_descriptor(
                     output_tensor.buffer_address(),
                     tiles_per_core_g2,
                     current_row,
-                    Wt,
+                    output_Wt,
                 ]
                 current_row += tiles_per_core_g2
 

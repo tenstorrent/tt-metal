@@ -1,0 +1,1 @@
+{"stage":"square_reduce_mean","fix":"Changed cb_xsq from 1*intermed_tile_size to Wt*intermed_tile_size in program descriptor. Square needs Wt pages to hold all squared tiles before reduce can consume them.","ts":"2026-03-11T18:12:41+00:00"}

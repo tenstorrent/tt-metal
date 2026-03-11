@@ -31,8 +31,10 @@ void kernel_main() {
 
     const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_size);
 
-    // For IS_INPUT_RM: each tile-row is 32 sticks. Page ID = row * 32 + stick
-    // For TILE: each tile-row is Wt tiles. Page ID = row * Wt + tile
+    // Generate reduce scaler tile: 1/W for mean computation
+    // scaler = 1.0f / origin_W, but origin_W = Wt * 32
+    const float scaler_val = 1.0f / static_cast<float>(Wt * 32);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_val);
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         uint32_t row_id = start_row_id + row;
