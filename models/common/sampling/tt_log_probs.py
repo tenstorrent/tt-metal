@@ -164,13 +164,14 @@ class LogProbsCalculator:
             return
 
         if isinstance(num_logprobs, list):
+            # Validate all individual values: no negatives allowed
+            min_val = min(num_logprobs) if num_logprobs else 0
+            assert min_val >= 0, f"num_logprobs must be >= 0, got {min_val}"
             # Use the max across users; the full batch runs with the same setting
             max_num = max(num_logprobs) if num_logprobs else 0
         else:
             max_num = num_logprobs
-
-        # Validate: values below 1 (other than 0) are invalid
-        assert max_num >= 0, f"num_logprobs must be >= 0, got {max_num}"
+            assert max_num >= 0, f"num_logprobs must be >= 0, got {max_num}"
 
         # Cap at MAX_LOGPROBS
         if max_num > MAX_LOGPROBS:
