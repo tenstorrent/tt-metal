@@ -773,10 +773,13 @@ def _patch_risc_debug() -> None:
     )
 
     def patched_halt(self):
-        was_already_halted = self.is_halted()
-        original_hw_halt(self)
-        if not was_already_halted:
-            get_triage_session().add_halted_core(self.risc_info.noc_block.location, self.risc_info.risc_name)
+        session = get_triage_session()
+        location = self.risc_info.noc_block.location
+        risc_name = self.risc_info.risc_name
+        already_halted_by_triage = session.is_halted_core(location, risc_name)
+        if not already_halted_by_triage:
+            original_hw_halt(self)
+            session.add_halted_core(location, risc_name)
 
     BabyRiscDebugHardware.halt = patched_halt
 
