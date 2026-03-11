@@ -355,7 +355,6 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-            logger.info(f"Running layer {i} in {'decode' if is_decode else 'prefill'}")
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=rope_mats,
