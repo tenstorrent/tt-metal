@@ -251,7 +251,10 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
         else:
-            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+            prefill_kwargs = {"page_table": page_table}
+            if global_user_id is not None:
+                prefill_kwargs["global_user_id"] = global_user_id
+            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
             host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
@@ -536,7 +539,12 @@ class Generator(WarmupForwardMixin):
 
             # For batched prefill: pass full page_table (function handles slot placement)
             # For non-batched prefill: pass sliced page_table for current user (like original code)
-            page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
+            if use_batched_prefill:
+                page_table_for_user = page_table
+            elif page_table is not None:
+                page_table_for_user = page_table[idx : idx + 1]
+            else:
+                page_table_for_user = None
             page_table_user = (
                 self._get_prefill_user_page_table(
                     page_table_for_user,

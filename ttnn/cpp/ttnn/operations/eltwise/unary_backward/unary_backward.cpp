@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <utility>
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -19,7 +20,6 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -1684,18 +1684,14 @@ std::vector<Tensor> repeat_bw(
 
 }  // namespace ttnn
 
-// Autoformat support
 namespace ttnn::operations::unary_backward {
-
-Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& /*output_mem_config*/) {
-    auto formatted_input_tensor = temp;
-    if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
-        auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
-        if (need_format) {
-            formatted_input_tensor =
-                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
-        }
+// Autoformat support
+Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& /*output_mem_config*/) {
+    auto formatted_input_tensor = input_tensor;
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        formatted_input_tensor =
+            ttnn::tilize_with_val_padding(input_tensor, a_pad_shape, PadValue(1.0f), input_tensor.memory_config());
     }
     return formatted_input_tensor;
 }

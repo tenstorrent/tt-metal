@@ -225,9 +225,11 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
-    auto lse_shape = input.logical_shape();
-    lse_shape[3] = 1;
-    lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
+    auto stats_shape = input.logical_shape();
+    stats_shape[3] = 1;
+    // 2× the sequence length: first half stores running max, second half stores running sum.
+    // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
+    stats_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
 
     return {
         .output = TensorSpec(
@@ -236,8 +238,8 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
         .joint_output = TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        .lse_output = TensorSpec(
-            lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        .stats_output = TensorSpec(
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
@@ -246,7 +248,7 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     return {
         .output = create_device_tensor(output_specs.output, tensor_args.input_q.device()),
         .joint_output = create_device_tensor(output_specs.joint_output, tensor_args.joint_q.device()),
-        .lse_output = create_device_tensor(output_specs.lse_output, tensor_args.input_q.device()),
+        .stats_output = create_device_tensor(output_specs.stats_output, tensor_args.input_q.device()),
     };
 }
 
