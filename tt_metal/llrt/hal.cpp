@@ -45,7 +45,9 @@ Hal::Hal(
 
         case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes); break;
 
-        case tt::ARCH::BLACKHOLE: initialize_bh(enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes, is_simulator); break;
+        case tt::ARCH::BLACKHOLE:
+            initialize_bh(enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes, is_simulator);
+            break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
