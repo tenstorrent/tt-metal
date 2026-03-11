@@ -305,10 +305,13 @@ def test_decode_pcc():
 
             ttnn_output_torch = ttnn.to_torch(ttnn_output)[0, 0, :, :]
 
-            # Calculate PCC
+            # Calculate PCC and assert — decode hidden states must meet >= 0.99
             pcc = calculate_pcc(ref_output.squeeze(0), ttnn_output_torch)
-
             logger.info(f"Step {step + 1} (pos={pos}): PCC = {pcc:.6f}")
+            assert pcc >= 0.99, (
+                f"Decode step {step + 1} (pos={pos}) PCC {pcc:.6f} < 0.99. "
+                "Check for bfloat8_b overflow or weight mapping issues."
+            )
 
             # Update position
             new_pos = ttnn.from_torch(

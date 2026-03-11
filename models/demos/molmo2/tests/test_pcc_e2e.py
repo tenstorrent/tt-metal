@@ -6,9 +6,18 @@
 End-to-end PCC comparison between HuggingFace and TTNN Molmo2 implementations.
 
 Compares outputs at key points:
-1. Text embeddings
-2. Vision backbone output (if multimodal)
-3. Final logits after prefill
+1. Text embeddings (PCC >= 0.99)
+2. Single-layer attention norm (PCC >= 0.99)
+3. Final prefill logits (PCC >= 0.95, cumulative over 36 layers)
+
+NOTE: This file uses pytest fixtures (mesh_device, hf_model) from conftest.py.
+For a standalone (no-fixture) version that builds PyTorch reference from weights
+directly, see test_e2e_pcc.py.
+
+PCC threshold rationale:
+- Individual blocks: >= 0.99 (CLAUDE.md requirement)
+- Full 36-layer model: >= 0.95 (cumulative precision loss over depth)
+- Final logits: >= 0.95 (includes embedding + 36 layers)
 """
 
 import pytest

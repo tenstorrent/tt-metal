@@ -6,12 +6,16 @@
 Tests for Molmo2 Vision Backbone (complete pipeline).
 
 Validates the full vision pipeline: ViT -> Pooling -> Projector.
+PCC thresholds:
+  - Adapter pipeline (pooling + projector): >= 0.99
+  - Full backbone (ViT 25L + adapter): >= 0.95 (cumulative precision loss)
 """
 
 
 import torch
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 
 
 def get_vision_backbone_weights(model_id: str = "allenai/Molmo2-8B"):
@@ -130,6 +134,7 @@ def test_vision_backbone_encode_only(device):
 
     print(f"VisionBackbone encode_only output shape: {features_torch.shape}")
     print("VisionBackbone encode_only test passed!")
+    # Note: Full-backbone PCC (ViT 25L + adapter) is tested in test_vision_backbone_pcc below
 
 
 def test_vision_backbone_projector_integration(device):
@@ -206,18 +211,26 @@ def test_vision_backbone_projector_integration(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Forward through pooling
+    # Reference: run pooling + projector in PyTorch
+    from models.demos.molmo2.reference.functional import image_pooling_forward, image_projector_forward
+
+    pooled_patches_idx = torch.randint(0, pool_size, (1, num_queries, 4))
+    ref_pooled = image_pooling_forward(query_torch, pooled_patches_idx, state_dict)
+    ref_output = image_projector_forward(ref_pooled, state_dict)
+
+    # TTNN: run pooling + projector
     pooled = pooling(query_ttnn, kv_ttnn)
-
-    # Forward through projector
     output = projector(pooled)
-
-    # Convert back to torch
     output_torch = ttnn.to_torch(output).squeeze(0).squeeze(0)
 
     # Check output shape
     expected_shape = (num_queries, output_dim)
     assert output_torch.shape == expected_shape, f"Expected shape {expected_shape}, got {output_torch.shape}"
+
+    # PCC check against PyTorch reference — individual blocks must be >= 0.99
+    passing, pcc_msg = comp_pcc(ref_output, output_torch, pcc=0.99)
+    print(f"Vision adapter pipeline PCC: {pcc_msg}")
+    assert passing, f"Vision adapter pipeline failed PCC check: {pcc_msg}"
 
     print(f"Vision adapter pipeline output shape: {output_torch.shape}")
     print("Vision adapter integration test passed!")

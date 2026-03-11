@@ -18,7 +18,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 
 
 @pytest.fixture
@@ -68,7 +68,10 @@ def test_vision_transformer(mesh_device, reference_model, num_layers):
     if reference_model is None:
         pytest.skip("Reference model not available")
 
-    # Set expected PCC based on layer depth
+    # Set expected PCC based on layer depth.
+    # Individual blocks meet >= 0.99 (see test_vision_block.py).
+    # 25-layer cumulative threshold of 0.91 reflects bfloat16 precision
+    # accumulation across all ViT layers; this is acceptable for the full encoder.
     expected_pcc = 0.99 if num_layers <= 5 else 0.91
 
     # Get reference ViT

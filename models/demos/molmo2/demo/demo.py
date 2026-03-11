@@ -380,7 +380,7 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         vit_head_dim=72,
         patch_size=14,
         image_size=378,
-        feature_layers=(18, 24),
+        feature_layers=(24, 18),  # HF order: vit_layers=[-3, -9] -> layers [24, 18]
         # Adapter config
         adapter_hidden_dim=1152,
         adapter_intermediate_dim=12288,
@@ -496,11 +496,12 @@ class Molmo2Generator:
         input_ids: torch.Tensor,
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
-    ) -> Tuple[ttnn.Tensor, torch.Tensor]:
+    ) -> ttnn.Tensor:
         """
-        Prepare text model inputs by processing vision and fusing embeddings.
+        Prepare text model inputs by processing vision and fusing embeddings on device.
 
-        This must be done BEFORE trace capture since it involves host-device transfers.
+        No CPU roundtrip: vision runs on TTNN, fusion is done via selector matmul.
+        Must be called BEFORE trace capture since it computes new tensors.
 
         Args:
             input_ids: Input token IDs
@@ -508,12 +509,12 @@ class Molmo2Generator:
             pooled_patches_idx: Indices for vision pooling
 
         Returns:
-            Tuple of (hidden_states_ttnn, hidden_states_torch)
+            Fused hidden states [1, 1, seq_len, hidden_dim] on device
         """
-        # Process vision and prepare fused embeddings (this has host-device transfers)
         if pixel_values is not None and pooled_patches_idx is not None:
-            visual_embeddings = self.model.embed_image(pixel_values, pooled_patches_idx)
-            hidden_states = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings)
+            visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
+            fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
+            ttnn.deallocate(visual_embeddings_ttnn)
         else:
             input_ids_ttnn = ttnn.from_torch(
                 input_ids,
@@ -523,27 +524,10 @@ class Molmo2Generator:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=self.mesh_mapper,
             )
-            hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
-            hidden_states = (
-                ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
-                .squeeze(0)
-                .squeeze(0)
-            )
+            fused_ttnn = self.model.text_model.embed_tokens(input_ids_ttnn)
+            ttnn.deallocate(input_ids_ttnn)
 
-        # Keep torch version for later use
-        hidden_states_torch = hidden_states.unsqueeze(0).unsqueeze(0).clone()
-
-        # Convert to TTNN tensor
-        hidden_states_ttnn = ttnn.from_torch(
-            hidden_states_torch,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
-
-        return hidden_states_ttnn, hidden_states_torch
+        return fused_ttnn
 
     def _prepare_vision_inputs_for_trace(
         self,
@@ -566,12 +550,9 @@ class Molmo2Generator:
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
 
-        # 1. Patch embedding and positional embedding (CPU) - done before trace
+        # 1. Patch embedding on TTNN (unfold on CPU, linear+pos_embed on device)
         vit = self.model.vision_backbone.image_vit
-        embedded = vit.patch_embed_cpu(pixel_values)  # [B, num_patches, hidden_dim]
-        pos_embed = vit.positional_embedding_torch
-        embedded = embedded + pos_embed.unsqueeze(0)
-        embedded = embedded.reshape(1, 1, -1, vit.hidden_dim)  # [1, 1, B*N, hidden_dim]
+        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         # 2. Prepare indices for TTNN gather
         # Identify valid indices (>= 0) and clip negative to 0
@@ -585,15 +566,7 @@ class Molmo2Generator:
         # Create valid mask: [1, 1, B*N_out*K_pool, 1]
         valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-        # 3. Convert to TTNN tensors
-        embedded_ttnn = ttnn.from_torch(
-            embedded,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
+        # 3. Convert remaining tensors to TTNN (embedded_ttnn already on device)
 
         idx_ttnn = ttnn.from_torch(
             flat_idx,
@@ -734,12 +707,13 @@ class Molmo2Generator:
         input_ids: torch.Tensor,
         visual_embeddings_ttnn: ttnn.Tensor,
         valid_token_torch: torch.Tensor,
-    ) -> Tuple[ttnn.Tensor, torch.Tensor]:
+    ) -> ttnn.Tensor:
         """
         Prepare text inputs using traced vision output.
 
         Fuses visual embeddings with text embeddings entirely on device.
         Uses matmul with selector matrix to avoid CPU roundtrip.
+        Returns fused hidden states [1, 1, seq_len, hidden_dim] on device.
         """
         batch_size, seq_len = input_ids.shape
         hidden_dim = 4096
@@ -823,21 +797,7 @@ class Molmo2Generator:
             # No visual tokens - just use text embeddings
             fused_ttnn = text_embeddings_ttnn
 
-        # Get torch version for prefill trace (needed for host tensor pattern)
-        # Shape should be [1, 1, seq_len, hidden_dim]
-        if self.is_mesh_device:
-            fused_torch = ttnn.to_torch(
-                fused_ttnn,
-                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
-            )[0].clone()
-        else:
-            fused_torch = ttnn.to_torch(fused_ttnn).clone()
-
-        # Ensure 4D shape [1, 1, seq_len, hidden_dim]
-        if fused_torch.dim() == 3:
-            fused_torch = fused_torch.unsqueeze(0)
-
-        return fused_ttnn, fused_torch
+        return fused_ttnn
 
     def _allocate_prefill_trace_tensors(
         self,
@@ -917,20 +877,11 @@ class Molmo2Generator:
         trace_id: int,
         trace_tensors: dict,
         trace_output: ttnn.Tensor,
-        hidden_states_torch: torch.Tensor,
+        hidden_states_ttnn: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """Execute captured prefill trace with new inputs."""
-        # Copy new hidden states to trace input location
-        new_hidden = ttnn.from_torch(
-            hidden_states_torch,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
-        ttnn.copy(new_hidden, trace_tensors["hidden_states"])
-        ttnn.deallocate(new_hidden)
+        # Device-to-device copy: no host roundtrip
+        ttnn.copy(hidden_states_ttnn, trace_tensors["hidden_states"])
 
         # Execute trace
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
@@ -1124,12 +1075,9 @@ class Molmo2Generator:
         batch_size = 1
         seq_len = input_ids.shape[1]
 
-        # Prepare vision inputs (same as before)
+        # Prepare vision inputs -- patch embedding on TTNN (no CPU matmul)
         vit = self.model.vision_backbone.image_vit
-        embedded = vit.patch_embed_cpu(pixel_values)
-        pos_embed = vit.positional_embedding_torch
-        embedded = embedded + pos_embed.unsqueeze(0)
-        embedded = embedded.reshape(1, 1, -1, vit.hidden_dim)
+        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
@@ -1171,14 +1119,7 @@ class Molmo2Generator:
         )
 
         # Convert other tensors to TTNN
-        embedded_ttnn = ttnn.from_torch(
-            embedded,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
+        # embedded_ttnn already on device from patch_embed_ttnn above
         idx_ttnn = ttnn.from_torch(
             flat_idx,
             device=self.mesh_device,
@@ -1592,14 +1533,7 @@ class Molmo2Generator:
         # Unified trace path: Vision + embed_tokens + Fusion + Prefill in single trace
         # This eliminates CPU roundtrip between vision and text prefill
         if use_unified_trace and pixel_values is not None:
-            # NOTE: Unified trace is currently disabled due to a TTNN trace capture issue.
-            # The ttnn.embedding operation fails with "Writes are not supported during trace capture"
-            # when used after text model warmup. This needs further investigation.
-            # For now, fall back to separate vision + prefill traces.
-            logger.warning(
-                "Unified trace is disabled due to TTNN trace capture limitations. "
-                "Using separate vision + prefill traces instead."
-            )
+            return self._run_unified_prefill(input_ids, pixel_values, pooled_patches_idx, timing)
 
         # Start end-to-end TTFT timer (vision + fusion + prefill)
         e2e_ttft_start = None
@@ -1667,7 +1601,7 @@ class Molmo2Generator:
             # Fuse visual embeddings with text embeddings
             logger.info("Fusing visual and text embeddings...")
             fuse_start = time.perf_counter()
-            hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs_traced(
+            hidden_states_ttnn = self._prepare_text_inputs_traced(
                 input_ids, visual_embeddings_ttnn, vision_inputs["valid_token_torch"]
             )
             timing["fuse_ms"] = (time.perf_counter() - fuse_start) * 1000
@@ -1689,9 +1623,7 @@ class Molmo2Generator:
             e2e_ttft_start = time.perf_counter()
             logger.info("Preparing inputs (vision processing)...")
             vision_start = time.perf_counter()
-            hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs(
-                input_ids, pixel_values, pooled_patches_idx
-            )
+            hidden_states_ttnn = self._prepare_text_inputs(input_ids, pixel_values, pooled_patches_idx)
             timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
             logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
 
@@ -1712,7 +1644,7 @@ class Molmo2Generator:
 
             # Execute trace (actual TTFT measurement)
             ttft_start = time.perf_counter()
-            logits = self._execute_prefill_trace(trace_id, trace_tensors, trace_output, hidden_states_torch)
+            logits = self._execute_prefill_trace(trace_id, trace_tensors, trace_output, hidden_states_ttnn)
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
 
@@ -2131,7 +2063,7 @@ def main():
     parser.add_argument(
         "--use-unified-trace",
         action="store_true",
-        help="[EXPERIMENTAL] Enable unified Vision+Prefill trace (not yet supported - vision backbone has internal writes)",
+        help="Enable unified Vision+Prefill trace (eliminates CPU roundtrip, best TTFT)",
     )
 
     args = parser.parse_args()
