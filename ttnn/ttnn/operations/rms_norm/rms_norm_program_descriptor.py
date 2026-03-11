@@ -255,10 +255,13 @@ def create_program_descriptor(
     )
 
     # cb_normed (c_28): intermediate format
-    # For no-gamma RM: Wt pages (mul_col output -> untilize input)
-    # For gamma: 1 page streaming (mul_col -> mul_row)
-    # For no-gamma TILE: 1 page (not used but allocated for simplicity)
-    normed_pages = Wt if (is_input_rm and not has_gamma) else 1
+    # Needs Wt pages whenever cb_normed is used as an intermediate between
+    # sequential compute phases (both run on same thread, so producer must
+    # finish before consumer starts => all Wt tiles must fit).
+    # - no-gamma RM: Wt pages (mul_col -> untilize, sequential on compute)
+    # - gamma (any layout): Wt pages (mul_col -> mul_row, sequential on compute)
+    # - no-gamma TILE: not used as intermediate (mul_col -> cb_out directly), 1 page
+    normed_pages = Wt if (is_input_rm or has_gamma) else 1
     cbs.append(
         ttnn.CBDescriptor(
             total_size=normed_pages * intermed_tile_size,
@@ -292,6 +295,13 @@ def create_program_descriptor(
     stick_size = W * input_tensor.element_size() if is_input_rm else tile_size
     reader_ct_args = [stick_size]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Gamma TensorAccessor args (appended after input accessor args)
+    # Gamma is always ROW_MAJOR_LAYOUT with shape (1,1,1,W), so its page = 1 stick
+    # Layout: [gamma_page_size, gamma_accessor_args...]
+    if has_gamma:
+        gamma_page_sz = gamma.buffer_page_size()
+        reader_ct_args.append(gamma_page_sz)
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
     grid_width = compute_grid.x

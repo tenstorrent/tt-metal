@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RMS Norm - Reader Kernel
-// Reads input data from DRAM, generates scaler/eps tiles, double-pushes per row
+// Reads input data from DRAM, generates scaler/eps tiles, double-pushes per row.
+// If gamma: reads gamma RM stick, zero-fills padding, pushes to cb_gamma_rm for tilize.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -16,6 +17,10 @@ constexpr uint32_t cb_gamma_rm = 3;
 // Compile-time args
 constexpr uint32_t stick_size = get_compile_time_arg_val(0);
 constexpr auto input_accessor_args = TensorAccessorArgs<1>();
+#if HAS_GAMMA
+constexpr uint32_t gamma_page_size = get_compile_time_arg_val(input_accessor_args.next_compile_time_args_offset());
+constexpr auto gamma_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset() + 1>();
+#endif
 
 void kernel_main() {
     // Runtime args
@@ -42,6 +47,41 @@ void kernel_main() {
     static_assert(sizeof(float) == sizeof(uint32_t));
     __builtin_memcpy(&epsilon, &eps_u32, sizeof(float));
     dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(epsilon);
+
+#if HAS_GAMMA
+    // Stage gamma RM data for tilize by compute kernel.
+    // Gamma shape is (1,1,1,W) = 1 stick of W elements.
+    // We need 32 sticks (one tile-row) in cb_gamma_rm: stick 0 = gamma data, sticks 1-31 = zeros.
+    // Total bytes = 32 * gamma_page_size (gamma_page_size = W * elem_size)
+    {
+        const auto gamma_accessor = TensorAccessor(gamma_accessor_args, gamma_addr, gamma_page_size);
+        const uint32_t gamma_rm_total_bytes = 32 * gamma_page_size;
+
+        cb_reserve_back(cb_gamma_rm, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_gamma_rm);
+
+        // Zero-fill the entire buffer (31 padding rows + room for gamma row)
+        // Use local L1 zero memory as source for zero-fill
+        uint32_t zeros_remaining = gamma_rm_total_bytes;
+        uint32_t dst = l1_write_addr;
+        while (zeros_remaining > 0) {
+            uint32_t chunk = (zeros_remaining < MEM_ZEROS_SIZE) ? zeros_remaining : MEM_ZEROS_SIZE;
+            noc_async_read(get_noc_addr(MEM_ZEROS_BASE), dst, chunk);
+            dst += chunk;
+            zeros_remaining -= chunk;
+        }
+        noc_async_read_barrier();
+
+        // Read gamma stick (1 row of W elements) into row 0
+        // Gamma is on device as ROW_MAJOR_LAYOUT with shape (1,1,1,W)
+        // It has a single page (page index 0)
+        uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+        noc_async_read(gamma_noc_addr, l1_write_addr, gamma_page_size);
+        noc_async_read_barrier();
+
+        cb_push_back(cb_gamma_rm, Wt);
+    }
+#endif
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         uint32_t row_id = start_row_id + row;
