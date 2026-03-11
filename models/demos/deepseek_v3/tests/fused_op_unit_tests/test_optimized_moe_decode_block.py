@@ -548,8 +548,8 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [False])
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("enable_trace", [True])
+@pytest.mark.parametrize("num_iterations", [5])
 @pytest.mark.parametrize(
     "device_params",
     [
