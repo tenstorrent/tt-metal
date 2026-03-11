@@ -105,7 +105,7 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_subblock_sweep(
                             subblock_h=sub_h,
                             subblock_w=sub_w,
                             mm_core_grid=ttnn.CoreCoord(12, 8),
-                            chunk_width_in_mm_blocks=1,
+                            chunk_width_in_mm_blocks=2,
                             rs_core_grid_offset=ttnn.CoreCoord(0, 8),
                             rs_mode="fused",
                             cluster_axis=cluster_axis,

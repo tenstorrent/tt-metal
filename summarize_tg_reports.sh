@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Summarizes sweep_perf_reports_tg_2/ into a table: sub_h, sub_w, num_buffers, time_us, tflops, flops_pct
 
-OUTDIR="${1:-sweep_perf_reports_tg_2}"
+OUTDIR="${1:-sweep_perf_reports_tg_less_sync}"
 
 printf "%-6s  %-6s  %-20s  %10s  %12s  %10s\n" \
     "sub_h" "sub_w" "num_buffers" "time_us" "tflops" "flops_pct"
