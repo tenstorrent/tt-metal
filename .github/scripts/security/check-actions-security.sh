@@ -16,6 +16,7 @@ GITHUB_DIR="$REPO_ROOT/.github"
 
 STRICT_MODE=false
 ISSUES_FOUND=0
+CHECKS_TO_RUN=()
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -33,8 +34,10 @@ usage() {
 Usage: ./check-actions-security.sh [OPTIONS] [FILE...]
 
 Options:
-  -h, --help    Show this help message and exit
-  --strict      Exit with error code if any issues found
+  -h, --help           Show this help message and exit
+  -c, --checks LIST    Run only specified checks (comma-separated, supports ranges)
+                       Example: -c 1-3,19 runs checks 1, 2, 3, and 19
+  --strict             Exit with error code if any issues found
 
 If no FILEs are provided, scans all .yml/.yaml files in .github/workflows and .github/actions.
 
@@ -64,6 +67,48 @@ EOF
 }
 
 # =============================================================================
+# Parse Check List (comma-separated with range support)
+# =============================================================================
+
+parse_checks() {
+    local input="$1"
+    local -a result=()
+
+    IFS=',' read -ra parts <<< "$input"
+    for part in "${parts[@]}"; do
+        part="${part// /}"  # Remove whitespace
+        if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            local start="${BASH_REMATCH[1]}"
+            local end="${BASH_REMATCH[2]}"
+            if [[ $start -gt $end ]]; then
+                echo "Error: Invalid range $part (start > end)" >&2
+                exit 1
+            fi
+            for ((i=start; i<=end; i++)); do
+                if [[ $i -ge 1 && $i -le 20 ]]; then
+                    result+=("$i")
+                else
+                    echo "Error: Check $i is out of range (valid: 1-20)" >&2
+                    exit 1
+                fi
+            done
+        elif [[ "$part" =~ ^[0-9]+$ ]]; then
+            if [[ $part -ge 1 && $part -le 20 ]]; then
+                result+=("$part")
+            else
+                echo "Error: Check $part is out of range (valid: 1-20)" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Invalid check specification: $part" >&2
+            exit 1
+        fi
+    done
+
+    CHECKS_TO_RUN=("${result[@]}")
+}
+
+# =============================================================================
 # Argument Parsing
 # =============================================================================
 
@@ -72,6 +117,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             usage
+            ;;
+        -c|--checks)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --checks requires an argument" >&2
+                exit 1
+            fi
+            parse_checks "$2"
+            shift 2
             ;;
         --strict)
             STRICT_MODE=true
@@ -83,6 +136,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Default to all checks if none specified
+if [[ ${#CHECKS_TO_RUN[@]} -eq 0 ]]; then
+    CHECKS_TO_RUN=({1..20})
+fi
 
 # =============================================================================
 # Helper Functions
@@ -823,7 +881,7 @@ echo "GitHub Actions Security Lint Check"
 echo "=========================================="
 echo ""
 
-for i in {1..20}; do
+for i in "${CHECKS_TO_RUN[@]}"; do
     run_check "$i"
 done
 
