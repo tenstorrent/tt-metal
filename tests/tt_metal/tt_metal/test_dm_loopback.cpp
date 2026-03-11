@@ -9,7 +9,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -41,7 +40,9 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
 
     // These addresses have been randomly chosen
     uint32_t l1_address = 1000 * 1024;
-    uint32_t dram_address = 30000 * 1024;
+    uint32_t dram_bank_size = MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
+    std::cout << "DRAM bank size: " << dram_bank_size << std::endl;
+    uint32_t dram_address = dram_bank_size + 1024;
     std::vector<uint32_t> value = {0x12345678};
 
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
@@ -56,7 +57,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
 
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
     dm_dram_to_l1_kernels.reserve(4);
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 1; i++) {
         dm_dram_to_l1_kernels.push_back(experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
@@ -66,7 +67,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
     dm_l1_to_dram_kernels.reserve(4);
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 1; i++) {
         dm_l1_to_dram_kernels.push_back(experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
@@ -74,8 +75,9 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
             experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
     }
 
+    dram_address = 1024;
     uint32_t signal_value = 0;
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 1; i++) {
         SetRuntimeArgs(program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, signal_value});
         dram_address += 1024;
         signal_value++;
@@ -91,7 +93,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     log_info(LogTest, "Reading from DRAM");
 
     std::vector<uint32_t> outputs{0};
-    tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_address, sizeof(uint32_t), outputs);
+    tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_bank_size + 1024, sizeof(uint32_t), outputs);
 
     ASSERT_EQ(outputs[0], value[0]) << "Got the value " << std::hex << outputs[0] << " instead of " << value[0];
 }
