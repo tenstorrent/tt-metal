@@ -18,3 +18,15 @@ runs:
         rm -rf "${{ inputs.path }}"
         echo "post rm"
         ls -al "$(dirname "${{ inputs.path }}")"
+
+    - name: Cleanup temp files from kernel compilation
+      shell: bash
+      run: |
+        echo "=== Disk usage before cleanup ==="
+        df -h / || true
+
+        # Clean temp files left by kernel compilation in /tmp
+        rm -rf /tmp/cc*.s /tmp/cc*.o /tmp/cc*.res /tmp/cc*.ld /tmp/cc*.le 2>/dev/null || true
+
+        echo "=== Disk usage after cleanup ==="
+        df -h / || true
