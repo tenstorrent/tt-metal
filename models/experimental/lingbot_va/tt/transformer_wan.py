@@ -394,13 +394,19 @@ class WanTransformer3DModel(Module):
         rename_substate(state, "patch_embedding_mlp", "patch_embedding")
         patch_weight = state.get("patch_embedding.weight")
         if patch_weight is not None:
-            # Reference: (inner_dim, in_channels * p0*p1*p2); WanPatchEmbed expects (embed_dim, in_c, kt, kh, kw)
-            embed_dim, flat = patch_weight.shape
             p0, p1, p2 = self.patch_size
-            assert flat == self.in_channels * p0 * p1 * p2
-            state["patch_embedding.weight"] = patch_weight.reshape(embed_dim, self.in_channels, p0, p1, p2)
+            # Reference Linear: (embed_dim, in_channels * p0*p1*p2); some checkpoints: (embed_dim, in_c, p0, p1, p2)
+            if patch_weight.ndim == 2:
+                embed_dim, flat = patch_weight.shape
+                assert flat == self.in_channels * p0 * p1 * p2
+                state["patch_embedding.weight"] = patch_weight.reshape(embed_dim, self.in_channels, p0, p1, p2)
+            elif patch_weight.ndim != 5:
+                raise ValueError(
+                    f"patch_embedding.weight must be 2D (Linear) or 5D (conv), got ndim={patch_weight.ndim}"
+                )
+            # 5D: already conv form, use as-is
         patch_bias = state.get("patch_embedding.bias")
-        if patch_bias is not None:
+        if patch_bias is not None and patch_bias.ndim == 1:
             state["patch_embedding.bias"] = patch_bias.reshape(1, -1)
 
     def get_rope_features(self, grid_id: torch.Tensor):
@@ -414,7 +420,7 @@ class WanTransformer3DModel(Module):
         """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L). Pads for sequence parallel."""
         logger.debug("Preparing rope features for shape {}", grid_id.shape)
         grid_id_tt = bf16_tensor(grid_id, device=self.mesh_device)
-        rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)  # each [B, L, 128] ttnn
+        rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)  # each [1, L, 128]
         B, L, D = rope_cos_tt.shape
         rope_cos_11LD = ttnn.reshape(rope_cos_tt, (1, 1, L, D))
         rope_sin_11LD = ttnn.reshape(rope_sin_tt, (1, 1, L, D))
@@ -423,7 +429,7 @@ class WanTransformer3DModel(Module):
         if padded_len > L:
             pad_len = padded_len - L
             zeros = ttnn.zeros(
-                (1, 1, pad_len, D), device=self.mesh_device, dtype=rope_cos_11LD.dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+                (1, 1, pad_len, D), device=self.mesh_device, dtype=rope_cos_11LD.dtype, layout=ttnn.TILE_LAYOUT
             )
             rope_cos_11LD = ttnn.concat([rope_cos_11LD, zeros], dim=2)
             rope_sin_11LD = ttnn.concat([rope_sin_11LD, zeros], dim=2)
@@ -480,15 +486,9 @@ class WanTransformer3DModel(Module):
     def preprocess_spatial_input_host(self, spatial: torch.Tensor):
         """Patchify video (B, C, F, H, W) -> (1, B, N, C*p0*p1*p2) and pad for sequence parallel."""
         B, C, F, H, W = spatial.shape
-        logger.debug("Preprocessing spatial input with shape {}", spatial.shape)
-        # NOTE: The current implementation only supports batch size 1.
-        # This is likely due to assumptions made in the patchification, device parallelism,
-        # and tensor reshaping logic. Supporting batch > 1 would require refactoring the
-        # logic for mesh/device sharding and sequence parallel padding.
         if B != 1:
-            raise NotImplementedError(
-                "Batch size >1 is not currently supported. The current implementation assumes B==1 for correct patchification, reshaping, and data parallelism. To support batch>1, the code would require changes in padding, sharding, and output postprocessing."
-            )
+            raise NotImplementedError("Batch size > 1 is not currently supported")
+        logger.debug("Preprocessing spatial input with shape {}", spatial.shape)
         pF, pH, pW = self.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
