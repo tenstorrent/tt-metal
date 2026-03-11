@@ -6,8 +6,8 @@
     "TILE_LAYOUT",
     "ROW_MAJOR_LAYOUT"
   ],
-  "current_stage_index": 0,
-  "last_passing_commit": null,
+  "current_stage_index": 1,
+  "last_passing_commit": "973bfa8eccfe9da219e6470ffacf097ff40306f1",
   "stages": [
     {
       "name": "data_pipeline",
@@ -36,8 +36,8 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "[\"bfloat16\"]",
-      "status": "pending",
-      "commit": null,
+      "status": "passed",
+      "commit": "973bfa8eccfe9da219e6470ffacf097ff40306f1",
       "attempts": 0,
       "free_retries": 0,
       "max_attempts": 6,
@@ -68,7 +68,7 @@
       "output_shape_expr": "list(shape[:-1]) + [32]",
       "compare_slice": "[:,:,:,0:1]",
       "dtype_parametrize": "[\"bfloat16\"]",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
