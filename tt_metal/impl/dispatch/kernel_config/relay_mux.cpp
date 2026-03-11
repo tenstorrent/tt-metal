@@ -102,7 +102,7 @@ void RelayMux::GenerateStaticConfigs() {
         src_fabric_node_id,
         dst_fabric_node_id,
         device_);
-    log_debug(
+    log_info(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
         "Slots: {}, L1 Size: {}, Src: {}, Dst: {}, Link Index: {}",

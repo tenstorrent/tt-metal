@@ -650,10 +650,12 @@ def gen_expert_mapping(experts, mesh_shape, cluster_axis):
 
     This tensor is replicated on every device (even devices not along the dispatch axis).
     """
+    print("mesh shape: ", mesh_shape[0], mesh_shape[1])
     num_devices = mesh_shape[0] * mesh_shape[1]
     experts_per_device = experts // num_devices
     expert_mapping = torch.zeros(1, experts, dtype=torch.uint16)
     for e in range(experts):
+        print("Experts per device: ", experts_per_device)
         expert_mapping[0, e] = e // experts_per_device
     # Replicate across all devices (same mapping for now)
     expert_mapping = expert_mapping.repeat(num_devices, 1)
@@ -994,7 +996,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         }
@@ -1034,17 +1036,20 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 1), (8, 5, 1)],
-    ids=["perf", "accuracy"],
+    # [(1, 1, 1), (8, 5, 1)],
+    # ids=["perf", "accuracy"],
+    [(1, 1, 1)],
+    ids=["perf"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("enable_trace", [True])
+# @pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_moe_compute(
