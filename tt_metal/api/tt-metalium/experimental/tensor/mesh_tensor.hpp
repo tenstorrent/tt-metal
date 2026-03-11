@@ -179,6 +179,10 @@ public:
         return std::nullopt;
     }
 
+    const distributed::MeshDevice& device() const { return get_device().value(); }
+
+    DeviceAddr address() const { return mesh_buffer()->address(); }
+
     // Getters:
 
     const TensorSpec& tensor_spec() const {
