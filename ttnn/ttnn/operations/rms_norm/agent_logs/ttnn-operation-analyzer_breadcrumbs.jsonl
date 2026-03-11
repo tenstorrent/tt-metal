@@ -10,3 +10,5 @@
 {"event":"analysis_progress","details":"All source files read. DeepWiki returned pack_untilize_block explanation. Now writing analysis document.","ts":"2026-03-11T17:10:15+00:00"}
 {"event":"action","type":"write_analysis","details":"Wrote tilize_analysis.md covering reader pattern, input CB sizing, stick-to-tile batching, work distribution","ts":"2026-03-11T17:11:13+00:00"}
 {"event":"complete","final_status":"SUCCESS","final_commit":"bfe5a1e0af","ts":"2026-03-11T17:13:37+00:00"}
+{"event":"complete","final_status":"SUCCESS","final_commit":"f50be4b7b7","details":"reduce_w analysis committed successfully with compute_core focus for rms_norm reference","ts":"2026-03-11T17:16:44+00:00"}
+{"event":"complete","final_status":"SUCCESS","final_commit":"f50be4b7b7","details":"untilize analysis committed as output_stage reference for rms_norm","ts":"2026-03-11T17:17:15+00:00"}
