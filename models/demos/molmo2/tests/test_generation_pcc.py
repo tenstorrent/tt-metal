@@ -35,8 +35,8 @@ def comp_pcc(a, b, pcc_threshold=0.99):
     return pcc, pcc >= pcc_threshold
 
 
-def run_generation_comparison(num_tokens: int = 20):
-    """Compare TTNN vs reference generation token by token."""
+def _run_generation_comparison_impl(num_tokens: int = 20):
+    """Compare TTNN vs reference generation token by token. Returns (hf_tokens, ttnn_tokens, prefill_pcc)."""
 
     from transformers import AutoProcessor
 
@@ -173,6 +173,7 @@ def run_generation_comparison(num_tokens: int = 20):
     ttnn_last_logits = ttnn_logits_torch[0, 0, -1, :].unsqueeze(0).unsqueeze(0)
 
     pcc, _ = comp_pcc(hf_last_logits, ttnn_last_logits)
+    prefill_pcc = pcc
     logger.info(f"Prefill last token logits PCC: {pcc:.6f}")
 
     # Get first predicted tokens
@@ -283,7 +284,47 @@ def run_generation_comparison(num_tokens: int = 20):
 
     ttnn.close_device(device)
 
+    return hf_generated, ttnn_generated, prefill_pcc
+
+
+def run_generation_comparison(num_tokens: int = 20):
+    hf_generated, ttnn_generated, prefill_pcc = _run_generation_comparison_impl(num_tokens)
     return hf_generated, ttnn_generated
+
+
+# ---------------------------------------------------------------------------
+# pytest entry points
+# ---------------------------------------------------------------------------
+
+
+def test_generation_prefill_pcc(device):
+    """
+    Prefill logits PCC >= 0.95 against HuggingFace reference.
+
+    Cumulative threshold for full 36-layer model is 0.95.
+    Individual block PCC >= 0.99 is enforced in test_text_block.py.
+    """
+    _, _, prefill_pcc = _run_generation_comparison_impl(num_tokens=1)
+    assert prefill_pcc >= 0.95, (
+        f"Prefill last-token logits PCC {prefill_pcc:.6f} < 0.95. " "Check text_model, embedding, or vision splicing."
+    )
+
+
+def test_generation_token_match(device):
+    """
+    First 20 greedy-decoded tokens match HF reference.
+
+    Requires prefill to produce correct first token, then decode to follow.
+    Even a single token mismatch can diverge the sequence — so we allow
+    up to 1 mismatch in 20 tokens (95% match rate).
+    """
+    hf_tokens, ttnn_tokens, _ = _run_generation_comparison_impl(num_tokens=20)
+    matching = sum(1 for a, b in zip(hf_tokens, ttnn_tokens) if a == b)
+    match_rate = matching / len(hf_tokens)
+    assert match_rate >= 0.95, (
+        f"Token match rate {match_rate:.2%} ({matching}/{len(hf_tokens)}) < 95%. "
+        "TTNN generation is diverging from HF reference."
+    )
 
 
 if __name__ == "__main__":

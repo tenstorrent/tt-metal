@@ -14,7 +14,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 
 
 @pytest.fixture
