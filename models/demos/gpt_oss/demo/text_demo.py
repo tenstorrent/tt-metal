@@ -426,7 +426,7 @@ def test_gpt_oss_demo(
 
     # Set to False to optimize for execution time.
     # If True, will always try to load HF weights if path is set.
-    load_model = True
+    load_model = False
     if load_model:
         if model_path is None:
             logger.warning(
