@@ -36,16 +36,18 @@ class DecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelPrefillConfig:
-        return NonExpert.prefill_model_config(hf_config, mesh_device)
+        return NonExpert.prefill_model_config(hf_config, mesh_device, fabric_config)
 
     @classmethod
     def decode_mlp_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelDecodeConfig:
-        return NonExpert.decode_model_config(hf_config, mesh_device)
+        return NonExpert.decode_model_config(hf_config, mesh_device, fabric_config)
 
     @classmethod
     def create_mlp_state(
