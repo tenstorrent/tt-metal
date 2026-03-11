@@ -632,7 +632,7 @@ class Generator(WarmupForwardMixin):
                     # sample_batched_prefill to bypass the on-device sampling module.
                     if hasattr(self.model[model_id], "sample_batched_prefill"):
                         tokens_host, log_probs_host = self.model[model_id].sample_batched_prefill(
-                            logits, last_token_idx, padded_batch, prefill_seq_len
+                            logits, last_token_idx, padded_batch, prefill_seq_len, sampling_params
                         )
                         for local_idx, slot in enumerate(empty_slots):
                             output_tokens[slot] = tokens_host[slot]
