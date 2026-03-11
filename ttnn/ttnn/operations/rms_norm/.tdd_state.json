@@ -1,0 +1,149 @@
+{
+  "op_name": "rms_norm",
+  "op_path": "ttnn/ttnn/operations/rms_norm",
+  "spec_path": "ttnn/ttnn/operations/rms_norm/op_design.md",
+  "layout": [
+    "TILE_LAYOUT",
+    "ROW_MAJOR_LAYOUT"
+  ],
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Identity passthrough: reader + tilize (RM) + copy_tiles + untilize (RM) + writer. Tests end-to-end data flow for both layouts.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "input_tensor",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "bfloat16",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "square_reduce_mean",
+      "description": "Square input + reduce SUM with 1/W scaler (= mean). Output is reduced shape [..,H,32] with valid data in column 0.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_square_reduce_mean.py",
+      "reference_body": "torch.mean(input_tensor ** 2, dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[:,:,:,0:1]",
+      "dtype_parametrize": "bfloat16",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "rms_norm_no_gamma",
+      "description": "Full RMS normalization without gamma: add_eps + rsqrt + second tilize pass + mul_col. Output matches input shape.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_rms_norm_no_gamma.py",
+      "reference_body": "input_tensor / torch.sqrt(torch.mean(input_tensor ** 2, dim=-1, keepdim=True) + 1e-6)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "bfloat16",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "rms_norm_with_gamma",
+      "description": "Full RMS normalization with gamma: adds mul_row(gamma) after normalize. Reader tilizes gamma RM data. Output matches input shape.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_rms_norm_with_gamma.py",
+      "reference_body": "(input_tensor / torch.sqrt(torch.mean(input_tensor ** 2, dim=-1, keepdim=True) + 1e-6)) * gamma",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "gamma=gamma_t",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, shape[-1])",
+      "extra_ttnn_setup": "gamma_t = ttnn.from_torch(gamma, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "bfloat16",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
