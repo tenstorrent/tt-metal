@@ -161,6 +161,13 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                     const auto& previous_cores = it->second;
                     // Only block before launching the current program if the previous program used the same cores
                     if (logical_cores_intersect(previous_cores, program_cores)) {
+                        std::cout << "Cores interserct, waiting for idle " << std::endl;
+                        for (uint32_t ct = 0; ct < previous_cores.size(); ct++) {
+                            for (const auto& core : previous_cores[ct]) {
+                                std::cout << "Waiting for core " << core.str() << std::endl;
+                            }
+                        }
+                        std::cout << std::endl;
                         tt::llrt::internal_::wait_for_idle(device->id(), previous_cores);
                         // Clear the active cores in use for this device, since we blocked
                         // on them

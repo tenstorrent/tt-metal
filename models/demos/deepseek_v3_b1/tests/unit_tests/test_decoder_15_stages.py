@@ -74,6 +74,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
+            "worker_l1_size": 1445824,
         }
     ],
     indirect=True,
@@ -126,7 +127,7 @@ def test_persistent_decoder_15_stages(
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 1
 
     torch.manual_seed(42)
     print("Create torch embedding")
@@ -168,7 +169,7 @@ def test_persistent_decoder_15_stages(
                 downstream_d2d_socket_fifo_size=embedding_fifo_size,
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
-                h2d_socket_fifo_size=token_size_bytes * 2,
+                h2d_socket_fifo_size=token_size_bytes * 1,
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
@@ -276,8 +277,8 @@ def test_persistent_decoder_15_stages(
                 # Post-SDPA
                 d["kv_b2_overlapped"],
                 d["o_proj_overlapped"],
-                d["ttnn_sdpa_input_l"],
-                d["ttnn_sdpa_input_ms"],
+                None,
+                None,
                 d["ttnn_sdpa_output_l"],
                 d["ttnn_sdpa_intermediate_recv"],
                 d["ttnn_sdpa_forwarder_scratch"],

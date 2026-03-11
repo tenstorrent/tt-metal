@@ -399,7 +399,14 @@ class DecoderBlock:
             # fabric) must have the same attn_base since attn assigns the same per-core args to
             # every core on the device.
             if moe_per_core_brisc:
+                print("MOE per core brisc args: ", moe_per_core_brisc)
                 print("Attention args per core: ", attn_brisc_prefix_len_by_core)
+
+                for c, _ in moe_per_core_brisc:
+                    if attn_brisc_prefix_len_by_core.get((c.x, c.y), 0) == 0:
+                        print(f"MOE core {c.x},{c.y} has no attention args")
+                        # raise ValueError(f"MOE core {c.x},{c.y} has no attention args")
+
                 attn_bases = {attn_brisc_prefix_len_by_core.get((c.x, c.y), 0) for c, _ in moe_per_core_brisc}
                 assert (
                     len(attn_bases) == 1

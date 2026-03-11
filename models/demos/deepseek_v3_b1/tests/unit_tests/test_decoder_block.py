@@ -467,24 +467,24 @@ def create_decoder_block_tensors(
     mesh_sdpa_l = torch.cat([torch.randn((SDPA_L_HEIGHT, SDPA_L_WIDTH), dtype=torch.bfloat16)] * num_devices, dim=0)
     mesh_sdpa_ms = torch.cat([torch.randn((SDPA_L_HEIGHT, SDPA_MS_WIDTH), dtype=torch.bfloat16)] * num_devices, dim=0)
 
-    ttnn_sdpa_input_l = ttnn.from_torch(
-        mesh_sdpa_l,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_l_mem,
-        tile=sdpa_tile,
-        mesh_mapper=shard_mesh_mapper,
-    )
-    ttnn_sdpa_input_ms = ttnn.from_torch(
-        mesh_sdpa_ms,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_ms_mem,
-        tile=sdpa_tile,
-        mesh_mapper=shard_mesh_mapper,
-    )
+    # ttnn_sdpa_input_l = ttnn.from_torch(
+    #     mesh_sdpa_l,
+    #     device=submesh,
+    #     dtype=ttnn.bfloat16,
+    #     layout=ttnn.TILE_LAYOUT,
+    #     memory_config=sdpa_l_mem,
+    #     tile=sdpa_tile,
+    #     mesh_mapper=shard_mesh_mapper,
+    # )
+    # ttnn_sdpa_input_ms = ttnn.from_torch(
+    #     mesh_sdpa_ms,
+    #     device=submesh,
+    #     dtype=ttnn.bfloat16,
+    #     layout=ttnn.TILE_LAYOUT,
+    #     memory_config=sdpa_ms_mem,
+    #     tile=sdpa_tile,
+    #     mesh_mapper=shard_mesh_mapper,
+    # )
     ttnn_sdpa_output_l = ttnn.from_torch(
         torch.zeros_like(mesh_sdpa_l),
         device=submesh,
@@ -693,8 +693,8 @@ def create_decoder_block_tensors(
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
         "ttnn_sdpa_output": ttnn_sdpa_output,
         "sender_coord": sender_coord,
-        "ttnn_sdpa_input_l": ttnn_sdpa_input_l,
-        "ttnn_sdpa_input_ms": ttnn_sdpa_input_ms,
+        "ttnn_sdpa_input_l": None,
+        "ttnn_sdpa_input_ms": None,
         "ttnn_sdpa_output_l": ttnn_sdpa_output_l,
         "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
         "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
@@ -798,7 +798,7 @@ def create_decoder_block_tensors(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1374544,
+            "worker_l1_size": 1483568,
         }
     ],
     indirect=True,

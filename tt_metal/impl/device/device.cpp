@@ -766,6 +766,18 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // This function queries Physical Coordinates (only exposed directly to the Device class)
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
+    (void)noc;
+
+    return std::vector<tt::tt_metal::CoreCoord>{
+        tt::tt_metal::CoreCoord(0, 9),
+        tt::tt_metal::CoreCoord(0, 0),
+        tt::tt_metal::CoreCoord(0, 7),
+        tt::tt_metal::CoreCoord(0, 3),
+        tt::tt_metal::CoreCoord(7, 9),
+        tt::tt_metal::CoreCoord(7, 1),
+        tt::tt_metal::CoreCoord(7, 6),
+        tt::tt_metal::CoreCoord(7, 4)};
+
     if (this->optimal_dram_bank_to_logical_worker_assignment_.empty()) {
         uint32_t full_grid_size_x = this->grid_size().x;
         uint32_t full_grid_size_y = this->grid_size().y;

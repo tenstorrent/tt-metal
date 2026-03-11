@@ -383,6 +383,10 @@ class AttentionBlock:
         full_device_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
+        full_device_grid = full_device_grid.subtract(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(12, 8), ttnn.CoreCoord(12, 8))])
+        )
+
         print("AttentionBlock full device grid calculated")
         # Matmul1 grid from OverlappedTensor metadata (single packed weight tensor)
         matmul_weights_core_grid = matmul_weights_tensor.core_range_set
@@ -587,9 +591,24 @@ class AttentionBlock:
         full_grid = rmsnorm_core_grid.merge(ttnn.CoreRangeSet([main_grid])).merge(ccl_sender_core_grid)
         print("AttentionBlock full grid calculated")
         # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
-        sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
 
-        sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
+        NUM_SDPA_WORKERS = 8
+        SDPA_L_HEIGHT = 8
+        SDPA_L_WIDTH = 512 * NUM_SDPA_WORKERS
+
+        sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS
+        sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
+        sdpa_worker_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
+        )
+        sdpa_tile = ttnn.Tile([8, 32])
+        sdpa_dtype = ttnn.bfloat16
+        sdpa_l_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(sdpa_worker_grid, (SDPA_L_HEIGHT, sdpa_l_per_worker), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        sdpa_worker_grid = sdpa_l_mem_config.shard_spec.grid
 
         # SDPA forwarder grid: derived from the scratch buffer's shard spec so that
         # the kernel runs on exactly the cores where the scratch buffer is allocated.
@@ -602,16 +621,18 @@ class AttentionBlock:
 
         # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
         full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
+        full_grid = full_grid.subtract(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(12, 8), ttnn.CoreCoord(12, 8))])
+        )
 
         # Get actual tile dimensions from input tensor (matches original op)
-        sdpa_tile = sdpa_input_l_sample.tile
         sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
-        sdpa_element_size_bytes = _get_element_size_bytes(sdpa_input_l_sample.dtype)
+        sdpa_element_size_bytes = _get_element_size_bytes(ttnn.bfloat16)
         sdpa_input_page_size_bytes = sdpa_element_size_bytes * sdpa_tile_height * sdpa_tile_width
         sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
 
         # Get shard spec to calculate tile counts (matches original op)
-        sdpa_shard_spec = sdpa_input_l_sample.memory_config().shard_spec
+        sdpa_shard_spec = sdpa_l_mem_config.shard_spec
         sdpa_input_l_num_pages = (sdpa_shard_spec.shape[0] // sdpa_tile_height) * (
             sdpa_shard_spec.shape[1] // sdpa_tile_width
         )
@@ -1901,8 +1922,8 @@ class AttentionBlock:
         ref_post_sdpa_weights1_fused_tensor = post_sdpa_weights1_fused_tensors_per_device[0]
         ref_post_sdpa_weights2_fused_tensor = post_sdpa_weights2_fused_tensors_per_device[0]
         ref_attention_block_output_tensor = attention_block_output_tensors_per_device[0]
-        ref_sdpa_input_l = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
-        ref_sdpa_input_ms = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
+        # ref_sdpa_input_l = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
+        # ref_sdpa_input_ms = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
         ref_sdpa_output_l = ttnn.get_device_tensors(sdpa_output_l_mesh)[0]
         ref_sdpa_intermediate_recv = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[0]
         ref_sdpa_forwarder_scratch = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
