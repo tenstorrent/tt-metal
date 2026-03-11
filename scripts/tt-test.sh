@@ -1,4 +1,7 @@
 #!/bin/bash
+# Auto-generated wrapper: wait for build before running tests
+source "/localdev/mstaletovic/2026_03_11/1701_mstaletovic_AgentsTestingInfra/clones/layer_norm_rm_run1/tt-metal/.eval/wait_for_build.sh" || exit $?
+# --- Original scripts/tt-test.sh below ---
 # tt-test.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.
