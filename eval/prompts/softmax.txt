@@ -21,7 +21,9 @@ This supports these call patterns:
 - softmax(t, numeric_stable=False)              # unstable mode (no max subtraction)
 - softmax(t, dim=-2, numeric_stable=False)      # all explicit
 
-Only dim=-1 and dim=-2 are supported. All other dim values must be rejected.
+Both dim=-1 and dim=-2 MUST be implemented and working. These are not optional —
+the kernel must handle reduction along either the width or height dimension.
+All other dim values must be rejected.
 
 The operation must validate inputs on the Python side and raise ValueError or
 RuntimeError for: wrong dtype (not bfloat16), wrong layout (not TILE_LAYOUT),
