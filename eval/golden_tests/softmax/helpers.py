@@ -33,8 +33,8 @@ def to_ttnn(tensor, device, dtype=ttnn.bfloat16):
     )
 
 
-def check_output(ttnn_output, expected, shape, rtol, atol):
-    """Validate shape, dtype, layout, and numerical correctness."""
+def check_output(ttnn_output, expected, shape, pcc_threshold=0.999, rms_threshold=0.02):
+    """Validate shape, dtype, layout, and numerical correctness using PCC + RMS."""
     assert list(ttnn_output.shape) == list(
         shape
     ), f"Shape mismatch: got {list(ttnn_output.shape)}, expected {list(shape)}"
@@ -43,14 +43,20 @@ def check_output(ttnn_output, expected, shape, rtol, atol):
 
     assert ttnn_output.layout == ttnn.TILE_LAYOUT, f"Layout mismatch: got {ttnn_output.layout}, expected TILE_LAYOUT"
 
-    actual = ttnn.to_torch(ttnn_output).float()
-    expected_f = expected.float()
+    actual = ttnn.to_torch(ttnn_output).to(torch.float64)
+    expected_f = expected.to(torch.float64)
 
-    abs_diff = (actual - expected_f).abs()
-    max_diff = abs_diff.max().item()
-    mean_diff = abs_diff.mean().item()
+    # PCC (Pearson Correlation Coefficient)
+    a_flat = actual.flatten()
+    e_flat = expected_f.flatten()
+    a_centered = a_flat - a_flat.mean()
+    e_centered = e_flat - e_flat.mean()
+    num = (a_centered * e_centered).sum()
+    den = a_centered.norm() * e_centered.norm()
+    pcc = (num / den).item() if den > 1e-30 else (1.0 if num.abs() < 1e-30 else 0.0)
 
-    passing = torch.allclose(actual, expected_f, rtol=rtol, atol=atol)
-    assert passing, (
-        f"Numerical mismatch: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}, " f"rtol={rtol}, atol={atol}"
-    )
+    # RMS error
+    rms_err = ((actual - expected_f) ** 2).mean().sqrt().item()
+
+    assert pcc >= pcc_threshold, f"PCC too low: {pcc:.8f} < {pcc_threshold} (rms_error={rms_err:.6f})"
+    assert rms_err <= rms_threshold, f"RMS error too high: {rms_err:.6f} > {rms_threshold} (pcc={pcc:.8f})"

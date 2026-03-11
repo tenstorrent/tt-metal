@@ -72,11 +72,9 @@ DISTRIBUTIONS = [
     pytest.param(_negative, id="negative"),
 ]
 
-# Tolerances: slightly relaxed for small-magnitude inputs
-RTOL = 0.02
-ATOL = 0.1
-RTOL_SMALL = 0.03
-ATOL_SMALL = 0.15
+# Tolerances (PCC + RMS)
+PCC_THRESHOLD = 0.999
+RMS_THRESHOLD = 0.02
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +97,4 @@ def test_softmax_distributions(shape, dim, make_input, device):
     ttnn_input = to_ttnn(torch_input, device)
     ttnn_output = softmax(ttnn_input, dim=dim)
 
-    # Relax tolerances for small-magnitude inputs
-    is_small = make_input.__name__ == "_small"
-    rtol = RTOL_SMALL if is_small else RTOL
-    atol = ATOL_SMALL if is_small else ATOL
-    check_output(ttnn_output, expected, shape, rtol, atol)
+    check_output(ttnn_output, expected, shape, PCC_THRESHOLD, RMS_THRESHOLD)

@@ -100,13 +100,11 @@ DIMS = [-1, -2]
 NUMERIC_STABLE_OPTIONS = [True, False]
 
 # ---------------------------------------------------------------------------
-# Tolerances
+# Tolerances (PCC + RMS)
 # ---------------------------------------------------------------------------
 
-RTOL_STABLE = 0.02
-ATOL_STABLE = 0.1
-RTOL_UNSTABLE = 0.05
-ATOL_UNSTABLE = 0.2
+PCC_THRESHOLD = 0.999
+RMS_THRESHOLD = 0.02
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +126,4 @@ def test_softmax(shape, dim, numeric_stable, device):
     ttnn_input = to_ttnn(torch_input, device)
     ttnn_output = softmax(ttnn_input, dim=dim, numeric_stable=numeric_stable)
 
-    rtol = RTOL_STABLE if numeric_stable else RTOL_UNSTABLE
-    atol = ATOL_STABLE if numeric_stable else ATOL_UNSTABLE
-    check_output(ttnn_output, expected, shape, rtol, atol)
+    check_output(ttnn_output, expected, shape, PCC_THRESHOLD, RMS_THRESHOLD)
