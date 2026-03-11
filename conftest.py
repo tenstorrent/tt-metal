@@ -1169,13 +1169,3 @@ def pytest_configure(config):
         new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
         new_xmlpath = os.path.join(directory, new_filename)
         config.option.xmlpath = new_xmlpath
-
-
-@pytest.fixture(scope="function")
-def cache_entries_counter(device):
-    """
-    Cache entries counter fixture - measures the number of program cache entries for a given test.
-    """
-    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
-
-    yield CacheEntriesCounter(device)
