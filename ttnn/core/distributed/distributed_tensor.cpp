@@ -313,46 +313,45 @@ private:
         std::vector<MeshCoordinate> buffer_coords;
         size_t num_views_with_value = 0;
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
-            if (xtensor_view.has_value()) {
-                const auto mapped_coord = remap_fn(coord);
-                buffer_coords.push_back(mapped_coord);
-                distributed_buffer.emplace_shard(
-                    mapped_coord,
-                    [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value, buffer_pin, can_borrow]() {
-                        // The callable makes a copy from the strided xtensor view to a vector; on multi-host systems,
-                        // executed only for shards that are local to this host.
-
-                        auto it = converted_buffers.find(&xtensor_view->get());
-                        if (it != converted_buffers.end()) {
-                            return it->second;
-                        }
-
-                        tt::tt_metal::HostBuffer buffer;
-                        if (can_borrow) {
-                            auto& view = xtensor_view->get();
-                            using U = std::remove_const_t<T>;
-                            auto shard_tensor = Tensor::from_borrowed_data(
-                                tt::stl::Span<U>(const_cast<U*>(view.data() + view.data_offset()), view.size()),
-                                shard_spec.logical_shape(),
-                                buffer_pin);
-                            buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
-                        } else {
-                            std::vector<std::remove_const_t<T>> data_vec(
-                                xtensor_view->get().begin(), xtensor_view->get().end());
-                            auto shard_tensor = Tensor::from_vector(
-                                std::move(data_vec),
-                                shard_spec,
-                                /*device=*/nullptr,
-                                std::nullopt,
-                                pad_value);
-                            buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
-                        }
-
-                        converted_buffers.emplace(&xtensor_view->get(), buffer);
-                        return buffer;
-                    });
-                num_views_with_value++;
+            if (!xtensor_view.has_value()) {
+                continue;
             }
+
+            auto get_shard_buffer =
+                [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value, buffer_pin, can_borrow]() {
+                    // The callable makes a copy from the strided xtensor view to a vector; on multi-host systems,
+                    // executed only for shards that are local to this host.
+                    auto it = converted_buffers.find(&xtensor_view->get());
+                    if (it != converted_buffers.end()) {
+                        return it->second;
+                    }
+
+                    Tensor shard_tensor;
+                    if (can_borrow) {
+                        auto& view = xtensor_view->get();
+                        using U = std::remove_const_t<T>;
+                        shard_tensor = Tensor::from_borrowed_data(
+                            tt::stl::Span<U>(const_cast<U*>(view.data() + view.data_offset()), view.size()),
+                            shard_spec.logical_shape(),
+                            buffer_pin);
+                    } else {
+                        std::vector<std::remove_const_t<T>> data_vec(
+                            xtensor_view->get().begin(), xtensor_view->get().end());
+                        shard_tensor = Tensor::from_vector(
+                            std::move(data_vec),
+                            shard_spec,
+                            /*device=*/nullptr,
+                            std::nullopt,
+                            pad_value);
+                    }
+                    auto buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
+                    converted_buffers.emplace(&xtensor_view->get(), buffer);
+                    return buffer;
+                };
+            const auto mapped_coord = remap_fn(coord);
+            buffer_coords.push_back(mapped_coord);
+            distributed_buffer.emplace_shard(mapped_coord, get_shard_buffer);
+            num_views_with_value++;
         }
 
         // If the distribution shape is 1D and we have less shards than devices, set the distribution shape to the
