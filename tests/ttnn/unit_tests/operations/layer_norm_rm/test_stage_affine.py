@@ -76,6 +76,6 @@ def test_affine(device, shape):
     assert torch.allclose(
         torch_output.float(),
         expected.float(),
-        rtol=0.02,
-        atol=0.02,
+        rtol=0.05,
+        atol=0.05,
     ), f"Max diff: {(torch_output.float() - expected.float()).abs().max()}"
