@@ -28,7 +28,11 @@ export DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-latest}"
 export DOCKER_IMAGE_OS="${DOCKER_IMAGE_OS:-ubuntu-22.04}"
 export DOCKER_IMAGE_VARIANT="${DOCKER_IMAGE_VARIANT:-ci-build}"
 export DOCKER_IMAGE_ARCH="${DOCKER_IMAGE_ARCH:-amd64}"
-export DOCKER_IMAGE="${DOCKER_IMAGE:-${GHCR_REPO}/${DOCKER_IMAGE_OS}-${DOCKER_IMAGE_VARIANT}-${DOCKER_IMAGE_ARCH}:${DOCKER_IMAGE_TAG}}"
+# DO NOT set DOCKER_IMAGE here — it must stay empty so that
+# resolve_workflow_docker_image() can select the correct variant (dev,
+# ci-test, ci-build, …) based on the image_type each workflow requests.
+# Setting it here would cause Priority 1 to short-circuit every call.
+export DEFAULT_DOCKER_IMAGE="${GHCR_REPO}/${DOCKER_IMAGE_OS}-${DOCKER_IMAGE_VARIANT}-${DOCKER_IMAGE_ARCH}:${DOCKER_IMAGE_TAG}"
 
 # ---------------------------------------------------------------------------
 # In-container paths and build variables
