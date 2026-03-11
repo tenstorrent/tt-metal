@@ -57,8 +57,7 @@ def test_group_norm(device):
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    # Now create the input tensors, starting with the input mask
-    # This is needed for each group to be able to select the correct elements of the input tensor
+    # Create the input mask which helps each group select the correct elements of the input tensor
     # In general, it will have dimensions of [1, num_groups, 32, 32*block_wt]
 
     # In this example, C=64 and num_groups=2, so each group is 32 channels (i.e. one tile) wide
