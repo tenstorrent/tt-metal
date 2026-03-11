@@ -43,11 +43,24 @@ echo "=========================================="
 echo ""
 
 # Check 1: Direct input interpolation in run blocks (high risk patterns)
+# Only flags UNSAFE usage: direct interpolation in run: blocks
+# Safe usage (passing via env var) is NOT flagged
 echo "Checking for dangerous direct interpolation patterns..."
 dangerous_patterns='github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)'
 while IFS= read -r -d '' file; do
     if grep -qE "$dangerous_patterns" "$file" 2>/dev/null; then
-        log_issue "HIGH" "$file" "Contains dangerous event data interpolation (comment/issue/PR body/title)"
+        # Check if any usage is in an unsafe context (directly in run: block, not via env var)
+        # Safe: env: block assignment like "VARNAME: ${{ github.event.comment.body }}"
+        # Unsafe: run: block with direct interpolation
+        unsafe_usage=$(awk '
+            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+            /^[[:space:]]*run:/ && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print; next }
+            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
+            in_run_block && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "Contains dangerous event data interpolation directly in run: block (comment/issue/PR body/title)"
+        fi
     fi
 done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
 
@@ -105,10 +118,25 @@ while IFS= read -r file; do
 done < <(grep -rl 'permissions:.*write-all\|write-all' "$GITHUB_DIR/workflows" 2>/dev/null || true)
 
 # Check 9: Ref-based injection vectors (head.ref, base.ref in ${{ }})
+# Only flags UNSAFE usage: direct interpolation in run: blocks
+# Safe usage (passing via env var) is NOT flagged
 echo "Checking for ref-based injection patterns..."
-while IFS= read -r file; do
-    [[ -n "$file" ]] && log_issue "MEDIUM" "$file" "Contains head.ref/base.ref interpolation - ensure value is passed via env var"
-done < <(grep -rlE '\$\{\{.*\.(head|base)\.ref' "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" 2>/dev/null || true)
+while IFS= read -r -d '' file; do
+    if grep -qE '\$\{\{.*\.(head|base)\.ref' "$file" 2>/dev/null; then
+        # Check if any usage is in an unsafe context (directly in run: block, not via env var)
+        # Safe: env: block assignment like "BASE_REF: ${{ github.event.pull_request.base.ref }}"
+        # Unsafe: run: block with direct interpolation
+        unsafe_usage=$(awk '
+            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+            /^[[:space:]]*run:/ && /\$\{\{.*\.(head|base)\.ref/ { print; next }
+            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
+            in_run_block && /\$\{\{.*\.(head|base)\.ref/ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "MEDIUM" "$file" "Contains head.ref/base.ref interpolation directly in run: block - use env var instead"
+        fi
+    fi
+done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
 
 # Check 10: curl | bash patterns
 echo "Checking for curl pipe to shell patterns..."

@@ -144,10 +144,16 @@ jobs:
           conda activate metalium_env
           wget -O /tmp/sfpi-info.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-info.sh
           wget -O /tmp/sfpi-version https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version
-          eval $(/tmp/sfpi-info.sh SHELL rpm)
-          wget $sfpi_url/$sfpi_filename
-          dnf -y install ./$sfpi_filename
-          rm -f $sfpi_filename /tmp/sfpi-info.sh /tmp/sfpi-version
+          # Safely parse sfpi-info.sh output instead of using eval
+          # Only accept lines matching the expected format: sfpi_varname='value'
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^sfpi_[a-z_]+=[\'\"'] ]]; then
+              declare "$line"
+            fi
+          done < <(/tmp/sfpi-info.sh SHELL rpm)
+          wget "$sfpi_url/$sfpi_filename"
+          dnf -y install "./$sfpi_filename"
+          rm -f "$sfpi_filename" /tmp/sfpi-info.sh /tmp/sfpi-version
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
           # Write command to script file to safely handle quotes and special characters
           cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
