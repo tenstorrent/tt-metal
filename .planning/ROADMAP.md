@@ -6,7 +6,7 @@
 
 **Requirements:** AP-01, AP-02, AP-03, AP-04, AP-05, AP-06
 
-**Plans:** 7 plans
+**Plans:** 8 plans
 
 Plans:
 - [x] 01-01-PLAN.md — Wave 0: test infrastructure scaffolding (kernels + host runner + common types)
@@ -16,3 +16,4 @@ Plans:
 - [ ] 01-05-PLAN.md — mesh/api.h: scatter + fused-scatter renames and chunking wrappers
 - [ ] 01-06-PLAN.md — mesh/api.h: new addrgen overloads for multicast_fused_scatter_write_atomic_inc
 - [ ] 01-07-PLAN.md — Integration test execution and hardware validation
+- [ ] 01-08-PLAN.md — Gap closure: compile-probe kernels for 7 missing wrapper families
