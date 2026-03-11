@@ -168,36 +168,32 @@ void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams&
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .defines = defines});
 
-    // Build runtime args -- layout depends on family
+    // Build runtime args -- layout depends on family and fabric mode (2D vs 1D)
     std::vector<uint32_t> writer_rt;
 
+    // Common prefix: src_l1_addr, total_size, dst_base_addr
+    writer_rt.push_back(src_l1_addr);
+    writer_rt.push_back(p.tensor_bytes);
+    writer_rt.push_back(dst_l1_addr);
+
+    if (is_2d_fabric) {
+        // Mesh mode: dst_mesh_id, dst_dev_id before NOC coords
+        writer_rt.push_back(p.mesh_id);
+        writer_rt.push_back(static_cast<uint32_t>(p.dst_chip));
+    }
+
+    writer_rt.push_back(rx_xy.x);
+    writer_rt.push_back(rx_xy.y);
+    writer_rt.push_back(gsem.address());
+
+    if (!is_2d_fabric) {
+        // Linear mode: num_hops after sem_addr (before fabric connection args)
+        // For linear unicast, num_hops = 1 (single-hop between adjacent devices)
+        writer_rt.push_back(1u);
+    }
+
     if (is_scatter) {
-        // Scatter kernels: src_l1_addr, total_size, dst_base_addr, dst_mesh_id, dst_dev_id,
-        //                  rx_noc_x, rx_noc_y, sem_l1_addr, scatter_offset
-        writer_rt = {
-            src_l1_addr,
-            p.tensor_bytes,
-            dst_l1_addr,
-            p.mesh_id,
-            static_cast<uint32_t>(p.dst_chip),
-            rx_xy.x,
-            rx_xy.y,
-            gsem.address(),
-            scatter_offset,
-        };
-    } else {
-        // Non-scatter kernels: src_l1_addr, total_size, dst_base_addr, dst_mesh_id, dst_dev_id,
-        //                      rx_noc_x, rx_noc_y, sem_l1_addr
-        writer_rt = {
-            src_l1_addr,
-            p.tensor_bytes,
-            dst_l1_addr,
-            p.mesh_id,
-            static_cast<uint32_t>(p.dst_chip),
-            rx_xy.x,
-            rx_xy.y,
-            gsem.address(),
-        };
+        writer_rt.push_back(scatter_offset);
     }
 
     // Append fabric connection runtime args

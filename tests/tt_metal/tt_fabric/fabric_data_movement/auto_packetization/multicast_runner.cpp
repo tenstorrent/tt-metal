@@ -201,114 +201,125 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .defines = defines});
 
-    // Compute bounding-box hop counts for all receivers relative to sender.
-    // Use MeshGraph::chip_to_coordinate to get (row, col) from chip_id.
-    const auto& mesh_graph = cp.get_mesh_graph();
-    auto src_mesh_coord = mesh_graph.chip_to_coordinate(
-        tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip);
-    int src_r = src_mesh_coord[0], src_c = src_mesh_coord[1];
-    int min_r = src_r, max_r = src_r, min_c = src_c, max_c = src_c;
-
-    for (const auto& r : receivers) {
-        auto coord = mesh_graph.chip_to_coordinate(r.fabric_node.mesh_id, r.fabric_node.chip_id);
-        min_r = std::min(min_r, (int)coord[0]);
-        max_r = std::max(max_r, (int)coord[0]);
-        min_c = std::min(min_c, (int)coord[1]);
-        max_c = std::max(max_c, (int)coord[1]);
-    }
-
-    uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
-    if (max_c > src_c) { e_hops = (uint16_t)(max_c - src_c); }
-    if (min_c < src_c) { w_hops = (uint16_t)(src_c - min_c); }
-    if (max_r > src_r) { s_hops = (uint16_t)(max_r - src_r); }
-    if (min_r < src_r) { n_hops = (uint16_t)(src_r - min_r); }
-
-    // Direction bitmask: bit0=W, bit1=E, bit2=N, bit3=S
-    const uint32_t dir_mask =
-        (w_hops ? 1u : 0u) | (e_hops ? 2u : 0u) | (n_hops ? 4u : 0u) | (s_hops ? 8u : 0u);
-
     // Use the first receiver's semaphore address for the sender RT args.
     // All receivers have the same semaphore L1 address (same core + same allocation).
     const uint32_t sem_l1_addr = receiver_sems[0].address();
 
-    // Build runtime args -- common prefix for all multicast families
+    // Build runtime args -- differs between 2D and 1D modes
     std::vector<uint32_t> writer_rt;
-    if (is_scatter) {
-        writer_rt = {
-            src_l1_addr,
-            p.tensor_bytes,
-            dst_l1_addr,
-            rx_xy.x,
-            rx_xy.y,
-            sem_l1_addr,
-            dir_mask,
-            scatter_offset,
-        };
-    } else {
-        writer_rt = {
-            src_l1_addr,
-            p.tensor_bytes,
-            dst_l1_addr,
-            rx_xy.x,
-            rx_xy.y,
-            sem_l1_addr,
-            dir_mask,
-        };
-    }
 
-    // --- Per-direction fabric connections (W, E, N, S) ---
-    // Pick representative receiver nodes at the edge of the bounding box
-    auto find_receiver_at = [&](int row, int col) -> tt::tt_fabric::FabricNodeId {
+    if (is_2d_fabric) {
+        // ===== 2D Mesh Mode =====
+        // Compute bounding-box hop counts for all receivers relative to sender.
+        const auto& mesh_graph = cp.get_mesh_graph();
+        auto src_mesh_coord = mesh_graph.chip_to_coordinate(
+            tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip);
+        int src_r = src_mesh_coord[0], src_c = src_mesh_coord[1];
+        int min_r = src_r, max_r = src_r, min_c = src_c, max_c = src_c;
+
         for (const auto& r : receivers) {
             auto coord = mesh_graph.chip_to_coordinate(r.fabric_node.mesh_id, r.fabric_node.chip_id);
-            if ((int)coord[0] == row && (int)coord[1] == col) {
-                return r.fabric_node;
+            min_r = std::min(min_r, (int)coord[0]);
+            max_r = std::max(max_r, (int)coord[0]);
+            min_c = std::min(min_c, (int)coord[1]);
+            max_c = std::max(max_c, (int)coord[1]);
+        }
+
+        uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
+        if (max_c > src_c) { e_hops = (uint16_t)(max_c - src_c); }
+        if (min_c < src_c) { w_hops = (uint16_t)(src_c - min_c); }
+        if (max_r > src_r) { s_hops = (uint16_t)(max_r - src_r); }
+        if (min_r < src_r) { n_hops = (uint16_t)(src_r - min_r); }
+
+        // Direction bitmask: bit0=W, bit1=E, bit2=N, bit3=S
+        const uint32_t dir_mask =
+            (w_hops ? 1u : 0u) | (e_hops ? 2u : 0u) | (n_hops ? 4u : 0u) | (s_hops ? 8u : 0u);
+
+        // Common prefix
+        writer_rt = {src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr, dir_mask};
+        if (is_scatter) {
+            writer_rt.push_back(scatter_offset);
+        }
+
+        // Per-direction fabric connections (W, E, N, S)
+        auto find_receiver_at = [&](int row, int col) -> tt::tt_fabric::FabricNodeId {
+            for (const auto& r : receivers) {
+                auto coord = mesh_graph.chip_to_coordinate(r.fabric_node.mesh_id, r.fabric_node.chip_id);
+                if ((int)coord[0] == row && (int)coord[1] == col) {
+                    return r.fabric_node;
+                }
+            }
+            return receivers[0].fabric_node;
+        };
+
+        auto pick_link = [&](tt::tt_fabric::FabricNodeId dst_fn, uint32_t& out_link_idx) {
+            auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst_fn);
+            if (links.empty()) {
+                ADD_FAILURE() << "No forwarding link from src to representative";
+                return false;
+            }
+            out_link_idx = links[0];
+            return true;
+        };
+
+        uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
+        tt::tt_fabric::FabricNodeId rep_w = src, rep_e = src, rep_n = src, rep_s = src;
+        if (w_hops) { rep_w = find_receiver_at(src_r, min_c); if (!pick_link(rep_w, link_idx_w)) return; }
+        if (e_hops) { rep_e = find_receiver_at(src_r, max_c); if (!pick_link(rep_e, link_idx_e)) return; }
+        if (n_hops) { rep_n = find_receiver_at(min_r, src_c); if (!pick_link(rep_n, link_idx_n)) return; }
+        if (s_hops) { rep_s = find_receiver_at(max_r, src_c); if (!pick_link(rep_s, link_idx_s)) return; }
+
+        if (w_hops) { tt::tt_fabric::append_fabric_connection_rt_args(src, rep_w, link_idx_w, sender_prog, p.sender_core, writer_rt); }
+        if (e_hops) { tt::tt_fabric::append_fabric_connection_rt_args(src, rep_e, link_idx_e, sender_prog, p.sender_core, writer_rt); }
+        if (n_hops) { tt::tt_fabric::append_fabric_connection_rt_args(src, rep_n, link_idx_n, sender_prog, p.sender_core, writer_rt); }
+        if (s_hops) { tt::tt_fabric::append_fabric_connection_rt_args(src, rep_s, link_idx_s, sender_prog, p.sender_core, writer_rt); }
+
+        writer_rt.push_back((uint32_t)e_hops);
+        writer_rt.push_back((uint32_t)w_hops);
+        writer_rt.push_back((uint32_t)n_hops);
+        writer_rt.push_back((uint32_t)s_hops);
+    } else {
+        // ===== 1D Linear Mode =====
+        // In linear topology, multicast uses start_distance and range.
+        // Source multicasts to all receivers in one direction.
+        // start_distance = 1 (first hop neighbor), range = number of receivers.
+        const uint8_t start_distance = 1;
+        const uint8_t range = static_cast<uint8_t>(receivers.size());
+
+        writer_rt = {src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr};
+        writer_rt.push_back(static_cast<uint32_t>(start_distance));
+        writer_rt.push_back(static_cast<uint32_t>(range));
+        if (is_scatter) {
+            writer_rt.push_back(scatter_offset);
+        }
+
+        // Find a direct neighbor of src to use as the fabric connection target.
+        // In 1D, append_fabric_connection_rt_args requires the dst to be a direct neighbor.
+        tt::tt_fabric::FabricNodeId neighbor_node = receivers[0].fabric_node;
+        bool found_neighbor = false;
+        for (const auto& direction : FabricContext::routing_directions) {
+            auto neighbors = cp.get_chip_neighbors(src, direction);
+            auto mesh_neighbors = neighbors.find(src.mesh_id);
+            if (mesh_neighbors != neighbors.end() && !mesh_neighbors->second.empty()) {
+                // Use the first direct neighbor found as the fabric connection target
+                neighbor_node = tt::tt_fabric::FabricNodeId{src.mesh_id, mesh_neighbors->second[0]};
+                found_neighbor = true;
+                break;
             }
         }
-        // Fallback: use the first receiver (should not happen in well-formed tests)
-        return receivers[0].fabric_node;
-    };
-
-    auto pick_link = [&](tt::tt_fabric::FabricNodeId dst_fn, uint32_t& out_link_idx) {
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst_fn);
-        if (links.empty()) {
-            ADD_FAILURE() << "No forwarding link from src to representative";
-            return false;
+        if (!found_neighbor) {
+            ADD_FAILURE() << "No direct neighbor found for src in 1D mode";
+            return;
         }
-        out_link_idx = links[0];
-        return true;
-    };
 
-    uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
-    tt::tt_fabric::FabricNodeId rep_w = src, rep_e = src, rep_n = src, rep_s = src;
-    if (w_hops) { rep_w = find_receiver_at(src_r, min_c); if (!pick_link(rep_w, link_idx_w)) return; }
-    if (e_hops) { rep_e = find_receiver_at(src_r, max_c); if (!pick_link(rep_e, link_idx_e)) return; }
-    if (n_hops) { rep_n = find_receiver_at(min_r, src_c); if (!pick_link(rep_n, link_idx_n)) return; }
-    if (s_hops) { rep_s = find_receiver_at(max_r, src_c); if (!pick_link(rep_s, link_idx_s)) return; }
-
-    // Append fabric connection blocks in fixed order: W, E, N, S
-    if (w_hops) {
+        auto forwarding_links = tt::tt_fabric::get_forwarding_link_indices(src, neighbor_node);
+        if (forwarding_links.empty()) {
+            ADD_FAILURE() << "No forwarding links from src to direct neighbor";
+            return;
+        }
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src, rep_w, link_idx_w, sender_prog, p.sender_core, writer_rt);
+            src, neighbor_node, forwarding_links[0], sender_prog, p.sender_core, writer_rt);
     }
-    if (e_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src, rep_e, link_idx_e, sender_prog, p.sender_core, writer_rt);
-    }
-    if (n_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src, rep_n, link_idx_n, sender_prog, p.sender_core, writer_rt);
-    }
-    if (s_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src, rep_s, link_idx_s, sender_prog, p.sender_core, writer_rt);
-    }
-
-    // Append hop counts
-    writer_rt.push_back((uint32_t)e_hops);
-    writer_rt.push_back((uint32_t)w_hops);
-    writer_rt.push_back((uint32_t)n_hops);
-    writer_rt.push_back((uint32_t)s_hops);
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 

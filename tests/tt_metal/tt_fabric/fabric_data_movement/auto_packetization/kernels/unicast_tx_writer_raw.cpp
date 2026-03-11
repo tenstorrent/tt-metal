@@ -28,22 +28,38 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using namespace tt::tt_fabric;
+#ifdef FABRIC_2D
 using namespace tt::tt_fabric::mesh::experimental;
+#else
+using namespace tt::tt_fabric::linear::experimental;
+#endif
 
 void kernel_main() {
     size_t idx = 0;
     const uint32_t src_l1_addr    = get_arg_val<uint32_t>(idx++);
     const uint32_t total_size     = get_arg_val<uint32_t>(idx++);
     const uint32_t dst_base_addr  = get_arg_val<uint32_t>(idx++);
+
+#ifdef FABRIC_2D
+    // Mesh mode: RT args include dst_mesh_id, dst_dev_id
     const uint16_t dst_mesh_id    = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint8_t  dst_dev_id     = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
+#endif
+
     const uint32_t rx_noc_x       = get_arg_val<uint32_t>(idx++);
     const uint32_t rx_noc_y       = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr    = get_arg_val<uint32_t>(idx++);
+
+#ifndef FABRIC_2D
+    // Linear mode: RT args include num_hops
+    const uint8_t num_hops        = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
+#endif
 
     // Build fabric sender from runtime args packed by host
     auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
@@ -59,6 +75,7 @@ void kernel_main() {
 
     // Send payload using auto-packetizing wrapper.
     // This call transparently chunks total_size into FABRIC_MAX_PACKET_SIZE pieces.
+#ifdef FABRIC_2D
     fabric_unicast_noc_unicast_write(
         &sender,
         packet_header,
@@ -67,17 +84,34 @@ void kernel_main() {
         src_l1_addr,
         total_size,
         tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr});
+#else
+    fabric_unicast_noc_unicast_write(
+        &sender,
+        packet_header,
+        src_l1_addr,
+        total_size,
+        tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr},
+        num_hops);
+#endif
 
     // Ensure all writes are flushed before sending completion signal
     noc_async_writes_flushed();
 
     // Signal completion via atomic increment on receiver semaphore
+#ifdef FABRIC_2D
     fabric_unicast_noc_unicast_atomic_inc(
         &sender,
         packet_header,
         dst_dev_id,
         dst_mesh_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_addr, /*inc=*/1, /*width_bits=*/32));
+#else
+    fabric_unicast_noc_unicast_atomic_inc(
+        &sender,
+        packet_header,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_addr, /*inc=*/1, /*width_bits=*/32),
+        num_hops);
+#endif
 
     sender.close();
 }
