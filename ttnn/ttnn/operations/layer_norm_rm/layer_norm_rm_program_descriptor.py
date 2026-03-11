@@ -332,9 +332,20 @@ def create_program_descriptor(
 
     # --- Compile-time args ---
 
-    # Reader compile-time args: stick_size, has_gamma, has_beta, TensorAccessorArgs(input)
+    # Reader compile-time args: stick_size, has_gamma, has_beta, TensorAccessorArgs(input),
+    #   TensorAccessorArgs(gamma) [or dummy], TensorAccessorArgs(beta) [or dummy]
     reader_ct_args = [stick_size, has_gamma, has_beta]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Gamma TA at fixed index 4 (1 arg for DRAM interleaved, dummy 0 when no gamma)
+    if gamma is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    else:
+        reader_ct_args.append(0)  # dummy placeholder
+    # Beta TA at fixed index 5 (1 arg for DRAM interleaved, dummy 0 when no beta)
+    if beta is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
+    else:
+        reader_ct_args.append(0)  # dummy placeholder
 
     # Compute compile-time args: Wt, has_gamma, has_beta
     # num_tile_rows varies per core (cliff), so it's a runtime arg instead

@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/layer_norm_rm",
   "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 5,
-  "last_passing_commit": "a1770b1ac8c0ceba67858f15b5d6e9339849a683",
+  "current_stage_index": 6,
+  "last_passing_commit": "9efdd8526e7f6d12518169c8e9fe138a907bffc0",
   "stages": [
     {
       "name": "data_pipeline",
@@ -229,8 +229,8 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
+      "status": "passed",
+      "commit": "9efdd8526e7f6d12518169c8e9fe138a907bffc0",
       "attempts": 0,
       "free_retries": 0,
       "max_attempts": 6,

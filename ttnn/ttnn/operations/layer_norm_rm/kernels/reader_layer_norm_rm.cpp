@@ -5,6 +5,7 @@
 // Reads RM sticks from DRAM via TensorAccessor.
 // Per tile-row: reads same 32 sticks N times (N passes).
 // At program start: fills scaler CB with 1/W, epsilon CB with eps.
+// If gamma/beta: duplicates single stick 32x into c_0 for compute to tilize.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -19,6 +20,8 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(0);
 constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
 constexpr uint32_t has_beta = get_compile_time_arg_val(2);
 constexpr auto input_tensor_args = TensorAccessorArgs<3>();
+constexpr auto gamma_tensor_args = TensorAccessorArgs<4>();
+constexpr auto beta_tensor_args = TensorAccessorArgs<5>();
 
 // Number of passes per tile-row: 3 (mean, variance, normalize)
 constexpr uint32_t NUM_PASSES = 3;
@@ -52,9 +55,40 @@ void kernel_main() {
     eps_conv.u = static_cast<uint32_t>(eps_bf16) << 16;
     dataflow_kernel_lib::prepare_reduce_scaler<c_3>(eps_conv.f);
 
+    // Gamma/beta stick duplication: read single stick 32 times to fill one tile-row
+    // This happens once at program start, before the main loop.
+    constexpr uint32_t STICKS_PER_TILE_ROW = 32;
+
+    if constexpr (has_gamma) {
+        const auto gamma_accessor = TensorAccessor(gamma_tensor_args, gamma_addr, stick_size);
+        cb_reserve_back(c_0, Wt);
+        uint32_t l1_write_addr = get_write_ptr(c_0);
+        // Gamma is shape (1,1,1,W) = single stick at page index 0
+        uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+        for (uint32_t s = 0; s < STICKS_PER_TILE_ROW; ++s) {
+            noc_async_read(gamma_noc_addr, l1_write_addr, stick_size);
+            l1_write_addr += stick_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(c_0, Wt);
+    }
+
+    if constexpr (has_beta) {
+        const auto beta_accessor = TensorAccessor(beta_tensor_args, beta_addr, stick_size);
+        cb_reserve_back(c_0, Wt);
+        uint32_t l1_write_addr = get_write_ptr(c_0);
+        // Beta is shape (1,1,1,W) = single stick at page index 0
+        uint64_t beta_noc_addr = beta_accessor.get_noc_addr(0);
+        for (uint32_t s = 0; s < STICKS_PER_TILE_ROW; ++s) {
+            noc_async_read(beta_noc_addr, l1_write_addr, stick_size);
+            l1_write_addr += stick_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(c_0, Wt);
+    }
+
     // Main loop: for each tile-row, read 32 sticks NUM_PASSES times
     uint32_t stick_id = start_stick_id;
-    constexpr uint32_t STICKS_PER_TILE_ROW = 32;
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
         for (uint32_t pass = 0; pass < NUM_PASSES; ++pass) {
