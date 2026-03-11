@@ -35,9 +35,9 @@ def load_model_optimisations(
         force_full_grid (bool): Optional flag to force full grid. Defaults to False.
 
     Returns:
-        ModelOptimisations512x512, ModelOptimisations1024x1024, or ModelOptimisations1024x1024_BH:
+        ModelOptimisations512x512, ModelOptimisations1024x1024, or ModelOptimisations1024x1024BH:
             The appropriate ModelOptimisation object based on the image resolution and hardware type.
-            For 1024x1024 resolution, automatically selects ModelOptimisations1024x1024_BH for Blackhole
+            For 1024x1024 resolution, automatically selects ModelOptimisations1024x1024BH for Blackhole
             hardware or ModelOptimisations1024x1024 for Wormhole hardware.
             For 512x512 resolution, returns ModelOptimisations512x512 regardless of hardware type.
 
