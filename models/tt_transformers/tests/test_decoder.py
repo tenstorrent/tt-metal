@@ -222,18 +222,12 @@ def test_decoder_inference(
             page_table=page_table_tt,
         )
 
-        mesh_composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            dims=(3, 1) if model_args.is_galaxy else (1, -1),
-            mesh_shape=model_args.cluster_shape,
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
-        # Match test_model decode output indexing: permute then slice to [batch, 1, dim]
-        tt_output_torch = (
-            tt_out.permute(2, 1, 0, 3)
-            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.dim]
-            .reshape(-1, 1, model_args.dim)
-        )
+
+        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
