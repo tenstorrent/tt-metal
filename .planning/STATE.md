@@ -2,7 +2,7 @@
 
 ## Current Position
 - **Phase:** 01-fabric-auto-packetization
-- **Current Plan:** 06 (next to execute)
+- **Current Plan:** 07 (next to execute)
 - **Status:** In Progress
 
 ## Progress
@@ -11,7 +11,7 @@
 - Plan 03: COMPLETE (linear/api.h scatter + fused-scatter renames)
 - Plan 04: COMPLETE (mesh/api.h unicast + multicast renames)
 - Plan 05: COMPLETE (mesh/api.h scatter + fused-scatter renames)
-- Plan 06: PENDING (mesh/api.h new addrgen overloads)
+- Plan 06: COMPLETE (mesh/api.h new addrgen overloads)
 - Plan 07: PENDING (integration test execution)
 
 ## Decisions
@@ -25,6 +25,8 @@
 - Mesh conn mgr wrappers use Pattern 5: route-setup for_each_header pass before chunk loop
 - Scatter wrappers are passthrough (no chunking) because pre-computed NOC scatter addresses cannot be independently chunked
 - Addrgen internal calls updated to _single_packet to avoid wrapper indirection
+- Large-page scatter fallback delegates to existing unicast_write and fused_unicast_with_atomic_inc addrgen overloads
+- _with_state scatter large-page path sets noc_send_type to NOC_UNICAST_WRITE before fallback
 
 ## Blockers
 None
@@ -38,7 +40,8 @@ None
 | 01    | 04   | 6min     | 2     | 1     |
 | 01    | 03   | 4min     | 2     | 1     |
 | 01    | 05   | 6min     | 2     | 1     |
+| 01    | 06   | 5min     | 2     | 1     |
 
 ## Last Session
-- **Timestamp:** 2026-03-11T01:31:29Z
-- **Stopped At:** Completed 01-05-PLAN.md
+- **Timestamp:** 2026-03-11T01:44:00Z
+- **Stopped At:** Completed 01-06-PLAN.md
