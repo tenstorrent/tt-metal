@@ -34,12 +34,17 @@ void kernel_main() {
     // TensorAccessor for input
     const auto input_accessor = TensorAccessor(input_accessor_args, input_addr, stick_size);
 
-    // Derive Wt from stick_size: stick_size = W * 2 (bf16), Wt = W / 32
-    constexpr uint32_t Wt = stick_size / (32 * 2);  // tiles per row
-    constexpr uint32_t num_passes = 1;              // Stage 1: single pass
+    // Derive W and Wt from stick_size: stick_size = W * 2 (bf16), Wt = W / 32
+    constexpr uint32_t W = stick_size / 2;
+    constexpr uint32_t Wt = W / 32;     // tiles per row
+    constexpr uint32_t num_passes = 1;  // Will increase to 2/3 in later stages
 
     // Number of tile-rows (each tile-row = 32 sticks)
     const uint32_t nblocks = num_sticks / 32;
+
+    // Generate reduce scaler tile (1/W) into c_2 at program start
+    // This is needed for reduce SUM to compute mean = sum * (1/W)
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce_scaler>(1.0f / static_cast<float>(W));
 
     // Read tile-rows, sending each one num_passes times
     for (uint32_t block = 0; block < nblocks; block++) {

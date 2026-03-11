@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Stage 1: Identity passthrough - tilize c_0 -> c_1, then untilize c_1 -> c_17.
+// Stage 2: tilize -> reduce_mean -> untilize (row-wise mean output)
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -10,11 +10,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
-
 // CB indices
 constexpr uint32_t cb_input_rm = 0;       // c_0: RM sticks from reader
 constexpr uint32_t cb_tilized = 1;        // c_1: Tilized tiles
-constexpr uint32_t cb_reduce_scaler = 2;  // c_2: Reduce scaler
+constexpr uint32_t cb_reduce_scaler = 2;  // c_2: Reduce scaler (1/W)
+constexpr uint32_t cb_mean = 24;          // c_24: Row-reduced mean (1 tile)
 constexpr uint32_t cb_output_tiles = 16;  // c_16: Pre-untilize output tiles
 constexpr uint32_t cb_output_rm = 17;     // c_17: Untilized RM output
 
@@ -42,12 +42,16 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
 
-        // For Stage 1: pass tilized data directly to output (c_1 -> c_16)
-        // We need to copy tiles from c_1 to c_16. But since we just need identity,
-        // we can untilize directly from c_1 to c_17.
+        // Phase 2: Reduce mean - SUM along row with 1/W scaler
+        // Input: c_1 (Wt tiles), Scaler: c_2 (1 tile, 1/W), Output: c_24 (1 tile, col vector)
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile>(
+                cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+
+        // Untilize mean (1 tile wide) from c_24 -> c_17
         compute_kernel_lib::untilize<
-            Wt,
-            cb_tilized,
+            1,
+            cb_mean,
             cb_output_rm,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);

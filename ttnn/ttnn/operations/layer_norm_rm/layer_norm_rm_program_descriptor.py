@@ -331,13 +331,15 @@ def create_program_descriptor(
         runtime_args=compute_rt_args,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             math_approx_mode=False,
         ),
     )
 
     # --- Writer kernel ---
-    writer_ct_args = [CB_OUTPUT_RM, stick_size]
+    output_W = output_tensor.shape[-1]
+    output_stick_size = output_W * output_tensor.element_size()
+    writer_ct_args = [CB_OUTPUT_RM, output_stick_size]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()
