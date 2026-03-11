@@ -431,7 +431,28 @@ WRAPPER
     echo "[${prompt_name}:${run_id}] ${result} (${mins}m ${secs}s)"
     echo "${elapsed}" > "${log_dir}/duration_seconds.txt"
 
-    # 8. Ingest into tracking database
+    # Resolve op name from prompt's golden tag (used by scoring and ingest)
+    local golden_op_for_ingest
+    golden_op_for_ingest="$(grep -oP '^# golden: \K\S+' "$prompt_file" || true)"
+
+    # 8. Run score.py to produce score.json
+    if [[ -n "$golden_op_for_ingest" ]]; then
+        local op_dir=""
+        for search_path in "ttnn/ttnn/operations/${golden_op_for_ingest}" "ttnn/cpp/ttnn/operations/${golden_op_for_ingest}"; do
+            if [[ -d "${clone_dir}/${search_path}" ]]; then
+                op_dir="${clone_dir}/${search_path}"
+                break
+            fi
+        done
+        if [[ -n "$op_dir" ]]; then
+            echo "[${prompt_name}:${run_id}] Running score.py on ${op_dir}..."
+            python3 "${clone_dir}/.claude/scripts/tdd-pipeline/score.py" "$op_dir" --json \
+                > "${log_dir}/score.json" 2>> "${log_dir}/score.log" || \
+                echo "[${prompt_name}:${run_id}] WARNING: score.py failed" >&2
+        fi
+    fi
+
+    # 9. Ingest into tracking database
     local ingest_args=(
         --prompt-name "$prompt_name"
         --run-number "$run_id"
@@ -443,13 +464,9 @@ WRAPPER
     if [[ -f "${log_dir}/test_results.json" ]]; then
         ingest_args+=(--test-results "${log_dir}/test_results.json")
     fi
-    # Score JSON is optional — only present if score.py was run
     if [[ -f "${log_dir}/score.json" ]]; then
         ingest_args+=(--score-json "${log_dir}/score.json")
     fi
-    # Pass op name for kernel/artifact collection
-    local golden_op_for_ingest
-    golden_op_for_ingest="$(grep -oP '^# golden: \K\S+' "$prompt_file" || true)"
     if [[ -n "$golden_op_for_ingest" ]]; then
         ingest_args+=(--op-name "$golden_op_for_ingest")
         ingest_args+=(--golden-name "$golden_op_for_ingest")
