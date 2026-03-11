@@ -145,7 +145,7 @@ def _process_prefill_chunk(
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
 
     # Process down projection in splits if needed
-    split_size = program_config.down_split_size
+    split_size = program_config.get_down_split_size(seq_len)
     if seq_len > split_size:
         down_input_list = ttnn.split(down_input, split_size, dim=2)
         down_input.deallocate(True)
