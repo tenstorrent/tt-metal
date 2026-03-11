@@ -52,6 +52,13 @@ IM_END_TOKEN = "<im_end>"
 IM_COL_TOKEN = "<im_col>"
 LOW_RES_IMAGE_START_TOKEN = "<low_res_im_start>"
 IMAGE_PROMPT = "<|image|>"
+FRAME_START_TOKEN = "<frame_start>"
+FRAME_END_TOKEN = "<frame_end>"
+VIDEO_PROMPT = "<|video|>"
+
+# Default video parameters matching HF Molmo2 video processor defaults
+VIDEO_MAX_FRAMES = 8
+VIDEO_MAX_FPS = 2.0
 
 # Molmo2 normalization constants (from HuggingFace Molmo2ImageProcessor)
 # These differ from standard ImageNet normalization
@@ -349,6 +356,161 @@ def get_image_tokens(image_grid: torch.Tensor, use_col_tokens: bool = True) -> s
         return low_res_tokens + high_res_tokens
     else:
         return low_res_tokens
+
+
+def get_video_tokens(
+    num_frames: int,
+    pooled_h: int,
+    pooled_w: int,
+    timestamps: np.ndarray,
+    use_col_tokens: bool = True,
+) -> str:
+    """
+    Generate video token string for all frames.
+
+    Each frame produces: "{timestamp} <frame_start><im_patch>*N<frame_end>"
+    where N = pooled_h * pooled_w (14*14=196 for 378x378 with patch_size=14, pool=[2,2]).
+
+    This matches the HuggingFace Molmo2Processor.get_video_string() output
+    (video_grid=[n_frames, h, w] where h,w are pooled dimensions).
+    """
+    video_string = ""
+    for frame_idx, frame_time in enumerate(timestamps):
+        prev_space = " " if frame_idx > 0 else ""
+        frame_prefix = prev_space + f"{frame_time:.1f} "
+        video_string += frame_prefix
+
+        per_row = IMAGE_PATCH_TOKEN * pooled_w
+        if use_col_tokens:
+            per_row += IM_COL_TOKEN
+        video_string += FRAME_START_TOKEN + (per_row * pooled_h) + FRAME_END_TOKEN
+
+    return video_string
+
+
+def preprocess_video_molmo2(
+    video_path: str,
+    base_size: int = 378,
+    patch_size: int = 14,
+    pooling_size: list = None,
+    max_frames: int = VIDEO_MAX_FRAMES,
+    max_fps: float = VIDEO_MAX_FPS,
+) -> dict:
+    """
+    Preprocess a video file for Molmo2.
+
+    Uses molmo-utils to extract frames, then applies the same per-frame
+    preprocessing as preprocess_image_molmo2_simple (resize + normalize).
+    Each frame is treated as a single image crop.
+
+    Args:
+        video_path: Path or URL to video file
+        base_size: Target frame size (378 for Molmo2)
+        patch_size: ViT patch size (14)
+        pooling_size: [pool_h, pool_w] for cross-attention pooling (default [2, 2])
+        max_frames: Maximum frames to extract
+        max_fps: Maximum frames per second to sample
+
+    Returns:
+        Dict with:
+          - pixel_values: [n_frames, 3, H, W] tensor
+          - image_token_pooling: [n_frames * N_out, K_pool] pooling indices
+          - n_frames: int
+          - timestamps: np.ndarray of frame timestamps
+    """
+    from molmo_utils import process_vision_info
+
+    if pooling_size is None:
+        pooling_size = [2, 2]
+    pool_h, pool_w = pooling_size
+    crop_patches = base_size // patch_size  # 27
+
+    # Convert URL/path to molmo-utils message format
+    if video_path.startswith("http://") or video_path.startswith("https://"):
+        video_src = video_path
+    else:
+        video_src = f"file://{video_path}" if not video_path.startswith("file://") else video_path
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video",
+                    "video": video_src,
+                    "num_frames": max_frames,
+                    "max_fps": max_fps,
+                    "frame_sampling_mode": "uniform_last_frame",
+                },
+                {"type": "text", "text": ""},
+            ],
+        }
+    ]
+
+    _, videos, _ = process_vision_info(messages)
+    if not videos:
+        raise ValueError(f"Could not extract frames from video: {video_path}")
+
+    frames_array, metadata = videos[0]
+    # frames_array: (T, H, W, 3) numpy uint8
+
+    n_frames = len(frames_array)
+
+    # Build per-frame pooling indices (with global offsets across frames)
+    resize_idx_per_frame = np.arange(crop_patches * crop_patches).reshape(crop_patches, crop_patches)
+    resize_idx_per_frame = arange_for_pooling(resize_idx_per_frame, pool_h, pool_w)
+    n_out = resize_idx_per_frame.shape[0] * resize_idx_per_frame.shape[1]
+    resize_idx_per_frame = resize_idx_per_frame.reshape(-1, pool_h * pool_w)  # [N_out, K_pool]
+
+    all_crops = []
+    all_pooling_idx = []
+    patches_per_frame = crop_patches * crop_patches  # 729
+
+    for frame_idx, frame in enumerate(frames_array):
+        # Resize and normalize frame (same as preprocess_image_molmo2_simple)
+        frame_resized = resize_image(frame, [base_size, base_size])
+        frame_normalized = normalize_image(frame_resized, IMAGENET_MEAN, IMAGENET_STD)
+        # [H, W, C] -> [C, H, W]
+        crop = torch.from_numpy(frame_normalized).permute(2, 0, 1).float()
+        all_crops.append(crop)
+
+        # Pooling indices with offset for this frame's patch range
+        offset = frame_idx * patches_per_frame
+        frame_idx_with_offset = np.where(
+            resize_idx_per_frame >= 0,
+            resize_idx_per_frame + offset,
+            resize_idx_per_frame,
+        )
+        all_pooling_idx.append(frame_idx_with_offset)
+
+    pixel_values = torch.stack(all_crops, dim=0)  # [n_frames, 3, H, W]
+    image_token_pooling = torch.from_numpy(np.stack(all_pooling_idx, axis=0)).long()  # [n_frames, N_out, K_pool]
+
+    # Compute timestamps from metadata
+    if hasattr(metadata, "get"):
+        frames_indices = metadata.get("frames_indices", np.arange(n_frames))
+        fps = metadata.get("fps", max_fps)
+    else:
+        frames_indices = getattr(metadata, "frames_indices", np.arange(n_frames))
+        fps = getattr(metadata, "fps", max_fps)
+
+    timestamps = np.array(frames_indices, dtype=float) / fps
+
+    # Pooled grid dimensions for get_video_tokens()
+    # resize_idx_per_frame was [14, 14, 4] before reshape → pooled_h=14, pooled_w=14
+    resize_idx_before_reshape = np.arange(crop_patches * crop_patches).reshape(crop_patches, crop_patches)
+    resize_idx_before_reshape = arange_for_pooling(resize_idx_before_reshape, pool_h, pool_w)
+    pooled_h, pooled_w = resize_idx_before_reshape.shape[0], resize_idx_before_reshape.shape[1]
+
+    return {
+        "pixel_values": pixel_values,  # [n_frames, 3, H, W]
+        "image_token_pooling": image_token_pooling,  # [n_frames, N_out, K_pool]
+        "n_frames": n_frames,
+        "timestamps": timestamps,
+        "patches_per_frame": patches_per_frame,
+        "pooled_h": pooled_h,
+        "pooled_w": pooled_w,
+    }
 
 
 def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
@@ -1853,6 +2015,259 @@ class Molmo2Generator:
 
         return output_text, perf_metrics
 
+    def run_video_inference(
+        self,
+        video_inputs: dict,
+        prompt: str,
+        max_new_tokens: int = 200,
+        use_trace: bool = False,
+        use_decode_trace: bool = False,
+        use_vision_trace: bool = False,
+        use_unified_trace: bool = False,
+    ) -> Tuple[str, dict]:
+        """
+        Run full inference on a video input with autoregressive generation.
+
+        Args:
+            video_inputs: Dict from preprocess_video_molmo2
+            prompt: Text prompt (should include <|video|> token)
+            max_new_tokens: Maximum tokens to generate
+            use_trace: Whether to use tracing for prefill
+            use_decode_trace: Whether to use tracing for decode
+            use_vision_trace: Whether to use tracing for vision backbone
+            use_unified_trace: Whether to use unified Vision+Prefill trace
+
+        Returns:
+            Tuple of (output_text, perf_metrics)
+        """
+        n_frames = video_inputs["n_frames"]
+        timestamps = video_inputs["timestamps"]
+        pooled_h = video_inputs["pooled_h"]
+        pooled_w = video_inputs["pooled_w"]
+
+        # Build prompt with video tokens (replaces <|video|> with per-frame patch tokens)
+        video_tokens_str = get_video_tokens(n_frames, pooled_h, pooled_w, timestamps)
+        full_prompt = prompt.replace(VIDEO_PROMPT, video_tokens_str)
+
+        # Tokenize input
+        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt")
+
+        # pooled_patches_idx shape: [n_frames, N_out, K_pool] -- no unsqueeze needed
+        pooled_patches_idx = video_inputs["image_token_pooling"]  # [n_frames, N_out, K_pool]
+        pixel_values = video_inputs["pixel_values"]  # [n_frames, 3, H, W]
+
+        num_visual_tokens = n_frames * pooled_h * pooled_w
+        logger.info(
+            f"Video: {n_frames} frames, {num_visual_tokens} visual tokens, {input_ids.shape[1]} total input tokens"
+        )
+
+        # Vision timing starts here
+        vision_start = time.perf_counter()
+
+        # Run prefill (vision + text model)
+        logits, prefill_timing = self.run_prefill(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            pooled_patches_idx=pooled_patches_idx,
+            use_trace=use_trace,
+            use_vision_trace=use_vision_trace,
+            use_unified_trace=use_unified_trace,
+        )
+
+        vision_total_ms = (time.perf_counter() - vision_start) * 1000
+
+        # First token from prefill logits (one-time CPU argmax)
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
+        if logits_torch.dim() == 2:
+            next_token_logits = logits_torch[-1, :]
+        else:
+            next_token_logits = logits_torch
+
+        next_token = torch.argmax(next_token_logits).item()
+        generated_tokens = [next_token]
+
+        # Put first token on device for CPU-free decode loop
+        tt_next_token = ttnn.from_torch(
+            torch.tensor([[next_token]], dtype=torch.long),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        # Autoregressive generation
+        decode_times = []
+        eos_token_id = self.tokenizer.eos_token_id
+
+        for i in range(max_new_tokens - 1):
+            if next_token == eos_token_id:
+                break
+
+            tt_next_token, decode_time = self.run_decode_step(
+                tt_next_token,
+                use_trace=use_decode_trace,
+                is_first=(i == 0),
+            )
+            decode_times.append(decode_time)
+
+            next_token = self._read_token_from_device(tt_next_token)
+            generated_tokens.append(next_token)
+
+            if (i + 1) % 10 == 0:
+                logger.debug(f"Generated {i + 1} tokens, last decode: {decode_time:.2f}ms")
+
+        output_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+        total_decode_time = sum(decode_times) if decode_times else 0.0
+        avg_decode_time = total_decode_time / len(decode_times) if decode_times else 0.0
+        tokens_per_sec = len(decode_times) / (total_decode_time / 1000) if total_decode_time > 0 else 0
+        vision_ms = prefill_timing.get("vision_ms", vision_total_ms)
+        frames_per_sec = n_frames / (vision_ms / 1000) if vision_ms > 0 else 0
+
+        perf_metrics = {
+            "n_frames": n_frames,
+            "frames_per_sec": frames_per_sec,
+            "vision_ms": vision_ms,
+            "vision_trace_ms": prefill_timing.get("vision_trace_ms", 0),
+            "compile_vision_ms": prefill_timing.get("compile_vision_ms", 0),
+            "compile_prefill_ms": prefill_timing.get("compile_prefill_ms", 0),
+            "ttft_ms": prefill_timing.get("ttft_ms", 0),
+            "e2e_ttft_ms": prefill_timing.get("e2e_ttft_ms", 0),
+            "prep_ms": prefill_timing.get("prep_ms", 0),
+            "compile_ms": prefill_timing.get("compile_ms", 0),
+            "avg_decode_ms": avg_decode_time,
+            "total_decode_ms": total_decode_time,
+            "input_tokens": input_ids.shape[1],
+            "generated_tokens": len(generated_tokens),
+            "tokens_per_sec": tokens_per_sec,
+            "output_text": output_text,
+        }
+
+        logger.info(f"Video: {n_frames} frames processed")
+        logger.info(f"Vision throughput: {frames_per_sec:.2f} frames/sec")
+        logger.info(f"TTFT: {prefill_timing.get('ttft_ms', 0):.2f}ms")
+        logger.info(f"Decode: {tokens_per_sec:.2f} tok/s ({len(generated_tokens)} tokens)")
+        logger.info(f"Output: '{output_text[:100]}...' " if len(output_text) > 100 else f"Output: '{output_text}'")
+
+        return output_text, perf_metrics
+
+
+def run_video_demo(
+    video_path: str,
+    prompt: str = "<|video|> Describe what happens in this video.",
+    max_new_tokens: int = 200,
+    device_id: int = 0,
+    num_layers: Optional[int] = None,
+    max_seq_len: int = 16384,
+    max_frames: int = VIDEO_MAX_FRAMES,
+    max_fps: float = VIDEO_MAX_FPS,
+    use_trace: bool = False,
+    use_decode_trace: bool = False,
+    use_vision_trace: bool = False,
+    use_unified_trace: bool = False,
+):
+    """
+    Run the Molmo2 demo with video input.
+
+    Args:
+        video_path: Path or URL to video file (.mp4, .webm)
+        prompt: Text prompt (must include <|video|>)
+        max_new_tokens: Maximum tokens to generate
+        device_id: TTNN device ID
+        num_layers: Number of text layers (default: 36)
+        max_seq_len: Maximum sequence length for KV cache (default: 16384 for video)
+        max_frames: Maximum frames to sample from video (default: 8)
+        max_fps: Maximum frames per second to sample (default: 2.0)
+        use_trace: Whether to use tracing for prefill
+        use_decode_trace: Whether to use tracing for decode
+        use_vision_trace: Whether to use tracing for vision backbone
+        use_unified_trace: Whether to use unified Vision+Prefill trace
+    """
+    logger.info("=" * 60)
+    logger.info("Molmo2-8B Video Demo")
+    logger.info("=" * 60)
+
+    # Load tokenizer
+    tokenizer = load_processor()
+
+    # Preprocess video
+    logger.info(f"Preprocessing video: {video_path}")
+    video_extraction_start = time.perf_counter()
+    video_inputs = preprocess_video_molmo2(
+        video_path,
+        max_frames=max_frames,
+        max_fps=max_fps,
+    )
+    video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
+    n_frames = video_inputs["n_frames"]
+    logger.info(f"Extracted {n_frames} frames in {video_extraction_ms:.2f}ms")
+    logger.info(f"Frame extraction: {n_frames / (video_extraction_ms / 1000):.2f} frames/sec (CPU)")
+
+    # Load weights
+    state_dict = load_model_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_shape = ttnn.MeshShape(1, 8)
+    logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
+    device = ttnn.open_mesh_device(mesh_shape)
+    logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
+
+    try:
+        model = create_model(device, state_dict, num_layers)
+        text_num_layers = num_layers if num_layers is not None else 36
+
+        generator = Molmo2Generator(
+            mesh_device=device,
+            model=model,
+            tokenizer=tokenizer,
+            num_layers=text_num_layers,
+            batch_size=1,
+            max_seq_len=max_seq_len,
+        )
+
+        logger.info("\n" + "=" * 60)
+        logger.info(f"Prompt: {prompt}")
+        logger.info("=" * 60)
+
+        response, perf_metrics = generator.run_video_inference(
+            video_inputs=video_inputs,
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            use_trace=use_trace,
+            use_decode_trace=use_decode_trace,
+            use_vision_trace=use_vision_trace,
+            use_unified_trace=use_unified_trace,
+        )
+
+        logger.info("\n" + "=" * 60)
+        logger.info("Video Performance Metrics:")
+        logger.info(f"  Frames processed:    {perf_metrics['n_frames']}")
+        logger.info(
+            f"  Frame extraction:    {video_extraction_ms:.2f}ms ({n_frames / (video_extraction_ms/1000):.2f} frames/sec CPU)"
+        )
+        logger.info(
+            f"  Vision (TTNN):       {perf_metrics['vision_ms']:.2f}ms ({perf_metrics['frames_per_sec']:.2f} frames/sec)"
+        )
+        logger.info(f"  TTFT:                {perf_metrics['ttft_ms']:.2f}ms")
+        if perf_metrics.get("e2e_ttft_ms", 0) > 0:
+            logger.info(f"  E2E TTFT:            {perf_metrics['e2e_ttft_ms']:.2f}ms")
+        logger.info(f"  Input tokens:        {perf_metrics['input_tokens']}")
+        logger.info(f"  Generated tokens:    {perf_metrics['generated_tokens']}")
+        logger.info(
+            f"  Decode:              {perf_metrics['avg_decode_ms']:.2f}ms/token ({perf_metrics['tokens_per_sec']:.2f} tok/s)"
+        )
+        logger.info("=" * 60)
+        logger.info(f"Response: {response}")
+        logger.info("=" * 60)
+
+        return perf_metrics
+
+    finally:
+        ttnn.close_mesh_device(device)
+        logger.info("Device closed")
+
 
 def run_demo(
     image_path: Optional[str] = None,
@@ -1860,6 +2275,7 @@ def run_demo(
     max_new_tokens: int = 100,
     device_id: int = 0,
     num_layers: Optional[int] = None,
+    max_seq_len: int = 2048,
     use_trace: bool = False,
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
@@ -1874,6 +2290,7 @@ def run_demo(
         max_new_tokens: Maximum tokens to generate
         device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
+        max_seq_len: Maximum sequence length for KV cache (default: 2048 for image)
         use_trace: Whether to use tracing for text prefill
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
@@ -1917,7 +2334,7 @@ def run_demo(
             tokenizer=tokenizer,
             num_layers=text_num_layers,
             batch_size=1,
-            max_seq_len=2048,
+            max_seq_len=max_seq_len,
         )
 
         # Run inference
@@ -1981,10 +2398,16 @@ def main():
         help="Path to input image (uses default dog.jpg if not specified)",
     )
     parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Path or URL to input video (.mp4, .webm) for video inference",
+    )
+    parser.add_argument(
         "--prompt",
         type=str,
-        default="<|image|> Describe this image in detail.",
-        help="Text prompt for the model (must include <|image|> token)",
+        default=None,
+        help="Text prompt for the model (must include <|image|> or <|video|> token)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -2003,6 +2426,24 @@ def main():
         type=int,
         default=None,
         help="Number of text layers (default: 36, use fewer for faster testing)",
+    )
+    parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=None,
+        help="Maximum sequence length for KV cache (default: 2048 for image, 16384 for video)",
+    )
+    parser.add_argument(
+        "--max-video-frames",
+        type=int,
+        default=VIDEO_MAX_FRAMES,
+        help=f"Maximum video frames to sample (default: {VIDEO_MAX_FRAMES})",
+    )
+    parser.add_argument(
+        "--max-video-fps",
+        type=float,
+        default=VIDEO_MAX_FPS,
+        help=f"Maximum frames per second for video sampling (default: {VIDEO_MAX_FPS})",
     )
     parser.add_argument(
         "--use-trace",
@@ -2027,17 +2468,38 @@ def main():
 
     args = parser.parse_args()
 
-    run_demo(
-        image_path=args.image,
-        prompt=args.prompt,
-        max_new_tokens=args.max_tokens,
-        device_id=args.device,
-        num_layers=args.num_layers,
-        use_trace=args.use_trace,
-        use_decode_trace=args.use_decode_trace,
-        use_vision_trace=args.use_vision_trace,
-        use_unified_trace=args.use_unified_trace,
-    )
+    if args.video is not None:
+        prompt = args.prompt if args.prompt is not None else f"{VIDEO_PROMPT} Describe what happens in this video."
+        max_seq_len = args.max_seq_len if args.max_seq_len is not None else 16384
+        run_video_demo(
+            video_path=args.video,
+            prompt=prompt,
+            max_new_tokens=args.max_tokens,
+            device_id=args.device,
+            num_layers=args.num_layers,
+            max_seq_len=max_seq_len,
+            max_frames=args.max_video_frames,
+            max_fps=args.max_video_fps,
+            use_trace=args.use_trace,
+            use_decode_trace=args.use_decode_trace,
+            use_vision_trace=args.use_vision_trace,
+            use_unified_trace=args.use_unified_trace,
+        )
+    else:
+        prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
+        max_seq_len = args.max_seq_len if args.max_seq_len is not None else 2048
+        run_demo(
+            image_path=args.image,
+            prompt=prompt,
+            max_new_tokens=args.max_tokens,
+            device_id=args.device,
+            num_layers=args.num_layers,
+            max_seq_len=max_seq_len,
+            use_trace=args.use_trace,
+            use_decode_trace=args.use_decode_trace,
+            use_vision_trace=args.use_vision_trace,
+            use_unified_trace=args.use_unified_trace,
+        )
 
 
 if __name__ == "__main__":
