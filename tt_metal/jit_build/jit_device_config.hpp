@@ -6,9 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <iosfwd>
 
-#include <fmt/base.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/arch.hpp>
@@ -61,15 +59,6 @@ struct JitDeviceConfig {
 // call time.
 JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs);
 
-std::ostream& operator<<(std::ostream& os, const JitDeviceConfig& config);
-
 // TODO: Add a factory method to create JitDeviceConfig from a YAML profile
 
 }  // namespace tt::tt_metal
-
-template <>
-struct fmt::formatter<tt::tt_metal::JitDeviceConfig> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const tt::tt_metal::JitDeviceConfig& config, format_context& ctx) const -> format_context::iterator;
-};

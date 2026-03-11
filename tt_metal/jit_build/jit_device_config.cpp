@@ -13,9 +13,7 @@
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 
-#include <sstream>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {
 
@@ -34,7 +32,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs) {
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
-    JitDeviceConfig config{
+    return {
         .hal = &hal,
         .arch = cluster.arch(),
         .num_dram_banks = num_dram_banks,
@@ -49,29 +47,6 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs) {
         .num_hw_cqs = num_hw_cqs,
         .routing_fw_enabled = cluster.is_base_routing_fw_enabled(),
         .profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes(ctx.rtoptions())};
-    log_info(tt::LogBuildKernels, "JitDeviceConfig: {}", config);
-    return config;
-}
-
-std::ostream& operator<<(std::ostream& os, const JitDeviceConfig& config) {
-    os << "JitDeviceConfig(";
-    const auto attributes = ttsl::reflection::get_attributes(config);
-    for (size_t i = 0; i < attributes.size(); ++i) {
-        const auto& [name, attr] = attributes[i];
-        if (i > 0) {
-            os << ", ";
-        }
-        os << name << "=" << attr.to_string();
-    }
-    os << ")";
-    return os;
 }
 
 }  // namespace tt::tt_metal
-
-auto fmt::formatter<tt::tt_metal::JitDeviceConfig>::format(
-    const tt::tt_metal::JitDeviceConfig& config, format_context& ctx) const -> format_context::iterator {
-    std::stringstream ss;
-    ss << config;
-    return fmt::format_to(ctx.out(), "{}", ss.str());
-}

@@ -16,7 +16,6 @@ std::optional<std::string> find_precompiled_dir(const std::string& root, uint64_
         // TODO: validate the dir contains all binaries we need
         return path;
     }
-    log_error(tt::LogBuildKernels, "Pre-compiled directory {} does not exist.", path);
     return std::nullopt;
 }
 

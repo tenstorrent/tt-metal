@@ -88,23 +88,18 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
 
     hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
-    log_info(tt::LogBuildKernels, "Dispatch core type: {}", static_cast<uint32_t>(config.dispatch_core_type));
-    log_info(tt::LogBuildKernels, "Dispatch core axis: {}", static_cast<uint32_t>(config.dispatch_core_axis));
 
     // Hash the number of hardware command queues
     hasher.update(static_cast<uint32_t>(config.num_hw_cqs));
-    log_info(tt::LogBuildKernels, "Number of hardware command queues: {}", static_cast<uint32_t>(config.num_hw_cqs));
 
     // Hash the harvesting configuration based on whether coordinate virtualization is enabled
     if (!config.coordinate_virtualization_enabled) {
         // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
         // devices with different cores harvested.
         hasher.update(config.harvesting_mask);
-        log_info(tt::LogBuildKernels, "Harvesting mask: {}", config.harvesting_mask);
     }
 
     hasher.update(rtoptions.get_compile_hash_string());
-    log_info(tt::LogBuildKernels, "Compile hash string: {}", rtoptions.get_compile_hash_string());
 
     return hasher.digest();
 }
@@ -260,14 +255,7 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
             build_env.build_env.get_firmware_binary_root());
         return;
     }
-    log_info(
-        tt::LogBuildKernels, "Building firmware for device {} with build key {}", device_id, build_env.build_key());
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
-    log_info(
-        tt::LogBuildKernels,
-        "Done building firmware for device {} with build key {}",
-        device_id,
-        build_env.build_key());
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(
