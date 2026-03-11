@@ -220,6 +220,11 @@ def test_matmul_custom_compressed_mixed_with_bfp20_runtime(device):
     _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8", "bfp4", "bfp2", "bfp0"], impl="runtime")
 
 
+def test_matmul_custom_compressed_mixed_with_bfp20_wide_runtime(device):
+    """[1, 7168] x [7168, 256], mixed bfp8+bfp4+bfp2+bfp0 via runtime impl."""
+    _run_matmul_custom_compressed(device, 1, 7168, 256, formats=["bfp8", "bfp4", "bfp2", "bfp0"], impl="runtime")
+
+
 def scale_tiles_clustered(b_torch, formats):
     """Top half tiles get first format, bottom half get second format.
     Results in exactly 2 format runs (or 1 if only 1 format)."""
