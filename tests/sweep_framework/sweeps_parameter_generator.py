@@ -549,6 +549,13 @@ if __name__ == "__main__":
         type=str,
         help="Filter configurations to specific mesh shape (e.g., '2x4', '1x1').",
     )
+    parser.add_argument(
+        "--master-trace",
+        required=False,
+        type=str,
+        help="Path to a master trace JSON file (e.g., ttnn_operations_master_*.json). "
+        "Overrides the default file resolution in MasterConfigLoader.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -588,5 +595,10 @@ if __name__ == "__main__":
         except ValueError:
             logger.error(f"Invalid mesh shape format: {args.mesh_shape}. Use format like '2x4' or '1x1'.")
             sys.exit(1)
+
+    if args.master_trace:
+        resolved = os.path.abspath(args.master_trace)
+        MasterConfigLoader.set_master_file_path(resolved)
+        logger.info(f"Master trace override: {resolved}")
 
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)

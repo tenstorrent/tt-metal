@@ -138,6 +138,10 @@ class MasterConfigLoader:
     # Mesh filter for server-side filtering (Phase 3)
     _mesh_filter: Optional[Tuple[int, int]] = None
 
+    # Override path for the master trace JSON file.
+    # When set, __init__ uses this instead of the hardcoded default paths.
+    _master_file_override: Optional[str] = None
+
     @classmethod
     def set_lead_models_filter(cls, enabled: bool) -> None:
         """Set the lead models filter.
@@ -198,6 +202,25 @@ class MasterConfigLoader:
     def get_mesh_filter(cls) -> Optional[Tuple[int, int]]:
         """Get the current mesh filter setting."""
         return cls._mesh_filter
+
+    @classmethod
+    def set_master_file_path(cls, path: Optional[str]) -> None:
+        """Override the default master trace JSON file path.
+
+        Args:
+            path: Absolute or relative path to a master trace JSON file.
+                  Set to None to revert to the built-in default resolution.
+
+        Note:
+            Must be called BEFORE importing sweep modules that instantiate
+            MasterConfigLoader, since the path is resolved at __init__ time.
+        """
+        cls._master_file_override = path
+
+    @classmethod
+    def get_master_file_path(cls) -> Optional[str]:
+        """Get the current master file path override (None means use defaults)."""
+        return cls._master_file_override
 
     @staticmethod
     def _parse_list_from_string(s: str) -> List:
@@ -313,23 +336,34 @@ class MasterConfigLoader:
         """Initialize the MasterConfigLoader for V2 format.
 
         Args:
-            master_file_path: Explicit path to JSON file. If None, uses ttnn_operations_master_v2.json
+            master_file_path: Explicit path to JSON file. If None, resolves in order:
+                1. Class-level override set via set_master_file_path()
+                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
+                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                4. None (degraded mode — empty configs)
         """
-        if master_file_path is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2.json")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
+        if master_file_path is None and MasterConfigLoader._master_file_override is not None:
+            override = MasterConfigLoader._master_file_override
+            if os.path.exists(override):
+                logger.info(f"✅ Using master trace JSON from --master-trace: {override}")
+                master_file_path = override
+            else:
+                logger.error(f"❌ --master-trace path does not exist: {override}")
+                logger.error("Falling back to default master trace resolution.")
+                MasterConfigLoader._master_file_override = None
 
-            # Prefer reconstructed V2 if it exists (from database)
+        if master_file_path is None and MasterConfigLoader._master_file_override is None:
+            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
+            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
+            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
+
             if os.path.exists(reconstructed_v2_path):
                 logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
                 master_file_path = reconstructed_v2_path
-            elif os.path.exists(v2_path):
-                logger.info(f"✅ Using V2 JSON: {v2_path}")
-                master_file_path = v2_path
+            elif os.path.exists(default_trace_path):
+                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
+                master_file_path = default_trace_path
             else:
-                # JSON not available (e.g., in CI execution jobs where only pre-generated
-                # vectors are needed). Skip silently — the loader will return empty configs.
                 master_file_path = None
 
         self.master_file_path = master_file_path
@@ -856,6 +890,10 @@ class MasterConfigLoader:
                     config_dict[f"{key}_layout"] = parsed_layout
                     config_dict[f"{key}_memory_config"] = parsed_mem_config
                     config_dict[f"{key}_tensor_placement"] = tensor_config.tensor_placement
+                elif key == "memory_config" and isinstance(value, dict) and "memory_layout" in value:
+                    config_dict[key] = self.parse_memory_config(value)
+                elif isinstance(value, dict) and value.get("type") == "DataType":
+                    config_dict[key] = self.parse_dtype(value.get("repr", ""))
                 else:
                     # Scalar/bool kwarg - pass as-is (preserve name)
                     # Try enum parsing first, then float parsing
