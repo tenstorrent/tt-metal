@@ -1173,17 +1173,8 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
                 f"{'PASSED' if pcc_pass else 'FAILED'} PCC={pcc_val:.4f}"
             )
         if not pcc_pass:
-            if ring_pos == 0:
-                # ring_pos=0 must pass — proves combine logic is correct
-                combine_pass = False
-                all_passing = False
-            else:
-                # ring_pos>0 may fail due to fabric delivery issues with cluster_axis=0.
-                # Upstream selective_reduce_combine only tests cluster_axis=1.
-                logger.warning(
-                    f"  Combine device {dev_idx} (ring_pos={ring_pos}): PCC={pcc_val:.4f} "
-                    f"(known fabric issue with axis=0, not blocking)"
-                )
+            combine_pass = False
+            all_passing = False
 
     if combine_pass:
         logger.info("selective_reduce_combine: ALL PASSED")
