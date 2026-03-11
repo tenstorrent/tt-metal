@@ -461,6 +461,7 @@ class ModelArgs:
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
         "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
         "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
+        "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -2275,6 +2276,7 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2558,6 +2560,9 @@ class ModelArgs:
         tile_size = 32
         if self.is_galaxy:
             self.padded_vocab_size = 128 * 1024
+        elif self.num_devices == 0:
+            # No mesh (e.g. reference-output generation): pad to tile_size only
+            self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
         else:
             self.padded_vocab_size = math.ceil(self.vocab_size / (tile_size * self.num_devices)) * (
                 tile_size * self.num_devices
@@ -2609,6 +2614,7 @@ class ModelArgs:
                 "Qwen2.5-VL-72B": 32,
                 "Qwen2.5-VL-32B": 16,
                 "Qwen2.5-72B": 32,
+                "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
             }.get(self.base_model_name, 0)
@@ -3366,6 +3372,7 @@ class ModelArgs:
             "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
             "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
             "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
+            "Qwen2.5-32B-Instruct": "Qwen/Qwen2.5-32B-Instruct",
             "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
             "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
             "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
@@ -3416,6 +3423,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
                 elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
                     fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
                 elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
                     fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
                 elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
