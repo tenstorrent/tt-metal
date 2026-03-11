@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "core_config.h"
 #include "noc/noc_parameters.h"
+#include "api/debug/dprint.h"
 
 namespace ckernel {
 #ifdef ARCH_QUASAR

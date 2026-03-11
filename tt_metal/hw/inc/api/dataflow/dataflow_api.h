@@ -1502,7 +1502,7 @@ FORCE_INLINE void noc_async_write_shard(
 /**
  * Returns the local address of the semaphore with the given id.
  *
- * Return value: Local address of the semaphore (uint32_t)
+ * Return value: Local address of the semaphore (uintptr_t)
  *
  * | Argument                  | Description                | Type                     | Valid Range              | Required |
  * |---------------------------|----------------------------|--------------------------|--------------------------|----------|
