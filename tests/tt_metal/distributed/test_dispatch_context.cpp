@@ -135,11 +135,7 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = true};
-    // Use ShardedBufferConfig to support multi-device mesh reads
-    ShardedBufferConfig fd_global_config{
-        .global_size = num_tiles * single_tile_size * system_shape.mesh_size(),
-        .global_buffer_shape = {system_shape[0], system_shape[1]},
-        .shard_shape = {1, 1}};
+    ReplicatedBufferConfig fd_global_config{.size = num_tiles * single_tile_size};
     auto fd_buf = MeshBuffer::create(fd_global_config, fd_buffer_config, mesh_device_.get());
 
     std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
@@ -149,22 +145,25 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
 
     // Verify sharded buffer readback in FD mode
     std::vector<uint32_t> fd_dst_vec = {};
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, true);
-    EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
+        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
+    }
+
     // Transition from FD to SD
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 
     // Verify sharded buffer still works after FD->SD transition
-    std::vector<uint32_t> fd_buf_readback_in_sd = {};
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, true);
-    EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec) << "Sharded buffer data mismatch after FD->SD transition";
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> fd_buf_readback_in_sd = {};
+        ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
+        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec) << "Sharded buffer data mismatch after FD->SD transition";
+    }
+
     // Write and verify interleaved L1 buffer in SD mode
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
-    ShardedBufferConfig sd_global_config{
-        .global_size = num_tiles * single_tile_size,
-        .global_buffer_shape = {system_shape[0], system_shape[1]},
-        .shard_shape = {1, 1}};
+    ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
     auto sd_buf = MeshBuffer::create(sd_global_config, sd_buffer_config, mesh_device_.get());
 
     std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
@@ -172,9 +171,11 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
-    std::vector<uint32_t> sd_dst_vec = {};
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, true);
-    EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> sd_dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
+        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
+    }
 }
 
 }  // namespace tt::tt_metal::distributed::test
