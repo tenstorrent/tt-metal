@@ -406,7 +406,7 @@ ttnn::MeshDevice* get_mesh_device(
 // RAII guard for automatic error capture - zero overhead on happy path
 class OperationErrorGuard {
     std::string operation_name_;
-    int uncaught_exceptions_at_start_;
+    int uncaught_exceptions_at_start_ = 0;
 
 public:
     explicit OperationErrorGuard(std::string_view op_name) :

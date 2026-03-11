@@ -130,8 +130,7 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
         }
     }
 
-    for (int i = 0; i < static_cast<int>(trace.size()); ++i) {
-        const auto& v = trace[i];
+    for (const auto& v : trace) {
         if (v[kNodeType] == kNodeFunctionStart && !first_begin_found) {
             first_begin_found = true;
         } else if (v[kNodeType] == kNodeFunctionEnd) {
