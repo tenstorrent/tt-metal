@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -80,7 +81,7 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
     const auto& all_devices = fixture->get_devices();
     struct ReceiverInfo {
         ChipId phys_id;
-        std::shared_ptr<tt::tt_metal::MeshDevice> mesh;
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh;
         tt::tt_metal::IDevice* dev;
         tt::tt_fabric::FabricNodeId fabric_node;
     };
@@ -91,7 +92,7 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
             continue;
         }
         auto fn = cp.get_fabric_node_id_from_physical_chip_id(dev->id());
-        receivers.push_back({dev->id(), dmesh, dev, fn});
+        receivers.push_back(ReceiverInfo{dev->id(), dmesh, dev, fn});
     }
     if (receivers.empty()) {
         ADD_FAILURE() << "No receiver devices found (need at least 2 devices for multicast)";
@@ -130,8 +131,6 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
 
     const size_t n_words = p.tensor_bytes / 4;
     const bool is_scatter = family_is_scatter(p.family);
-    const bool is_fused = family_is_fused(p.family);
-
     uint32_t scatter_half_bytes = 0;
     uint32_t scatter_offset = 0;
     if (is_scatter) {

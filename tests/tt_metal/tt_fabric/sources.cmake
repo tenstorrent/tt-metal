@@ -32,6 +32,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
     fabric_data_movement/test_auto_packetization.cpp
     fabric_data_movement/auto_packetization/unicast_runner.cpp
+    fabric_data_movement/auto_packetization/multicast_runner.cpp
 )
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)
