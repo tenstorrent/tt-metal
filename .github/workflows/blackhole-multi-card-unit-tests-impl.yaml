@@ -93,8 +93,14 @@ jobs:
             timeout: 60
             test-type: slow
           - name: ring joint attention tests
-            cmd: pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
-            timeout: 30
+            cmd: |
+              pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
+              pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py -svv
+            timeout: 60
+            test-type: slow
+          - name: sdpa nightly tests
+            cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+            timeout: 60
             test-type: slow
           - name: fabric infra unit tests
             cmd: |
