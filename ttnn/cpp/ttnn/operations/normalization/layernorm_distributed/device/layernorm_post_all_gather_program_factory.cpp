@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
+#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
@@ -433,11 +434,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = operation_attributes.eps;  // epsilon
+    uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
     // Set runtime arguments based on kernel layout type
     if (use_2d_kernel) {
@@ -464,7 +461,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      tile_offset,
                      stats_offset,
                      packed_winv_value,
-                     e.u,
+                     eps,
                      gamma_dram_addr,
                      beta_dram_addr,
                      stats_addr,
@@ -501,7 +498,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                  tile_offset,
                  stats_offset,
                  packed_winv_value,
-                 e.u,
+                 eps,
                  gamma_dram_addr,
                  beta_dram_addr,
                  stats_addr,
