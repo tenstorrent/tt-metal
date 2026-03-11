@@ -163,14 +163,31 @@ class ReferenceTextBlock(nn.Module):
         return x
 
 
+import pytest
+
+
+@pytest.mark.parametrize("layer_num", [0, 17, 35], ids=["layer0", "layer17", "layer35"])
+def test_text_block_parametrized(device, layer_num):
+    """
+    Test TextBlock against PyTorch reference for first, middle, and last layers.
+
+    All layers must meet PCC >= 0.99 (CLAUDE.md requirement for individual blocks).
+    """
+    _run_text_block_test(device, layer_num)
+
+
 def test_text_block(device):
     """
-    Test TextBlock against PyTorch reference.
+    Test TextBlock against PyTorch reference (layer 0 for backwards compatibility).
     """
+    _run_text_block_test(device, layer_num=0)
+
+
+def _run_text_block_test(device, layer_num: int):
+    """Shared implementation for text block tests."""
     from models.demos.molmo2.tt.text_block import TextBlock
 
     model_id = "allenai/Molmo2-8B"
-    layer_num = 0
     hidden_dim = 4096
     intermediate_dim = 12288
     num_heads = 32
@@ -279,8 +296,8 @@ def test_text_block(device):
     # Convert back to torch
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
 
-    # Compare with PCC
-    passing, pcc_msg = comp_pcc(ref_output, tt_output_torch, pcc=0.98)
+    # Compare with PCC — CLAUDE.md requires >= 0.99 for all individual blocks
+    passing, pcc_msg = comp_pcc(ref_output, tt_output_torch, pcc=0.99)
     print(f"TextBlock (layer={layer_num}) PCC: {pcc_msg}")
 
     assert passing, f"TextBlock failed PCC check: {pcc_msg}"
