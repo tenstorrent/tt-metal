@@ -16,7 +16,7 @@ from diffusers import AutoencoderKLWan
 from easydict import EasyDict
 from transformers import T5TokenizerFast, UMT5EncoderModel
 
-from .wantransformer3dmodel import WanTransformer3DModel
+from .transformer_wan import WanTransformer3DModel
 
 # -----------------------------------------------------------------------------
 # Logging (adapted from wan_va.utils.logging)
