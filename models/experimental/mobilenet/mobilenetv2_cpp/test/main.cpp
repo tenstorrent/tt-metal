@@ -18,19 +18,17 @@ int main(int argc, char** argv) {
     int batch_size = 1;
 
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <weights_dir>" << std::endl;
         return 1;
     }
-    std::string model_path = argv[1];
+    std::string weights_dir = argv[1];
 
-    auto infra = std::make_shared<MobileNetv2TestInfra>(device, batch_size, model_path);
+    auto infra = std::make_shared<MobileNetv2TestInfra>(device, batch_size, weights_dir);
 
-    // First run configures convs JIT
     (*infra).run();
     (*infra).validate();
     (*infra).deallocOutput();
 
-    // Optimized run
     Profiler profiler;
     for (int i = 0; i < 10; i++) {
         profiler.start("inference_time");

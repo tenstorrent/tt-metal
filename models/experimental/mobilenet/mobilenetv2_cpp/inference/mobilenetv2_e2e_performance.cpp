@@ -15,8 +15,8 @@ MobileNetV2Trace2CQ::MobileNetV2Trace2CQ() :
     test_infra(nullptr) {}
 
 void MobileNetV2Trace2CQ::initialize_mobilenetv2_trace_2cqs_inference(
-    const std::shared_ptr<ttnn::MeshDevice>& device, int device_batch_size, const std::string& model_path) {
-    test_infra = std::make_shared<MobileNetv2TestInfra>(device, device_batch_size, model_path);
+    const std::shared_ptr<ttnn::MeshDevice>& device, int device_batch_size, const std::string& weights_dir) {
+    test_infra = std::make_shared<MobileNetv2TestInfra>(device, device_batch_size, weights_dir);
 
     this->device_ptr_ = device;
     auto [tt_inputs_host, sharded_mem_config_DRAM, input_mem_config] = (*test_infra).setupDramShardedInput(device);
