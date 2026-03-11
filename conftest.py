@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import fcntl
 import pytest
 import torch
 import random
@@ -28,6 +29,45 @@ from tests.scripts.common import get_updated_device_params
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
+
+# --- Device lock: serialize all pytest sessions on the same device ---
+# tt-test.sh acquires this lock before spawning pytest and sets TT_DEVICE_LOCK_HELD=1.
+# When pytest is run directly (without tt-test.sh), this fixture acquires the
+# same lock so concurrent sessions still serialize.  This prevents two pytest
+# processes from talking to the device simultaneously.
+_DEVICE_LOCK_FILE = "/tmp/tt-device.lock"
+_DEVICE_LOCK_TIMEOUT = 300  # seconds — matches tt-test.sh
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _device_lock():
+    if os.environ.get("TT_DEVICE_LOCK_HELD") == "1":
+        yield  # tt-test.sh already holds the lock
+        return
+
+    lock_fd = open(_DEVICE_LOCK_FILE, "w")
+    logger.info("Waiting for device lock ({})...", _DEVICE_LOCK_FILE)
+    deadline = time.monotonic() + _DEVICE_LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                lock_fd.close()
+                pytest.exit(
+                    f"Could not acquire device lock ({_DEVICE_LOCK_FILE}) " f"after {_DEVICE_LOCK_TIMEOUT}s",
+                    returncode=3,
+                )
+            time.sleep(1)
+
+    logger.info("Device lock acquired")
+    try:
+        yield
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+        logger.info("Device lock released")
 
 
 @pytest.fixture(scope="function")

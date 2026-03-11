@@ -76,6 +76,10 @@ if ! flock -w "$LOCK_TIMEOUT" 9; then
 fi
 echo "TT_TEST: Device lock acquired" >&2
 
+# Signal to child processes (e.g. conftest device lock plugin) that the lock
+# is already held — they must not re-acquire it or they will deadlock.
+export TT_DEVICE_LOCK_HELD=1
+
 # --- Check if device needs reset from previous hang ---
 if [[ -f "$DIRTY_FLAG" ]]; then
     echo "TT_TEST: Device marked dirty from previous run, resetting..." >&2
