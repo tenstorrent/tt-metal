@@ -398,19 +398,19 @@ TEST_F(MemoryUtilsTest, SnapshotFeature) {
     // Two sets of expectations: default and when LLK asserts are enabled.
     // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
     // in unpacker/packer configurations that invoke functions exclusively used for assertions.
-    size_t peak_1 = 36864, alloc_1 = 36864, dealloc_1 = 12288;
+    size_t peak_1 = 34816, alloc_1 = 34816, dealloc_1 = 10240;
     size_t peak_2 = 86016, alloc_2 = 86016, dealloc_2 = 20480;
-    size_t peak_3 = 274432, alloc_3 = 282624, dealloc_3 = 20480;
+    size_t peak_3 = 272384, alloc_3 = 280576, dealloc_3 = 18432;
     if (ttml::core::is_llk_assert_enabled()) {
-        peak_1 = 38912;
-        alloc_1 = 38912;
-        dealloc_1 = 14336;
+        peak_1 = 36864;
+        alloc_1 = 36864;
+        dealloc_1 = 12288;
         peak_2 = 90112;
         alloc_2 = 90112;
         dealloc_2 = 24576;
-        peak_3 = 278528;
-        alloc_3 = 286720;
-        dealloc_3 = 24576;
+        peak_3 = 276480;
+        alloc_3 = 284672;
+        dealloc_3 = 22528;
     }
 
     // Snapshot 1: Add operation
