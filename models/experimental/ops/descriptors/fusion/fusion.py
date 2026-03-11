@@ -70,6 +70,10 @@ class _CacheEntry:
     # generic_op's override_runtime_arguments can call
     # UpdateDynamicCircularBufferAddress on the cached Program.
     sharded_cb_map: List[Tuple[int, int, int]]
+    # (merged_cb_idx, op_idx, orig_cb_idx) for GlobalCB-backed CBs.
+    # Updates the GlobalCircularBuffer pointer so that the cached Program
+    # uses the current allocation (which may differ across invocations).
+    global_cb_map: List[Tuple[int, int, int]]
     # Which source ops produce the FusedOp's output tensors:
     # [(op_idx, tensor_idx_within_op), ...]
     output_sources: List[Tuple[int, int]]
@@ -192,6 +196,24 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
             if found:
                 break
 
+    # --- Build global_cb_map ---
+    # Track which merged CB descriptors use a GlobalCircularBuffer.
+    global_cb_map: List[Tuple[int, int, int]] = []
+    for merged_idx, merged_cb in enumerate(desc.cbs):
+        if not merged_cb.has_global_circular_buffer():
+            continue
+        # Match to source op CB by core_ranges identity
+        merged_ranges = merged_cb.core_ranges
+        found = False
+        for op_idx, op in enumerate(ops):
+            for cb_idx, cb in enumerate(op.descriptor.cbs):
+                if cb.has_global_circular_buffer() and cb.core_ranges == merged_ranges:
+                    global_cb_map.append((merged_idx, op_idx, cb_idx))
+                    found = True
+                    break
+            if found:
+                break
+
     # --- Record output tensor sources ---
     output_sources: List[Tuple[int, int]] = []
     for out_t in fused_op.output_tensors:
@@ -212,6 +234,7 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
         barrier_suffix=barrier_suffix,
         rebind_spec=rebind_spec,
         sharded_cb_map=sharded_cb_map,
+        global_cb_map=global_cb_map,
         output_sources=output_sources,
     )
 
@@ -253,7 +276,12 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
         new_cb = ops[op_idx].descriptor.cbs[orig_cb_idx]
         desc.cbs[merged_cb_idx].set_buffer_from_cb(new_cb)
 
-    # 4. Update tensor lists
+    # 4. Update GlobalCB pointers
+    for merged_cb_idx, op_idx, orig_cb_idx in entry.global_cb_map:
+        new_cb = ops[op_idx].descriptor.cbs[orig_cb_idx]
+        desc.cbs[merged_cb_idx].set_global_circular_buffer_from_cb(new_cb)
+
+    # 5. Update tensor lists
     all_inputs: List = []
     seen_ids: Set[int] = set()
     for op in ops:

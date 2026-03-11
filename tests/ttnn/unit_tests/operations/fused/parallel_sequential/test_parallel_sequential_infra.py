@@ -1034,12 +1034,11 @@ class TestPhaseNameGeneration:
 
         lines = gen(0, "", source, [], 0, phase_name="rms_norm")
         assert "Phase 0: rms_norm" in lines[1]
-        joined = "\n".join(lines)
-        assert 'DeviceZoneScopedN("rms_norm");' in joined
+        # DeviceZoneScopedN is emitted in the kernel_main() dispatcher,
+        # not inside _generate_phase_namespace, so we only check the comment.
 
         lines = gen(0, "", source, [], 0, phase_name="")
         assert "Phase 0" in lines[1]
-        assert "DeviceZoneScopedN" not in "\n".join(lines)
 
     def test_default_no_zone(self):
         lines = _codegen._generate_phase_namespace(0, "", "void kernel_main() { int x = 1; }", [], 0)
