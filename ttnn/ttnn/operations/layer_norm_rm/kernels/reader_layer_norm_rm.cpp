@@ -18,7 +18,8 @@ constexpr uint32_t cb_beta = 5;           // c_5
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
-    constexpr auto input_accessor_args = TensorAccessorArgs<1>();
+    constexpr uint32_t epsilon_u32 = get_compile_time_arg_val(1);
+    constexpr auto input_accessor_args = TensorAccessorArgs<2>();
 
     // Runtime args
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -37,7 +38,7 @@ void kernel_main() {
     // Derive W and Wt from stick_size: stick_size = W * 2 (bf16), Wt = W / 32
     constexpr uint32_t W = stick_size / 2;
     constexpr uint32_t Wt = W / 32;     // tiles per row
-    constexpr uint32_t num_passes = 2;  // 2-pass: pass1=mean, pass2=subtract_mean
+    constexpr uint32_t num_passes = 2;  // 2-pass: pass1=mean, pass2=var+rsqrt
 
     // Number of tile-rows (each tile-row = 32 sticks)
     const uint32_t nblocks = num_sticks / 32;
@@ -45,6 +46,15 @@ void kernel_main() {
     // Generate reduce scaler tile (1/W) into c_2 at program start
     // This is needed for reduce SUM to compute mean = sum * (1/W)
     dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce_scaler>(1.0f / static_cast<float>(W));
+
+    // Generate epsilon tile into c_3 at program start
+    // Reinterpret epsilon_u32 back to float
+    union {
+        uint32_t u;
+        float f;
+    } eps_conv;
+    eps_conv.u = epsilon_u32;
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_eps_scalar>(eps_conv.f);
 
     // Read tile-rows, sending each one num_passes times
     for (uint32_t block = 0; block < nblocks; block++) {

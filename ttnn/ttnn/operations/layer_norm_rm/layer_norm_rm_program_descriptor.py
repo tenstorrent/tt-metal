@@ -12,6 +12,7 @@ Work is distributed across cores using split_work_to_cores().
 """
 
 from pathlib import Path
+import struct
 import ttnn
 
 # Kernel files live in kernels/ subdirectory
@@ -287,7 +288,9 @@ def create_program_descriptor(
     # ========== 4. KERNEL DESCRIPTORS ==========
 
     # --- Reader kernel ---
-    reader_ct_args = [stick_size]
+    # Pack epsilon float as uint32_t for compile-time arg
+    epsilon_u32 = struct.unpack("I", struct.pack("f", epsilon))[0]
+    reader_ct_args = [stick_size, epsilon_u32]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
