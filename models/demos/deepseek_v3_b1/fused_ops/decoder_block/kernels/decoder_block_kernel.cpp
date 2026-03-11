@@ -1988,13 +1988,15 @@ void kernel_main() {
         // Read the global position from L1 and decide whether this device has
         // work / owns the current KV-cache slot. The normalized (device-local)
         // local_cur_pos is used for kv cache update and flash mla.
+        invalidate_l1_cache();
         uint32_t cur_pos = pos_ptr[0];
 
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
-        // Run RMSNorm + Mcast even if skip_attention is true
+
+        // Run RMSNorm, Matmul, Gather even if skip_attention is true
         // This is to make sure downstream ccls are blocked by the mcast
         // ====================================================================
         // Input core: RMSNorm + Mcast send
@@ -2010,26 +2012,26 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
+        // ====================================================================
+        // Matmul operation
+        // ====================================================================
+        {
+            DeviceZoneScopedN("MATMUL");
+            deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
+            matmul(matmul_args);
+        }
+
+        // ====================================================================
+        // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
+        // ====================================================================
+        {
+            DeviceZoneScopedN("GATHER");
+            deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
+                gather_reduce;
+            gather_reduce(gather_reduce_args);
+        }
+
         if (!skip_attention) {
-            // ====================================================================
-            // Matmul operation
-            // ====================================================================
-            {
-                DeviceZoneScopedN("MATMUL");
-                deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
-                matmul(matmul_args);
-            }
-
-            // ====================================================================
-            // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
-            // ====================================================================
-            {
-                DeviceZoneScopedN("GATHER");
-                deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
-                    gather_reduce;
-                gather_reduce(gather_reduce_args);
-            }
-
             // ====================================================================
             // RMSNorm2
             // ====================================================================
@@ -2707,7 +2709,9 @@ void kernel_main() {
         setup_mla_sharded_buffers();
         mla_body();
         unified_kernels::reconfig_cb_interfaces(moe_cb_config);
+#if defined(COMPILE_FOR_BRISC)
         *pos_ptr += 1;
+#endif
         setup_moe_sharded_buffers();
         moe_body();
     }
