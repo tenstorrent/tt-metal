@@ -132,6 +132,57 @@ jobs:
           mkdir -p generated/test_reports
           echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
+      - name: Merge test reports
+        id: generate-device-perf-report
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.tier }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
+          if [ -f "$DEVICE_PERF_REPORT_FILENAME" ]; then
+            python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" CHECK
+            echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Check device perf report exists
+        id: check-device-perf-report
+        if: ${{ !cancelled() && steps.generate-device-perf-report.outputs.device_perf_report_filename != '' }}
+        run: |
+          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+      - name: Clean test name for artifact
+        if: ${{ !cancelled() && steps.generate-device-perf-report.outputs.device_perf_report_filename != '' }}
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
+          echo "ARTIFACT_NAME=device-perf-report-csv-${{ inputs.tier }}-${{ matrix.test-group.sku }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+      - name: Upload device perf report
+        timeout-minutes: 5
+        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
