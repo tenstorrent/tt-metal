@@ -464,7 +464,7 @@ def _create_program_descriptor_dim_h(
     )
 
     writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "softmax_writer.cpp"),
+        kernel_source=str(KERNEL_DIR / "softmax_writer_h.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
@@ -566,6 +566,9 @@ def _build_runtime_args_reader_h(
         [3] col_start_tile_id - Starting tile in flat array for the first column
         [4] curr_col_in_batch - Starting column index within the current batch
         [5] num_cols          - Number of columns assigned to this core
+        [6] Wt                - Full tensor width in tiles (row stride)
+        [7] Ht                - Tile rows per batch element
+        [8] chunk_size        - Max columns per chunk
     """
     rt_args = ttnn.RuntimeArgs()
     src_addr = input_tensor.buffer_address()
@@ -582,7 +585,17 @@ def _build_runtime_args_reader_h(
                 # col_start_tile_id: starting tile in flat layout
                 col_start_tile_id = batch_idx * (Ht * Wt) + col_in_batch
                 start_id = col_start_tile_id
-                rt_args[x][y] = [src_addr, num_tiles, start_id, col_start_tile_id, col_in_batch, num_cols]
+                rt_args[x][y] = [
+                    src_addr,
+                    num_tiles,
+                    start_id,
+                    col_start_tile_id,
+                    col_in_batch,
+                    num_cols,
+                    Wt,
+                    Ht,
+                    chunk_size,
+                ]
                 current_col += num_cols
 
     for core_range in core_group_2.ranges():
@@ -594,7 +607,17 @@ def _build_runtime_args_reader_h(
                 col_in_batch = current_col % Wt
                 col_start_tile_id = batch_idx * (Ht * Wt) + col_in_batch
                 start_id = col_start_tile_id
-                rt_args[x][y] = [src_addr, num_tiles, start_id, col_start_tile_id, col_in_batch, num_cols]
+                rt_args[x][y] = [
+                    src_addr,
+                    num_tiles,
+                    start_id,
+                    col_start_tile_id,
+                    col_in_batch,
+                    num_cols,
+                    Wt,
+                    Ht,
+                    chunk_size,
+                ]
                 current_col += num_cols
 
     _fill_idle_cores(rt_args, compute_grid, core_group_1, core_group_2)
@@ -615,11 +638,16 @@ def _build_runtime_args_writer_h(
 ):
     """Build per-core runtime args for dim=-2 writer.
 
-    Same as reader_h but for output: writer maps tiles back to correct positions.
+    Writer maps tiles from chunked column order back to correct DRAM positions.
     Runtime args per core:
-        [0] dst_addr      - Output buffer DRAM address
-        [1] num_pages     - Total output tiles for this core
-        [2] start_id      - First output tile index
+        [0] dst_addr          - Output buffer DRAM address
+        [1] num_pages         - Total output tiles for this core
+        [2] start_id          - First output tile index (batch_base + col_in_batch)
+        [3] curr_col_in_batch - Starting column index within the current batch
+        [4] num_cols          - Number of columns assigned to this core
+        [5] Wt                - Full tensor width in tiles (row stride)
+        [6] Ht                - Tile rows per batch element
+        [7] chunk_size        - Max columns per chunk
     """
     rt_args = ttnn.RuntimeArgs()
     dst_addr = output_tensor.buffer_address()
@@ -633,7 +661,7 @@ def _build_runtime_args_writer_h(
                 batch_idx = current_col // Wt
                 col_in_batch = current_col % Wt
                 start_id = batch_idx * (Ht * Wt) + col_in_batch
-                rt_args[x][y] = [dst_addr, num_pages, start_id]
+                rt_args[x][y] = [dst_addr, num_pages, start_id, col_in_batch, num_cols, Wt, Ht, chunk_size]
                 current_col += num_cols
 
     for core_range in core_group_2.ranges():
@@ -644,7 +672,7 @@ def _build_runtime_args_writer_h(
                 batch_idx = current_col // Wt
                 col_in_batch = current_col % Wt
                 start_id = batch_idx * (Ht * Wt) + col_in_batch
-                rt_args[x][y] = [dst_addr, num_pages, start_id]
+                rt_args[x][y] = [dst_addr, num_pages, start_id, col_in_batch, num_cols, Wt, Ht, chunk_size]
                 current_col += num_cols
 
     _fill_idle_cores(rt_args, compute_grid, core_group_1, core_group_2)
