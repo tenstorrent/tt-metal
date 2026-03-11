@@ -249,14 +249,9 @@ def get_device_config(
 
 def get_model_config(
     model_config_src: str,
-    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/",
+    configs_root: str = f"{get_tt_metal_home()}/tt-train/",
 ) -> TransformerConfig:
-    """Load model configuration given its filename.
-
-    Args:
-        model_config_src: Model config path relative to configs root (e.g., "model_configs/nanogpt.yaml")
-        configs_root: Root directory for config resolution (default: {TT_METAL_HOME}/tt-train/configs/)
-    """
+    """Load model configuration given its filename."""
 
     model_config = load_config(model_config_src, configs_root)
     model_config = TransformerConfig(model_config)

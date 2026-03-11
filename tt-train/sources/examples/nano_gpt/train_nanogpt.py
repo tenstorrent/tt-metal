@@ -1090,10 +1090,10 @@ def main():
         training_config = TrainingConfig(yaml_config)
 
         # Load model config from separate file (matching C++ behavior)
-        # Use configs_root as base since paths are like "model_configs/..."
+        # Use tt_train_root as base since C++ uses paths like "configs/model_configs/..."
         if training_config.model_config:
             print(f"Loading model config from: {training_config.model_config}")
-            model_yaml = load_config(training_config.model_config, configs_root)
+            model_yaml = load_config(training_config.model_config, tt_train_root)
             model_config = parse_model_config(model_yaml)
         else:
             print("Warning: No model_config specified in training config")
