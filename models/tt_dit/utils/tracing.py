@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import NoneType
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,8 @@ class Tracer:
     2. The tracer returns the same output tensor objects every time; a subsequent call
        overwrites previous results in place.
     """
+
+    _traces_live: int = 0
 
     def __init__(
         self,
@@ -139,6 +142,7 @@ class Tracer:
             # weights.
             self._function = None
 
+            Tracer._traces_live += 1
             self._trace_id = trace_id
             self._outputs = outputs
         else:
@@ -180,7 +184,16 @@ class Tracer:
             self._args = ()
             self._kwargs = {}
             self._outputs = None
+            Tracer._traces_live -= 1
             ttnn.release_trace(self._device, trace_id)
+
+    @staticmethod
+    def warn_if_live() -> None:
+        """Log a warning if there are any live traces that have not been released."""
+        if Tracer._traces_live > 0:
+            frame = inspect.stack()[1]
+            location = f"{frame.filename}:{frame.lineno} in {frame.function}"
+            logger.warning(f"{Tracer._traces_live} live trace(s) at: {location}")
 
     def _tensor_to_device(self, value: Any, *, path_label: str) -> Any:
         if not isinstance(value, ttnn.Tensor):

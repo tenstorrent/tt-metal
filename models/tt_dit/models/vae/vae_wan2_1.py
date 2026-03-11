@@ -21,6 +21,7 @@ from ...utils import tensor
 from ...utils.conv3d import _ntuple, aligned_channels, get_conv3d_config, prepare_conv3d_weights
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -316,6 +317,7 @@ class WanCausalConv3d(Module):
                 shard_dim=2,
                 dtype=self.dtype,
             )
+            Tracer.warn_if_live()
             self.mask_cache[key] = mask
         return self.mask_cache[key]
 
@@ -722,6 +724,7 @@ class WanConv2d(Module):
                 shard_dim=2,
                 dtype=self.dtype,
             )
+            Tracer.warn_if_live()
             self.mask_cache[key] = mask
         return self.mask_cache[key]
 
