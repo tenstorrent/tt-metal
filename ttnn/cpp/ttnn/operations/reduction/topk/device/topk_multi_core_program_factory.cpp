@@ -5,7 +5,6 @@
 #include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
@@ -42,9 +41,10 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
     const CoreRange core_range,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
-    const uint32_t index_tile_size) {
-    const auto config_opt =
-        find_topk_core_config(width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size);
+    const uint32_t index_tile_size,
+    uint32_t tile_width = 32) {
+    const auto config_opt = find_topk_core_config(
+        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
     if (config_opt.has_value()) {
         const auto& config = config_opt.value();
         return {
@@ -62,8 +62,6 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
 
 TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::create(
     const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
-    using namespace tt::constants;
-
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& input_indices_tensor = tensor_args.indices;
@@ -95,7 +93,9 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const auto* device = input_tensor.device();
 
     const auto input_shape = input_tensor.padded_shape();
-    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
+    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
 
     // Determine optimal core configuration based on input dimensions, K value, and memory constraints
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
@@ -106,7 +106,8 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         first_core_range,            // Available core grid
         device->l1_size_per_core(),  // L1 memory per core
         value_tile_size,             // Value tile memory footprint
-        index_tile_size);            // Index tile memory footprint
+        index_tile_size,             // Index tile memory footprint
+        tile_width);
 
     constexpr bool select_cores_row_wise = false;
 
@@ -129,9 +130,9 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     all_cores_range_set = all_cores_range_set.merge(final_cores_range_set);
 
     // Calculate processing dimensions in tile units
-    const uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;  // Width tiles per local core
-    const uint32_t Wt_final = final_topk_input_size / TILE_WIDTH;  // Total width tiles for final core
-    const uint32_t Kt = args.k % TILE_WIDTH == 0 ? args.k / TILE_WIDTH : (args.k / TILE_WIDTH) + 1;  // TopK in tiles
+    const uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
+    const uint32_t Wt_final = final_topk_input_size / tile_width;  // Total width tiles for final core
+    const uint32_t Kt = args.k % tile_width == 0 ? args.k / tile_width : (args.k / tile_width) + 1;  // TopK in tiles
 
     const uint32_t num_cb_unit = 2;                // Base buffering unit
     const uint32_t cb_in_units = 2 * num_cb_unit;  // 4 units total for double-buffered input
@@ -237,7 +238,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         index_cb_index,                // CB1: Input indices destination
         Ht,                            // Height tiles in tensor
         Wt_local,                      // Width tiles per local core
-        input_shape[-1] / TILE_WIDTH,  // Total width tiles (Wt)
+        input_shape[-1] / tile_width,  // Total width tiles (Wt)
     };
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_local_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_local_compile_time_args);

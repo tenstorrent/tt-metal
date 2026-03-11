@@ -17,7 +17,8 @@ void kernel_main() {
     const uint32_t blk = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t num_datum_padded = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr uint32_t tile_hw = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_11;
     constexpr uint32_t onetile = 1;
@@ -40,7 +41,7 @@ void kernel_main() {
         // same pointer, but for zeroing out the tile
         volatile tt_l1_ptr uint16_t* zero_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_mask_obj.get_write_ptr());
-        for (uint32_t i = 0; i < TILE_WIDTH * TILE_HEIGHT; i++) {
+        for (uint32_t i = 0; i < tile_hw; i++) {
             zero_ptr[i] = 0.0f;
         }
         constexpr uint32_t num_datum_unpadded = 32 - num_datum_padded;

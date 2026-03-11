@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
@@ -17,7 +16,6 @@
 #include <variant>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
 namespace ttnn::prim {
 
@@ -67,15 +65,19 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
 
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
+
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / TILE_WIDTH;
-    const uint32_t Ht = H / TILE_HEIGHT;
-    const uint32_t stats_tiles_cols = stats.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t Wt = W / tile_width;
+    const uint32_t Ht = H / tile_height;
+    const uint32_t stats_tiles_cols = stats.padded_shape()[-1] / tile_width;
     const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
     const uint32_t num_devices = stats_tiles_cols / tile_cols_per_device;
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
@@ -131,15 +133,15 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_hw : 0;
+    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_hw : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_width : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_width : 0;
     }
 
     log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);

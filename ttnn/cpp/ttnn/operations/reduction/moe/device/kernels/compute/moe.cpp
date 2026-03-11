@@ -217,6 +217,7 @@ template <
     uint32_t index_transposed_cb_index,
     uint32_t values_cb_index,
     uint32_t output_ind_cb_index,
+    uint32_t tile_width,
     bool first_call>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
@@ -323,7 +324,7 @@ void top_k() {
             cb_push_back(index_transposed_cb_index, Wt);
         }
 
-        constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;
+        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
@@ -380,8 +381,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
 
-    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
+    constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
     // mask out invalid experts
     // TODO: fix the bug that makes this give bad results
@@ -400,6 +402,7 @@ void kernel_main() {
         index_transposed_cb_index,
         values_cb_index,
         output_ind_cb_index,
+        tile_width,
         true>();
 
     // mask out all experts except the top-k

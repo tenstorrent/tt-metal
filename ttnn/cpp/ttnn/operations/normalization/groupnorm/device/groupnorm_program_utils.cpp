@@ -7,8 +7,6 @@
 #include <limits>
 #include <algorithm>
 
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::prim {
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
@@ -79,7 +77,7 @@ void split_and_form_rectangle_grids(
     }
 }
 
-std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size) {
+std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width) {
     uint32_t current_position = 0;
     uint32_t max_tile_span = 0;
     uint32_t num_groups_before_start_again_at_tile_beginning = static_cast<uint32_t>(-1);
@@ -87,15 +85,15 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 
     while (current_position < W) {
         uint32_t group_end = current_position + group_size;
-        uint32_t start_tile = current_position / tt::constants::TILE_WIDTH;
-        uint32_t end_tile = (group_end - 1) / tt::constants::TILE_WIDTH;
+        uint32_t start_tile = current_position / tile_width;
+        uint32_t end_tile = (group_end - 1) / tile_width;
         uint32_t current_tile_span = end_tile - start_tile + 1;
 
         max_tile_span = std::max(max_tile_span, current_tile_span);
 
         current_position = group_end;
 
-        if (current_position % tt::constants::TILE_WIDTH == 0 && calc_num_groups_before_start_again_at_tile_beginning) {
+        if (current_position % tile_width == 0 && calc_num_groups_before_start_again_at_tile_beginning) {
             num_groups_before_start_again_at_tile_beginning = current_position / group_size;
             calc_num_groups_before_start_again_at_tile_beginning = false;
         }

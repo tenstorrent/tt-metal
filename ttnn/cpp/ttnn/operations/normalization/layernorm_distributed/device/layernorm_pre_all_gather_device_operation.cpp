@@ -7,10 +7,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/constants.hpp>
-
 using namespace tt::tt_metal;
-using namespace tt::constants;
 
 namespace ttnn::prim {
 
@@ -76,11 +73,12 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
     const auto& input_tensor = tensor_args.input;
 
     auto output_shape = input_tensor.logical_shape();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t num_tiles_w = 1;
     if (args.norm_type == LayerNormDistributedType::LAYERNORM) {
         num_tiles_w = 2;
     }
-    output_shape[3] = num_tiles_w * TILE_WIDTH;
+    output_shape[3] = num_tiles_w * tile_width;
 
     auto output_dtype = args.dtype.value_or(input_tensor.dtype());
     return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
