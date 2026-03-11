@@ -148,3 +148,4 @@ target_link_libraries(
 
 # Make sure protobuf files are generated before compiling host_id assignment tests
 add_dependencies(test_host_id_assignment scaleout_generated_protos)
+
