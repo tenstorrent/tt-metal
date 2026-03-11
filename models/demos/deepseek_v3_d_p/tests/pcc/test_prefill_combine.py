@@ -138,6 +138,9 @@ def test_ttnn_combine(
 
     num_devices = mesh_device.get_num_devices()
 
+    # Log fabric config
+    logger.info(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
+
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
@@ -320,6 +323,9 @@ def test_ttnn_combine(
         num_dispatch_groups,
         num_routed_experts,
         verbose=True,
+        expert_dispatch_table=expert_dispatch_table,
+        expert_token_counts=expert_token_counts,
+        experts_per_chip=experts_per_chip,
     )
 
     log_validation_results(

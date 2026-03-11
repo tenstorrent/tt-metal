@@ -80,23 +80,15 @@ CombineDeviceOperation::CombineProgramFactory::create_mesh_workload(
 
     auto* mesh_device = tensor_args.dispatched_buffer.device();
 
-    // Create global semaphores for cross-device synchronization
+    // Create global semaphore for cross-device synchronization (fabric init barrier)
     auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
-    auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 
     // Create a program for each device in the mesh
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            tensor_return_value,
-            tensor_coords,
-            init_barrier_semaphore,
-            final_barrier_semaphore);
+            operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords, init_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -110,8 +102,7 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
+    const GlobalSemaphore& init_semaphore) {
     tt::tt_metal::Program program{};
 
     // Extract input tensors
@@ -171,6 +162,9 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
     // Use first available core for now (single-core implementation)
     CoreCoord worker_core = subdevice_cores.at(0);
     CoreRangeSet worker_core_grid = CoreRangeSet({CoreRange(worker_core, worker_core)});
+
+    // Create local semaphore for reader→writer zero-init synchronization (same core, no cross-device)
+    auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_grid, 0);
 
     log_debug(tt::LogOp, "Creating prefill combine program with hidden_size: {} on core: {}", hidden_size, worker_core);
 
@@ -374,17 +368,21 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
             .defines = writer_defines});
 
     // Set runtime args
-    std::vector<uint32_t> reader_runtime_args = {
+    // Base tensor addresses (shared between reader and writer)
+    std::vector<uint32_t> base_runtime_args = {
         dispatched_buffer.buffer()->address(),
         dispatched_metadata.buffer()->address(),
         expert_token_counts.buffer()->address(),
         output_tensor.buffer()->address(),
     };
 
-    std::vector<uint32_t> writer_runtime_args = reader_runtime_args;  // Copy base args
+    // Reader needs: base + zero_init semaphore ID (kernel uses get_semaphore() to convert to address)
+    std::vector<uint32_t> reader_runtime_args = base_runtime_args;
+    reader_runtime_args.push_back(zero_init_semaphore_id);
 
-    // Add semaphore addresses for fabric synchronization
-    writer_runtime_args.push_back((uint32_t)cross_device_semaphore.address());
+    // Writer needs: base + zero_init semaphore ID + init_semaphore address (global)
+    std::vector<uint32_t> writer_runtime_args = base_runtime_args;
+    writer_runtime_args.push_back(zero_init_semaphore_id);
     writer_runtime_args.push_back((uint32_t)init_semaphore.address());
 
     // Append fabric connection args (only if fabric is enabled)
@@ -429,7 +427,7 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
          .writer_kernel_id = writer_kernel_id,
          .worker_core = worker_core,
          .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}};
+         .zero_init_semaphore_id = zero_init_semaphore_id}};
 }
 
 void CombineDeviceOperation::CombineProgramFactory::override_runtime_arguments(
@@ -446,10 +444,16 @@ void CombineDeviceOperation::CombineProgramFactory::override_runtime_arguments(
             tensor_args.dispatched_metadata.buffer()->address(),
             tensor_args.expert_token_counts.buffer()->address(),
             tensor_return_value.buffer()->address(),
+            shared_variables.zero_init_semaphore_id,
         };
 
-        std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
-        writer_runtime_args.push_back((uint32_t)shared_variables.cross_device_semaphore.address());
+        std::vector<uint32_t> writer_runtime_args = {
+            tensor_args.dispatched_buffer.buffer()->address(),
+            tensor_args.dispatched_metadata.buffer()->address(),
+            tensor_args.expert_token_counts.buffer()->address(),
+            tensor_return_value.buffer()->address(),
+        };
+        writer_runtime_args.push_back(shared_variables.zero_init_semaphore_id);
         writer_runtime_args.push_back((uint32_t)shared_variables.init_semaphore.address());
         // Note: Fabric connection args are not updated here as they don't change
 

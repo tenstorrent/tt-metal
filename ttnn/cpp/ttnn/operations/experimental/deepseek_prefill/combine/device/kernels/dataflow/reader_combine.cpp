@@ -87,6 +87,8 @@ void kernel_main() {
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args++);
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args++);
+    uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
 
     // Print key compile time args for debugging (RISCV_1)
     DPRINT_COMBINE << "Combine Reader: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
@@ -128,8 +130,15 @@ void kernel_main() {
     DPRINT_COMBINE << "Zero-init done" << ENDL();
 #endif
 
-    // ====
-    // read experts token counter (chips/fractured ==1, experts_per_chip)
+    // Signal local writer that zero-init is complete (or skipped if INIT_ZEROS=0)
+    // Reader is RISCV_1, Writer is RISCV_0 - they use different NOC buses but share L1.
+    // noc_semaphore_wait in writer calls invalidate_l1_cache() so it will see this value.
+    DPRINT_COMBINE << "Signaling writer zero-init complete..." << ENDL();
+    volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
+    noc_semaphore_set(zero_init_sem_ptr, 1);
+
+    // ==== Read experts token counter (chips/fractured ==1, experts_per_chip) ====
     const auto experts_tok_counter_addr_gen =
         TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr, aligned_experts_tok_counter_page_size);
     for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {

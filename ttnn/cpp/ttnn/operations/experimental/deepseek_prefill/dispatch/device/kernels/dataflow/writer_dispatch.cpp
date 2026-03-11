@@ -384,19 +384,6 @@ void kernel_main() {
     cb_push_back(cb_metadata_temp_id, 1);
 
 #ifdef DEST_CHIP_ID
-    // There is still risk of incomplete data if a device exits prematurely
-    noc_async_write_barrier();
-    // use unicast packet header
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        num_devices>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
     // Close fabric connections to prevent resource conflicts with subsequent operations
     close_direction_connections(directions, fabric_connections);
 #endif

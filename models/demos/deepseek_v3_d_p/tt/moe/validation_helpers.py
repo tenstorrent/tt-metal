@@ -7,6 +7,72 @@ import torch
 from loguru import logger
 
 
+def trace_token_source(
+    dispatch_group_idx: int,
+    chip_id: int,
+    token_id: int,
+    topk_idx: int,
+    indices: torch.Tensor,
+    expert_dispatch_table: torch.Tensor,
+    expert_token_counts: torch.Tensor,
+    num_dispatch_groups: int,
+    num_routed_experts: int,
+    experts_per_chip: int,
+) -> dict:
+    """
+    Trace the source of a token in the combine output.
+
+    Given a failed token position, returns info about which expert processed it,
+    which chip hosts that expert, and the send order of this token.
+
+    Args:
+        dispatch_group_idx: The dispatch group (EP rank) index
+        chip_id: The destination chip ID
+        token_id: The token index
+        topk_idx: The top-k index
+        indices: Expert indices tensor [dispatch_group_size, seq_len_per_chip, num_experts_per_tok]
+        expert_dispatch_table: Expert to chip mapping [num_dispatch_groups, num_routed_experts]
+        expert_token_counts: Token counts per expert [num_dispatch_groups, dispatch_group_size, experts_per_chip]
+        num_dispatch_groups: Number of EP ranks
+        num_routed_experts: Total number of routed experts
+        experts_per_chip: Number of experts per chip
+
+    Returns:
+        Dict with expert_id, expert_chip, local_expert, send_order, total_tokens
+    """
+    expert_id = indices[chip_id, token_id, topk_idx].item()
+    expert_chip = expert_dispatch_table[dispatch_group_idx, expert_id].item()
+
+    # Calculate local_expert using same formula as create_expert_dispatch_table
+    experts_per_group = num_routed_experts // num_dispatch_groups
+    local_expert_in_group = expert_id % experts_per_group
+    local_expert = local_expert_in_group % experts_per_chip
+
+    # Handle both 2D [chip, expert] and 3D [dispatch_group, chip, expert] shapes
+    if expert_token_counts.dim() == 2:
+        total_tokens = expert_token_counts[expert_chip, local_expert].item()
+    else:
+        total_tokens = expert_token_counts[dispatch_group_idx, expert_chip, local_expert].item()
+
+    # Find send order by counting tokens sent before this one
+    # This mirrors the kernel's iteration order: for each token routed to this expert
+    send_order = 0
+    for c in range(indices.shape[0]):
+        for t in range(indices.shape[1]):
+            for k in range(indices.shape[2]):
+                if indices[c, t, k].item() == expert_id:
+                    if (c, t, k) == (chip_id, token_id, topk_idx):
+                        return {
+                            "expert_id": expert_id,
+                            "expert_chip": expert_chip,
+                            "local_expert": local_expert,
+                            "send_order": send_order,
+                            "total_tokens": total_tokens,
+                        }
+                    send_order += 1
+    return None
+
+
 @dataclass
 class ValidationResult:
     """Result of tensor comparison."""
@@ -80,6 +146,9 @@ def validate_combine_output(
     atol: float = 1e-2,
     rtol: float = 1e-2,
     verbose: bool = False,
+    expert_dispatch_table: torch.Tensor = None,
+    expert_token_counts: torch.Tensor = None,
+    experts_per_chip: int = None,
 ) -> ValidationResult:
     """
     Validate combine output against torch reference (EP-rank aware).
@@ -147,6 +216,61 @@ def validate_combine_output(
                                 f"torch={torch_data[first_diff_idx].item():.6f}, "
                                 f"ttnn={ttnn_data[first_diff_idx].item():.6f}"
                             )
+                            # Segment analysis: ✅ = good, ⚠️ = bad (ttnn=0 but torch not near zero)
+                            is_ttnn_zero = ttnn_data == 0
+                            is_torch_small = torch.abs(torch_data.float()) < 0.01
+                            is_bad = is_ttnn_zero & ~is_torch_small
+
+                            # Build segments
+                            segments = []
+                            if len(is_bad) > 0:
+                                current_bad = is_bad[0].item()
+                                current_len = 1
+                                for i in range(1, len(is_bad)):
+                                    if is_bad[i].item() == current_bad:
+                                        current_len += 1
+                                    else:
+                                        segments.append((current_len, current_bad))
+                                        current_bad = is_bad[i].item()
+                                        current_len = 1
+                                segments.append((current_len, current_bad))
+
+                            # Merge small good segments (<=2) surrounded by bad into bad
+                            merged = []
+                            for length, bad in segments:
+                                if not bad and length <= 2 and merged and merged[-1][1]:
+                                    # Small good after bad - merge into previous bad
+                                    merged[-1] = (merged[-1][0] + length, True)
+                                elif merged and merged[-1][1] == bad:
+                                    # Same type - merge
+                                    merged[-1] = (merged[-1][0] + length, bad)
+                                else:
+                                    merged.append((length, bad))
+                            segments = merged
+
+                            segment_strs = [f"[{length},{'⚠️' if bad else '✅'}]" for length, bad in segments]
+                            logger.error(f"   Segments: {' '.join(segment_strs)}")
+
+                        # Trace token source if data available
+                        if expert_dispatch_table is not None and expert_token_counts is not None:
+                            trace = trace_token_source(
+                                dispatch_group_idx,
+                                chip_id,
+                                token_id,
+                                topk_idx,
+                                indices,
+                                expert_dispatch_table,
+                                expert_token_counts,
+                                num_dispatch_groups,
+                                num_routed_experts,
+                                experts_per_chip,
+                            )
+                            if trace:
+                                logger.error(
+                                    f"   Source: expert={trace['expert_id']} on chip={trace['expert_chip']} "
+                                    f"(local_expert={trace['local_expert']}), "
+                                    f"send_order={trace['send_order']}/{trace['total_tokens']}"
+                                )
 
     passed = len(mismatches) == 0
     return ValidationResult(

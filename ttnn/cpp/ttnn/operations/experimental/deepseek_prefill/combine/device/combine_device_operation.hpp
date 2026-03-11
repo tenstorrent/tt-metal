@@ -74,7 +74,7 @@ struct CombineDeviceOperation {
             tt::tt_metal::KernelHandle writer_kernel_id;
             CoreCoord worker_core;
             const GlobalSemaphore init_semaphore;
-            const GlobalSemaphore cross_device_semaphore;
+            uint32_t zero_init_semaphore_id;  // Local semaphore ID for reader→writer sync
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -92,8 +92,7 @@ struct CombineDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
             const MeshCoordinateRangeSet& tensor_coords,
-            const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore);
+            const GlobalSemaphore& init_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_workload,

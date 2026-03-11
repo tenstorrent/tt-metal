@@ -86,8 +86,10 @@ void kernel_main() {
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);  // Local semaphore
+    uint32_t init_semaphore_address =
+        get_arg_val<uint32_t>(rt_args_idx++);  // Global semaphore (address passed directly)
 
     // Fabric connection args follow (appended by append_fabric_connection_rt_args)
 
@@ -148,7 +150,13 @@ void kernel_main() {
     DPRINT_COMBINE << "Waiting for fabric connections barrier..." << ENDL();
     open_direction_connections_barrier(directions, fabric_connections);
 
-    // Send init semaphore to all devices
+    // Wait for local reader to complete zero-init (or signal if INIT_ZEROS=0)
+    DPRINT_COMBINE << "Waiting for local reader zero-init..." << ENDL();
+    noc_semaphore_wait((uint32_t*)zero_init_semaphore_address, 1);
+    noc_semaphore_set((uint32_t*)zero_init_semaphore_address, 0);
+    DPRINT_COMBINE << "Local reader zero-init done" << ENDL();
+
+    // Send init semaphore to all devices (fabric aand zeros completed)
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     DPRINT_COMBINE << "Sending init semaphore to configured targets..." << ENDL();
     send_init_semaphore_to_configured_targets<
@@ -160,12 +168,12 @@ void kernel_main() {
         axis,
         num_devices>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
-    // Wait for all devices to complete initialization
+    // Wait for all devices to complete fabric initialization
     DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
-    DPRINT_COMBINE << "Fabric setup complete" << ENDL();
+    DPRINT_COMBINE << "Fabric and zero-init setup complete" << ENDL();
 #endif
 
     cb_wait_front(cb_experts_tok_counter_id, 1);
@@ -234,19 +242,6 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
-    // There is still risk of incomplete data if a device exits prematurely
-    noc_async_write_barrier();
-    // use unicast packet header
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        num_devices>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
     // Close fabric connections to prevent resource conflicts with subsequent operations
     close_direction_connections(directions, fabric_connections);
 #endif
