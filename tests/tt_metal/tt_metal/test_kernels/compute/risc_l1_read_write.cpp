@@ -15,8 +15,6 @@ void kernel_main() {
     const uint32_t base_src_l1_address = get_arg_val<uint32_t>(0);
     const uint32_t base_dst_l1_address = get_arg_val<uint32_t>(1);
 
-    // DPRINT << "Neo ID: " << neo_id << ENDL();
-
     ckernel::Semaphore semaphore(get_compile_time_arg_val(0));
     const uint32_t base_semaphore_value = get_compile_time_arg_val(1);
     semaphore.wait(base_semaphore_value + neo_id);
