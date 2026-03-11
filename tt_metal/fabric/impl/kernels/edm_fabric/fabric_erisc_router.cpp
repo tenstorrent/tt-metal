@@ -2189,7 +2189,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
 #if defined(FABRIC_2D_VC1_ACTIVE)
     // VC1 receiver channel pointer for inter-mesh routing
-    auto outbound_to_receiver_channel_pointer_ch1 = outbound_to_receiver_channel_pointers.template get<1>();
+    [[maybe_unused]] auto outbound_to_receiver_channel_pointer_ch1 =
+        outbound_to_receiver_channel_pointers.template get<1>();
 
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
     receiver_channel_pointers_ch1.reset();
@@ -2202,7 +2203,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // Per-VC sender runtime state
     auto channel_connection_established_vc0 = initialize_array<ACTUAL_SENDER_CHANNELS_PER_VC[0], bool, false>();
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    auto channel_connection_established_vc1 = initialize_array<ACTUAL_SENDER_CHANNELS_PER_VC[1], bool, false>();
+    [[maybe_unused]] auto channel_connection_established_vc1 =
+        initialize_array<ACTUAL_SENDER_CHANNELS_PER_VC[1], bool, false>();
 #else
     [[maybe_unused]] auto channel_connection_established_vc1 = initialize_array<0, bool, false>();
 #endif
@@ -2216,7 +2218,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto sender_channel_from_receiver_credits_vc0 =
         init_sender_channel_from_receiver_credits_flow_controllers<ACTUAL_SENDER_CHANNELS_PER_VC[0]>();
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    auto sender_channel_from_receiver_credits_vc1 =
+    [[maybe_unused]] auto sender_channel_from_receiver_credits_vc1 =
         init_sender_channel_from_receiver_credits_flow_controllers<ACTUAL_SENDER_CHANNELS_PER_VC[1]>();
 #else
     [[maybe_unused]] auto sender_channel_from_receiver_credits_vc1 =
@@ -2607,7 +2609,9 @@ void
         std::array<uint32_t, N0>& free_slots_vc0,
         std::array<uint32_t, N1>& free_slots_vc1) {
     wait_for_vc_static_connections<0>(worker_interfaces_vc0, free_slots_vc0);
+#if defined(FABRIC_2D_VC1_SERVICED)
     wait_for_vc_static_connections<1>(worker_interfaces_vc1, free_slots_vc1);
+#endif
 }
 
 template <size_t vc, size_t ch>
@@ -2669,7 +2673,9 @@ void
         EdmChannelWorkerIFsVC0& worker_interfaces_vc0,
         EdmChannelWorkerIFsVC1& worker_interfaces_vc1) {
     init_vc_sender_channel_worker_interfaces<0>(semaphore_addrs_vc0, info_addrs_vc0, worker_interfaces_vc0);
+#if defined(FABRIC_2D_VC1_SERVICED)
     init_vc_sender_channel_worker_interfaces<1>(semaphore_addrs_vc1, info_addrs_vc1, worker_interfaces_vc1);
+#endif
 }
 
 // Copy the sender_channel_free_slots_stream_ids to per-VC local arrays
