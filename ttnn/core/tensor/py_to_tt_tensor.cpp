@@ -75,6 +75,7 @@ Tensor create_tt_tensor_from_host_data(
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
+        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), memory_config);
 
         if (mesh_mapper != nullptr) {
             // Distributed tensors must be created via the factory function: the per-shard
@@ -86,9 +87,7 @@ Tensor create_tt_tensor_from_host_data(
                 host_buffer.view_as<T>(),
                 tensor_shape,
                 host_buffer.pin(),
-                must_construct_on_host
-                    ? dst_tensor_layout
-                    : TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), memory_config),
+                must_construct_on_host ? dst_tensor_layout : src_tensor_layout,
                 *mesh_mapper,
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
@@ -96,10 +95,11 @@ Tensor create_tt_tensor_from_host_data(
         }
 
         TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
-        const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, tensor_spec);
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
-
         const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
+        const bool construct_on_device =
+            can_construct_on_device(device, tensor_shape, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
+            fast_approx;
 
         // TODO: Remove preserve_nan_values argument after https://github.com/tenstorrent/tt-metal/issues/31406
         if (preserve_nan_values) {

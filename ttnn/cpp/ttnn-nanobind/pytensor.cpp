@@ -685,7 +685,8 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
-            nb::arg("preserve_nan_values") = false,
+            nb::arg("preserve_nan_values") = false,  // TODO: Remove preserve_nan_values argument after
+                                                     // https://github.com/tenstorrent/tt-metal/issues/31406
             nb::arg("col_tilize") = false,
             nb::arg("fast_approx") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
