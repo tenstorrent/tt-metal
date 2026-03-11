@@ -620,34 +620,148 @@ TEST_F(Fabric1DFixture, AutoPacketizationSparseMulticastSilicon) {
     }
 }
 
-// --- Linear scatter write: GTEST_SKIP (no linear-specific scatter kernel) ---
+// --- Linear unicast scatter write ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastScatterSilicon) {
-    GTEST_SKIP() << "Linear-specific unicast scatter kernel not yet implemented";
+    auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(this);
+    const uint32_t max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+
+    std::vector<uint32_t> sizes = {256u, 1024u, max_payload & ~3u};
+
+    for (uint32_t sz : sizes) {
+        sz = (sz / 8) * 8;
+        if (sz == 0) sz = 8;
+        tt::tt_fabric::test::RawTestParams p{
+            .mesh_id = mesh_id,
+            .src_chip = src_chip,
+            .dst_chip = dst_chip,
+            .tensor_bytes = sz,
+            .sender_core = CoreCoord{0, 0},
+            .receiver_core = CoreCoord{1, 0},
+            .family = tt::tt_fabric::test::AutoPacketFamily::UnicastScatter,
+        };
+        tt::tt_fabric::test::run_raw_unicast_write_test(this, p);
+    }
 }
 
-// --- Linear fused atomic inc: GTEST_SKIP ---
+// --- Linear unicast fused atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastFusedAtomicIncSilicon) {
-    GTEST_SKIP() << "Linear-specific unicast fused atomic inc kernel not yet implemented";
+    auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(this);
+    const uint32_t max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+
+    std::vector<uint32_t> sizes = {
+        max_payload / 2,
+        2 * max_payload + 512,
+        524288u,  // 512 KiB (fits in L1 data space)
+    };
+
+    for (uint32_t sz : sizes) {
+        sz = (sz + 3u) & ~3u;
+        tt::tt_fabric::test::RawTestParams p{
+            .mesh_id = mesh_id,
+            .src_chip = src_chip,
+            .dst_chip = dst_chip,
+            .tensor_bytes = sz,
+            .sender_core = CoreCoord{0, 0},
+            .receiver_core = CoreCoord{1, 0},
+            .family = tt::tt_fabric::test::AutoPacketFamily::UnicastFusedAtomicInc,
+        };
+        tt::tt_fabric::test::run_raw_unicast_write_test(this, p);
+    }
 }
 
-// --- Linear fused scatter + atomic inc: GTEST_SKIP ---
+// --- Linear unicast fused scatter + atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastFusedScatterAtomicIncSilicon) {
-    GTEST_SKIP() << "Linear-specific unicast fused scatter+atomic inc kernel not yet implemented";
+    auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(this);
+    const uint32_t max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+
+    std::vector<uint32_t> sizes = {256u, 1024u, max_payload & ~3u};
+
+    for (uint32_t sz : sizes) {
+        sz = (sz / 8) * 8;
+        if (sz == 0) sz = 8;
+        tt::tt_fabric::test::RawTestParams p{
+            .mesh_id = mesh_id,
+            .src_chip = src_chip,
+            .dst_chip = dst_chip,
+            .tensor_bytes = sz,
+            .sender_core = CoreCoord{0, 0},
+            .receiver_core = CoreCoord{1, 0},
+            .family = tt::tt_fabric::test::AutoPacketFamily::UnicastFusedScatterAtomicInc,
+        };
+        tt::tt_fabric::test::run_raw_unicast_write_test(this, p);
+    }
 }
 
-// --- Linear multicast scatter: GTEST_SKIP ---
+// --- Linear multicast scatter write ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastScatterSilicon) {
-    GTEST_SKIP() << "Linear-specific multicast scatter kernel not yet implemented";
+    auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(this);
+    const uint32_t max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+
+    std::vector<uint32_t> sizes = {256u, 1024u, max_payload & ~3u};
+
+    for (uint32_t sz : sizes) {
+        sz = (sz / 8) * 8;
+        if (sz == 0) sz = 8;
+        tt::tt_fabric::test::RawTestParams p{
+            .mesh_id = mesh_id,
+            .src_chip = src_chip,
+            .dst_chip = dst_chip,
+            .tensor_bytes = sz,
+            .sender_core = CoreCoord{0, 0},
+            .receiver_core = CoreCoord{1, 0},
+            .family = tt::tt_fabric::test::AutoPacketFamily::MulticastScatter,
+        };
+        tt::tt_fabric::test::run_raw_multicast_write_test(this, p);
+    }
 }
 
-// --- Linear multicast fused atomic inc: GTEST_SKIP ---
+// --- Linear multicast fused atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastFusedAtomicIncSilicon) {
-    GTEST_SKIP() << "Linear-specific multicast fused atomic inc kernel not yet implemented";
+    auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(this);
+    const uint32_t max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+
+    std::vector<uint32_t> sizes = {
+        max_payload / 2,
+        2 * max_payload + 512,
+        524288u,  // 512 KiB (fits in L1 data space)
+    };
+
+    for (uint32_t sz : sizes) {
+        sz = (sz + 3u) & ~3u;
+        tt::tt_fabric::test::RawTestParams p{
+            .mesh_id = mesh_id,
+            .src_chip = src_chip,
+            .dst_chip = dst_chip,
+            .tensor_bytes = sz,
+            .sender_core = CoreCoord{0, 0},
+            .receiver_core = CoreCoord{1, 0},
+            .family = tt::tt_fabric::test::AutoPacketFamily::MulticastFusedAtomicInc,
+        };
+        tt::tt_fabric::test::run_raw_multicast_write_test(this, p);
+    }
 }
 
-// --- Linear multicast fused scatter + atomic inc: GTEST_SKIP ---
+// --- Linear multicast fused scatter + atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastFusedScatterAtomicIncSilicon) {
-    GTEST_SKIP() << "Linear-specific multicast fused scatter+atomic inc kernel not yet implemented";
+    auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(this);
+    const uint32_t max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+
+    std::vector<uint32_t> sizes = {256u, 1024u, max_payload & ~3u};
+
+    for (uint32_t sz : sizes) {
+        sz = (sz / 8) * 8;
+        if (sz == 0) sz = 8;
+        tt::tt_fabric::test::RawTestParams p{
+            .mesh_id = mesh_id,
+            .src_chip = src_chip,
+            .dst_chip = dst_chip,
+            .tensor_bytes = sz,
+            .sender_core = CoreCoord{0, 0},
+            .receiver_core = CoreCoord{1, 0},
+            .family = tt::tt_fabric::test::AutoPacketFamily::MulticastFusedScatterAtomicInc,
+        };
+        tt::tt_fabric::test::run_raw_multicast_write_test(this, p);
+    }
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

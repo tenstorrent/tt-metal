@@ -27,11 +27,17 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using namespace tt::tt_fabric;
+#ifdef FABRIC_2D
 using namespace tt::tt_fabric::mesh::experimental;
+#else
+using namespace tt::tt_fabric::linear::experimental;
+#endif
 
 void kernel_main() {
     size_t idx = 0;
@@ -41,6 +47,12 @@ void kernel_main() {
     const uint32_t rx_noc_x       = get_arg_val<uint32_t>(idx++);
     const uint32_t rx_noc_y       = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr    = get_arg_val<uint32_t>(idx++);
+
+    const uint64_t dst_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, dst_base_addr, 0);
+    const uint64_t sem_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, 0);
+
+#ifdef FABRIC_2D
+    // ===== 2D Mesh Mode =====
     const uint32_t dir_mask       = get_arg_val<uint32_t>(idx++);
 
     const bool hasW = (dir_mask & 0x1u) != 0;
@@ -72,9 +84,6 @@ void kernel_main() {
     if (hasE) { senderE.open<true>(); }
     if (hasN) { senderN.open<true>(); }
     if (hasS) { senderS.open<true>(); }
-
-    const uint64_t dst_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, dst_base_addr, 0);
-    const uint64_t sem_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, 0);
 
     // Fused multicast write + atomic_inc per direction.
     // The wrapper auto-packetizes and fires atomic_inc only on the final chunk.
@@ -117,4 +126,29 @@ void kernel_main() {
     if (hasE) { senderE.close(); }
     if (hasN) { senderN.close(); }
     if (hasS) { senderS.close(); }
+
+#else
+    // ===== 1D Linear Mode =====
+    const uint8_t start_distance = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
+    const uint8_t range          = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
+
+    auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::allocate_header();
+
+    sender.open<true>();
+
+    // Linear multicast fused write + atomic_inc with auto-packetization
+    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+        &sender,
+        packet_header,
+        src_l1_addr,
+        total_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, sem_noc_addr, /*val=*/1, /*flush=*/true},
+        start_distance,
+        range);
+
+    // No separate completion signaling needed -- fused wrapper handles it.
+
+    sender.close();
+#endif
 }

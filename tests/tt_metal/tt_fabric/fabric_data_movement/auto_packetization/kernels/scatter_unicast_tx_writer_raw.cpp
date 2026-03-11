@@ -28,22 +28,37 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using namespace tt::tt_fabric;
+#ifdef FABRIC_2D
 using namespace tt::tt_fabric::mesh::experimental;
+#else
+using namespace tt::tt_fabric::linear::experimental;
+#endif
 
 void kernel_main() {
     size_t idx = 0;
     const uint32_t src_l1_addr     = get_arg_val<uint32_t>(idx++);
     const uint32_t total_size      = get_arg_val<uint32_t>(idx++);
     const uint32_t dst_base_addr   = get_arg_val<uint32_t>(idx++);
+
+#ifdef FABRIC_2D
     const uint16_t dst_mesh_id     = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint8_t  dst_dev_id      = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
+#endif
+
     const uint32_t rx_noc_x        = get_arg_val<uint32_t>(idx++);
     const uint32_t rx_noc_y        = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr     = get_arg_val<uint32_t>(idx++);
+
+#ifndef FABRIC_2D
+    const uint8_t num_hops         = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
+#endif
+
     const uint32_t scatter_offset  = get_arg_val<uint32_t>(idx++);
 
     auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
@@ -59,6 +74,7 @@ void kernel_main() {
     // chunk_size = half of total, scatter splits evenly between addr0 and addr1
     const uint16_t scatter_chunk_size = static_cast<uint16_t>(total_size / 2);
 
+#ifdef FABRIC_2D
     fabric_unicast_noc_scatter_write(
         &sender,
         packet_header,
@@ -67,16 +83,33 @@ void kernel_main() {
         src_l1_addr,
         total_size,
         tt::tt_fabric::NocUnicastScatterCommandHeader{{dst_noc_addr0, dst_noc_addr1}, {scatter_chunk_size}});
+#else
+    fabric_unicast_noc_scatter_write(
+        &sender,
+        packet_header,
+        src_l1_addr,
+        total_size,
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{dst_noc_addr0, dst_noc_addr1}, {scatter_chunk_size}},
+        num_hops);
+#endif
 
     noc_async_writes_flushed();
 
     // Separate atomic_inc for completion signaling
+#ifdef FABRIC_2D
     fabric_unicast_noc_unicast_atomic_inc(
         &sender,
         packet_header,
         dst_dev_id,
         dst_mesh_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_addr, /*inc=*/1, /*width_bits=*/32));
+#else
+    fabric_unicast_noc_unicast_atomic_inc(
+        &sender,
+        packet_header,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_addr, /*inc=*/1, /*width_bits=*/32),
+        num_hops);
+#endif
 
     sender.close();
 }
