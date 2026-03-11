@@ -1,6 +1,6 @@
 ---
 name: nuke-op
-description: Remove a TTNN operation from the codebase for agent evaluation. Deletes C++ sources, kernels, tests, cleans build/bind/Python references, verifies the build still succeeds, and runs a smoke test on a surviving operation. Args = <category> <operation>.
+description: Remove a TTNN operation from the codebase for agent evaluation. Auto-discovers and nukes ALL related variants (moreh, backward, training, attention) across the entire operations tree. Args = <category> <operation>.
 argument-hint: "<category> <operation>"
 ---
 
@@ -16,13 +16,28 @@ Extract from the user's arguments:
 
 Both are required. If missing, ask the user.
 
+## Auto-Discovery of Related Operations
+
+The script automatically discovers and nukes ALL related operation directories across the entire `ttnn/cpp/ttnn/operations/` tree. It matches directory names (case-insensitive, underscore-insensitive) that contain the operation name.
+
+For example, `normalization softmax` will auto-discover and also nuke:
+- `moreh/moreh_softmax`
+- `moreh/moreh_softmax_backward`
+- `transformer/attention_softmax`
+
+Similarly, `normalization groupnorm` will also nuke:
+- `moreh/moreh_group_norm`
+- `moreh/moreh_group_norm_backward`
+
+Each discovered target gets its own full cleanup: directory deletion, CMake cleanup, nanobind cleanup, and Python file cleanup, all scoped to that target's category.
+
 ## Name Variants
 
 Operations sometimes have inconsistent naming between their directory name and their test/reference names. For example:
-- Directory: `groupnorm` but tests named `group_norm` or `group_norm`
+- Directory: `groupnorm` but tests named `group_norm`
 - Directory: `batch_norm` but tests named `batchnorm`
 
-**The script uses the operation name as a substring match for test file discovery.** If the operation has naming variants, you MUST run the script multiple times — once per variant. The script is idempotent for the op directory deletion (skips if already gone) and additive for test deletion.
+**The script uses the operation name as a substring match for test file discovery.** If the operation has naming variants, you MUST run the script multiple times — once per variant. The script is idempotent for directory deletion (skips if already gone) and additive for test deletion.
 
 ### How to detect variants
 
@@ -35,8 +50,8 @@ Before running, check for variants:
 ### Example multi-run
 
 ```bash
-./scripts/nuke_op.sh normalization groupnorm           # deletes op dir + tests named "groupnorm"
-./scripts/nuke_op.sh normalization group_norm           # op dir already gone, catches "group_norm" tests
+./scripts/nuke_op.sh normalization groupnorm           # nukes all groupnorm-related dirs + tests named "groupnorm"
+./scripts/nuke_op.sh normalization group_norm           # all dirs already gone, catches "group_norm" tests
 ```
 
 ---
@@ -45,7 +60,7 @@ Before running, check for variants:
 
 ```
 Step 1: Pre-flight checks
-Step 2: Dry run
+Step 2: Dry run (shows ALL discovered targets)
 Step 3: Run nuke script (possibly multiple times for name variants)
 Step 4: LLM review of modified files
 Step 5: Build verification (agent, background)
@@ -73,8 +88,8 @@ Run with `--dry-run` first to show what will be affected:
 ```
 
 This lists:
-- The op directory to delete
-- Files to modify (CMake, nanobind, Python)
+- ALL discovered related operation directories that will be deleted
+- Files to modify per category (CMake, nanobind, Python)
 - All test files that will be deleted
 
 If name variants were detected, dry-run each variant. Present the combined output.
@@ -89,12 +104,12 @@ Execute the real deletion. For each name variant:
 ./scripts/nuke_op.sh {category} {variant}
 ```
 
-The script:
-- Backs up everything to `/tmp/nuked_ops/{category}/{variant}/`
-- Deletes the operation directory (kernels, program factories, device code, pybinds, headers)
-- Strips references from CMakeLists.txt, nanobind file, and Python golden/config file
-- Finds and deletes all `.py` test files under `tests/` and `models/` whose filename contains the operation name
-- Backs up deleted test files before removing them
+The script automatically:
+- **Discovers** all related operation directories across the entire operations tree
+- **Backs up** everything to `/tmp/nuked_ops/{category}/{variant}/`
+- **Deletes** each discovered operation directory (kernels, program factories, device code, pybinds, headers)
+- **Strips references** from each category's CMakeLists.txt, nanobind file, and Python golden/config file
+- **Finds and deletes** all `.py` test files under `tests/` and `models/` whose filename contains the operation name
 - Skips YAML configs and sweep_framework files
 
 Capture script output and verify exit code 0 for each run.
@@ -103,20 +118,18 @@ Capture script output and verify exit code 0 for each run.
 
 ## Step 4: LLM Review of Modified Files
 
-After all script runs complete, review the modified registration files:
+After all script runs complete, review ALL modified registration files. The script may have modified files in multiple categories:
 
-1. **Read** `ttnn/cpp/ttnn/operations/{category}/CMakeLists.txt`
-   - No dangling references to the deleted operation
-   - Valid CMake syntax (no orphaned list entries)
-   - Other operations in the category are untouched
+1. **For each category that had a target nuked**, read and verify:
+   - `ttnn/cpp/ttnn/operations/{category}/CMakeLists.txt` — no dangling refs, valid syntax
+   - `ttnn/cpp/ttnn/operations/{category}/{category_leaf}_nanobind.cpp` — no includes/binds for deleted ops
+   - `ttnn/ttnn/operations/{category_leaf}.py` — no golden functions, config aliases, or imports
 
-2. **Read** `ttnn/cpp/ttnn/operations/{category}/{category_leaf}_nanobind.cpp`
-   - No `#include` or `bind_*` calls for the deleted operation
-   - File still structurally valid
-
-3. **Read** `ttnn/ttnn/operations/{category_leaf}.py`
-   - No golden functions, config aliases, or imports for the deleted operation
-   - Surviving code is syntactically valid
+2. Common categories to check (based on the script's NUKE_RELATED output):
+   - The primary category (e.g., `normalization`)
+   - `moreh` (for moreh variants)
+   - `transformer` (for attention variants)
+   - Any other category the script reported
 
 Fix any issues with the Edit tool before proceeding.
 
@@ -176,14 +189,20 @@ Prompt: |
 ```
 ## Nuke Report: {category}/{operation}
 
-### Deleted
-- Operation directory: {path} ({N} files)
-- Test files: {N} files deleted
+### Targets Discovered and Nuked
+- {category}/{operation} ({N} files)
+- moreh/moreh_{operation} ({N} files)
+- moreh/moreh_{operation}_backward ({N} files)
+- transformer/attention_{operation} ({N} files)
+- ... (all discovered targets)
 
-### Modified (references cleaned)
-- CMakeLists.txt: {N} lines removed
-- Nanobind file: {N} lines removed
-- Python file: {N} lines removed
+### Test files deleted
+- {N} files
+
+### Modified (references cleaned per category)
+- normalization: CMakeLists.txt ({N} lines), nanobind ({N} lines), Python ({N} lines)
+- moreh: CMakeLists.txt ({N} lines), nanobind ({N} lines), Python ({N} lines)
+- transformer: CMakeLists.txt ({N} lines), nanobind ({N} lines), Python ({N} lines)
 
 ### Verification
 - Build: PASSED / FAILED
@@ -216,6 +235,11 @@ Common causes after a nuke:
    Grep: from.*{operation}|import.*{operation}
    Path: ttnn/ttnn/
    ```
+4. **Cross-category references** — one operation's code may reference another variant:
+   ```
+   Grep: moreh_{operation}|attention_{operation}
+   Path: ttnn/cpp/ttnn/operations/
+   ```
 
 Fix the issues and re-run the build. Do not give up after one attempt.
 
@@ -225,11 +249,12 @@ Fix the issues and re-run the build. Do not give up after one attempt.
 
 | Content | Action |
 |---------|--------|
-| `ttnn/cpp/ttnn/operations/{cat}/{op}/` (kernels, factories, device code, pybinds, headers) | DELETE |
+| `ttnn/cpp/ttnn/operations/{cat}/{op}/` (primary target) | DELETE |
+| All discovered related op dirs (moreh, backward, attention, etc.) | DELETE |
 | Test `.py` files with op name in filename (under `tests/`, `models/`) | DELETE |
-| CMakeLists.txt lines referencing the op | EDIT (remove lines) |
-| Nanobind registration lines | EDIT (remove lines) |
-| Python golden functions, config aliases, imports | EDIT (remove blocks) |
+| CMakeLists.txt lines referencing each deleted op | EDIT (remove lines) |
+| Nanobind registration lines per category | EDIT (remove lines) |
+| Python golden functions, config aliases, imports per category | EDIT (remove blocks) |
 | YAML sweep configs | KEEP |
 | `sweep_framework/` test files | KEEP |
 | Mixed test files (op name only in content, not filename) | KEEP (may break at runtime) |

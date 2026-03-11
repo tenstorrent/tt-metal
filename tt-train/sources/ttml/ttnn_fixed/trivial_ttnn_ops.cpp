@@ -32,15 +32,8 @@ tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
     return ttnn::subtract(t_sub_max, log_t_sum_over_dim);
 }
 
-// Stable softmax implementation
-// ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
 tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
-    return ttnn::softmax(
-        t,
-        /* dim */ dim,
-        /*memory_config */ std::nullopt,
-        ttml::core::ComputeKernelConfig::softmax(),
-        /*stable*/ true);
+    throw std::runtime_error("softmax operation has been removed");
 }
 
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b) {

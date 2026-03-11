@@ -4,12 +4,10 @@
 
 #include "softmax.hpp"
 
-#include "device/softmax_device_operation.hpp"
-
 namespace ttml::metal {
 
 ttnn::Tensor softmax(const ttnn::Tensor& input_tensor, int32_t dim) {
-    return ttnn::prim::ttml_softmax(input_tensor, dim);
+    throw std::runtime_error("softmax operation has been removed");
 }
 
 }  // namespace ttml::metal

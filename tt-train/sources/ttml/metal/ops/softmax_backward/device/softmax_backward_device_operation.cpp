@@ -4,64 +4,29 @@
 
 #include "softmax_backward_device_operation.hpp"
 
-#include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
-
-using namespace tt::tt_metal;
 
 namespace ttml::metal::ops::softmax_backward::device {
 
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& softmax_output = tensor_args.softmax_output;
-    const auto& upstream_grad = tensor_args.upstream_grad;
-    TT_FATAL(
-        softmax_output.logical_shape() == upstream_grad.logical_shape(),
-        "Softmax output and upstream gradient tensors must have the same shape");
-    TT_FATAL(softmax_output.dtype() == DataType::BFLOAT16, "Softmax backward only supports BFLOAT16");
-    TT_FATAL(
-        upstream_grad.dtype() == softmax_output.dtype(),
-        "Softmax output and upstream gradient must have the same dtype");
-    TT_FATAL(softmax_output.layout() == Layout::TILE, "Softmax backward requires TILE layout");
-    TT_FATAL(upstream_grad.layout() == Layout::TILE, "Softmax backward requires TILE layout");
-    const auto rank = softmax_output.logical_shape().rank();
-    TT_FATAL(
-        attributes.dim == rank - 1,
-        "Currently only supporting softmax_backward on last dimension (got dim={}, rank={})",
-        attributes.dim,
-        rank);
+    const operation_attributes_t&, const tensor_args_t&) {
+    TT_THROW("softmax_backward device operation has been removed");
 }
 
 SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.softmax_output;
-    return {
-        input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), input_tensor.memory_config())};
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    return tensor_args.softmax_output.tensor_spec();
 }
 
 SoftmaxBackwardDeviceOperation::tensor_return_value_t SoftmaxBackwardDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.softmax_output.device());
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs({}, tensor_args), tensor_args.softmax_output.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxBackwardDeviceOperation::tensor_return_value_t>
 SoftmaxBackwardDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& softmax_output = tensor_args.softmax_output;
-    const auto& upstream_grad = tensor_args.upstream_grad;
-    const auto& output_tensor = tensor_return_value;
-    // Placeholder; tt-train build does not depend on ttnn data_movement common_tm_bw_model.
-    constexpr int ideal_dev_clock_cycles = 0;
-    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-        {softmax_output, upstream_grad}, output_tensor, ideal_dev_clock_cycles);
-    return result;
+    const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&) {
+    return {};
 }
 
 }  // namespace ttml::metal::ops::softmax_backward::device
@@ -69,14 +34,8 @@ SoftmaxBackwardDeviceOperation::create_op_performance_model(
 namespace ttnn::prim {
 
 ttnn::Tensor ttml_softmax_backward(
-    const ttnn::Tensor& softmax_output,
-    const ttnn::Tensor& upstream_grad,
-    uint32_t dim,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttml::metal::ops::softmax_backward::device::SoftmaxBackwardDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{dim, sub_core_grids};
-    auto tensor_args = OperationType::tensor_args_t{softmax_output, upstream_grad};
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    const ttnn::Tensor&, const ttnn::Tensor&, uint32_t, const std::optional<tt::tt_metal::CoreRangeSet>&) {
+    throw std::runtime_error("softmax_backward device operation has been removed");
 }
 
 }  // namespace ttnn::prim
