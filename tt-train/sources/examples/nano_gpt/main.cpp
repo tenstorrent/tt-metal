@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,8 +25,6 @@
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
-#include "optimizers/adamw.hpp"
-#include "optimizers/no_op.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn/distributed/create_socket.hpp"
@@ -155,13 +153,6 @@ struct TrainingConfig {
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
-    float learning_rate = 3e-4F;
-    float weight_decay = 1e-2F;
-    bool use_no_op = false;
-    bool use_moreh_adamw = false;
-    // works only for AdamW
-    bool use_kahan_summation = false;
-    // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
     std::string model_config;
     std::string data_path;
@@ -180,11 +171,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["learning_rate"].as<float>();
-    config.weight_decay = training_config["weight_decay"].as<float>();
-    config.use_no_op = training_config["use_no_op"].as<bool>(config.use_no_op);
-    config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
-    config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_config = training_config["model_config"].as<std::string>("");
@@ -385,6 +371,9 @@ int main(int argc, char **argv) {
     std::string model_config_path =
         (training_config_path.parent_path().parent_path() / training_config.model_config).string();
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
+
+    auto optimizer_node = yaml_config["training_config"]["optimizer"];
+
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
@@ -554,7 +543,7 @@ int main(int argc, char **argv) {
                     const uint32_t BATCH_DIM = 0;
                     const uint32_t SEQUENCE_DIM_DATA = 3;
                     const uint32_t SEQUENCE_DIM_TARGETS = 1;
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         data_placements[pctx.get_ddp_axis().value()] =
@@ -574,7 +563,7 @@ int main(int argc, char **argv) {
                             device,
                             ttnn::Layout::ROW_MAJOR,
                             data_mapper.get()));
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         targets_placements[pctx.get_ddp_axis().value()] =
@@ -688,41 +677,28 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    auto adamw_params = ttml::optimizers::AdamWConfig();
-    adamw_params.lr = training_config.learning_rate;
-    adamw_params.weight_decay = training_config.weight_decay;
-    adamw_params.use_kahan_summation = training_config.use_kahan_summation;
-
-    if (training_config.use_no_op) {
-        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (!is_three_tier_training(multihost_config)) {
-        fmt::print("AdamW configuration:\n");
-        fmt::print("    Learning rate: {}\n", adamw_params.lr);
-        fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
-        fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
-    } else {
-        fmt::println("Remote optimizer configured!");
-    }
-
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer = [&model,
-                             &adamw_params,
-                             &training_config,
-                             &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+    auto select_optimizer =
+        [&model, &optimizer_node, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (is_three_tier_training(multihost_config)) {
             return std::make_unique<ttml::optimizers::RemoteOptimizer>(
                 get_model_parameters(model), multihost_config.num_mh_workers);
-        } else if (training_config.use_no_op) {
-            return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
-        } else if (training_config.use_moreh_adamw) {
-            return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
-        } else {
-            return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
+        return ttml::optimizers::create_optimizer(optimizer_node, get_model_parameters(model));
     };
 
     auto optimizer = select_optimizer();
+
+    if (optimizer->get_name() == "NoOp") {
+        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
+    } else if (is_three_tier_training(multihost_config)) {
+        fmt::println("Remote optimizer configured!");
+    } else {
+        fmt::print("Optimizer: {}\n", optimizer->get_name());
+        // TODO: Replace with print_stats() after #38756 is resolved
+        fmt::print("    Learning rate: {}\n", optimizer->get_lr());
+    }
     auto scheduler = schedule_func(optimizer.get(), training_config.max_steps);
 
     if (is_three_tier_training(multihost_config)) {
@@ -733,7 +709,7 @@ int main(int argc, char **argv) {
         fmt::println("[worker] Remote optimizer receiving weights from rank {}", multihost_config.num_mh_workers);
         optimizer_ptr->receive_weights();
         fmt::println("[worker] Remote optimizer received weights from rank {}", multihost_config.num_mh_workers);
-    } else if (training_config.use_no_op) {
+    } else if (optimizer->get_name() == "NoOp") {
         fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
@@ -19,7 +20,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -650,106 +651,154 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     return asic_positions_to_asic_ids;
 }
 
-// Helper function to add rank binding constraints
+// Helper function to add rank binding constraints. Only called when config.disable_rank_bindings is false.
+//
+// Purpose: Build rank_to_asics so that fabric nodes of rank R can only map to ASICs in rank_to_asics[R].
+// The topology solver then chooses a valid 1:1 mapping respecting connectivity.
 void add_rank_binding_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const TopologyMappingConfig& config,
     MeshId logical_mesh_id,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    // TODO: Remove this once rank bindings file is removed from multi-host systems
-    // Build Rank bindings constraints (only if rank bindings are enabled)
-    if (!config.disable_rank_bindings) {
-        // Check that rank mappings are provided
-        if (fabric_node_id_to_mesh_rank.contains(logical_mesh_id) && asic_id_to_mesh_rank.contains(logical_mesh_id)) {
-            const auto& fabric_node_ranks = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
-            const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
+    if (!fabric_node_id_to_mesh_rank.contains(logical_mesh_id) || !asic_id_to_mesh_rank.contains(logical_mesh_id)) {
+        return;
+    }
+    const auto& fabric_node_ranks = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
+    const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
 
-            // Group fabric nodes by rank
-            std::map<MeshHostRankId, std::set<FabricNodeId>> rank_to_fabric_nodes;
-            for (const auto& [fabric_node, rank] : fabric_node_ranks) {
-                rank_to_fabric_nodes[rank].insert(fabric_node);
+    // Group fabric nodes by rank: rank_to_fabric_nodes[R] = { fabric nodes that must map to rank R's ASICs }
+    std::map<MeshHostRankId, std::set<FabricNodeId>> rank_to_fabric_nodes;
+    for (const auto& [fabric_node, rank] : fabric_node_ranks) {
+        rank_to_fabric_nodes[rank].insert(fabric_node);
+    }
+
+    // rank_to_asics[R] = { ASICs that fabric nodes of rank R may map to }
+    std::map<MeshHostRankId, std::set<tt::tt_metal::AsicID>> rank_to_asics;
+
+    if (config.hostname_to_asics.empty()) {
+        // Legacy path: no host grouping. Each ASIC with explicit rank goes to that rank's pool.
+        for (const auto& [asic_id, rank] : asic_ranks) {
+            if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                rank_to_asics[rank].insert(asic_id);
             }
+        }
+    } else {
+        // Host-grouped path: config.hostname_to_asics defines which ASICs belong to which host.
+        // Constraint: all ASICs on the same host must map to fabric nodes of the same rank
+        // (ControlPlane/TopologyMapper "same-host same-rank" invariant).
 
-            // Group ASICs by rank.
-            // - hostname_to_asics empty: add non-UNSET ASICs directly (original behavior).
-            // - hostname_to_asics non-empty: legacy ASICs (not in config) go by rank; hosts with one rank get that
-            //   rank; UNSET-only hosts pool to any unclaimed rank.
-            std::map<MeshHostRankId, std::set<tt::tt_metal::AsicID>> rank_to_asics;
-            std::set<MeshHostRankId> claimed_ranks;
-            std::unordered_set<tt::tt_metal::AsicID> asics_in_host_config;
-            for (const auto& [_, asic_set] : config.hostname_to_asics) {
-                for (const auto& a : asic_set) {
-                    asics_in_host_config.insert(a);
-                }
+        std::unordered_set<tt::tt_metal::AsicID> asics_in_host_config;
+        for (const auto& [_, asic_set] : config.hostname_to_asics) {
+            asics_in_host_config.insert(asic_set.begin(), asic_set.end());
+        }
+
+        // Legacy ASICs (not in any host in config): add by explicit rank.
+        for (const auto& [asic_id, rank] : asic_ranks) {
+            if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET && !asics_in_host_config.contains(asic_id)) {
+                rank_to_asics[rank].insert(asic_id);
             }
+        }
 
-            // Legacy ASICs (not in host config): add non-UNSET by rank.
-            for (const auto& [asic_id, rank] : asic_ranks) {
-                if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET && !asics_in_host_config.contains(asic_id)) {
-                    rank_to_asics[rank].insert(asic_id);
-                }
-            }
+        // Per-host: classify as explicitly bound (has rank) or UNSET (all ASICs have MESH_HOST_RANK_UNSET).
+        std::set<MeshHostRankId> claimed_ranks;
+        std::vector<std::set<tt::tt_metal::AsicID>> unset_hosts;
 
-            if (!config.hostname_to_asics.empty()) {
-                std::set<tt::tt_metal::AsicID> unset_asic_pool;
-                for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
-                    std::vector<std::pair<tt::tt_metal::AsicID, MeshHostRankId>> host_pairs;
-                    for (const auto& asic_id : asic_set) {
-                        auto it = asic_ranks.find(asic_id);
-                        if (it != asic_ranks.end()) {
-                            host_pairs.emplace_back(asic_id, it->second);
-                        }
-                    }
-                    if (host_pairs.empty()) {
-                        continue;
-                    }
-                    std::optional<MeshHostRankId> host_rank;
-                    for (const auto& [_, rank] : host_pairs) {
-                        if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
-                            if (host_rank.has_value() && host_rank.value() != rank) {
-                                TT_THROW(
-                                    "Host consistency violated: host {} has ASICs with inconsistent ranks ({} and {}). "
-                                    "Each host in the PSD must have exactly one rank binding.",
-                                    hostname,
-                                    host_rank->get(),
-                                    rank.get());
-                            }
-                            host_rank = rank;
-                        }
-                    }
-                    if (host_rank.has_value()) {
-                        claimed_ranks.insert(host_rank.value());
-                        for (const auto& [asic_id, _] : host_pairs) {
-                            rank_to_asics[host_rank.value()].insert(asic_id);
-                        }
-                    } else {
-                        for (const auto& [asic_id, _] : host_pairs) {
-                            unset_asic_pool.insert(asic_id);
-                        }
-                    }
+        for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
+            std::set<tt::tt_metal::AsicID> host_asics_in_mesh;
+            std::optional<MeshHostRankId> host_rank;
+            for (const auto& asic_id : asic_set) {
+                auto it = asic_ranks.find(asic_id);
+                if (it == asic_ranks.end()) {
+                    continue;
                 }
-                for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
-                    if (!fn_set.empty() && !claimed_ranks.contains(r)) {
-                        for (const auto& asic_id : unset_asic_pool) {
-                            rank_to_asics[r].insert(asic_id);
-                        }
-                    }
-                }
-            }
-
-            // Add many-to-many required constraints for each rank
-            // This allows any fabric node with a given rank to map to any ASIC with the same rank
-            for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
-                auto asic_it = rank_to_asics.find(rank);
-                if (asic_it != rank_to_asics.end()) {
-                    if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_it->second)) {
+                host_asics_in_mesh.insert(asic_id);
+                if (it->second != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                    if (host_rank.has_value() && host_rank.value() != it->second) {
                         TT_THROW(
-                            "Failed to add required constraint for rank bindings in mesh {} for rank {}",
-                            logical_mesh_id.get(),
-                            rank);
+                            "Host consistency violated: host {} has ASICs with inconsistent ranks ({} and {}). "
+                            "Each host in the PSD must have exactly one rank binding.",
+                            hostname,
+                            host_rank->get(),
+                            it->second.get());
                     }
+                    host_rank = it->second;
                 }
+            }
+            if (host_asics_in_mesh.empty()) {
+                continue;
+            }
+
+            if (host_rank.has_value()) {
+                claimed_ranks.insert(host_rank.value());
+                for (const auto& asic_id : host_asics_in_mesh) {
+                    rank_to_asics[host_rank.value()].insert(asic_id);
+                }
+            } else {
+                unset_hosts.push_back(std::move(host_asics_in_mesh));
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Device pool for UNSET hosts (hosts with no explicit rank binding)
+        // -----------------------------------------------------------------------
+        // UNSET hosts form a "device pool" that we assign to unclaimed ranks.
+        // Two strategies to preserve same-host same-rank:
+        //
+        // 1. Multi-ASIC hosts: Assign the entire host to one unclaimed rank.
+        //    All ASICs on that host go to the same rank's pool, so the solver
+        //    cannot split them across ranks.
+        //
+        // 2. Single-ASIC hosts: Add to a shared pool available to ALL unclaimed ranks.
+        //    The solver picks which rank gets each ASIC while satisfying connectivity.
+        //    Flexibility is needed when e.g. only rank 1 is explicitly bound and we
+        //    have 3 single-ASIC hosts for ranks 0, 2, 3.
+        // -----------------------------------------------------------------------
+        if (!unset_hosts.empty()) {
+            std::vector<MeshHostRankId> unclaimed_ranks;
+            for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
+                if (!fn_set.empty() && !claimed_ranks.contains(r)) {
+                    unclaimed_ranks.push_back(r);
+                }
+            }
+            if (unclaimed_ranks.empty()) {
+                TT_THROW(
+                    "Rank bindings: {} host(s) have no rank binding but all mesh ranks are already claimed. "
+                    "Either assign ranks to these hosts or ensure enough ranks exist.",
+                    unset_hosts.size());
+            }
+
+            std::set<tt::tt_metal::AsicID> single_asic_pool;  // Shared pool for single-ASIC UNSET hosts
+            size_t multi_idx = 0;
+            for (const auto& host_asics : unset_hosts) {
+                if (host_asics.size() > 1) {
+                    // Multi-ASIC: assign whole host to one unclaimed rank (round-robin).
+                    MeshHostRankId r = unclaimed_ranks[multi_idx++ % unclaimed_ranks.size()];
+                    for (const auto& asic_id : host_asics) {
+                        rank_to_asics[r].insert(asic_id);
+                    }
+                } else {
+                    // Single-ASIC: add to shared pool. Will be added to all unclaimed ranks below.
+                    single_asic_pool.insert(host_asics.begin(), host_asics.end());
+                }
+            }
+            for (const auto& r : unclaimed_ranks) {
+                for (const auto& asic_id : single_asic_pool) {
+                    rank_to_asics[r].insert(asic_id);
+                }
+            }
+        }
+    }
+
+    // Add required constraint: fabric nodes of rank R can only map to ASICs in rank_to_asics[R].
+    for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
+        auto asic_it = rank_to_asics.find(rank);
+        if (asic_it != rank_to_asics.end() && !asic_it->second.empty()) {
+            if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_it->second)) {
+                TT_THROW(
+                    "Failed to add required constraint for rank bindings in mesh {} for rank {}",
+                    logical_mesh_id.get(),
+                    rank);
             }
         }
     }
@@ -1179,9 +1228,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Build intra-mesh constraints
             ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
 
-            // Add rank binding constraints
-            add_rank_binding_constraints(
-                intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+            // Add rank binding constraints only when rank bindings are enabled
+            if (!config.disable_rank_bindings) {
+                add_rank_binding_constraints(
+                    intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+            }
 
             // Add exit node constraints (only if exit node graphs are not empty)
             // Since we initialize empty graphs for all meshes, we check if they have nodes before adding constraints
