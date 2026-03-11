@@ -15,7 +15,7 @@ from .softmax import softmax
 
 def pytorch_reference(input_tensor):
     """PyTorch reference for this stage."""
-    torch.nn.functional.softmax(input, dim=-1)
+    return torch.nn.functional.softmax(input_tensor, dim=-1)
 
 
 @pytest.mark.parametrize(
