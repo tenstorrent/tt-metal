@@ -178,10 +178,6 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
         return mapped_dst_type;
     }
 
-    // TODO: Perform type conversion on the Python side for now due to performance considerations.
-    // Device-side type conversion is disabled because of issues with typecast/to_layout.
-    // Re-enable device-side typecasting once these issues are fixed.
-    // return mapped_dst_type;
     return to_ttnn_dtype(src_dtype);  // borrow pytensor by default.
 }
 }  // namespace
@@ -203,6 +199,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     bool preserve_nan_values,
     bool col_tilize,
     bool fast_approx) {
+    ZoneScoped;
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
     }

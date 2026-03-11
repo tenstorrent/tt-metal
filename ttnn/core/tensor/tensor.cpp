@@ -45,7 +45,6 @@ std::atomic<std::uint64_t> tensor_id_counter{0};
 
 template <typename T>
 Tensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
-    // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec =
         TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
@@ -182,10 +181,10 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    // from_span do first copy of the data to pass to from_vector
-    // than from_vector allocate another vector to change layout, in that use case we don't need first
-    // allocation.
     if (!logical_matches_physical(spec)) {
+        // If the logical type doesn’t match the physical type, we need to encode the data
+        // and write the result to a new buffer. This branch avoids the extra copy that
+        // would otherwise occur in the from_vector function call.
         auto res = from_span_impl(buffer, spec, static_cast<T>(pad_value));
         res = to_dtype(res, spec.data_type());
         if (device) {
