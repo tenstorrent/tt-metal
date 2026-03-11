@@ -466,8 +466,8 @@ Tensor FoldOperation::invoke(
     const auto in_channels = shape[3];
     const bool was_tiled = processed_tensor.layout() == Layout::TILE;
 
-    // Convert to row-major for 32-channel aligned tensors for better performance
-    if (in_channels % 32 == 0 && was_tiled) {
+    // The interleaved fold kernels operate on row-major data, so untilize first.
+    if (was_tiled) {
         processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 
