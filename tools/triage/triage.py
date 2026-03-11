@@ -741,7 +741,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             exit(1)
 
 
-def _patch_risc_debug(context: Context) -> None:
+def _patch_risc_debug() -> None:
     """
     Blackhole and Wormhole HW bug: HALT → READ/WRITE → CONTINUE breaks cores.
     This patches both risc_debug and debug_hardware instances so that
@@ -788,7 +788,7 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
     else:
         context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
-    _patch_risc_debug(context)
+    _patch_risc_debug()
     return context
 
 

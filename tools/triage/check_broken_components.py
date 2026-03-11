@@ -13,6 +13,9 @@ Options:
 Description:
     Verifies that cores halted by triage are still halted and prints a summary of
     broken devices and cores. It relies on run_checks to identify all broken components.
+    A device is considered broken if both NoCs hang (timeout on register access).
+    A core is considered broken if it cannot be halted or if it resumed execution
+    even though triage did not continue it.
 
 Owner:
     adjordjevic-TT
