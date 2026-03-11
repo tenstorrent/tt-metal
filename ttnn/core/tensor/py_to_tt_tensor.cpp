@@ -101,6 +101,7 @@ Tensor create_tt_tensor_from_host_data(
 
         const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
+        // TODO: Remove preserve_nan_values argument after https://github.com/tenstorrent/tt-metal/issues/31406
         if (preserve_nan_values) {
             return Tensor::from_span(
                 tt::stl::make_const_span(host_buffer.view_as<T>()),
