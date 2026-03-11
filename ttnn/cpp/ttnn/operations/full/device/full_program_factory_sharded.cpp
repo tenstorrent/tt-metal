@@ -68,7 +68,7 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
             num_shards) {  // For L1 sharding, the user may specify a core grid larger than the number of shards. In
                            // this case, we need to determine which cores have data on them so that we are not running
                            // programs on cores with no data being processed.
-            runtime_cores = output.get_cores_with_shards();
+            runtime_cores = output.buffer()->buffer_distribution_spec().value().cores_with_data();
             compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(runtime_cores));
         } else {
             compute_core_range =

@@ -91,7 +91,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         if (num_compute_cores >
             num_shards) {  // If the user specified more compute cores than there are data, we need to figure out which
                            // cores have data on them and only activate those cores.
-            ordered_cores_with_data = a.get_cores_with_shards();
+            ordered_cores_with_data = a.buffer()->buffer_distribution_spec().value().cores_with_data();
             has_ordered_cores_with_data = true;
             compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
 

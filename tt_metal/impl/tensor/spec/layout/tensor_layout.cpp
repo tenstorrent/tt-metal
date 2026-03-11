@@ -200,6 +200,15 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
         const std::array<uint32_t, 2> tensor2d_shape_in_pages{
             static_cast<uint32_t>(height_in_pages), static_cast<uint32_t>(width_in_pages)};
         shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
+        distribution_spec = BufferDistributionSpec::from_shard_spec(
+            shape,
+            Shape(shard_spec->shape),
+            page_shape,
+            shard_spec->grid,
+            shard_spec->orientation,
+            memory_config_.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                ? ShardDistributionStrategy::GRID_2D
+                : ShardDistributionStrategy::ROUND_ROBIN_1D);
     }
 
     if (const auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
