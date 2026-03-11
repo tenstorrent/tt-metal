@@ -179,7 +179,7 @@ Lives in the operation directory. Example:
   "op_name": "my_op",
   "op_path": "ttnn/ttnn/operations/my_op",
   "spec_path": "ttnn/ttnn/operations/my_op/op_design.md",
-  "layout": "ROW_MAJOR_LAYOUT",
+  "layout": ["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"],
   "current_stage_index": 1,
   "last_passing_commit": "abc1234...",
   "stages": [

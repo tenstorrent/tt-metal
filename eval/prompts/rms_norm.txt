@@ -24,10 +24,19 @@ This supports these call patterns:
 Supported dtypes: bfloat16 and float32.
 - For float32 input, fp32 accumulation must be enabled (no intermediate bfloat16 downcast).
 
-Supported layouts: ROW_MAJOR_LAYOUT and TILE_LAYOUT.
-- For TILE_LAYOUT, H and W must be divisible by 32.
-- Gamma tensor should always be in ROW_MAJOR_LAYOUT with shape (1, 1, 1, W).
-- Output layout matches input layout.
+## Layout handling
+
+The operation must natively support both ROW_MAJOR_LAYOUT and TILE_LAYOUT inputs.
+Layout conversion (tilize/untilize) must happen in-kernel, not in the Python entry
+point. Gamma is always provided in ROW_MAJOR_LAYOUT with shape (1, 1, 1, W) and
+must also be tilized in-kernel. Output layout must match input layout.
+For TILE_LAYOUT, H and W must be divisible by 32.
+
+TDD stages should test BOTH layouts. Each stage should be parametrized over
+layout (ROW_MAJOR_LAYOUT, TILE_LAYOUT) so that kernel-level layout handling
+is verified incrementally, not deferred to a final integration test.
+
+## Validation
 
 The operation must validate inputs on the Python side and raise ValueError or
 RuntimeError for:

@@ -25,6 +25,14 @@ DTYPE_MAP = {
     "float32": (torch.float32, ttnn.float32),
 }
 {%- endif %}
+{%- if layouts | length > 1 %}
+
+LAYOUT_MAP = {
+{%- for l in layouts %}
+    "{{ l }}": ttnn.{{ l }},
+{%- endfor %}
+}
+{%- endif %}
 
 
 @pytest.mark.parametrize(
@@ -35,17 +43,27 @@ DTYPE_MAP = {
 {%- endfor %}
     ],
 )
+{%- if layouts | length > 1 %}
+@pytest.mark.parametrize("layout_name", {{ layouts | map("tojson") | list }}, ids=[{% for l in layouts %}"{{ l | lower }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- endif %}
 {%- if dtype_parametrize %}
 @pytest.mark.parametrize("dtype_name", {{ dtype_parametrize }})
-def test_{{ stage_name }}(device, shape, dtype_name):
+def test_{{ stage_name }}(device, shape{{ ", layout_name" if layouts | length > 1 }}, dtype_name):
     """Verify {{ stage_description }}."""
     torch_dtype, ttnn_dtype = DTYPE_MAP[dtype_name]
+{%- else %}
+def test_{{ stage_name }}(device, shape{{ ", layout_name" if layouts | length > 1 }}):
+    """Verify {{ stage_description }}."""
+{%- endif %}
+{%- if layouts | length > 1 %}
+    layout = LAYOUT_MAP[layout_name]
+{%- else %}
+    layout = ttnn.{{ layouts[0] }}
+{%- endif %}
     torch.manual_seed(42)
+{%- if dtype_parametrize %}
     torch_input = torch.randn(shape, dtype=torch_dtype)
 {%- else %}
-def test_{{ stage_name }}(device, shape):
-    """Verify {{ stage_description }}."""
-    torch.manual_seed(42)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 {%- endif %}
     {{ extra_setup }}
@@ -59,7 +77,7 @@ def test_{{ stage_name }}(device, shape):
 {%- else %}
         dtype=ttnn.bfloat16,
 {%- endif %}
-        layout=ttnn.{{ layout }},
+        layout=layout,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
