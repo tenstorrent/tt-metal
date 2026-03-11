@@ -173,6 +173,8 @@ def test_block_sharded_group_norm_sdxl_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 83180  # Measured: ~83μs for GroupNorm SDXL block sharded
+    if (is_llk_assert_enabled):
+        expected_duration_ns = 86258  # Measured: ~86μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -209,6 +211,8 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 600338  # Measured: ~600μs for GroupNorm SDXL negative mask
+    if (is_llk_assert_enabled):
+        expected_duration_ns = 624293  # Measured: ~624μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -317,8 +321,6 @@ def test_conv2d_auto_sliced_vae_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
-    if (is_llk_assert_enabled):
-        expected_duration_ns = 3403770  # Measured: 3.40ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(
