@@ -128,6 +128,7 @@ class MatmulCustomCompressed:
 
         out_w = out_shard_shape[1] // 32
         assert (num_tiles_k * out_w) % 2 == 0, f"total tiles (K*N) must be even, got {num_tiles_k * out_w}"
+        assert out_w == 1 or out_w % 2 == 0, f"out_w must be 1 or even, got {out_w}"
 
         # CB indices
         cb_in0 = 0
