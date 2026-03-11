@@ -160,6 +160,8 @@ def test_math_matmul(
         input_A_dimensions=in0_dimensions,
         input_B_dimensions=in1_dimensions,
         tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
 
     tilized_in0 = tilize_block(

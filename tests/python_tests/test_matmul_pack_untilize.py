@@ -59,6 +59,8 @@ def test_matmul_pack_untilize(
         math_fidelity,
         input_A_dimensions=input_dimensions,
         input_B_dimensions=input_dimensions,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
 
     configuration = TestConfig(

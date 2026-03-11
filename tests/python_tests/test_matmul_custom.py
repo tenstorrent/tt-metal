@@ -62,6 +62,7 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
+        DataFormat.Bfp8_b,
     ]
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
@@ -116,6 +117,8 @@ def test_matmul_custom(
         input_B_dimensions=input_B_dimensions,
         # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
         tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
 
     if formats.input_format != DataFormat.Bfp8_b:

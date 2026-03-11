@@ -111,6 +111,8 @@ class MatmulFpu(Fpu):
             input_A_dimensions=operation.src_a.dimensions,
             input_B_dimensions=operation.src_b.dimensions,
             tilize=False,
+            input_A_format=operation.src_a.data_format,
+            input_B_format=operation.src_b.data_format,
         )
 
         return (tensor_a, tensor_b, golden)

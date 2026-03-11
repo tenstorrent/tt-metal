@@ -57,6 +57,8 @@ def test_matmul_unpack_tilize(
             math_fidelity,
             input_A_dimensions=input_dimensions,
             input_B_dimensions=input_dimensions,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format,
         )
     )
     golden_tensor = golden_tensor.to(torch_format)

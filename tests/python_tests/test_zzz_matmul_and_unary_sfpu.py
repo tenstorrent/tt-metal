@@ -117,6 +117,8 @@ def test_matmul_and_unary_sfpu(
         math_fidelity,
         input_A_dimensions=input_dimensions,
         input_B_dimensions=input_dimensions,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
     golden_tensor = tilize(golden_tensor, formats.output_format)
 

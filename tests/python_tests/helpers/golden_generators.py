@@ -739,6 +739,49 @@ class TransposeGolden:
         )
 
 
+def _bfp8b_to_float16b(operand, dimensions=None):
+    BFP8_BLOCK = 16
+    flat = operand.flatten().to(torch.float32)
+    n = flat.numel()
+
+    # Reinterpret float32 bits as int32 (zero-copy)
+    u32 = flat.view(torch.int32)
+    bf16_bits = (u32 >> 16) & 0xFFFF
+
+    signs = (bf16_bits >> 15) & 1
+    exps = (bf16_bits >> 7) & 0xFF
+    mants = ((bf16_bits & 0x7F) >> 1) | 0x40
+
+    # Reshape into (num_blocks, 16) for block-wise max
+    exps_blocks = exps.view(-1, BFP8_BLOCK)
+    mants_blocks = mants.view(-1, BFP8_BLOCK)
+    signs_blocks = signs.view(-1, BFP8_BLOCK)
+
+    # Shared exponent = max per block, broadcast back
+    shared_exps = exps_blocks.max(dim=1, keepdim=True).values
+
+    # Right-shift mantissa by per-element delta
+    deltas = shared_exps - exps_blocks
+    shifted = mants_blocks >> deltas
+
+    # Scale: 2^(shared_exp - 127 - 6)
+    values = shifted.float() * torch.exp2((shared_exps - 133).float())
+
+    # Apply sign
+    values = torch.where(signs_blocks.bool(), -values, values)
+
+    quantized = values.flatten()[:n].to(torch.bfloat16)
+
+    if dimensions is not None:
+        quantized = untilize_block(
+            quantized,
+            stimuli_format=DataFormat.Float16_b,
+            dimensions=dimensions,
+        ).flatten()
+
+    return quantized
+
+
 @register_golden
 class MatmulGolden(FidelityMasking):
 
@@ -751,8 +794,17 @@ class MatmulGolden(FidelityMasking):
         input_A_dimensions=None,
         input_B_dimensions=None,
         tilize: bool = False,
+        input_A_format: DataFormat = None,
+        input_B_format: DataFormat = None,
     ):
         torch_format = format_dict[data_format]
+
+        if input_A_format == DataFormat.Bfp8_b:
+            dims = input_A_dimensions if tilize else None
+            operand1 = _bfp8b_to_float16b(operand1, dims)
+        if input_B_format == DataFormat.Bfp8_b:
+            dims = input_B_dimensions if tilize else None
+            operand2 = _bfp8b_to_float16b(operand2, dims)
 
         t1 = to_tensor(operand1, data_format)
         t2 = to_tensor(operand2, data_format)
