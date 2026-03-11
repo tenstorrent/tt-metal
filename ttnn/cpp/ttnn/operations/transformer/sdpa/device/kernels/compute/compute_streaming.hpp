@@ -741,9 +741,10 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
-                // Only the LAST full subblock posts the semaphore — one post per reduce,
-                // matching the single semaphore get in the UNPACK MOP split.
-                bool kt_trigger_reduce = reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1);
+                // Exactly one subblock posts the semaphore per reduce: the last full
+                // subblock when no partial follows, otherwise the partial subblock.
+                bool kt_trigger_reduce =
+                    reduce_trigger && !has_partial_subblock && (kt_subblock == kt_num_full_subblocks - 1);
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
@@ -796,9 +797,8 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
-                // Partial subblock is always the last subblock — never trigger custom reduce sync.
-                // The reduce trigger mechanism is only for full subblocks.
-                constexpr bool partial_trigger_reduce = false;
+                // Partial subblock is the last subblock — it owns the reduce trigger.
+                const bool partial_trigger_reduce = reduce_trigger;
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
