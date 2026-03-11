@@ -7,3 +7,6 @@
 {"event":"helper_analysis","file":"reduce_helpers_compute.hpp","applicable":true,"functions":["reduce<SUM, REDUCE_ROW> for mean and variance row reductions"],"ts":"2026-03-11T17:28:03+00:00"}
 {"event":"helper_analysis","file":"binary_op_helpers.hpp","applicable":true,"functions":["sub<COL> for subtract mean, square for centered^2, mul<COL> for rsqrt multiply, mul<ROW>/add<ROW> for gamma/beta"],"ts":"2026-03-11T17:28:06+00:00"}
 {"event":"design_decision","phase":"cb_layout","choice":"Dedicated CBs for persistent scalars (mean, rsqrt_var), separate tilize/untilize CBs","rationale":"Mean persists across pass2 and pass3; rsqrt_var persists in pass3. Tilize output feeds compute, untilize input from compute output.","ts":"2026-03-11T17:28:08+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: layer_norm_rm","ts":"2026-03-11T17:31:48+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"5c8ed56d95","ts":"2026-03-11T17:31:49+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[],"final_commit":"5c8ed56d95","ts":"2026-03-11T17:31:51+00:00"}
