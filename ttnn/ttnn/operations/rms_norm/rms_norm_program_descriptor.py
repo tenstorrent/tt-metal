@@ -60,9 +60,9 @@ def create_program_descriptor(
     fp32_dest_acc_en = input_tensor.dtype == ttnn.float32
 
     # Page sizes
-    # For TILE_LAYOUT: page_size = tile_size(dtype)
-    # For ROW_MAJOR_LAYOUT: input pages are still tile-sized for tilize compatibility
-    tile_size = input_tensor.buffer_page_size() if not is_input_rm else ttnn.tile_size(input_tensor.dtype)
+    # All CBs use tile-sized pages for tilize/untilize compatibility
+    tile_size = ttnn.tile_size(input_tensor.dtype)
+    # For TensorAccessor: use actual buffer page size (stick for RM, tile for TILE)
     input_page_size = input_tensor.buffer_page_size()
     output_page_size = output_tensor.buffer_page_size()
 
@@ -94,16 +94,16 @@ def create_program_descriptor(
 
     cbs = []
 
-    # cb_in (c_0): Wt pages, input data format
+    # cb_in (c_0): Wt pages, tile-sized pages (for tilize compatibility in RM path)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=Wt * input_page_size,
+            total_size=Wt * tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_IN,
                     data_format=input_tensor.dtype,
-                    page_size=input_page_size,
+                    page_size=tile_size,
                 )
             ],
         )
@@ -172,16 +172,16 @@ def create_program_descriptor(
             )
         )
 
-    # cb_out (c_16): Wt pages, output data format
+    # cb_out (c_16): Wt pages, tile-sized pages (for untilize compatibility in RM path)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=Wt * output_page_size,
+            total_size=Wt * tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_OUT,
                     data_format=output_tensor.dtype,
-                    page_size=output_page_size,
+                    page_size=tile_size,
                 )
             ],
         )
@@ -276,7 +276,10 @@ def create_program_descriptor(
     ]
 
     # --- Reader kernel ---
-    stick_size = W * input_tensor.element_size()
+    # stick_size is the page size for TensorAccessor and noc_async_read/write:
+    # RM: W * elem_size (one stick = one row of W elements)
+    # TILE: tile_size (one page = one tile)
+    stick_size = W * input_tensor.element_size() if is_input_rm else tile_size
     reader_ct_args = [stick_size]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
