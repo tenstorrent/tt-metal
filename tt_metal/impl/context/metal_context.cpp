@@ -642,6 +642,8 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricUDMMode fabric_udm_mode,
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
+    log_info(tt::LogMetal, "DIAG MetalContext::set_fabric_config: incoming={}, current={}, control_plane_exists={}",
+        fabric_config, this->fabric_config_, control_plane_ != nullptr);
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -656,9 +658,13 @@ void MetalContext::set_fabric_config(
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
+        log_info(tt::LogMetal, "DIAG   set_fabric_config: storing fabric_config {} -> {} (one side was DISABLED)",
+            this->fabric_config_, fabric_config);
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
+        log_info(tt::LogMetal, "DIAG   set_fabric_config: both non-DISABLED, current={}, incoming={} (must match)",
+            this->fabric_config_, fabric_config);
         TT_FATAL(
             this->fabric_config_ == fabric_config,
             "Tried to override previous value of fabric config: {}, with: {}",
@@ -722,17 +728,25 @@ void MetalContext::set_fabric_config(
 }
 
 void MetalContext::initialize_fabric_config() {
+    log_info(tt::LogMetal, "DIAG MetalContext::initialize_fabric_config: fabric_config_={}, control_plane_exists={}",
+        this->fabric_config_, control_plane_ != nullptr);
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+        log_info(tt::LogMetal, "DIAG   -> fabric DISABLED, returning (no-op)");
         return;
     }
 
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
+    log_info(tt::LogMetal, "DIAG   -> calling get_control_plane() (will lazy-init ControlPlane if needed)");
     auto& control_plane = this->get_control_plane();
     control_plane.configure_routing_tables_for_fabric_ethernet_channels();
+    log_info(tt::LogMetal, "DIAG   -> initialize_fabric_config done, ControlPlane fabric_config={}",
+        control_plane.get_fabric_config());
 }
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
+    log_info(tt::LogMetal, "DIAG MetalContext::initialize_fabric_tensix_datamover_config: fabric_config_={}",
+        this->fabric_config_);
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
@@ -807,6 +821,7 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
+    log_info(tt::LogMetal, "DIAG construct_control_plane(path={}): fabric_config_={}", mesh_graph_desc_path.string(), this->fabric_config_);
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
@@ -839,6 +854,7 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::construct_control_plane() {
+    log_info(tt::LogMetal, "DIAG construct_control_plane(auto-discovery): fabric_config_={}", this->fabric_config_);
     // Use auto-discovery to generate mesh graph from physical system descriptor
     // This uses MeshGraph::generate_from_physical_system_descriptor which internally
     // uses map_mesh_to_physical to find a valid mapping

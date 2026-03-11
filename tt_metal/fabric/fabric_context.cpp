@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -249,6 +250,13 @@ FabricContext::FabricContext(
 
     // Step 2: Derive topology (depends on: fabric_config_)
     this->topology_ = FabricContext::get_topology_from_config(fabric_config);
+    log_info(tt::LogFabric, "DIAG FabricContext: fabric_config={} -> topology_={} ({})",
+        fabric_config, static_cast<int>(this->topology_),
+        this->topology_ == tt::tt_fabric::Topology::Linear ? "Linear" :
+        this->topology_ == tt::tt_fabric::Topology::Ring ? "Ring" :
+        this->topology_ == tt::tt_fabric::Topology::Mesh ? "Mesh" :
+        this->topology_ == tt::tt_fabric::Topology::Torus ? "Torus" :
+        this->topology_ == tt::tt_fabric::Topology::NeighborExchange ? "NeighborExchange" : "Unknown");
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh(control_plane);
 
     // Step 3: Compute routing flags (depends on: topology_)

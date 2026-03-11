@@ -715,9 +715,13 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::initialize_fabric_context() {
+    log_info(tt::LogFabric, "DIAG ControlPlane::initialize_fabric_context: fabric_config_={}", fabric_config_);
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
+        log_info(tt::LogFabric, "DIAG   -> creating FabricContext with fabric_config={}", fabric_config_);
         this->fabric_context_ = std::make_unique<FabricContext>(
             *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+    } else {
+        log_info(tt::LogFabric, "DIAG   -> NOT creating FabricContext (not a tt_fabric config)");
     }
 }
 

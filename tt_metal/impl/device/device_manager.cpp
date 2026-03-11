@@ -261,6 +261,10 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     // while initializing default sub device state.
     // This call will be a no-op if fabric is disabled.
     // May be called again below
+    log_info(
+        tt::LogMetal,
+        "DIAG open_devices: BEFORE first initialize_fabric_config, MetalContext fabric_config={}",
+        tt::tt_metal::MetalContext::instance().get_fabric_config());
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Mock devices don't support fabric operations
@@ -268,7 +272,14 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (any_remote_devices && !is_mock) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        log_info(
+            tt::LogMetal,
+            "DIAG open_devices: any_remote_devices=true, read fabric_config={} from MetalContext",
+            fabric_config);
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            log_info(
+                tt::LogMetal,
+                "DIAG open_devices: fabric_config is DISABLED -> OVERRIDING to FABRIC_1D");
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             tt::tt_fabric::SetFabricConfig(
                 fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
@@ -282,18 +293,31 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
                 "accordingly.",
                 fabric_config);
         } else {
+            log_info(
+                tt::LogMetal,
+                "DIAG open_devices: fabric_config already set to {}, NOT overriding",
+                fabric_config);
             // Use the same mode
             tt::tt_fabric::SetFabricConfig(
                 fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         }
         descriptor_->reliability_mode_ = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs_);
+    } else {
+        log_info(
+            tt::LogMetal,
+            "DIAG open_devices: any_remote_devices={}, is_mock={} -> skipping fabric auto-detection",
+            any_remote_devices, is_mock);
     }
 
     skip_remote_devices_ = skip;
     add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool
+    log_info(
+        tt::LogMetal,
+        "DIAG open_devices: BEFORE initialize_fabric_tensix_datamover_config, MetalContext fabric_config={}",
+        tt::tt_metal::MetalContext::instance().get_fabric_config());
     tt::tt_metal::MetalContext::instance().initialize_fabric_tensix_datamover_config();
 
     init_firmware_on_active_devices();
