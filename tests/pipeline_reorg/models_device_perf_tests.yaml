@@ -7,7 +7,6 @@
 #   model: Model identifier for filtering (workflow_dispatch model selection).
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
-#     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
 #     tt_cache_path: (optional) Path for TT_CACHE_PATH; use with export TT_CACHE_PATH={tt_cache_path} in cmd.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
@@ -24,17 +23,14 @@
   skus:
     wh_n150:
       timeout: 10
-      tier: 1
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
       timeout: 10
-      tier: 1
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
       timeout: 10
-      tier: 1
       tt_cache_path: ""
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
