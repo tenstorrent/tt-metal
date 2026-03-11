@@ -187,7 +187,11 @@ Tensor Tensor::from_span(
     // allocation.
     if (!logical_matches_physical(spec)) {
         auto res = from_span_impl(buffer, spec, static_cast<T>(pad_value));
-        return to_dtype(res, spec.data_type());
+        res = to_dtype(res, spec.data_type());
+        if (device) {
+            res = res.to_device(device, spec.memory_config(), cq_id);
+        }
+        return res;
     }
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
 }
