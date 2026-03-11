@@ -19,7 +19,7 @@ Current performance and target performance for two systems are detailed below. P
 
 | System   | CFG | SP | TP | Encoding | Denoising (50 steps) | VAE   | Total |
 |----------|-----|----|----|----------|----------------------|-------|-------|
-| QuietBox | 2   | 1  | 4  | 0.35s    | 80s                  | 0.75s | 88s   |
+| QuietBox | 2   | 1  | 4  | 0.35s    | 77s                  | 0.8s  | 84s   |
 | Galaxy   | 2   | 4  | 4  | 0.35s    | 25s                  | 0.4s  | 26s   |
 
 
