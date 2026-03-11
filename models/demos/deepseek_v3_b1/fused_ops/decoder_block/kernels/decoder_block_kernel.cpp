@@ -2717,7 +2717,7 @@ void kernel_main() {
         mcast.init(mcast_args);
     }
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    while (true) {
 #if defined(COMPILE_FOR_BRISC)
         constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
         constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");

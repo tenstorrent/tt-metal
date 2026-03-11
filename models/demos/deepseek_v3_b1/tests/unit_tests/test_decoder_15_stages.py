@@ -80,7 +80,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
     indirect=True,
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
-@pytest.mark.parametrize("iterations", [4000])
+@pytest.mark.parametrize("iterations", [8192])
 @pytest.mark.timeout(120000)
 def test_persistent_decoder_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict

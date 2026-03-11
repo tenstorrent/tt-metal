@@ -2,40 +2,40 @@
 
 stage_to_slice_mapping:
   0:
-    host: bh-glx-c07u08
+    host: bh-glx-b08u08
     slice: 0
   1:
-    host: bh-glx-c07u08
+    host: bh-glx-b08u08
     slice: 1
   2:
-    host: bh-glx-c07u08
+    host: bh-glx-b08u08
     slice: 2
   3:
-    host: bh-glx-c07u08
+    host: bh-glx-b08u08
     slice: 3
   4:
-    host: bh-glx-c07u02
+    host: bh-glx-b08u02
     slice: 0
   5:
-    host: bh-glx-c07u02
+    host: bh-glx-b08u02
     slice: 1
   6:
-    host: bh-glx-c07u02
+    host: bh-glx-b08u02
     slice: 2
   7:
-    host: bh-glx-c07u02
+    host: bh-glx-b08u02
     slice: 3
   8:
-    host: bh-glx-c08u02
+    host: bh-glx-b09u02
     slice: 0
   9:
-    host: bh-glx-c08u02
+    host: bh-glx-b09u02
     slice: 1
   10:
-    host: bh-glx-c08u02
+    host: bh-glx-b09u02
     slice: 2
   11:
-    host: bh-glx-c08u02
+    host: bh-glx-b09u02
     slice: 3
   12:
     host: bh-glx-c08u08

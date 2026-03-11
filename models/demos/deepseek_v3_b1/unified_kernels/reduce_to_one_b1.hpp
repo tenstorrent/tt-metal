@@ -200,7 +200,7 @@ struct ReduceToOneB1 {
             }
 
 #if defined(COMPILE_FOR_NCRISC)
-            DPRINT << "R1" << ENDL();
+            DPRINT << "R1S" << ENDL();
             // ================================================================
             // NCRISC - Reader: receives data from fabric via semaphore waits
             // ================================================================
@@ -256,7 +256,7 @@ struct ReduceToOneB1 {
             if constexpr (CTArgs::is_fabric_core) {
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
-                        DPRINT << "R1 Persistent fabric signal enable" << ENDL();
+                        DPRINT << "Persistent fabric signal enable" << ENDL();
                         // Persistent fabric core: wait for aggregator signal, then send
                         // cross-device atomic inc to bcast sender on entry device.
                         // Persistent args start after the worker sem addrs.
@@ -271,7 +271,7 @@ struct ReduceToOneB1 {
                         volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
                         noc_semaphore_wait_min(wait_sem_ptr, 1);
-                        DPRINT << "R1 Wait sem wait done" << ENDL();
+                        DPRINT << "Wait sem wait done" << ENDL();
                         unified_kernels::semaphore_dec(wait_sem_ptr);
 
                         constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
@@ -287,11 +287,11 @@ struct ReduceToOneB1 {
                             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                                 p_idx);
                         sender.open();
-                        DPRINT << "R1 Sender opened" << ENDL();
+                        DPRINT << "Sender opened" << ENDL();
                         sender.wait_for_empty_write_slot();
                         sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
                         sender.close();
-                        DPRINT << "R1 Sender closed" << ENDL();
+                        DPRINT << "Sender closed" << ENDL();
                         noc_async_full_barrier();
                     }
                     return;
@@ -343,7 +343,7 @@ struct ReduceToOneB1 {
             // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                DPRINT << "R1 Scratch cb waited" << ENDL();
+                DPRINT << "Scratch cb waited" << ENDL();
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
                 uint64_t dst_noc_addr_0 =
@@ -354,21 +354,21 @@ struct ReduceToOneB1 {
                 if constexpr (CTArgs::enable_downstream_socket) {
                     // Per-shard useful bytes (strips padding from padded payload_size_bytes)
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
-                    
+
                     if (args.socket_config_addr != 0) {
-                        DPRINT << "R1 Socket config addr: " << args.socket_config_addr << ENDL();
+                        DPRINT << "Socket config addr: " << args.socket_config_addr << ENDL();
                         // Aggregator: wait for all other workers, then stream to downstream socket.
                         // The aggregator core IS the output core, so all shards are already in local L1.
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
                         noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        DPRINT << "R1 Agg sem wait done" << ENDL();
+                        DPRINT << "Agg sem wait done" << ENDL();
                         noc_semaphore_set(agg_sem_ptr, 0);
 
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                         set_sender_socket_page_size(sender_socket, CTArgs::agg_output_size_bytes);
                         socket_reserve_pages(sender_socket, 1);
-                        DPRINT << "R1 Reserved pages" << ENDL();
+                        DPRINT << "Reserved pages" << ENDL();
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
                         uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
@@ -381,20 +381,20 @@ struct ReduceToOneB1 {
                             noc_async_write(shard_l1_addr, fifo_dst, useful_per_shard);
                             noc_async_writes_flushed();
                         }
-                        DPRINT << "R1 noc writes flushed" << ENDL();
+                        DPRINT << "noc writes flushed" << ENDL();
 
                         socket_push_pages(sender_socket, 1);
-                        DPRINT << "R1 Pushed pages" << ENDL();
+                        DPRINT << "Pushed pages" << ENDL();
                         socket_notify_receiver(sender_socket);
-                        DPRINT << "R1 Notified receiver" << ENDL();
+                        DPRINT << "Notified receiver" << ENDL();
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
-                        DPRINT << "R1 Socket barrier" << ENDL();
+                        DPRINT << "Socket barrier" << ENDL();
                         noc_async_write_barrier();
                         update_socket_config(sender_socket);
-                        DPRINT << "R1 Updated socket config" << ENDL();
+                        DPRINT << "Updated socket config" << ENDL();
                         if (args.persistent_enable != 0) {
-                            DPRINT << "R1 Persistent enable" << ENDL();
+                            DPRINT << "Persistent enable" << ENDL();
                             uint64_t fc_sem = get_noc_addr(
                                 args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
                             noc_semaphore_inc(fc_sem, 1);
@@ -409,7 +409,7 @@ struct ReduceToOneB1 {
                 }
 
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                DPRINT << "R1 Popped scratch cb" << ENDL();
+                DPRINT << "Popped scratch cb" << ENDL();
                 return;
             }
 

@@ -4930,8 +4930,6 @@ class MoeOp:
                 moe._setup_per_device_args(
                     chip_id,
                     num_iterations,
-                    persistent_mode,
-                    # persistent_next_iter_sem_addr,
                     reduce_root_coord,
                     coord,
                     row,
