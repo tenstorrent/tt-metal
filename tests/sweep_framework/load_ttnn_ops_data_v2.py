@@ -1312,7 +1312,11 @@ if __name__ == "__main__":
         elif cmd == "reconstruct-lead":
             from tests.sweep_framework.framework.constants import LEAD_MODELS
 
-            output = sys.argv[2] if len(sys.argv) > 2 else "model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json"
+            output = (
+                sys.argv[2]
+                if len(sys.argv) > 2
+                else "model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json"
+            )
             schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2"
             print(f"Using lead model patterns: {LEAD_MODELS}")
             reconstruct_from_db(output, schema, model_filter=LEAD_MODELS)
@@ -1343,11 +1347,19 @@ if __name__ == "__main__":
             print(f"Unknown command: {cmd}")
             print("Usage:")
             print("  python load_ttnn_ops_data_v2.py load                                        # Load JSON to DB")
-            print("  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] [models]      # Reconstruct JSON from DB")
-            print("  python load_ttnn_ops_data_v2.py reconstruct-lead [output] [schema]           # Reconstruct lead models only")
-            print("  python load_ttnn_ops_data_v2.py reconstruct-op <name>                       # Reconstruct single op")
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] [models]      # Reconstruct JSON from DB"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct-lead [output] [schema]           # Reconstruct lead models only"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct-op <name>                       # Reconstruct single op"
+            )
             print("  python load_ttnn_ops_data_v2.py verify [original] [reconstructed]            # Compare files")
             print("  python load_ttnn_ops_data_v2.py duplicates [json] [op]                      # Detect duplicates")
-            print("  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2>                     # Find config line numbers")
+            print(
+                "  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2>                     # Find config line numbers"
+            )
     else:
         load_data()
