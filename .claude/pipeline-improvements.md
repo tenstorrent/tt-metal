@@ -103,6 +103,52 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+### 12. TDD tolerance not scaled for cascading operations
+**Status**: Proposed — HIGH PRIORITY
+
+**Discovered in**: layer_norm_rm run1 (2026-03-11), affine stage
+
+The TDD framework applies the same tolerance (rtol/atol) to all stages regardless of how many bf16 operations they cascade. A 3-operation chain (normalize + gamma_mul + beta_add) naturally accumulates more bf16 rounding error than a single operation. In the layer_norm_rm run, this caused 5 hard attempts and ~44 minutes of futile precision engineering before tolerance was relaxed from 0.02 to 0.05.
+
+**Proposal**: Two complementary approaches:
+1. **Architect-side**: Architect specifies per-stage tolerance in the TDD stage plan, scaling by operation chain depth: `tolerance = base_tol * (1 + 0.5 * additional_ops_beyond_first_stage)`.
+2. **Framework-side**: Add "precision floor detection" to the TDD orchestrator: if max_diff is stable (within 10%) across 2+ consecutive hard attempts and is within 5x of tolerance, auto-suggest tolerance relaxation rather than consuming more hard attempts.
+
+---
+
+### 13. fp32_dest_acc_en incompatible with tilize/untilize on Wormhole B0
+**Status**: Proposed — HIGH PRIORITY
+
+**Discovered in**: layer_norm_rm run1 (2026-03-11), affine stage
+
+Enabling `fp32_dest_acc_en=True` in the ComputeConfigDescriptor causes the tilize and untilize hardware helpers to produce corrupted output (repeated rows, zeros). This is a known WH B0 LLK limitation (related to MOVD2B/MOVB2D transpose bugs). The kernel writer spent 2 hard attempts (~12 minutes) discovering this at runtime.
+
+**Proposal**: Add as a hard constraint in the architect's instructions and a shared "Known Hardware Limitations" reference: "Any operation using in-kernel tilize or untilize MUST set fp32_dest_acc_en=False. fp32 destination accumulation is incompatible with the tilize/untilize pack path on Wormhole B0."
+
+---
+
+### 14. Architect deliberation text leaks into op_design.md
+**Status**: Proposed
+
+**Discovered in**: layer_norm_rm run1 (2026-03-11)
+
+The architect's op_design.md contains inline deliberation text showing the evolution of design decisions (e.g., lines 216-226: "Actually, this creates a problem...", "Revised gamma/beta approach...", "Simplest correct approach..."). While the final approach is correct, the deliberation trail can confuse downstream agents who may try to implement an intermediate approach.
+
+**Proposal**: Add instruction to architect: "Before finalizing op_design.md, remove all deliberation text. Present only the final validated approach. Deliberation history belongs in breadcrumbs, not the design artifact."
+
+---
+
+### 15. TensorAccessorArgs safe-offset pattern for conditional parameters
+**Status**: Proposed
+
+**Discovered in**: layer_norm_rm run1 (2026-03-11), normalize stage
+
+`TensorAccessorArgs<N>` reads `get_compile_time_arg_val(N)` at class instantiation time via a static constexpr member. Even inside `if constexpr(false)`, the template is instantiated and triggers "Index out of range" static assertions if the arg doesn't exist. This caused 3 free retries in the kernel writer.
+
+**Proposal**: Document the safe-offset pattern in the architect's kernel args design section: "For conditional TensorAccessor parameters, compute the offset using a ternary OUTSIDE any if constexpr block: `constexpr uint32_t offset = has_param ? TensorAccessorArgs<prev>::next_compile_time_args_offset() : prev_offset;`."
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +161,7 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | TDD tolerance not scaled for cascading ops | HIGH | SMALL | HIGH |
+| 13 | fp32_dest_acc / tilize-untilize incompatibility | HIGH | SMALL | HIGH |
+| 14 | Architect deliberation text in design doc | MEDIUM | SMALL | MEDIUM |
+| 15 | TensorAccessorArgs safe-offset pattern | MEDIUM | SMALL | MEDIUM |
