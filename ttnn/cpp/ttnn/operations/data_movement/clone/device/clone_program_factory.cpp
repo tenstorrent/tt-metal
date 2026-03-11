@@ -66,6 +66,12 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
 
+        // For sharded row-major, unit size must be based on shard width, not full tensor width
+        if (!tilized) {
+            input_unit_size = shard_width * input.element_size();
+            output_unit_size = shard_width * output.element_size();
+        }
+
         auto grid_size = all_cores.bounding_box();
         num_cores_x = grid_size.end_coord.x + 1;
         num_cores_y = grid_size.end_coord.y + 1;
