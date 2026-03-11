@@ -28,6 +28,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      model:
+        description: 'Filter tests by model-name (default: all)'
+        required: false
+        type: string
+        default: "all"
 
 jobs:
   generate-matrix:
@@ -113,6 +118,15 @@ jobs:
             cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
             timeout: 15
             test-type: slow
+          - name: deepseek prefill dispatch/combine tests
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
+            timeout: 30
+            test-type: loudbox-or-qb
+            owner_id: U08E1JCMAJF
+            model-name: deepseek_prefill
           YAML_EOF
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
@@ -122,11 +136,24 @@ jobs:
           runner_label="${{ inputs.runner-label }}"
           viommu_json="false"
           if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
+          loudbox_json="false"
+          if [[ "$runner_label" == *LoudBox* ]]; then loudbox_json="true"; fi
+          quietbox_json="false"
+          if [[ "$runner_label" == *LLMBox* ]]; then quietbox_json="true"; fi
 
           if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu)]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
+          fi
+
+          # Filter by model if specified
+          model_filter="${{ inputs.model }}"
+          if [ "$model_filter" != "all" ]; then
+            filtered_tests=$(echo "$filtered_tests" | jq -c --arg model "$model_filter" \
+              '[.[] | select(.["model-name"] == $model or .["model-name"] == null)]')
           fi
 
           echo "Filtered tests: $filtered_tests"
@@ -233,7 +260,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U0883RN6CRE # William Ly
+          owner: ${{ matrix.test-group.owner_id || 'U0883RN6CRE' }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
