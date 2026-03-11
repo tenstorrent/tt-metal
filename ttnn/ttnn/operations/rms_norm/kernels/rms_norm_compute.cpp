@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RMS Norm - Compute Kernel
-// Stage 2: tilize(RM), square, reduce_row, add_eps+rsqrt, copy to output, untilize(RM)
+// Stage 3: tilize, square, reduce, add_eps+rsqrt, normalize_mul(COL bcast), untilize
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -50,9 +50,9 @@ void kernel_main() {
         }
 
         // Phase 2: Square c_1 -> c_3
-        // WaitAndPopPerTile on c_1 since we don't need to reuse it in Stage 2
+        // WaitUpfrontNoPop: persist c_1 for Phase 5 (normalize multiply)
         compute_kernel_lib::square<
-            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop,
             compute_kernel_lib::BinaryOutputPolicy::PerTile,
             compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
             cb_tilized, cb_sq, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
@@ -77,15 +77,24 @@ void kernel_main() {
                 rsqrt_tile(dst_idx);
             });
 
-        // Copy c_6 -> c_16 (1 tile, the reduced output)
-        compute_kernel_lib::copy_tiles<
-            compute_kernel_lib::CopyInputPolicy::WaitAndPop,
-            compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(cb_rms_inv, cb_out, 1);
+        // Phase 5: Normalize multiply x * rms_inv (COL broadcast)
+        // c_1 already waited from Phase 2 (WaitUpfrontNoPop), use NoWaitNoPop
+        // c_6 has 1 tile (rms_inv), COL broadcast replicates across Wt columns
+        compute_kernel_lib::mul<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryOutputPolicy::PerTile,
+            compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+            cb_tilized, cb_rms_inv, cb_out, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
-        // Phase 7: Untilize (RM path only) c_16 -> c_17 (1 tile output)
+        // Manual pop c_1 after Phase 5 (was persisted since Phase 2)
+        cb_pop_front(cb_tilized, Wt);
+
+        // Phase 7: Untilize (RM path only) c_16 -> c_17 (full Wt width)
         if constexpr (input_is_rm) {
             compute_kernel_lib::untilize<
-                1,
+                Wt,
                 cb_out,
                 cb_untilized,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
