@@ -363,15 +363,16 @@ class BlazeMoeGate(AbstractModule):
             batch_size_per_device = end_index - start_index
             # get the ceil of batch size per core
             batch_size_per_core = (batch_size_per_device + num_device_cores - 1) // num_device_cores
-            num_cores = batch_size_per_device // batch_size_per_core
+            padding_size = (batch_size_per_core - (batch_size_per_device % batch_size_per_core)) % batch_size_per_core
+            num_cores = (batch_size_per_device + padding_size) // batch_size_per_core
             core_grid = ttnn.num_cores_to_corerangeset(
                 num_cores,
                 ttnn.CoreCoord(grid.x, grid.y),
                 row_wise=True,
             )
 
-            input_output_shard_shape = (32 * batch_size_per_device, 32)
-            reshaped_input_shape = (batch_size_per_device, 16, 16)
+            input_output_shard_shape = (32 * batch_size_per_core, 32)
+            reshaped_input_shape = (batch_size_per_device + padding_size, 16, 16)
 
             # currently we cannot convert the tile size of logits and input indices to 16*16,
             # but the memory layout is the same since the length is 256
@@ -385,6 +386,8 @@ class BlazeMoeGate(AbstractModule):
             )
 
             cur_logits = logits[:, :, start_index:end_index, :]
+            # pad the logits to the nearest multiple of batch_size_per_core
+            cur_logits = ttnn.pad(cur_logits, [(0, 0), (0, 0), (0, padding_size), (0, 0)], 0)
             cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)
 
             # change the memory config of the logits
@@ -392,7 +395,9 @@ class BlazeMoeGate(AbstractModule):
 
             # create the bias
             scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-            scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
+            scores_correction_bias = ttnn.repeat(
+                scores_correction_bias, ttnn.Shape((batch_size_per_device + padding_size, 1))
+            )
             scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
             scores_correction_bias = ttnn.to_memory_config(
                 scores_correction_bias, memory_config=input_output_mem_config
@@ -400,14 +405,72 @@ class BlazeMoeGate(AbstractModule):
 
             # create the output tensor, input indices and output indices
             ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-            ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device, 1, 1))
+            ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device + padding_size, 1, 1))
             ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
             ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-            ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_device, 1, 1))
+            ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_device + padding_size, 1, 1))
             ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
             ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-            ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device, 1, 1))
+            ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device + padding_size, 1, 1))
             ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
+
+            ###
+            input_shard_shape = (32, 32)
+            logits_shard_shape = (32, 32)
+            output_shard_shape = (32, 32)
+            input_tile = ttnn.Tile(input_shard_shape)
+            logits_tile = ttnn.Tile(logits_shard_shape)
+            output_tile = ttnn.Tile(output_shard_shape)
+
+            # create the bias
+            scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
+            scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((32, 1)))
+            scores_correction_bias = ttnn.reshape(scores_correction_bias, (32, 16, 16))
+            scores_correction_bias = ttnn.to_memory_config(
+                scores_correction_bias, memory_config=input_output_mem_config
+            )
+            import pdb
+
+            pdb.set_trace()
+
+            # create the output buffer
+            torch_output = torch.zeros((128, 1, 16), dtype=torch.bfloat16)
+            ttnn_output_tensor = ttnn.from_torch(
+                torch_output,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
+                memory_config=input_output_mem_config,
+                tile=output_tile,
+            )
+
+            torch_input_indices = torch.arange(16 * 16, dtype=torch.int32)
+            torch_input_indices = torch_input_indices.unsqueeze(0).expand(128, -1)
+            torch_input_indices = torch_input_indices.reshape((128, 16, 16))
+            torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
+            ttnn_input_indices = ttnn.from_torch(
+                torch_input_indices,
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
+                memory_config=input_output_mem_config,
+                tile=input_tile,
+            )
+
+            torch_output_indices = torch.zeros((128, 1, 16), dtype=torch.uint16)
+            ttnn_output_indices = ttnn.from_torch(
+                torch_output_indices,
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
+                memory_config=input_output_mem_config,
+                tile=output_tile,
+            )
+
+            ###
 
             eps = 1e-20
             scaling_factor = cfg["routed_scaling_factor"]
@@ -432,8 +495,8 @@ class BlazeMoeGate(AbstractModule):
             )
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
-            topk_experts_scores_list.append(topk_experts_scores)
-            topk_experts_indices_list.append(topk_experts_indices)
+            topk_experts_scores_list.append(topk_experts_scores[:batch_size_per_device, :, :])
+            topk_experts_indices_list.append(topk_experts_indices[:batch_size_per_device, :, :])
 
             if end_index >= total_batch_size_per_device:
                 break
@@ -453,7 +516,7 @@ class BlazeMoeGate(AbstractModule):
         topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
         topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=cfg["output_memory_config"])
         topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=cfg["output_memory_config"])
-        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        # topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
         topk_experts_indices = topk_experts_indices[:, :, :, :8]
 
         return topk_experts_weights, topk_experts_indices
