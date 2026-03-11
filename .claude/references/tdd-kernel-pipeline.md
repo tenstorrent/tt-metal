@@ -32,7 +32,7 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init {op_path}/op_desig
 Read `{op_path}/op_design.md` to determine TDD stages. Stages follow this ordering heuristic:
 - Stage 1: Data pipeline (reader + writer + passthrough compute)
 - Stage 2: Bookend phases together (e.g., tilize + untilize as identity roundtrip)
-- Stage 3+: Compute phases in pipeline order
+- Stage 3+: Compute phases in pipeline order. Phases with reduced-shape outputs (e.g., reduce_row → column vector) can be their own stage using `output_shape_expr` + `compare_slice`, or grouped with the next full-shape stage.
 
 ### Step 3: Register all stages
 For each stage, run `add-stage`. Register ALL stages before implementing any.
@@ -118,6 +118,12 @@ The body becomes the return statement of `pytorch_reference(input_tensor)`:
 
 # For variance:
 "mean = input_tensor.mean(dim=-1, keepdim=True)\n    return ((input_tensor - mean) ** 2).mean(dim=-1, keepdim=True)"
+
+# For reduced-shape intermediate (e.g., rsqrt after reduce_row):
+# reference_body returns the natural reduced shape — compare_slice handles alignment
+"x = input_tensor.float()\n    return (x.pow(2).mean(-1, keepdim=True) + 1e-6).rsqrt()"
+# with output_shape_expr: "list(shape[:-1]) + [32]"
+# with compare_slice: "[:,:,:,0:1]"
 ```
 
 ### How to set tolerances
@@ -131,7 +137,8 @@ The body becomes the return statement of `pytorch_reference(input_tensor)`:
 - `extra_args`: Appended to op call (e.g., `", gamma, beta"`)
 - `extra_setup`: Python code for extra tensor setup before the op call
 - `extra_ttnn_setup`: Python code for extra TTNN setup after input creation
-- `output_shape_expr`: Python expression for expected output shape if different from input (e.g., `"list(shape[:-1]) + [1]"`)
+- `output_shape_expr`: Python expression for expected output shape if different from input (e.g., `"list(shape[:-1]) + [32]"` for a reduce_row result padded to tile alignment)
+- `compare_slice`: Python slice expression applied to both golden and TTNN output before numerical comparison (e.g., `"[:,:,:,0:1]"` for reduce_row results where only column 0 is valid). Use together with `output_shape_expr` for reduced-shape intermediate stages.
 - `kernel_files`: List of kernel files this stage modifies (informational, passed to kernel-writer)
 
 ## FAILURE HANDLING

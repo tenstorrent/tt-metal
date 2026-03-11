@@ -168,13 +168,15 @@ Apply three complementary heuristics:
 
 **Heuristic 2 (H2): Semantic Goal Progression** — how to break a kernel into stages.
 - Identify testable intermediate results (functional milestones)
-- Each stage's output must be independently verifiable against PyTorch from the original input
+- Each stage's output must be verifiable against a PyTorch reference from the original input
+- **Reduced-shape intermediates are allowed.** If a phase naturally produces a different shape than the final output (e.g., reduce_row → column vector, reduce_scalar → scalar), use `output_shape_expr` to set the tile-aligned output shape and `compare_slice` to extract the valid region from both tensors before comparison. **Do NOT force broadcasting** to match the input shape — this creates artificial kernel complexity that wastes attempt budget.
 
 **Heuristic 3 (H3): Phase Count Cap** — when to split a stage.
 - If a stage would add **more than 3 new compute phases**, split it into sub-stages at the nearest testable boundary
-- A "testable boundary" is any intermediate result expressible as a PyTorch expression from the original input (e.g., variance alone: `x.var(dim=-1, keepdim=True)`)
+- A "testable boundary" is any intermediate result expressible as a PyTorch expression from the original input. The intermediate may have a **reduced shape** — use `output_shape_expr` + `compare_slice` to handle this.
 - Fewer phases per stage means faster debugging when a stage fails — the kernel writer has fewer places to look
 - Example: "variance_normalize" (5 phases) → "variance" (square + reduce + add_eps → verifiable as `x.var(…) + eps`) + "normalize" (rsqrt + multiply → verifiable as full `layer_norm`)
+- Example (reduced shape): "square_reduce" stage after reduce_row produces `[N,C,H,1]` — set `output_shape_expr: "list(shape[:-1]) + [32]"` (tile-aligned) and `compare_slice: "[:,:,:,0:1]"` to verify only column 0
 
 **Common pattern**: Stage 1 establishes data pipeline (reader+writer at full, compute at minimum viable / identity). Subsequent stages incrementally build compute.
 
@@ -206,7 +208,8 @@ JSON payload schema:
 | `extra_args` | string | No | Appended to op call |
 | `extra_setup` | string | No | Python code for extra tensor setup |
 | `extra_ttnn_setup` | string | No | Python code for extra TTNN setup |
-| `output_shape_expr` | string | No | Output shape if different from input |
+| `output_shape_expr` | string | No | Output shape if different from input (tile-aligned) |
+| `compare_slice` | string | No | Python slice applied to both golden and TTNN output before comparison (e.g., `"[:,:,:,0:1]"` for reduce_row where only column 0 is valid) |
 | `dtype_parametrize` | string | No | List of dtype names for multi-dtype testing |
 
 #### Test Data Rule: Always Use Randomized Tensors
@@ -350,8 +353,8 @@ output[i,j,k,...] = f(input[...], params...)
 
 ### TDD Stage Plan
 
-| Stage | Name | What's Added | CB Bypass Path | Expected Output |
-|-------|------|-------------|----------------|-----------------|
+| Stage | Name | What's Added | Expected Output | Output Shape | Compare Slice |
+|-------|------|-------------|-----------------|--------------|---------------|
 
 ### Stage 1: {stage_name}
 - **Scope**: {kernel files modified, phases implemented}

@@ -147,6 +147,7 @@ def _render_template(state: dict, stage: dict, op_path: Path) -> str:
             extra_ttnn_setup=stage.get("extra_ttnn_setup", ""),
             extra_args=stage.get("extra_args", ""),
             output_shape_expr=stage.get("output_shape_expr", ""),
+            compare_slice=stage.get("compare_slice", ""),
             dtype_parametrize=stage.get("dtype_parametrize", ""),
             tolerance_rtol=stage["tolerance"]["rtol"],
             tolerance_atol=stage["tolerance"]["atol"],
@@ -249,6 +250,7 @@ def test_{stage["name"]}(device, shape{layout_func_param}):
 
     # Numerical comparison
     torch_output = ttnn.to_torch(ttnn_output)
+{f"    torch_output = torch_output{stage.get('compare_slice', '')}" + chr(10) + f"    expected = expected{stage.get('compare_slice', '')}" if stage.get("compare_slice") else ""}
     assert torch.allclose(
         torch_output.float(),
         expected.float(),
@@ -398,6 +400,7 @@ def cmd_add_stage(args):
         "extra_setup": stage_def.get("extra_setup", ""),
         "extra_ttnn_setup": stage_def.get("extra_ttnn_setup", ""),
         "output_shape_expr": stage_def.get("output_shape_expr", ""),
+        "compare_slice": stage_def.get("compare_slice", ""),
         "dtype_parametrize": stage_def.get("dtype_parametrize", ""),
         "status": STATUS_PENDING,
         "commit": None,

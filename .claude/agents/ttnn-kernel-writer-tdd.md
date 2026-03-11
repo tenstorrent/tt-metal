@@ -151,6 +151,7 @@ Read the status output. The current stage is marked with `>`. Extract:
 - Do NOT implement future stage phases, even if you can see them in the design
 - Do NOT "prepare" for future stages by adding code that isn't tested now
 - For intermediate stages: route data from the last active phase directly to output, bypassing unimplemented phases
+- **Reduced-shape intermediates**: If the stage's `.tdd_state.json` entry has `output_shape_expr` and/or `compare_slice`, the stage produces an output with a different shape than the final operation output. Modify the entry point's output tensor allocation to match the stage's expected output shape. The test's `compare_slice` handles extracting the valid region from both tensors. **Do NOT broadcast** reduced-shape intermediates to full input shape — this wastes attempts on artificial kernel complexity. Revert the output shape change in the next stage.
 
 **What you CAN modify (integration authority):**
 - Kernel files (reader, compute, writer) — your primary job
@@ -380,11 +381,17 @@ Read the specific headers referenced in your op_design.md. The code has Doxygen 
 
 ---
 
-## DPRINT — KERNEL DEBUG PRINTING
+## DPRINT — KERNEL DEBUG PRINTING (USE PROACTIVELY)
 
 DPRINT lets you print values from inside kernels running on the device. It can print scalars, strings, and — most usefully — **slices of CB data via `TSLICE`**. Full documentation: `docs/source/tt-metalium/tools/kernel_print.rst`.
 
+**DPRINT is your primary debugging tool.** When a numerical mismatch occurs, do NOT guess — add DPRINT to inspect intermediate CB contents and identify exactly where values diverge. This is especially important for:
+- **Reduced-shape intermediate stages** — verify the reduce output CB has the correct values in the valid region before they flow to the output
+- **Multi-phase compute pipelines** — insert DPRINT between phases to isolate which phase produces wrong values
+- **Broadcast operations** — verify the broadcast input tile has data in the expected valid region (Col0, Row0, etc.)
+
 **When to use it:**
+- **FIRST response to any numerical mismatch** — before changing kernel code, add DPRINT to verify what the kernel actually computed vs what you expected
 - Debugging numerical mismatches — print the actual CB contents at a specific phase to see where values diverge from expectations
 - Verifying intermediate results that don't pass through the output tensor (e.g., a reduction result in a 1-tile CB)
 - Understanding data layout issues — print a tile slice to see how data is arranged after tilize/untilize

@@ -96,6 +96,10 @@ def test_{{ stage_name }}(device, shape{{ ", layout_name" if layouts | length > 
 
     # Numerical comparison
     torch_output = ttnn.to_torch(ttnn_output)
+{%- if compare_slice %}
+    torch_output = torch_output{{ compare_slice }}
+    expected = expected{{ compare_slice }}
+{%- endif %}
     assert torch.allclose(
         torch_output.float(),
         expected.float(),
