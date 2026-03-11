@@ -421,43 +421,43 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
         # simplest
-        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (2, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (3, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.TILE_LAYOUT),
+        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (2, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
+        (3, [1, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
         # 2 tensors - basic ND sharding concat
-        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [3, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on 1 dim         # +
-        (2, [7, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on 2 dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (2, [3, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (2, [7, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),
+        (2, [3, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),
+        (2, [7, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),
+        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (2, [3, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),
+        (2, [7, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
         # 3 tensors - ND sharding concat
-        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (3, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (3, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (3, [5, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
-        (3, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),
+        (3, [4, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),
+        (3, [2, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),
+        (3, [7, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (3, [9, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),
+        (3, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
         # 4 tensors - ND sharding concat
-        (4, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 4 tensors on batch  # -
-        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
-        (4, [1, 64, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 4 tensors on width
-        (4, [1, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
-        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
-        (4, [1, 64, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
+        (4, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),
+        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),
+        (4, [3, 64, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),
+        (4, [1, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (4, [2, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),
+        (4, [4, 64, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
         # 5 tensors - ND sharding concat
-        (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 5 tensors on batch  # -
-        (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 5 tensors on height
-        (5, [3, 64, 128, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 5 tensors on width
-        (5, [2, 32, 64, 96], [1, 32, 32], 3, ttnn.TILE_LAYOUT),  # concat 5 tensors on ...
-        (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on batch  # -
-        (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on height
-        (5, [3, 64, 128, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on width
-        (5, [2, 32, 64, 96], [1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT),  # concat 5 tensors on ...
+        (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),
+        (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),
+        (5, [3, 64, 128, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),
+        (5, [2, 32, 64, 96], [1, 32, 32], 3, ttnn.TILE_LAYOUT),
+        (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),
+        (5, [3, 64, 128, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
+        (5, [2, 32, 64, 96], [1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, concat_dim, layout, dtype):
     """
     Test concat operation with ND sharded tensors.
@@ -491,7 +491,6 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
         ttnn.from_torch(t, dtype=dtype, device=device, layout=layout, memory_config=input_memory_config)
         for t in torch_tensors
     ]
-    print("\ntensors have been created\n")
 
     # Verify tensors have ND sharding - sanity check
     for tt_tensor in ttnn_tensors:
@@ -507,42 +506,10 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
             actual_shape == expected_shape
         ), f"Shard shape mismatch: expected {list(expected_shape)}, got {list(actual_shape)}"
 
-    # Compute output shard shape (adjust for concat dimension): same grid and layout as inputs,
-    # output shard shape = sum of input shard shapes along concat_dim (mirrors device op logic).
-    # TODO:Z ? should we calculate output_shard_shape in the python - or should force it in C++ code?
-    # input_mem_config = ttnn_tensors[0].memory_config()
-    # input_nd_spec = input_mem_config.nd_shard_spec
-    # output_shard_shape = list(input_nd_spec.shard_shape)
-    # output_shard_shape[concat_dim] = 0
-    # for tt_t in ttnn_tensors:
-    #     output_shard_shape[concat_dim] += tt_t.memory_config().nd_shard_spec.shard_shape[concat_dim]
-    # output_nd_shard_spec = ttnn.NdShardSpec(
-    #     output_shard_shape,
-    #     input_nd_spec.grid,
-    #     orientation=input_nd_spec.orientation,
-    #     shard_distribution_strategy=input_nd_spec.shard_distribution_strategy,
-    # )
-    # output_memory_config = ttnn.MemoryConfig(input_mem_config.buffer_type, output_nd_shard_spec)
-
-    print("\nright before concat\n")
-    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim)  # , memory_config=output_memory_config)
+    # memory_config for ttnn_output will be calculated according first input tensor memory config)
+    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim)
 
     # Convert back to torch and compare
     actual_output = ttnn.to_torch(ttnn_output)
-    # Set print options to show all tensor data
-    # # torch.set_printoptions(profile="full")
-    # # ttnn.set_printoptions(profile="full")
 
-    # # # # Now printing the tensor will show all elements
-    # # print("NormalFile")
-    # # print(torch_output)
-    # # print("FirstFile")
-    # # print(ttnn_tensors[0])
-    # # print("MyFile")
-    # # print(actual_output)
-    # # print("-----")
-    # ttnn.set_printoptions(profile="default")
-    # torch.set_printoptions(profile="default")
-
-    print("\n before assert\n")
     assert_with_pcc(torch_output, actual_output, 0.999)
