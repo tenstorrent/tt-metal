@@ -4,7 +4,7 @@
 # Uses flock to serialize device access across multiple agents/terminals.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
 # dispatch layer (does not penalize setup/compilation time).
-# Automatically resets the device after hangs, ensuring the next runner
+# Automatically resets the device after any failure, ensuring the next runner
 # always gets a clean device.
 #
 # Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
@@ -68,13 +68,17 @@ shift
 # --- Acquire flock ---
 exec 9>"$LOCK_FILE"
 
+LOCK_TIMEOUT=300
 echo "TT_TEST: Waiting for device lock..." >&2
-flock 9
+if ! flock -w "$LOCK_TIMEOUT" 9; then
+    echo "TT_TEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
+    exit 3
+fi
 echo "TT_TEST: Device lock acquired" >&2
 
 # --- Check if device needs reset from previous hang ---
 if [[ -f "$DIRTY_FLAG" ]]; then
-    echo "TT_TEST: Device marked dirty from previous hang, resetting..." >&2
+    echo "TT_TEST: Device marked dirty from previous run, resetting..." >&2
     if ! tt-smi -r; then
         echo "TT_TEST_ERROR: Device reset (tt-smi -r) failed" >&2
         exit 3
@@ -164,6 +168,14 @@ if [[ $EXIT_CODE -eq 0 ]]; then
     exit 0
 fi
 
+# Pytest exit code 5 = no tests collected (typo in path, bad marker filter, etc.)
+if [[ $EXIT_CODE -eq 5 ]]; then
+    rm -f "$DIRTY_FLAG"
+    rm -f "$TRIAGE_LOG"
+    echo "TT_TEST_ERROR: No tests collected" >&2
+    exit 3
+fi
+
 # Determine if this was a hang:
 #   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
 IS_HANG=false
@@ -171,22 +183,24 @@ if [[ -s "$TRIAGE_LOG" ]]; then
     IS_HANG=true
 fi
 
-# Kill any remaining child processes (pytest may have left orphans)
-pkill -9 -P $$ 2>/dev/null || true
+# Kill any remaining child processes and their descendants.
+for child_pid in $(pgrep -P $$ 2>/dev/null); do
+    pkill -9 -P "$child_pid" 2>/dev/null || true
+    kill -9 "$child_pid" 2>/dev/null || true
+done
 
-# Only reset device when the failure might have left it dirty.
-# Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
-# assertion errors) and collection errors don't touch the device.
+# Always reset device on failure. Even non-hang failures can leave device state
+# dirty in ways that affect subsequent tests.
+echo "TT_TEST: Resetting device..." >&2
+if tt-smi -r; then
+    sleep 2
+    rm -f "$DIRTY_FLAG"
+    echo "TT_TEST: Device reset complete" >&2
+else
+    echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
+fi
+
 if [[ "$IS_HANG" == true ]]; then
-    echo "TT_TEST: Resetting device..." >&2
-    if tt-smi -r; then
-        sleep 2
-        rm -f "$DIRTY_FLAG"
-        echo "TT_TEST: Device reset complete" >&2
-    else
-        echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
-    fi
-
     echo "TT_TEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
     echo "" >&2
 
@@ -208,7 +222,6 @@ if [[ "$IS_HANG" == true ]]; then
     exit 2
 fi
 
-rm -f "$DIRTY_FLAG"
 rm -f "$TRIAGE_LOG"
 echo "TT_TEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
 exit 1
