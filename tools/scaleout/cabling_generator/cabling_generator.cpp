@@ -1142,8 +1142,8 @@ void CablingGenerator::merge(
                 for (auto& conn : connections) {
                     auto& [host_a, tray_a, port_a] = conn.first;
                     auto& [host_b, tray_b, port_b] = conn.second;
-                    if (temp_remap.contains(host_a)) host_a = temp_remap[host_a];
-                    if (temp_remap.contains(host_b)) host_b = temp_remap[host_b];
+                    if (temp_remap.contains(host_a)) { host_a = temp_remap[host_a]; }
+                    if (temp_remap.contains(host_b)) { host_b = temp_remap[host_b]; }
                 }
             }
             // Rebuild derived lookups after remapping.
@@ -1279,13 +1279,20 @@ static void resolved_graph_to_protobuf(
     const ResolvedGraphInstance& resolved,
     cabling_generator::proto::GraphTemplate* template_proto,
     const std::unordered_map<std::string, Node>& node_templates) {
-    // Add children (nodes)
-    for (const auto& [name, node] : resolved.nodes) {
+    // Add children in template order (children_order) to preserve DFS host_id assignment on reload.
+    for (const auto& [name, is_node] : resolved.children_order) {
+        if (!is_node) {
+            continue;  // subgraphs not serialized in flat topology
+        }
+        auto it = resolved.nodes.find(name);
+        if (it == resolved.nodes.end()) {
+            continue;
+        }
+        const auto& node = it->second;
         auto* child = template_proto->add_children();
         child->set_name(name);
         auto* node_ref = child->mutable_node_ref();
 
-        // Find node descriptor name from node_templates by matching the node structure
         auto template_key = find_template_key_for_node(node, node_templates);
         if (!template_key) {
             throw std::runtime_error(fmt::format(
@@ -1296,8 +1303,6 @@ static void resolved_graph_to_protobuf(
         }
         node_ref->set_node_descriptor(*template_key);
     }
-
-    // Add children (subgraphs) - not used in flat extracted_topology
 
     // Add internal_connections
     for (const auto& [port_type, connections] : resolved.internal_connections) {
@@ -1911,8 +1916,8 @@ void CablingGenerator::reassign_host_ids_dfs() {
             for (auto& conn : connections) {
                 auto& [host_a, tray_a, port_a] = conn.first;
                 auto& [host_b, tray_b, port_b] = conn.second;
-                if (id_remap.contains(host_a)) host_a = id_remap[host_a];
-                if (id_remap.contains(host_b)) host_b = id_remap[host_b];
+                if (id_remap.contains(host_a)) { host_a = id_remap[host_a]; }
+                if (id_remap.contains(host_b)) { host_b = id_remap[host_b]; }
             }
         }
 
