@@ -2,11 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_512x512 import (
     ModelOptimisations512x512,
 )
 from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024 import (
     ModelOptimisations1024x1024,
+)
+from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024BH import (
+    ModelOptimisations1024x1024BH,
 )
 
 
@@ -19,7 +23,7 @@ def load_model_optimisations(
     force_full_grid=False,
 ):
     """
-    Load the appropriate ModelOptimisation object based on the provided image resolution.
+    Load the appropriate ModelOptimisation object based on the provided image resolution and hardware type.
 
     Args:
         image_resolution (tuple): A tuple of (height, width) representing the image resolution.
@@ -31,15 +35,18 @@ def load_model_optimisations(
         force_full_grid (bool): Optional flag to force full grid. Defaults to False.
 
     Returns:
-        ModelOptimisations512x512 or ModelOptimisations1024x1024: The appropriate ModelOptimisation
-            object based on the image resolution.
+        ModelOptimisations512x512, ModelOptimisations1024x1024, or ModelOptimisations1024x1024BH:
+            The appropriate ModelOptimisation object based on the image resolution and hardware type.
+            For 1024x1024 resolution, automatically selects ModelOptimisations1024x1024BH for Blackhole
+            hardware or ModelOptimisations1024x1024 for Wormhole hardware.
+            For 512x512 resolution, returns ModelOptimisations512x512 regardless of hardware type.
 
     Raises:
         ValueError: If the image_resolution is not supported.
 
     Example:
         >>> model_opt = load_model_optimisations((512, 512))
-        >>> model_opt = load_model_optimisations((1024, 1024))
+        >>> model_opt = load_model_optimisations((1024, 1024))  # Auto-selects based on hardware
     """
     if not isinstance(image_resolution, (tuple, list)) or len(image_resolution) != 2:
         raise ValueError(f"image_resolution must be a tuple or list of length 2, got {image_resolution}")
@@ -58,10 +65,20 @@ def load_model_optimisations(
         init_kwargs["ff_weights_dtype"] = ff_weights_dtype
 
     if (height, width) == (512, 512):
+        # For now, 512x512 image resolution uses the same configs regardless of hardware type
         return ModelOptimisations512x512(**init_kwargs)
     elif (height, width) == (1024, 1024):
-        return ModelOptimisations1024x1024(**init_kwargs)
+        # Check hardware type and return appropriate config
+        if is_wormhole_b0():
+            return ModelOptimisations1024x1024(**init_kwargs)
+        elif is_blackhole():
+            return ModelOptimisations1024x1024BH(**init_kwargs)
+        else:
+            raise ValueError(
+                "Unsupported hardware type for 1024x1024 resolution. Only Blackhole and Wormhole_B0 are supported."
+            )
     else:
         raise ValueError(
-            f"Unsupported image_resolution: {image_resolution}. " "Only (512, 512) and (1024, 1024) are supported."
+            f"Unsupported image_resolution: {image_resolution}. "
+            "Supported resolutions are (512, 512) and (1024, 1024)."
         )
