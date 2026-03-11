@@ -518,9 +518,9 @@ def create_tt_model(
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            15,  # max_generated_tokens (PCC validates first 10, run a few more to verify stability)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)

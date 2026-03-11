@@ -375,7 +375,8 @@ class TtTransformer(LightweightModule):
         ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
-        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
+        tokens_flat = tokens.view(-1)
+        tokens = torch.nn.functional.pad(tokens_flat, (0, max(0, 32 - tokens_flat.shape[0])), "constant", 0)[:32]
         tokens = ttnn.from_torch(
             tokens,
             device=None,
@@ -623,7 +624,19 @@ class TtTransformer(LightweightModule):
                 buffer_key="SAMPLING",
             )
 
-            tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
+            # Use single-core untilize to avoid sub-device core mismatch when sub-devices are active
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
+
+            # Save logits for PCC check if requested
+            if tt_out_logits_saved is not None:
+                tt_out_logits = ttnn.to_torch(
+                    tt_logits,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                    ),
+                )
+                tt_out_logits = tt_out_logits[0, 0, 0, : self.args.vocab_size]
+                tt_out_logits_saved.copy_(tt_out_logits)
 
             return tt_logits, None
 
