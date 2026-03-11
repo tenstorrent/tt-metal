@@ -80,4 +80,4 @@ All phase behaviors have automated silicon verification.
 | Resolved | 0 |
 | Escalated | 0 |
 
-19 TEST_F cases across Fabric2DFixture (10) and Fabric1DFixture (9). All 9 auto-packetizing families covered. No GTEST_SKIP barriers remain (sparse multicast enabled). Only legitimate skip: device count guard (< 3 devices).
+19 TEST_F cases across Fabric2DFixture (10) and Fabric1DFixture (9). 8 of 9 families silicon-validated. SparseMulticast GTEST_SKIP restored after silicon execution confirmed firmware hang (issue #36581). Device count guard (< 3 devices) also present.
