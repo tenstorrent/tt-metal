@@ -13,9 +13,9 @@ import torch.nn.functional
 from .layer_norm_rm import layer_norm_rm
 
 
-def pytorch_reference(input_tensor):
+def pytorch_reference(input_tensor, shape):
     """PyTorch reference for this stage."""
-    torch.nn.functional.layer_norm(x, [shape[-1]], eps=1e-5)
+    return torch.nn.functional.layer_norm(input_tensor.float(), [shape[-1]], eps=1e-5).to(torch.bfloat16)
 
 
 @pytest.mark.parametrize(
@@ -33,7 +33,7 @@ def test_normalize(device, shape):
     torch.manual_seed(42)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-    expected = pytorch_reference(torch_input)
+    expected = pytorch_reference(torch_input, shape)
 
     ttnn_input = ttnn.from_torch(
         torch_input,
