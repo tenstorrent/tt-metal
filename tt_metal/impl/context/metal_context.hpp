@@ -192,9 +192,7 @@ private:
     // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
     // This updates cached dispatch/compute core allocations to match current dispatch mode
     void reinitialize_dispatch_managers();
-    void teardown_base_objects();
     void teardown_dispatch_state();
-    void initialize_base_objects();
 
     void init_context_descriptor(int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
     void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);

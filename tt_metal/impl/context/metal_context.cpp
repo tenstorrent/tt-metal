@@ -308,7 +308,7 @@ void MetalContext::teardown() {
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
     Inspector::clear_all_core_info();
-    // Deinitialize inspector
+    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
 
     noc_debug_state_.reset();
@@ -369,7 +369,7 @@ ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
     register_handlers_locked();
 
     // Allow only one instance connected to a silicon cluster
-    if (!MetalEnvAccessor(env_to_use).get_rtoptions().get_mock_enabled()) {
+    if (!MetalEnvAccessor(env_to_use).impl().get_rtoptions().get_mock_enabled()) {
         if (g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire) != nullptr) {
             TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
         }
@@ -420,15 +420,6 @@ void MetalContext::register_handlers_locked() {
     }
 }
 
-void MetalContext::teardown_base_objects() {
-    inspector_data_.reset();
-    if (env_owned_) {
-        delete env_;
-    }
-    env_ = nullptr;
-    env_owned_ = false;
-}
-
 void MetalContext::teardown_dispatch_state() {
     for (auto& mem_map : dispatch_mem_map_) {
         if (mem_map) {
@@ -440,36 +431,15 @@ void MetalContext::teardown_dispatch_state() {
     dispatch_core_manager_.reset();
 }
 
-void MetalContext::initialize_base_objects() {
-<<<<<<< HEAD
-    MetalEnvDescriptor settings;
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        settings = MetalEnvDescriptor(*mock_cluster_desc);
-    }
-    env_ = new tt::tt_metal::MetalEnv(std::move(settings));
-    env_owned_ = true;
-=======
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
->>>>>>> 90d32aee70 (Multiple MetalContext)
-}
-
 MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
     env_(&metal_env), context_id_(context_id) {
     check_context_id(context_id);
-    initialize_base_objects();
     device_manager_ = std::make_unique<DeviceManager>();
 }
 
 MetalContext::~MetalContext() {
     teardown();
     device_manager_.reset();
-    // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
-    system_mesh_.reset();
-    control_plane_.reset();
-    distributed_context_.reset();
-    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
-    inspector_data_.reset();
     if (env_owned_) {
         delete env_;
     }
