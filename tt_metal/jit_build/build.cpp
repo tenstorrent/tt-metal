@@ -143,7 +143,8 @@ void JitBuildEnv::init(
     string common_flags =
         "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
         "-flto=auto -ffast-math "
-        "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
+        "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+        "-Wno-volatile -Wno-template-body ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
