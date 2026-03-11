@@ -68,10 +68,41 @@
       "dtype_parametrize": "",
       "status": "in_progress",
       "commit": null,
-      "attempts": 0,
+      "attempts": 2,
       "free_retries": 0,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 0.375",
+          "details": {
+            "max_diff": "0.375"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "center_and_square",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 9.0",
+          "details": {
+            "max_diff": "9.0"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "center_and_square",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "normalize",

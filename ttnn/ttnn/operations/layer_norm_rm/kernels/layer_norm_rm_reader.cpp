@@ -31,6 +31,10 @@ void kernel_main() {
     // ========== Setup TensorAccessor for input ==========
     const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_size);
 
+    // ========== Fill scaler CB (c_8) with 1/W for reduce_row ==========
+    const float scaler_value = 1.0f / static_cast<float>(W);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_value);
+
     // ========== Main loop: read 32 RM sticks per block ==========
     uint32_t stick_id = start_stick_id;
 
