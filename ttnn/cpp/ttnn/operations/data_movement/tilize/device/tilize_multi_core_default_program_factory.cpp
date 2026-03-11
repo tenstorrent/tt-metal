@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterleavedProgramFactory::create(
+TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultProgramFactory::create(
     const ttnn::prim::TilizeParams& operation_attributes,
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
@@ -30,12 +30,16 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
-    int32_t ntiles = a.physical_volume() / TILE_HW;
-    uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.padded_shape()[-1] * a.element_size();
+    Buffer* src0_buffer = a.buffer();
+    Buffer* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    IDevice* device = a.device();
+    auto logical_shape = a.logical_shape();
+    uint32_t logical_width = logical_shape[-1];
+    uint32_t ntiles_per_block = tt::div_up(logical_width, TILE_WIDTH);
+    uint32_t ntiles = dst_buffer->num_pages();
+    uint32_t nblocks = tt::div_up(ntiles, ntiles_per_block);
+    auto* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -49,18 +53,29 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     auto [output_cb_index, _] = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, ntiles_per_block, output_cb_data_format);
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     /** reader
      */
-    std::vector<uint32_t> reader_ct_args = {block_size_nbytes};
+    uint32_t page_size = src0_buffer->page_size();
+    uint32_t aligned_page_size = src0_buffer->aligned_page_size();
+    uint32_t num_pages_in_row = 1;
+    uint32_t size_of_valid_data_in_last_page_in_row = page_size;
+    if (a.is_sharded()) {
+        uint32_t shard_width =
+            a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
+        num_pages_in_row = tt::div_up(logical_width,
+                                      shard_width);  // Compute number of pages in one tensor row.
+        uint32_t padding_size =
+            (num_pages_in_row * page_size) -
+            (a.logical_shape()[-1] * a.element_size());  // Compute padding size for the last page in the row.
+        size_of_valid_data_in_last_page_in_row = page_size - padding_size;
+    }
+    std::vector<uint32_t> reader_ct_args = {
+        aligned_page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-        "reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "reader_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
@@ -79,6 +94,11 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
     std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     if (!core_range.ranges().empty()) {
         CreateKernel(
             program,
@@ -86,6 +106,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_args,
             });
     }
@@ -96,6 +117,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_args_cliff,
             });
     }
@@ -105,7 +127,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
 
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
-    uint32_t row_start_id = 0;
+    uint32_t page_start_id = 0;
     const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
@@ -114,13 +136,13 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core * TILE_HEIGHT,
-            block_size_nbytes,
+            page_size,
             ntiles_per_block,
-            block_size_nbytes,
+            page_size,
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row
-            row_start_id};
+            page_start_id};
 
         // writer runtime args
         const std::array writer_rt_args = {
@@ -133,7 +155,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
-        row_start_id += TILE_HEIGHT * nblocks_per_core;
+        page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
@@ -143,13 +165,13 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core_cliff * TILE_HEIGHT,
-            block_size_nbytes,
+            page_size,
             ntiles_per_block,
-            block_size_nbytes,
+            page_size,
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row
-            row_start_id};
+            page_start_id};
 
         // writer runtime args
         const std::array writer_rt_args = {
@@ -166,7 +188,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
-void TilizeMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+void TilizeMultiCoreDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::TilizeParams& /*operation_attributes*/,
     const ttnn::prim::TilizeInputs& tensor_args,
