@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import is_llk_assert_enabled
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
@@ -134,6 +135,8 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
+    if is_llk_assert_enabled:
+        expected_duration_ns = 1665525  # Measured: 1.67ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -170,6 +173,8 @@ def test_block_sharded_group_norm_sdxl_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 83180  # Measured: ~83μs for GroupNorm SDXL block sharded
+    if is_llk_assert_enabled:
+        expected_duration_ns = 86258  # Measured: ~86μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -206,6 +211,8 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 600338  # Measured: ~600μs for GroupNorm SDXL negative mask
+    if is_llk_assert_enabled:
+        expected_duration_ns = 624293  # Measured: ~624μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
