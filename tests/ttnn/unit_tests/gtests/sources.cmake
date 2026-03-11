@@ -61,6 +61,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_create_tensor_multi_device.cpp
     tensor/test_create_tensor_with_layout.cpp
     tensor/test_distributed_tensor.cpp
+    tensor/test_tensor_deallocate.cpp
     tensor/test_tensor_topology.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_partition.cpp

@@ -94,6 +94,10 @@ bool DeviceStorage::is_uniform_storage() const {
 }
 
 void DeviceStorage::deallocate_shared_memory(bool force) {
+    if (!is_allocated()) {
+        return;
+    }
+
     bool is_sole_owner = get_root_mesh_buffer().use_count() == 1;
     if (force || is_sole_owner) {
         deallocate_root_mesh_buffer();
@@ -117,7 +121,7 @@ DeviceStorage DeviceStorage::combine_to_multi_device_storage(
     // Check that all storages are allocated on the same mesh buffer.
     auto prototype = storages[0].get().mesh_buffer;
     for (const auto& storage : storages) {
-        TT_FATAL(storage.get().mesh_buffer != prototype, "Given storages must be allocated on the same mesh buffer.");
+        TT_FATAL(storage.get().mesh_buffer == prototype, "Given storages must be allocated on the same mesh buffer.");
     }
 
     // Collect all coodinates.
