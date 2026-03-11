@@ -509,12 +509,10 @@ def run_demo(
             if all_stats:
                 statistics["batch_count"] = len(all_stats)
                 mtp_accepts = [s.get("mtp_accepts") for s in all_stats if s.get("mtp_accepts") is not None]
-                mtp_passes = [
-                    s.get("decode_forward_passes") for s in all_stats if s.get("decode_forward_passes") is not None
-                ]
-                if mtp_accepts and mtp_passes:
+                mtp_verifies = [s.get("mtp_verifies") for s in all_stats if s.get("mtp_verifies") is not None]
+                if mtp_accepts and mtp_verifies:
                     total_accepts = sum(int(x) for x in mtp_accepts)
-                    total_verifies = sum(int(x) for x in mtp_passes)
+                    total_verifies = sum(int(x) for x in mtp_verifies)
                     statistics["mtp_accepts"] = total_accepts
                     statistics["mtp_accept_rate"] = (total_accepts / total_verifies) if total_verifies > 0 else 0.0
                 else:

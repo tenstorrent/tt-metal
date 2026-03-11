@@ -1300,8 +1300,6 @@ def test_mtp_verify_batching_aliasing(
         # Debug toggles for KV cache snapshots and verify table prints.
         enable_kv_log = False
         enable_verify_table = debug_mtp
-        compare_base = False
-        compare_steps = 0
         log_host_rank_env = os.getenv("TT_LOG_HOST_RANK")
         log_host_rank = int(log_host_rank_env) if log_host_rank_env not in (None, "") else None
         host_rank = int(os.getenv("TT_MESH_HOST_RANK", "0"))
@@ -1310,12 +1308,9 @@ def test_mtp_verify_batching_aliasing(
             enable_verify_table = False
         if debug_mtp:
             logger.info(
-                "DEBUG_MTP enabled: compare_base={} compare_steps={} enable_verify_table={} enable_kv_log={} compare_base_reason={} kv_log_reason={}",
-                compare_base,
-                compare_steps,
+                "DEBUG_MTP enabled: enable_verify_table={} enable_kv_log={} kv_log_reason={}",
                 enable_verify_table,
                 enable_kv_log,
-                "disabled because device-side KV snapshot cloning OOMs in verify debug runs",
                 "disabled because full KV host dumps stall before verify decode",
             )
 
@@ -1517,42 +1512,6 @@ def test_mtp_verify_batching_aliasing(
                 (spec_next_all[spec_user_ids] == next_tokens[step + 1][spec_user_ids]).sum().item()
             )
             predictor_spec_count += int(spec_user_ids.numel())
-
-            if compare_base and step < compare_steps:
-                kv_cache_current = gen.get_kv_cache()
-                kv_cache_snapshot = [ttnn.clone(tensor) for tensor in kv_cache_current]
-                logits_base_tt = gen._decode_step_tt(
-                    tokens_step=batched_tokens,
-                    positions=batched_positions,
-                    batch_size_per_row=gen.batch_size_per_row,
-                    page_tables=gen._get_page_tables(),
-                    return_hidden=False,
-                )
-                logits_base = ttnn.to_torch(
-                    logits_base_tt,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(-2, -1), mesh_shape=mesh.shape),
-                )
-                ttnn.deallocate(logits_base_tt)
-                gen.ccl.reset_sem_counters()
-
-                logits_base = logits_base.squeeze(0).squeeze(0)
-                pred_base_all = torch.argmax(logits_base, dim=-1).to(torch.int32)
-                pred_base_prompt = pred_base_all[prompt_user_ids]
-
-                base_mismatch = (pred_base_prompt != gt_next).nonzero(as_tuple=False).flatten().tolist()
-                if base_mismatch:
-                    logger.info(
-                        "MTP verify base compare step {}: base mismatches at prompt indices {}",
-                        step,
-                        base_mismatch,
-                    )
-                else:
-                    logger.info("MTP verify base compare step {}: base matches all prompt lanes", step)
-
-                # Restore caches to the snapshot so the aliased decode sees the original state.
-                gen.set_kv_cache(kv_cache_snapshot)
-                for tensor in kv_cache_current:
-                    ttnn.deallocate(tensor)
 
             if step == 0:
                 _dump_kv_cache(

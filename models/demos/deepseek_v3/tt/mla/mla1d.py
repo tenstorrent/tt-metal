@@ -1278,6 +1278,8 @@ class MLA1D(AbstractModule):
                 setattr(cls, "_mtp_alias_mask_cache", cache)
             cache[id(page_table_tt)] = alias_mask
         except Exception:
+            # Alias-mask caching is a best-effort optimization. If it fails here,
+            # the decode path recomputes the mask from the page table tensor.
             pass
         return page_table_tt
 

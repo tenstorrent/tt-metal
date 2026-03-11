@@ -33,6 +33,11 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
     logger.info(f"{label} saved to '{path}'")
 
 
+def _write_prompts_json(path: Path, prompts: list[str]) -> None:
+    payload = {"prompts": [{"prompt": prompt} for prompt in prompts]}
+    _write_json_output(path, payload, "Temporary prompts file")
+
+
 def _build_compare_log(
     baseline: dict,
     baseline_path: Path,
@@ -195,7 +200,12 @@ def _resolve_paths(args: argparse.Namespace, prompts: list[str]) -> tuple[Path, 
     return baseline_output, mtp_output, compare_log_output
 
 
-def _build_demo_command(args: argparse.Namespace, output_path: Path, enable_mtp: bool) -> list[str]:
+def _build_demo_command(
+    args: argparse.Namespace,
+    output_path: Path,
+    enable_mtp: bool,
+    prompts_file_override: str | None = None,
+) -> list[str]:
     cmd = [
         str(DS_RUN),
         "python",
@@ -211,9 +221,10 @@ def _build_demo_command(args: argparse.Namespace, output_path: Path, enable_mtp:
         "--output-path",
         str(output_path),
     ]
-    if args.prompts_file:
-        cmd.extend(["--prompts-file", args.prompts_file])
-        if args.num_prompts is not None:
+    prompts_file_to_use = prompts_file_override or args.prompts_file
+    if prompts_file_to_use:
+        cmd.extend(["--prompts-file", prompts_file_to_use])
+        if args.num_prompts is not None and prompts_file_override is None:
             cmd.extend(["--num-prompts", str(args.num_prompts)])
     else:
         cmd.extend(args.prompts)
@@ -254,24 +265,42 @@ def main() -> None:
     args = create_parser().parse_args()
     prompts = _load_prompts(args)
     baseline_output_path, mtp_output_path, compare_log_path = _resolve_paths(args, prompts)
+    temp_prompts_file: Path | None = None
+    prompts_file_override: str | None = None
+    if not args.prompts_file:
+        temp_prompts_file = compare_log_path.with_name(f"{compare_log_path.stem}_prompts.json")
+        _write_prompts_json(temp_prompts_file, prompts)
+        prompts_file_override = str(temp_prompts_file)
 
-    _run_demo_command(_build_demo_command(args, baseline_output_path, enable_mtp=False), "baseline demo")
-    baseline_output = _load_output_json(baseline_output_path, "Baseline output")
+    try:
+        _run_demo_command(
+            _build_demo_command(
+                args, baseline_output_path, enable_mtp=False, prompts_file_override=prompts_file_override
+            ),
+            "baseline demo",
+        )
+        baseline_output = _load_output_json(baseline_output_path, "Baseline output")
 
-    _run_demo_command(_build_demo_command(args, mtp_output_path, enable_mtp=True), "MTP demo")
-    mtp_output = _load_output_json(mtp_output_path, "MTP output")
+        _run_demo_command(
+            _build_demo_command(args, mtp_output_path, enable_mtp=True, prompts_file_override=prompts_file_override),
+            "MTP demo",
+        )
+        mtp_output = _load_output_json(mtp_output_path, "MTP output")
 
-    compare_log = _build_compare_log(
-        baseline=baseline_output,
-        baseline_path=baseline_output_path,
-        current=mtp_output,
-        current_path=mtp_output_path,
-    )
-    _write_json_output(compare_log_path, compare_log, "Comparison log")
+        compare_log = _build_compare_log(
+            baseline=baseline_output,
+            baseline_path=baseline_output_path,
+            current=mtp_output,
+            current_path=mtp_output_path,
+        )
+        _write_json_output(compare_log_path, compare_log, "Comparison log")
 
-    if compare_log["mismatch_reason"] is not None:
-        raise SystemExit(compare_log["mismatch_reason"])
-    logger.info("Output comparison passed: prompt+generated text content matches exactly.")
+        if compare_log["mismatch_reason"] is not None:
+            raise SystemExit(compare_log["mismatch_reason"])
+        logger.info("Output comparison passed: prompt+generated text content matches exactly.")
+    finally:
+        if temp_prompts_file is not None:
+            temp_prompts_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

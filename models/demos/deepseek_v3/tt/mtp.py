@@ -255,11 +255,13 @@ class MTP2D(AbstractModule):
 
         hidden_norm_in = ttnn.to_memory_config(hidden_states, **cfg["hidden_norm_reshard"])
         hidden_norm = DistributedRMSNorm.forward_decode(hidden_norm_in, cfg["hidden_norm"])
-        ttnn.deallocate(hidden_norm_in)
+        if _has_distinct_buffer(hidden_norm_in, hidden_states):
+            ttnn.deallocate(hidden_norm_in)
 
         token_norm_in = ttnn.to_memory_config(token_emb, **cfg["token_norm_reshard"])
         token_norm = DistributedRMSNorm.forward_decode(token_norm_in, cfg["token_norm"])
-        ttnn.deallocate(token_norm_in)
+        if _has_distinct_buffer(token_norm_in, token_emb):
+            ttnn.deallocate(token_norm_in)
         ttnn.deallocate(token_emb)
 
         hidden_full = ttnn.experimental.all_gather_async(

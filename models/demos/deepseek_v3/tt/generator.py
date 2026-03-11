@@ -131,7 +131,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         prefill_max_tokens: int | None = None,
         force_recalculate: bool = False,
         profile_decode: bool = False,
-        enable_mtp: bool = True,
+        enable_mtp: bool = False,
         min_mtp_accept_rate: float | None = None,
     ) -> None:
         self.mesh_device = mesh_device
@@ -903,6 +903,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         decode_forward_passes = 0
         decode_step_active_masks_for_stats: List[List[bool]] = []
         decode_step_user_tokens_for_stats: List[List[int]] = []
+        mtp_accept_rate = None
+        mtp_accepts = None
+        mtp_verifies = None
         num_of_users = tokens_batched.shape[0]
         token_trace = bool(int(os.getenv("DEEPSEEK_TOKEN_TRACE", "0")))
         use_mtp_path = self.enable_mtp and teacher_forcing is None and max_new_tokens > 1 and not self.profile_decode
@@ -917,7 +920,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 "falling back to regular decode path."
             )
             use_mtp_path = False
-        stats_max_prompts_per_batch = self.batch_size // 2 if use_mtp_path else self.batch_size
         prompt_user_ids: torch.Tensor | None = None
         spec_user_ids: torch.Tensor | None = None
         if use_mtp_path and num_of_prompts > 0:
@@ -929,7 +931,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                     "falling back to regular decode path."
                 )
                 use_mtp_path = False
-                stats_max_prompts_per_batch = self.batch_size
             else:
                 prompt_user_ids_list: list[int] = []
                 spec_user_ids_list: list[int] = []
@@ -1092,8 +1093,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 decode_step_idx = 0
                 decode_step_active_masks: List[List[bool]] = []
                 decode_step_user_tokens: List[List[int]] = []
-                mtp_accept_rate = None
-                mtp_accepts = None
                 if use_mtp_path:
                     skip_accept_decode = True
                     generated_counts = torch.zeros((num_of_prompts,), dtype=torch.int32)
@@ -1273,7 +1272,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                                         "Hidden batch smaller than max spec user id: "
                                         f"{hidden_2b.shape[0]} <= {max_idx}"
                                     )
-                                hidden_prompt = hidden_2b[prompt_user_ids]
                                 hidden_verify = hidden_2b[spec_user_ids]
                                 if accept_mask.any():
                                     accept_prompt_ids = prompt_user_ids[accept_mask]
@@ -1284,7 +1282,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                                         "Hidden batch smaller than verify offset + num_prompts: "
                                         f"{hidden_2b.shape[0]} < {verify_offset + num_of_prompts}"
                                     )
-                                hidden_prompt = hidden_2b[:num_of_prompts]
                                 hidden_verify = hidden_2b[verify_offset : verify_offset + num_of_prompts]
                                 if accept_mask.any():
                                     hidden_for_spec[:num_of_prompts][accept_mask] = hidden_verify[accept_mask]
@@ -1307,6 +1304,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_step_user_tokens.append(step_user_tokens)
 
                     mtp_accepts = total_accepts
+                    mtp_verifies = total_verifies
                     if total_verifies > 0:
                         mtp_accept_rate = total_accepts / total_verifies
                         logger.info(f"MTP accept rate: {total_accepts}/{total_verifies} = {mtp_accept_rate:.3f}")
@@ -1428,9 +1426,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 for i in range(num_of_prompts)
             ]
             decode_tokens_per_sec_per_user = (sum(per_user_tps) / num_of_prompts) if num_of_prompts > 0 else 0
-            decode_tokens_per_sec = (
-                (decode_tokens_per_sec_per_user * stats_max_prompts_per_batch) if total_decode_time > 0 else 0
-            )
+            decode_tokens_per_sec = (decode_tokens_per_sec_per_user * num_of_prompts) if total_decode_time > 0 else 0
         elif len(decode_times) == 1:
             total_decode_time = decode_times[0]
             decode_tokens_per_sec_per_user = 0
@@ -1465,6 +1461,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         statistics["mtp_accept_rate"] = mtp_accept_rate
         if mtp_accepts is not None:
             statistics["mtp_accepts"] = mtp_accepts
+        if mtp_verifies is not None:
+            statistics["mtp_verifies"] = mtp_verifies
 
         return generations, statistics
 
@@ -1638,7 +1636,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if prompt_len <= 0:
                     last_hidden = torch.zeros((self.hf_config.hidden_size,), dtype=torch.bfloat16)
                 else:
-                    hidden_idx = min(prompt_len - 1, full_seq_len - 1)
+                    global_hidden_idx = prompt_len - 1
+                    hidden_row_idx = 0
+                    hidden_idx = global_hidden_idx
+                    if full_seq_len <= 0:
+                        raise RuntimeError("Cannot extract last prefill hidden state from an empty hidden tensor.")
+                    if self.mesh_device.shape[0] > 1:
+                        hidden_row_idx = global_hidden_idx // full_seq_len
+                        hidden_idx = global_hidden_idx % full_seq_len
                     hidden_slice = ttnn.slice(
                         hidden_tt, [0, 0, hidden_idx, 0], [1, 1, hidden_idx + 1, hidden_tt.shape[3]]
                     )
@@ -1648,10 +1653,19 @@ class DeepseekGenerator(WarmupForwardMixin):
                             self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                         ),
                     )
-                    last_hidden = last_hidden.squeeze(0).squeeze(0).squeeze(0)
+                    last_hidden = last_hidden.squeeze(0).squeeze(0)
+                    if last_hidden.dim() == 3 and last_hidden.shape[1] == 1:
+                        last_hidden = last_hidden[:, 0, :]
                     if last_hidden.dim() == 2 and last_hidden.shape[-1] == self.hf_config.hidden_size:
-                        # Some mesh composers leave an extra mesh-row dimension; take the first row.
-                        last_hidden = last_hidden[0]
+                        if hidden_row_idx >= last_hidden.shape[0]:
+                            raise RuntimeError(
+                                f"Last hidden row index {hidden_row_idx} out of range for shape {tuple(last_hidden.shape)}"
+                            )
+                        last_hidden = last_hidden[hidden_row_idx]
+                    elif last_hidden.dim() != 1 or last_hidden.shape[0] != self.hf_config.hidden_size:
+                        raise RuntimeError(
+                            f"Unexpected last_hidden shape after prefill gather: {tuple(last_hidden.shape)}"
+                        )
                     ttnn.deallocate(hidden_slice)
 
             ttnn.deallocate(hidden_tt)
