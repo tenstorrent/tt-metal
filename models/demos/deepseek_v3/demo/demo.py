@@ -11,7 +11,6 @@ from glob import glob
 from pathlib import Path
 
 from loguru import logger
-from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
@@ -250,12 +249,6 @@ def create_parser() -> argparse.ArgumentParser:
         help="If set, require MTP accept rate to be at least this value.",
     )
     p.add_argument(
-        "--mtp-skip-on-accept",
-        choices=["auto", "on", "off"],
-        default="auto",
-        help="Control MTP skip-on-accept behavior: auto (default), on (force), off (disable).",
-    )
-    p.add_argument(
         "--compare-output",
         type=str,
         help="Path to a baseline output JSON to compare against (prompt+generated text only).",
@@ -393,34 +386,6 @@ def _trace_mtp_conflict_requested(
     return enable_mtp
 
 
-def _assert_demo_mtp_available(
-    *,
-    model_path: Path,
-    random_weights: bool,
-    override_num_layers: int | None,
-    enable_mtp: bool,
-) -> None:
-    if not enable_mtp:
-        return
-    if random_weights:
-        raise SystemExit("MTP cannot be enabled with --random-weights.")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    if override_num_layers is not None:
-        hf_config.num_hidden_layers = int(override_num_layers)
-
-    if not DeepseekGeneratorDP._config_supports_mtp(hf_config, random_weights=random_weights):
-        raise SystemExit(
-            "MTP was enabled, but the model config does not include a valid MTP layer "
-            "(num_nextn_predict_layers=0 or num_hidden_layers < 61)."
-        )
-    if not DeepseekGeneratorDP._model_path_has_mtp_weights(model_path, hf_config):
-        raise SystemExit(
-            "MTP was enabled, but the model artifacts do not contain the required MTP weights "
-            "(missing model.layers.<num_hidden_layers>.eh_proj.weight in model.safetensors.index.json)."
-        )
-
-
 def run_demo(
     prompts: list[str] | None = None,
     *,
@@ -444,7 +409,6 @@ def run_demo(
     force_recalculate: bool = False,
     enable_mtp: bool = True,
     min_mtp_accept_rate: float | None = None,
-    mtp_skip_on_accept: str = "auto",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -466,13 +430,6 @@ def run_demo(
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
-    _assert_demo_mtp_available(
-        model_path=model_path,
-        random_weights=random_weights,
-        override_num_layers=override_num_layers,
-        enable_mtp=enable_mtp,
-    )
-
     if _trace_mtp_conflict_requested(
         enable_trace=enable_trace,
         token_accuracy=token_accuracy,
@@ -547,12 +504,6 @@ def run_demo(
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":
-            if mtp_skip_on_accept == "on":
-                mtp_skip_on_accept_override = True
-            elif mtp_skip_on_accept == "off":
-                mtp_skip_on_accept_override = False
-            else:
-                mtp_skip_on_accept_override = None
             gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
                 model_path=model_path,
@@ -572,7 +523,6 @@ def run_demo(
                 force_recalculate=force_recalculate,
                 enable_mtp=enable_mtp,
                 min_mtp_accept_rate=min_mtp_accept_rate,
-                mtp_skip_on_accept=mtp_skip_on_accept_override,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -735,7 +685,6 @@ def main() -> None:
         profile_decode=args.profile_decode,
         enable_mtp=(args.mtp == "on"),
         min_mtp_accept_rate=args.min_mtp_accept_rate,
-        mtp_skip_on_accept=args.mtp_skip_on_accept,
     )
 
     saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)

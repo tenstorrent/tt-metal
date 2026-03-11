@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
 import torch
 from loguru import logger
-from safetensors import safe_open
 from tracy import signpost
 from transformers import AutoConfig
 
@@ -20,19 +18,12 @@ from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
-from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.weight_config import (
-    WeightConfigEncoder,
-    get_weight_config,
-    locked_file,
-    try_decode_saved_weight,
-    validate_weight_config_paths,
-)
+from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 MAX_SEQ_LEN = 2048
@@ -142,7 +133,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         profile_decode: bool = False,
         enable_mtp: bool = True,
         min_mtp_accept_rate: float | None = None,
-        mtp_skip_on_accept: bool | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -176,23 +166,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                     f"to {self.hf_config.num_hidden_layers} (num_hidden_layers)"
                 )
                 self.hf_config.first_k_dense_replace = self.hf_config.num_hidden_layers
-        config_supports_mtp = self._config_supports_mtp(self.hf_config, random_weights=random_weights)
-        if enable_mtp:
-            if random_weights:
-                raise ValueError("MTP cannot be enabled with --random-weights.")
-            if not config_supports_mtp:
-                raise ValueError(
-                    "MTP was enabled, but the model config does not include a valid MTP layer "
-                    "(num_nextn_predict_layers=0 or num_hidden_layers < 61)."
-                )
-            self.enable_mtp = True
-        else:
-            self.enable_mtp = False
+        self.enable_mtp = bool(enable_mtp)
 
         if not self.enable_mtp and hasattr(self.hf_config, "num_nextn_predict_layers"):
             self.hf_config.num_nextn_predict_layers = 0
         self.min_mtp_accept_rate = min_mtp_accept_rate
-        self.mtp_skip_on_accept = mtp_skip_on_accept
         logger.info(f"MTP enabled: {self.enable_mtp}")
         # Tokenizer is optional; caller can pass a tokenizer or handle failure.
         self.tokenizer = tokenizer
@@ -247,11 +225,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         self._prepare_weight_configs(cache_dir)
-        if self.enable_mtp and not self._has_cached_mtp_weights(self.model_weight_config):
-            raise RuntimeError(
-                "MTP was enabled, but the resolved weight config does not contain MTP tensors. "
-                "Ensure the model artifacts include MTP weights and refresh the cache if needed."
-            )
+        self._assert_mtp_available()
 
     def _dump_meminfo(self, header: str) -> None:
         if self.enable_mem_profile:
@@ -298,181 +272,26 @@ class DeepseekGenerator(WarmupForwardMixin):
             single_layer=self.single_layer,
         )
 
-        if self.enable_mtp and self._mtp_cache_needs_refresh(weight_cache_root, self.model_weight_config):
-            if not self._has_cached_mtp_weights(self.model_weight_config) and not self._model_path_has_mtp_weights(
-                self.model_path, self.hf_config
-            ):
-                raise RuntimeError(
-                    "MTP was enabled, but neither the cached weights nor the source model artifacts contain "
-                    "the required MTP tensors."
-                )
-            if not self._has_cached_mtp_weights(self.model_weight_config):
-                logger.warning(
-                    "MTP is enabled but cached model weights do not include MTP tensors; augmenting cache with MTP tensors."
-                )
-            else:
-                logger.warning(
-                    "MTP cached tensors are incompatible with current runtime expectations; refreshing MTP cache."
-                )
-            try:
-                self._augment_mtp_weights_in_cache(weight_cache_root)
-            except Exception as e:
-                logger.warning(f"Fast MTP cache augmentation failed ({e}); falling back to full cache refresh.")
-                self.model_weight_config = get_weight_config(
-                    ModuleClass=RowBatchedModel,
-                    hf_config=self.hf_config,
-                    weight_cache_path=weight_cache_root,
-                    mesh_device=self.mesh_device,
-                    force_recalculate=True,
-                    random_weights=self.random_weights,
-                    model_path=self.model_path,
-                    single_layer=self.single_layer,
-                )
-            else:
-                self.model_weight_config = get_weight_config(
-                    ModuleClass=RowBatchedModel,
-                    hf_config=self.hf_config,
-                    weight_cache_path=weight_cache_root,
-                    mesh_device=self.mesh_device,
-                    force_recalculate=False,
-                    random_weights=self.random_weights,
-                    model_path=self.model_path,
-                    single_layer=self.single_layer,
-                )
+    def _assert_mtp_available(self) -> None:
+        if not self.enable_mtp:
+            return
 
-    @staticmethod
-    def _config_supports_mtp(hf_config: AutoConfig, random_weights: bool = False) -> bool:
-        requested_mtp_layers = int(getattr(hf_config, "num_nextn_predict_layers", 0))
-        return (
-            (not random_weights) and requested_mtp_layers > 0 and int(getattr(hf_config, "num_hidden_layers", 0)) >= 61
-        )
-
-    @staticmethod
-    def _model_path_has_mtp_weights(model_path: str | Path | None, hf_config: AutoConfig) -> bool:
-        if model_path is None:
-            return False
-        index_path = Path(model_path) / "model.safetensors.index.json"
-        if not index_path.exists():
-            return False
-        try:
-            with index_path.open("r") as f:
-                weight_map = json.load(f)["weight_map"]
-        except Exception:
-            return False
-
-        mtp_layer_idx = int(getattr(hf_config, "num_hidden_layers", 0))
-        required_key = f"model.layers.{mtp_layer_idx}.eh_proj.weight"
-        return required_key in weight_map
-
-    @staticmethod
-    def _has_cached_mtp_weights(weight_config: dict | None) -> bool:
-        if not isinstance(weight_config, dict):
-            return False
-        mtp_cfg = weight_config.get("mtp")
-        return isinstance(mtp_cfg, dict) and len(mtp_cfg) > 0
-
-    def _mtp_cache_needs_refresh(self, weight_cache_root: Path, weight_config: dict | None) -> bool:
-        if not self._has_cached_mtp_weights(weight_config):
-            return True
-
-        try:
-            eh_proj_weight = weight_config["mtp"]["eh_proj"]["linear"]["input_tensor_b"]
-            if not isinstance(eh_proj_weight, SavedWeight):
-                return True
-
-            eh_proj_path = self._get_weight_cache_leaf_path(weight_cache_root) / eh_proj_weight.path
-            if not eh_proj_path.exists():
-                return True
-
-            eh_proj_tensor = ttnn.load_tensor(str(eh_proj_path))
-            expected_shard_width = even_int_div(int(self.hf_config.hidden_size), int(self.mesh_device.shape[1]))
-            actual_shard_width = int(eh_proj_tensor.shape[-1])
-            if actual_shard_width != expected_shard_width:
-                logger.warning(
-                    f"MTP eh_proj cached shard width is {actual_shard_width}, expected {expected_shard_width}; cache refresh required."
-                )
-                return True
-        except Exception as e:
-            logger.warning(f"Failed to validate cached MTP tensors ({e}); refreshing MTP cache.")
-            return True
-
-        return False
-
-    def _get_weight_cache_leaf_path(self, weight_cache_root: Path) -> Path:
-        return (
-            weight_cache_root
-            / f"{self.hf_config.num_hidden_layers}_layers"
-            / f"mesh_{self.mesh_device.shape[0]}x{self.mesh_device.shape[1]}"
-        )
-
-    def _load_mtp_layer_state_dict(self, skip_tied_weights: bool) -> dict[str, torch.Tensor]:
-        if self.model_path is None:
-            raise RuntimeError("Cannot augment MTP cache without model_path")
-
-        model_dir = Path(self.model_path)
-        index_path = model_dir / "model.safetensors.index.json"
-        if not index_path.exists():
-            raise RuntimeError(f"Missing safetensors index file: {index_path}")
-
-        with index_path.open("r") as f:
-            weight_map = json.load(f)["weight_map"]
-
-        mtp_layer_idx = int(self.hf_config.num_hidden_layers)
-        mtp_prefix = f"model.layers.{mtp_layer_idx}."
-        mtp_full_keys = sorted(k for k in weight_map.keys() if k.startswith(mtp_prefix))
-        if len(mtp_full_keys) == 0:
-            raise RuntimeError(f"No MTP keys found under prefix {mtp_prefix}")
-
-        if skip_tied_weights:
-            tied_keys = {
-                f"{mtp_prefix}embed_tokens.weight",
-                f"{mtp_prefix}shared_head.head.weight",
-            }
-            mtp_full_keys = [k for k in mtp_full_keys if k not in tied_keys]
-
-        state_dict: dict[str, torch.Tensor] = {}
-        keys_per_shard: dict[str, list[str]] = {}
-        for key in mtp_full_keys:
-            keys_per_shard.setdefault(weight_map[key], []).append(key)
-
-        for shard_file, shard_keys in keys_per_shard.items():
-            with safe_open(str(model_dir / shard_file), framework="pt", device="cpu") as shard:
-                for key in shard_keys:
-                    state_dict[key[len(mtp_prefix) :]] = shard.get_tensor(key)
-
-        if "eh_proj.weight" not in state_dict:
-            raise RuntimeError("Loaded MTP state dict is missing required key 'eh_proj.weight'")
-
-        return state_dict
-
-    def _augment_mtp_weights_in_cache(self, weight_cache_root: Path) -> None:
         if self.random_weights:
-            raise RuntimeError("Random-weights mode is not supported for MTP cache augmentation")
+            raise ValueError("MTP cannot be enabled with --random-weights.")
 
-        cache_leaf = self._get_weight_cache_leaf_path(weight_cache_root)
-        config_path = cache_leaf / "config.json"
-        if not config_path.exists():
-            raise RuntimeError(f"Base cache config does not exist at {config_path}")
+        requested_mtp_layers = int(getattr(self.hf_config, "num_nextn_predict_layers", 0))
+        if requested_mtp_layers <= 0 or int(getattr(self.hf_config, "num_hidden_layers", 0)) < 61:
+            raise RuntimeError(
+                "MTP was enabled, but the model config does not include a valid MTP layer "
+                "(num_nextn_predict_layers=0 or num_hidden_layers < 61)."
+            )
 
-        with locked_file(config_path, "r", exclusive=False) as f:
-            base_weight_cfg = json.load(f, object_hook=try_decode_saved_weight)
-
-        use_tied_weights = bool(getattr(self.hf_config, "tie_word_embeddings", False))
-        mtp_state_dict = self._load_mtp_layer_state_dict(skip_tied_weights=use_tied_weights)
-        mtp_weight_cfg = MTP2D.convert_weights(
-            hf_config=self.hf_config,
-            state_dicts=(mtp_state_dict,),
-            output_path=cache_leaf / "mtp",
-            mesh_device=self.mesh_device,
-            reuse_embedding_weight_cfg=base_weight_cfg.get("embedding") if use_tied_weights else None,
-            reuse_head_weight_cfg=base_weight_cfg.get("lm_head") if use_tied_weights else None,
-        )
-
-        base_weight_cfg["mtp"] = mtp_weight_cfg
-        validate_weight_config_paths(cache_leaf, base_weight_cfg)
-
-        with locked_file(config_path, "w", exclusive=True) as f:
-            json.dump(base_weight_cfg, f, cls=WeightConfigEncoder)
+        mtp_cfg = self.model_weight_config.get("mtp") if isinstance(self.model_weight_config, dict) else None
+        if not isinstance(mtp_cfg, dict) or not mtp_cfg:
+            raise RuntimeError(
+                "MTP was enabled, but the resolved weight config does not contain MTP tensors. "
+                "Regenerate the DeepSeek cache with MTP weights before running."
+            )
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:
         logger.info("Creating model states...")
@@ -1276,8 +1095,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 mtp_accept_rate = None
                 mtp_accepts = None
                 if use_mtp_path:
-                    skip_accept_decode = True if self.mtp_skip_on_accept is None else bool(self.mtp_skip_on_accept)
-                    logger.info(f"MTP skip-on-accept path enabled: {skip_accept_decode}")
+                    skip_accept_decode = True
                     generated_counts = torch.zeros((num_of_prompts,), dtype=torch.int32)
                     if num_of_prompts > 0:
                         generated_counts += 1
@@ -1493,11 +1311,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                         mtp_accept_rate = total_accepts / total_verifies
                         logger.info(f"MTP accept rate: {total_accepts}/{total_verifies} = {mtp_accept_rate:.3f}")
                         logger.info(
-                            "MTP skip-path summary: enabled={} skipped_decode_tokens={} "
+                            "MTP skip-path summary: skipped_decode_tokens={} "
                             "accepted_committed_second_token={}".format(
-                                skip_accept_decode,
-                                skipped_decode_tokens if skip_accept_decode else 0,
-                                accepted_committed_second_token if skip_accept_decode else 0,
+                                skipped_decode_tokens,
+                                accepted_committed_second_token,
                             )
                         )
                         if self.min_mtp_accept_rate is not None and mtp_accept_rate < self.min_mtp_accept_rate:
