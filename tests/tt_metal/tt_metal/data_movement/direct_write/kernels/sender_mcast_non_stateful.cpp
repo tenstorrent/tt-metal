@@ -31,7 +31,6 @@ void kernel_main() {
             }
         } else {
             for (uint32_t i = 0; i < num_writes; i++) {
-                uint32_t current_local_addr = sub_base_addr + (i * addr_stride);
                 uint32_t write_value = write_value_base + i;
                 noc_inline_mcast_dw_write<InlineWriteDst::DEFAULT, true, true>(
                     dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, num_subordinates);
