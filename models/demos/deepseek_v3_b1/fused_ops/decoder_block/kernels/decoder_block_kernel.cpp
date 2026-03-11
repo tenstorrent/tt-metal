@@ -1968,7 +1968,7 @@ void kernel_main() {
         moe_mcast;
 
     auto mla_body = [&]() __attribute__((always_inline)) __attribute__((always_inline)) {
-        DPRINT << "Starting MLA" << ENDL();
+        // DPRINT << "Starting MLA" << ENDL();
         // ========================================================================
         // CCL Broadcast (optional, skip if single-device mode)
         // ========================================================================
@@ -1979,7 +1979,7 @@ void kernel_main() {
                 bcast(bcast_args);
             }
         }
-        DPRINT << "CCL Broadcast done" << ENDL();
+        // DPRINT << "CCL Broadcast done" << ENDL();
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
@@ -2036,7 +2036,7 @@ void kernel_main() {
 #endif
         }
 
-        DPRINT << "Starting Attention" << ENDL();
+        // DPRINT << "Starting Attention" << ENDL();
         if (!skip_attention) {
             // ====================================================================
             // Matmul operation
@@ -2120,7 +2120,7 @@ void kernel_main() {
                     create_q_heads(create_q_heads_args);
                 }
             }
-            DPRINT << "Starting KV Cache Branch" << ENDL();
+            // DPRINT << "Starting KV Cache Branch" << ENDL();
             // ====================================================================
             // KV Cache Branch
             // Non-owning SP devices skip the entire branch and just signal the
@@ -2200,12 +2200,12 @@ void kernel_main() {
                 FlashMLAOp::push_dummy_sdpa_inputs();
             }
         }
-        DPRINT << "Flash MLA done" << ENDL();
+        // DPRINT << "Flash MLA done" << ENDL();
 
         // ========================================================================
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
-        DPRINT << "Starting Post SDPA" << ENDL();
+        // DPRINT << "Starting Post SDPA" << ENDL();
         {
             DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
@@ -2368,7 +2368,7 @@ void kernel_main() {
 
     auto moe_body = [&]() {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
-        DPRINT << "Starting MoE" << ENDL();
+        // DPRINT << "Starting MoE" << ENDL();
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
             residual_mcast(moe.routed.residual_mcast_args);
@@ -2472,7 +2472,7 @@ void kernel_main() {
             expert_scale_mcast(moe.routed.expert_scale_mcast_args);
         }
 #endif  // ENABLE_ROUTING
-        DPRINT << "Starting Shared Expert" << ENDL();
+        // DPRINT << "Starting Shared Expert" << ENDL();
 
         // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
         //     Uses MoeGather (sender=BRISC) to avoid NOC contention with DRAM matmul (NCRISC)
@@ -2662,7 +2662,6 @@ void kernel_main() {
 
         // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh
         //     Reduces final_output from all 8 devices to ROOT1 device
-        DPRINT << "Starting ReduceToOneB1" << ENDL();
 #ifdef ENABLE_REDUCE_TO_ONE
         {
             DeviceZoneScopedN("REDUCE_TO_ONE");
@@ -2701,7 +2700,7 @@ void kernel_main() {
     // ====================================================================
     {
         DeviceZoneScopedN("MCAST_INIT");
-        DPRINT << "Starting Mcast Init" << ENDL();
+        // DPRINT << "Starting Mcast Init" << ENDL();
         mcast.init(mcast_args);
     }
 
@@ -2713,8 +2712,10 @@ void kernel_main() {
             constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
             if constexpr (is_bcast_sender && Core::is_sender_core) {
                 auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
+                DPRINT << "Bcast sem wait" << ENDL();
                 noc_semaphore_wait(next_iter_sem, 1);
                 noc_semaphore_set(next_iter_sem, 0);
+                DPRINT << "Bcast sem wait done" << ENDL();
             }
         }
 #endif

@@ -136,6 +136,7 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
+                        DPRINT << "Bcast wait for pages" << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
@@ -149,6 +150,7 @@ struct Broadcast {
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
+                        DPRINT << "Bcast got pages" << ENDL();
                     } else {
 #endif
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
@@ -164,6 +166,7 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
+                DPRINT << "Bcast Write start" << ENDL();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
@@ -309,6 +312,7 @@ struct Broadcast {
                     close_connections(fabric_connection);
                 }
                 noc_async_write_barrier();
+                DPRINT << "Bcast Write end" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

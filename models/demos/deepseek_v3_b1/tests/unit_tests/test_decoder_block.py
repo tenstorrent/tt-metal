@@ -485,15 +485,15 @@ def create_decoder_block_tensors(
     #     tile=sdpa_tile,
     #     mesh_mapper=shard_mesh_mapper,
     # )
-    ttnn_sdpa_output_l = ttnn.from_torch(
-        torch.zeros_like(mesh_sdpa_l),
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_l_mem,
-        tile=sdpa_tile,
-        mesh_mapper=shard_mesh_mapper,
-    )
+    # ttnn_sdpa_output_l = ttnn.from_torch(
+    #     torch.zeros_like(mesh_sdpa_l),
+    #     device=submesh,
+    #     dtype=ttnn.bfloat16,
+    #     layout=ttnn.TILE_LAYOUT,
+    #     memory_config=sdpa_l_mem,
+    #     tile=sdpa_tile,
+    #     mesh_mapper=shard_mesh_mapper,
+    # )
 
     sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker
     sdpa_recv_shard_shape = (2 * SDPA_L_HEIGHT, sdpa_recv_per_worker)
@@ -695,7 +695,7 @@ def create_decoder_block_tensors(
         "sender_coord": sender_coord,
         "ttnn_sdpa_input_l": None,
         "ttnn_sdpa_input_ms": None,
-        "ttnn_sdpa_output_l": ttnn_sdpa_output_l,
+        "ttnn_sdpa_output_l": None,
         "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
         "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
         "device_chunk_size": program_config.device_chunk_size,

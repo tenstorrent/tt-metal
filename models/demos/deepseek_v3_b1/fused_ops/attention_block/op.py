@@ -1943,7 +1943,7 @@ class AttentionBlock:
         ref_attention_block_output_tensor = attention_block_output_tensors_per_device[0]
         # ref_sdpa_input_l = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
         # ref_sdpa_input_ms = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
-        ref_sdpa_output_l = ttnn.get_device_tensors(sdpa_output_l_mesh)[0]
+        # ref_sdpa_output_l = ttnn.get_device_tensors(sdpa_output_l_mesh)[0]
         ref_sdpa_intermediate_recv = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[0]
         ref_sdpa_forwarder_scratch = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
 
@@ -2929,9 +2929,21 @@ class AttentionBlock:
         post_sdpa_cb_list.append(sdpa_r1_result_ms_cb_descriptor)
 
         # CB 20: SDPA L output (aliased to output tensor)
-        sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            sdpa_cb_l_out, ref_sdpa_output_l, core_ranges=full_device_grid
+        sdpa_l_out_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=sdpa_cb_l_out,
+            data_format=data_format,
+            page_size=sdpa_l_tile_size,
+            tile=ttnn.TileDescriptor(sdpa_tile),
         )
+        sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            sdpa_cb_l_out,
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_post_sdpa,
+            total_size=sdpa_l_tiles_per_worker * sdpa_l_tile_size,
+            core_ranges=full_device_grid,
+        )
+        sdpa_l_out_cb_descriptor.format_descriptors = [sdpa_l_out_cb_format]
+        sdpa_out_interm_running_offset_post_sdpa += sdpa_l_out_cb_descriptor.total_size
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
         # ========================================================================

@@ -200,6 +200,7 @@ struct ReduceToOneB1 {
             }
 
 #if defined(COMPILE_FOR_NCRISC)
+            DPRINT << "R1" << ENDL();
             // ================================================================
             // NCRISC - Reader: receives data from fabric via semaphore waits
             // ================================================================
@@ -245,11 +246,12 @@ struct ReduceToOneB1 {
                 unified_kernels::semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
-
+            DPRINT << "R1D" << ENDL();
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
+            DPRINT << "R1" << ENDL();
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
@@ -464,7 +466,7 @@ struct ReduceToOneB1 {
             } else {
                 cb_pop_front(source_cb, CTArgs::num_tiles);
             }
-
+            DPRINT << "R1D" << ENDL();
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC - Compute: performs reduction

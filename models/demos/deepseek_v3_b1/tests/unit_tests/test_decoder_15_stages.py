@@ -74,7 +74,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1445824,
+            "worker_l1_size": 1439536,
         }
     ],
     indirect=True,
@@ -279,7 +279,7 @@ def test_persistent_decoder_15_stages(
                 d["o_proj_overlapped"],
                 None,
                 None,
-                d["ttnn_sdpa_output_l"],
+                None,
                 d["ttnn_sdpa_intermediate_recv"],
                 d["ttnn_sdpa_forwarder_scratch"],
                 d["device_chunk_size"],
