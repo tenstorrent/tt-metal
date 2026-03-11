@@ -57,28 +57,34 @@ def invalidate_vector(test_vector) -> tuple:
     """
     input_shape = test_vector.get("input_a_shape")
 
-    # If we have shape info, check for very large configs
+    # Extract Q shape - handle both dict (V1) and tuple/list (V2) formats
+    shape_q = None
     if isinstance(input_shape, dict):
         shape_q = input_shape.get("input_a") or input_shape.get("self")
+    elif isinstance(input_shape, (list, tuple)) and len(input_shape) >= 4:
+        shape_q = input_shape
 
-        # Calculate approximate memory requirement
-        if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) >= 4:
-            batch, num_heads, seq_len, head_dim = shape_q[0], shape_q[1], shape_q[2], shape_q[3]
+    if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) >= 4:
+        batch, num_heads, seq_len, head_dim = shape_q[0], shape_q[1], shape_q[2], shape_q[3]
 
-            # Filter very large attention computations that cause timeouts
-            if seq_len > 4096:
-                return True, f"Sequence length {seq_len} too large (timeout risk)"
+        # Filter very large sequence lengths that cause device hangs/OOM
+        if seq_len > 4096:
+            return True, f"Sequence length {seq_len} too large (timeout/OOM risk)"
 
-            if num_heads > 64:
-                return True, f"Number of heads {num_heads} too large (timeout risk)"
+        if num_heads > 64:
+            return True, f"Number of heads {num_heads} too large (timeout risk)"
 
-            # Also filter configs with very large batch * heads * seq_len
-            total_elements = batch * num_heads * seq_len * seq_len * head_dim
-            if total_elements > 1024 * 1024 * 1024:  # 1B elements
-                return (
-                    True,
-                    f"Attention computation too large: {total_elements / (1024**3):.2f}B elements (timeout risk)",
-                )
+        # Large batch sizes can OOM on single device (N150/N300)
+        if batch > 16:
+            return True, f"Batch size {batch} too large for single device (OOM risk)"
+
+        # Filter configs with very large total attention computation
+        total_elements = batch * num_heads * seq_len * seq_len * head_dim
+        if total_elements > 1024 * 1024 * 1024:  # 1B elements
+            return (
+                True,
+                f"Attention computation too large: {total_elements / (1024**3):.2f}B elements (timeout risk)",
+            )
 
     return False, None
 
@@ -133,15 +139,31 @@ def run(
     is_causal = kwargs.get("is_causal", False)
     if is_causal is None:
         is_causal = False
+
+    # Clear sharded memory configs - shard specs from traced configs have galaxy-specific
+    # core grids that are invalid on N150/N300 (different harvesting, grid sizes).
+    if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if input_c_memory_config is not None and "SHARDED" in str(input_c_memory_config):
+        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if output_memory_config is not None and "SHARDED" in str(output_memory_config):
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
-    # Validate program_config grid fits test device; drop if too large (TT_FATAL)
+    # Clear sharded memory_config from op_kwargs too
+    if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
+        del op_kwargs["memory_config"]
+
+    # Validate program_config grid fits test device; check each dimension (not just total)
     pc = op_kwargs.get("program_config")
     if pc is not None:
         try:
             device_grid = device.compute_with_storage_grid_size()
             pc_grid = pc.compute_with_storage_grid_size
-            if pc_grid[0] * pc_grid[1] > device_grid.x * device_grid.y:
+            if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
                 del op_kwargs["program_config"]
         except Exception:
             del op_kwargs["program_config"]
@@ -170,7 +192,6 @@ def run(
     mem_config_q = input_a_memory_config
     mem_config_k = input_b_memory_config
     mem_config_v = input_c_memory_config
-    output_mem_config = output_memory_config
 
     batch_size, num_heads_q, seq_len, head_dim = shape_q
     _, num_heads_k, _, _ = shape_k
@@ -196,15 +217,16 @@ def run(
             remaining = num_heads_q - (repeat_factor * num_heads_v)
             torch_v = torch.cat([torch_v, torch_v[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1)
 
-    # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs
+    # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
+    # Always use DRAM interleaved for the round-trip (safe on any device).
     torch_q = ttnn.to_torch(
-        ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
+        ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     )
     torch_k = ttnn.to_torch(
-        ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
+        ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     )
     torch_v = ttnn.to_torch(
-        ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
+        ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     )
 
     # Ensure all tensors have the same dtype for PyTorch SDPA
@@ -237,7 +259,7 @@ def run(
     # Quantize PyTorch output to match TTNN output dtype for fair comparison
     torch_output_tensor = ttnn.to_torch(
         ttnn.from_torch(
-            torch_output_golden, dtype=dtype_q, layout=layout_q, device=device, memory_config=output_mem_config
+            torch_output_golden, dtype=dtype_q, layout=layout_q, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
     )
 
