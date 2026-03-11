@@ -671,26 +671,25 @@ def test_rotary_embedding_llama_per_head(
     assert passing
 
 
-def run_test_rotary_embedding_llama_emulate_decode_with_prefill(
-    device,
+def run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
+    trans_mat_sharded,
+    cos_sin_sharded,
+    seq_len,
     batch,
     num_heads,
     head_dim,
+    datatype,
     pcc,
-    datatype=ttnn.bfloat16,
-    trans_mat_sharded=False,
-    cos_sin_sharded=False,
-    seq_len=1,
+    device,
 ):
     """
-    Compare Decode mode emulated with Prefill against regular decode mode (transpose->shard->RoPE->interleave->transpose)
-    when seq_len=1. When seq_len>1, compares prefill mode against PyTorch ground truth (covers COS_SIN_SHARDED_RELOAD).
+    Validate height-sharded `cos`/`sin` and `trans_mat` support in Prefill mode. Also, validates
+    decode (seq_len=1) mode emulated as prefill mode (batch, seq_len exchanged) for Deepseek.
     Input/Output are interleaved, cos/sin and trans_mat may be interleaved or sharded.
     """
     torch.manual_seed(42)
     max_seq_len = MAX_SEQ_LEN
     compute_grid_size = device.compute_with_storage_grid_size()
-    num_cores = compute_grid_size.x * compute_grid_size.y
     device_num_cores = compute_grid_size.x * compute_grid_size.y
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -700,59 +699,26 @@ def run_test_rotary_embedding_llama_emulate_decode_with_prefill(
         packer_l1_acc=True,
     )
 
-    trans_mat_torch = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)
-    head_dim_padded = nearest_32(head_dim)
+    trans_mat_torch = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)  # 32x32 tile
+    head_dim_padded = nearest_32(head_dim)  # to allow sharded config with arbitrary (even) head_dim
 
     if seq_len == 1:
         # Decode emulation: input (1, num_heads, batch, head_dim)
+        num_positions = batch
         position_ids = torch.arange(batch)
+        # This code path emulates decode done as prefill instead by interchanging `seq_len=1` and `batch`
         x_torch = (torch.rand(1, num_heads, batch, head_dim) * 2) - 1
         cos_torch, sin_torch = compute_gather_cos_sin(dhead=head_dim, end=max_seq_len * 2, position_ids=position_ids)
-
-        can_do_decode = head_dim % ttnn.TILE_SIZE == 0 and num_heads <= ttnn.TILE_SIZE and batch <= num_cores
-        if can_do_decode:
-            rope_setup = RotarySetup(device, batch, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None)
-            cos_none, sin_none = rope_setup.get_rot_mats(position_ids)
-            grid = ttnn.num_cores_to_corerangeset(batch, rope_setup.core_grid, row_wise=True)
-            input_mem_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, head_dim),
-                core_grid=grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            x_tt = ttnn.from_torch(x_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
-            x_trans = ttnn.transpose(x_tt, 1, 2, memory_config=input_mem_config)
-            out_a_trans = ttnn.experimental.rotary_embedding_llama(
-                x_trans,
-                cos_none,
-                sin_none,
-                rope_setup.transformation_mat,
-                is_decode_mode=True,
-                memory_config=input_mem_config,
-                compute_kernel_config=compute_kernel_config,
-            )
-            out_a = ttnn.transpose(
-                ttnn.to_memory_config(out_a_trans, ttnn.L1_MEMORY_CONFIG),
-                1,
-                2,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            out_a_torch = ttnn.to_torch(out_a)
-        else:
-            cos_half = cos_torch[..., 0::2]
-            sin_half = sin_torch[..., 0::2]
-            out_a_torch = apply_rotary_emb_qk_real(x_torch, cos_half, sin_half)
-        num_positions = batch
     else:
         # Prefill: input (batch, num_heads, seq_len, head_dim), compare vs PyTorch (covers COS_SIN_SHARDED_RELOAD)
-        position_ids = torch.arange(seq_len)
-        x_torch = (torch.rand(batch, num_heads, seq_len, head_dim) * 2) - 1
-        cos_torch, sin_torch = compute_gather_cos_sin(dhead=head_dim, end=max_seq_len * 2, position_ids=position_ids)
-        cos_half = cos_torch[..., 0::2]
-        sin_half = sin_torch[..., 0::2]
-        out_a_torch = apply_rotary_emb_qk_real(x_torch, cos_half, sin_half)
         num_positions = seq_len
+        position_ids = torch.arange(seq_len)  # can technically be seq_len x batch_size
+        x_torch = (torch.rand(batch, num_heads, seq_len, head_dim) * 2) - 1
+
+    cos_torch, sin_torch = compute_gather_cos_sin(dhead=head_dim, end=max_seq_len * 2, position_ids=position_ids)
+    cos_half = cos_torch[..., 0::2]
+    sin_half = sin_torch[..., 0::2]
+    out_a_torch = apply_rotary_emb_qk_real(x_torch, cos_half, sin_half)
 
     # Path B: Prefill mode (interleaved input)
     if cos_sin_sharded:
@@ -810,6 +776,9 @@ def run_test_rotary_embedding_llama_emulate_decode_with_prefill(
         trans_mat_tt = ttnn.from_torch(trans_mat_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
 
     x_tt_b = ttnn.from_torch(x_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    logger.info(
+        f"Shapes: x_tt_b: {x_tt_b.shape}, cos_tt: {cos_tt.shape}, sin_tt: {sin_tt.shape}, trans_mat_tt: {trans_mat_tt.shape}"
+    )
     out_b = ttnn.experimental.rotary_embedding_llama(
         x_tt_b,
         cos_tt,
@@ -822,70 +791,107 @@ def run_test_rotary_embedding_llama_emulate_decode_with_prefill(
     out_b_torch = ttnn.to_torch(out_b)
 
     passing, out_pcc = comp_pcc(out_a_torch, out_b_torch, pcc)
-    logger.info(f"Decode vs Prefill PCC: {out_pcc}")
+    logger.info(f"PCC against Torch: {out_pcc}")
     assert out_a_torch.shape == out_b_torch.shape, f"Shape mismatch: {out_a_torch.shape} vs {out_b_torch.shape}"
-    assert passing, f"Decode vs Prefill PCC {out_pcc} below threshold {pcc}"
+    assert passing, f"Prefill PCC {out_pcc} below threshold {pcc}"
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
-    "batch, num_heads, head_dim",
+    "trans_mat_sharded",
     (
-        (32, 1, 64),  # Deepseek_v3
-        (128, 1, 256),
-        (32, 16, 128),
-        (5, 1, 48),
-        (33, 1, 32),
-        (32, 5, 16),
-        (31, 65, 64),
-        (33, 31, 2),
-        (1, 1, 2),  # Deepseek_v3
+        False,
+        True,
+    ),
+    ids=(
+        "trans_mat_interleaved",
+        "trans_mat_sharded",
     ),
 )
 @pytest.mark.parametrize(
-    "trans_mat_sharded, cos_sin_sharded",
+    "cos_sin_sharded",
     (
-        (False, False),
-        (True, False),
-        (False, True),
-        (True, True),
+        False,
+        True,
     ),
-    ids=("none_sharded", "trans_mat_sharded", "cos_sin_sharded", "both_sharded"),
+    ids=(
+        "cs_interleaved",
+        "cs_sharded",
+    ),
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (1, 128),
+    (
+        1,
+        128,
+    ),
     ids=("decode", "prefill"),
+)
+@pytest.mark.parametrize(
+    "batch",
+    (
+        1,
+        32,
+        33,
+    ),
+    ids=(
+        "batch1",
+        "batch32",
+        "batch33",
+    ),
+)
+@pytest.mark.parametrize(
+    "num_heads",
+    (
+        1,
+        33,
+    ),
+    ids=(
+        "heads1",
+        "heads33",
+    ),
+)
+@pytest.mark.parametrize(
+    "head_dim",
+    (
+        2,
+        64,
+        256,
+    ),
+    ids=(
+        "head_dim2",
+        "head_dim64",
+        "head_dim256",
+    ),
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_rotary_embedding_llama_emulate_decode_with_prefill(
-    batch,
-    num_heads,
-    head_dim,
+def test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
     trans_mat_sharded,
     cos_sin_sharded,
     seq_len,
+    batch,
+    num_heads,
+    head_dim,
     datatype,
     pcc,
     device,
 ):
     """
-    When seq_len=1: compare prefill mode emulating decode vs decode (or PyTorch fallback).
-    When seq_len>1: compare prefill vs PyTorch ground truth (covers COS_SIN_SHARDED_RELOAD).
+    Validate height-sharded `cos`/`sin` and `trans_mat` support in Prefill mode.
     """
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least (8, 8) to run")
 
-    run_test_rotary_embedding_llama_emulate_decode_with_prefill(
-        device,
+    run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
+        trans_mat_sharded,
+        cos_sin_sharded,
+        seq_len,
         batch,
         num_heads,
         head_dim,
-        pcc,
         datatype,
-        trans_mat_sharded=trans_mat_sharded,
-        cos_sin_sharded=cos_sin_sharded,
-        seq_len=seq_len,
+        pcc,
+        device,
     )
