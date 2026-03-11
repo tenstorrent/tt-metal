@@ -37,7 +37,6 @@ on:
       - "Sanity tests"
       - "PR - Sanity tests"
       - "Sanity tests nightly debug run"
-      - "Sanity tests nightly debug run with watcher"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"

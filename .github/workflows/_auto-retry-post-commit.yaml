@@ -19,7 +19,6 @@ on:
       # to want to to
       - "zzz TG Quick tests"
       - "Sanity tests nightly debug run"
-      - "Sanity tests nightly debug run with watcher"
     types:
       - completed
 
