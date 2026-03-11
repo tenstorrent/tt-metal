@@ -451,6 +451,7 @@ class ModelArgs:
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "Qwen3.5-9B": "models/tt_transformers/model_params/Qwen3.5-9B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -547,7 +548,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+        if self.base_model_name in ["Phi-3-mini-128k-instruct", "Qwen3.5-9B"]:
             self.trust_remote_code_hf = True
 
         self._set_hf_params(self.CKPT_DIR)
