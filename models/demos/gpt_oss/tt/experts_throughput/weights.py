@@ -711,36 +711,54 @@ def create_fused_moe_gpt_config(
     N = config.intermediate_size
     E = experts_per_device
 
-    # --- Extract per-device weights from state_dict ---
-    # Slice only experts_per_device experts for the weight tensor (local experts only).
-    # The mapping tensor covers all num_experts (global) to route all experts correctly.
+    # --- Extract ALL expert weights from state_dict ---
+    # Each device owns E = experts_per_device unique experts.
+    # Device d (row-major: d = row * mesh_cols + col) owns experts [d*E : (d+1)*E].
+    # Weights are organized as [rows*num_cores, cols*L, ...] and sharded via
+    # ShardTensor2dMesh(dims=(0, 1)) so each device gets [num_cores, L, ...].
     if "gate_up_proj" in state_dict:
-        gate_up = state_dict["gate_up_proj"][:E]  # [E, K, 2N] interleaved
-        w0 = gate_up[..., ::2].contiguous()  # gate [E, K, N]
-        w1 = gate_up[..., 1::2].contiguous()  # up   [E, K, N]
+        gate_up_all = state_dict["gate_up_proj"]  # [num_experts, K, 2N]
+        w0_all = gate_up_all[..., ::2].contiguous().float()  # [num_experts, K, N]
+        w1_all = gate_up_all[..., 1::2].contiguous().float()  # [num_experts, K, N]
     else:
-        w0 = state_dict["gate_proj"][:E].contiguous()  # [E, K, N]
-        w1 = state_dict["up_proj"][:E].contiguous()  # [E, K, N]
-    w2 = state_dict["down_proj"][:E].contiguous()  # [E, N, K]
-
-    # Convert to float32 for weight preparation (quantized on upload)
-    w0 = w0.float()
-    w1 = w1.float()
-    w2 = w2.float()
+        w0_all = state_dict["gate_proj"].contiguous().float()
+        w1_all = state_dict["up_proj"].contiguous().float()
+    w2_all = state_dict["down_proj"].contiguous().float()  # [num_experts, N, K]
 
     # --- Prepare fused kernel weights (DRAM HEIGHT_SHARDED) ---
-    # _build_ring2cores uses get_optimal_dram_bank_to_logical_worker_assignment which
-    # works on both single Device and MeshDevice objects.
     ring2cores = _build_ring2cores(mesh_device)
     num_cores = len(ring2cores)
     L = 1  # single-layer mode
 
     dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_core_coords])
-
-    # w0_w1: shape (num_cores, L, E, groups_per_core, K, 4*TILE_SIZE)
-    torch_w0_w1 = _prepare_w0_w1_tensor(w0.unsqueeze(0), w1.unsqueeze(0), L, E, K, N, ring2cores)
     groups_per_core = _FUSED_MAX_TILES_PER_CORE // 2  # 4
+
+    # Prepare per-device weight tensors for all 32 devices, organized as [rows, cols].
+    # Expert assignment matches gen_expert_mapping (cluster_axis=0):
+    #   experts_per_cluster = num_experts / mesh_cols (e.g., 128/8 = 16)
+    #   Device at (row r, col c) owns experts [c*epc + r*E : c*epc + (r+1)*E]
+    # Cat columns on dim 1, rows on dim 0 → [rows*num_cores, cols*L, E, groups, K, tile].
+    # ShardTensor2dMesh(dims=(0, 1)) gives each device [num_cores, L, E, groups, K, tile].
+    mesh_cols = total_devices // ring_devices
+    experts_per_cluster = config.num_experts // mesh_cols
+    w0_w1_rows = []
+    w2_rows = []
+    for r in range(ring_devices):
+        w0_w1_cols = []
+        w2_cols = []
+        for c in range(mesh_cols):
+            start = c * experts_per_cluster + r * E
+            w0_d = w0_all[start : start + E].unsqueeze(0)  # [1, E, K, N]
+            w1_d = w1_all[start : start + E].unsqueeze(0)  # [1, E, K, N]
+            w2_d = w2_all[start : start + E].unsqueeze(0)  # [1, E, N, K]
+            w0_w1_cols.append(_prepare_w0_w1_tensor(w0_d, w1_d, L, E, K, N, ring2cores))
+            w2_cols.append(_prepare_w2_tensor(w2_d, L, E, N, K, ring2cores))
+        w0_w1_rows.append(torch.cat(w0_w1_cols, dim=1))  # cat cols on dim 1
+        w2_rows.append(torch.cat(w2_cols, dim=1))
+    torch_w0_w1 = torch.cat(w0_w1_rows, dim=0)  # cat rows on dim 0
+    torch_w2 = torch.cat(w2_rows, dim=0)
+
     w0_w1_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.DRAM,
@@ -756,11 +774,9 @@ def create_fused_moe_gpt_config(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(ring_devices, mesh_cols)),
     )
 
-    # w2: shape (num_cores, L, E, 2, N, 4*TILE_SIZE)
-    torch_w2 = _prepare_w2_tensor(w2.unsqueeze(0), L, E, N, K, ring2cores)
     w2_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.DRAM,
@@ -776,20 +792,21 @@ def create_fused_moe_gpt_config(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(ring_devices, mesh_cols)),
     )
-
-    # --- Expert routing mapping: [total_devices, experts_per_ring] uint16 ---
-    # Uses ring-local expert IDs (0..experts_per_ring-1), matching the e2e test format.
-    # mapping[d, e] = (e // experts_per_device) * mesh_cols + (d % mesh_cols)
-    # This gives the linearized device ID of the device in the same column ring
-    # that owns ring-local expert e.
-    mesh_cols = total_devices // ring_devices
-    mapping_data = torch.zeros(total_devices, experts_per_ring, dtype=torch.int16)
-    for d in range(total_devices):
-        col = d % mesh_cols
-        for e in range(experts_per_ring):
-            mapping_data[d, e] = (e // experts_per_device) * mesh_cols + col
+    # --- Expert routing mapping: [total_devices, num_experts] uint16 ---
+    # Uses global expert IDs (0..num_experts-1) with gen_expert_mapping logic.
+    # For cluster_axis=0: mapping[e] = (e % epc // E) * mesh_cols + (e // epc)
+    # where epc = experts_per_cluster. This maps each expert to its global device ID.
+    num_experts = config.num_experts
+    experts_per_cluster = num_experts // mesh_cols
+    mapping_row = torch.zeros(num_experts, dtype=torch.int16)
+    for e in range(num_experts):
+        cluster_id = e // experts_per_cluster
+        expert_within_cluster = e % experts_per_cluster
+        device_within_cluster = expert_within_cluster // experts_per_device
+        mapping_row[e] = device_within_cluster * mesh_cols + cluster_id
+    mapping_data = mapping_row.unsqueeze(0).repeat(total_devices, 1)
     tt_dispatch_mapping = ttnn.from_torch(
         mapping_data,
         device=mesh_device,

@@ -86,11 +86,6 @@ def fused_decode_forward(
     # Reshape hidden_states to [M, 1, 1, H] for dispatch
     hidden_states = ttnn.reshape(hidden_states, (tokens_per_device, 1, 1, config.hidden_size))
 
-    # Save a DRAM copy of scores for post-combine weighting.
-    # Scores are [M, 1, 1, K] HEIGHT_SHARDED L1 — copy to interleaved DRAM before
-    # dispatch consumes L1 space. This is a device-to-device copy, no host round-trip.
-    tt_scores_copy = ttnn.to_memory_config(topk_expert_scores, ttnn.DRAM_MEMORY_CONFIG)
-
     # Format conversion: router outputs [M, K] uint16 TILE but dispatch needs
     # [M, 1, 1, K] uint16 HEIGHT_SHARDED L1 ROW_MAJOR. Since ttnn.reshape doesn't
     # support uint16, we read to host and re-upload. This is a temporary workaround
@@ -104,6 +99,24 @@ def fused_decode_forward(
 
     ttnn.deallocate(topk_expert_indices)
     ttnn.deallocate(topk_expert_scores)
+
+    # Re-upload scores to DRAM interleaved for post-combine weighting.
+    # We already have host_scores from the host round-trip above.
+    # Shape: [M, 1, 1, K] per row, sharded across rows, replicated across cols.
+    scores_for_weight = torch.cat(
+        [
+            host_scores[row * mesh_cols].reshape(tokens_per_device, 1, 1, K_sel).to(torch.bfloat16)
+            for row in range(mesh_rows)
+        ]
+    )
+    tt_scores_copy = ttnn.from_torch(
+        scores_for_weight,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(mesh_rows, mesh_cols)),
+    )
 
     num_cores_y = min(8, tokens_per_device)
     num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y

@@ -325,18 +325,18 @@ def run_fused_throughput_experts_component(
         num_links=4,
     )
 
-    # Create routing with ring-local expert IDs (0..experts_per_ring-1).
-    # Matches e2e test format: each column ring has experts_per_ring = E * ring_devices
-    # ring-local experts that map to ring_devices devices.
+    # Create routing with global expert IDs (0..num_experts-1).
+    # Each column ring only processes experts on devices in that ring; the all_reduce
+    # across columns (cluster_axis=1) combines all partial results.
     num_experts_per_tok = tt_config.num_experts_per_tok
-    experts_per_ring = tt_config.num_experts_per_device * mesh_device.shape[cluster_axis]
+    total_experts = config.num_local_experts  # 128
     indices_list = []
     scores_list = []
 
     routing_weights = torch.zeros(num_tokens, config.num_local_experts, dtype=torch.float32)
 
     for _ in range(num_tokens):
-        selected = torch.randperm(experts_per_ring)[:num_experts_per_tok].sort().values
+        selected = torch.randperm(total_experts)[:num_experts_per_tok].sort().values
         indices_list.append(selected.to(torch.int64))
         scores = torch.rand(num_experts_per_tok, dtype=torch.float32) + 1e-5
         scores = scores / scores.sum()
@@ -348,10 +348,11 @@ def run_fused_throughput_experts_component(
     # Create hidden states - tokens on dim 0 matching e2e test format
     hidden_states_torch = torch.randn(num_tokens, 1, 1, hidden_size, dtype=torch.float32)
 
-    # Run reference for PCC comparison using global expert IDs (0..num_experts-1).
-    # routing_weight_map=None means unweighted sum, so we pass uniform weights for routed experts.
+    # Zero out bias in reference model since moe_gpt kernel doesn't add bias.
     reference_experts = reference_layer.mlp.experts.eval()
     with torch.no_grad():
+        reference_experts.gate_up_proj_bias.zero_()
+        reference_experts.down_proj_bias.zero_()
         reference_output = reference_experts(
             hidden_states_torch.reshape(1, 1, num_tokens, hidden_size),
             router_indices=indices_torch.squeeze(),
@@ -407,20 +408,24 @@ def run_fused_throughput_experts_component(
             config=tt_config,
             fused_config=fused_config,
             mesh_device=mesh_device,
-            routing_weight_map=None,
         )
 
-        # Gather output across mesh: row-concat tokens, col-concat hidden (take first H cols)
-        mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
-        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[:num_tokens, ..., :hidden_size]
+        # After all_reduce across cols, all col devices in the same row have identical
+        # output [1, 1, M, H]. Pick col=0 from each row and concat tokens along dim -2.
+        mesh_rows, mesh_cols = mesh_device.shape
+        dev_tensors = ttnn.get_device_tensors(tt_output)
+        per_row = [ttnn.to_torch(dev_tensors[r * mesh_cols]) for r in range(mesh_rows)]
+        tt_output_torch = torch.cat(per_row, dim=-2)[..., :hidden_size]
         assert not torch.isnan(tt_output_torch).any(), "NaN detected in fused expert output"
         assert not torch.isinf(tt_output_torch).any(), "Inf detected in fused expert output"
         # reference_output: [num_tokens, hidden_size]
 
         tt_flat = tt_output_torch.reshape(-1, hidden_size)[:num_tokens].float()
-        passing, pcc_str = compare_tensors(tt_flat, reference_output, mesh_device, pcc_threshold=0.0)
+        ref_flat = reference_output.reshape(-1, hidden_size)[:num_tokens].float()
+
+        passing, pcc_str = compare_tensors(tt_flat, ref_flat, mesh_device, pcc_threshold=0.0)
         logger.info(
-            f"Fused throughput experts PCC (global expert IDs, no routing weights applied): {pcc_str}. "
+            f"Fused throughput experts PCC (global expert IDs): {pcc_str}. "
             f"Output range: [{tt_flat.min():.4f}, {tt_flat.max():.4f}]."
         )
     finally:
