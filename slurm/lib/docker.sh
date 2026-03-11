@@ -22,11 +22,43 @@ native_run() {
     local venv_dir="${ws}/python_env"
 
     log_info "Running natively (NO_DOCKER=1)"
+    log_info "  WORKSPACE=${ws}"
 
-    # Ensure the venv's Python stdlib is bundled (self-contained).
-    # uv's --managed-python copies the binary but not the stdlib;
-    # without bundling, Python can't find 'encodings' on compute nodes.
     if [[ -d "${venv_dir}" ]]; then
+        # --- Diagnostics: venv state before activation ---
+        log_info "Venv directory: ${venv_dir}"
+        if [[ -f "${venv_dir}/pyvenv.cfg" ]]; then
+            log_info "pyvenv.cfg contents:"
+            while IFS= read -r line; do log_info "  ${line}"; done < "${venv_dir}/pyvenv.cfg"
+        else
+            log_warn "pyvenv.cfg NOT FOUND in ${venv_dir}"
+        fi
+
+        local py_bin="${venv_dir}/bin/python3"
+        if [[ -e "${py_bin}" ]]; then
+            if [[ -L "${py_bin}" ]]; then
+                log_info "python3 binary: symlink -> $(readlink -f "${py_bin}" 2>/dev/null || readlink "${py_bin}")"
+            else
+                log_info "python3 binary: regular file ($(stat -c '%s bytes, inode %i' "${py_bin}" 2>/dev/null || stat -f '%z bytes' "${py_bin}"))"
+            fi
+        else
+            log_warn "python3 binary NOT FOUND at ${py_bin}"
+        fi
+
+        # Check stdlib presence
+        local stdlib_encodings
+        stdlib_encodings=$(ls -d "${venv_dir}"/lib/python3*/encodings 2>/dev/null | head -1)
+        if [[ -n "${stdlib_encodings}" ]]; then
+            log_info "stdlib encodings found: ${stdlib_encodings}"
+        else
+            log_warn "stdlib encodings NOT found under ${venv_dir}/lib/python3*/"
+            log_info "Contents of ${venv_dir}/lib/:"
+            ls -la "${venv_dir}/lib/" 2>/dev/null | while IFS= read -r line; do log_info "  ${line}"; done
+        fi
+
+        # Ensure the venv's Python stdlib is bundled (self-contained).
+        # uv's --managed-python copies the binary but not the stdlib;
+        # without bundling, Python can't find 'encodings' on compute nodes.
         if ! ls "${venv_dir}"/lib/python3*/encodings/__init__.py &>/dev/null; then
             local bundle_script="${ws}/scripts/bundle_python_into_venv.sh"
             if [[ -x "${bundle_script}" ]]; then
@@ -38,9 +70,39 @@ native_run() {
             fi
         fi
 
+        # Fix pyvenv.cfg 'home' if it points to a path that doesn't exist on
+        # this node.  uv --managed-python sets home to the uv cpython install
+        # dir (e.g. /usr/local/share/uv/python/cpython-.../install/bin) which
+        # won't exist on NFS compute nodes.  When Python can't resolve the
+        # home path it falls back to its compiled-in prefix (/install) and
+        # fails to find the stdlib.  Rewriting home to the venv's own bin/
+        # makes Python find the bundled stdlib in python_env/lib/python3.X/.
+        if [[ -f "${venv_dir}/pyvenv.cfg" ]]; then
+            local cfg_home
+            cfg_home=$(grep -E '^home\s*=' "${venv_dir}/pyvenv.cfg" | head -1 | sed 's/^home\s*=\s*//')
+            if [[ -n "${cfg_home}" && ! -d "${cfg_home}" ]]; then
+                local new_home
+                new_home="$(cd "${venv_dir}/bin" && pwd)"
+                log_info "pyvenv.cfg home '${cfg_home}' does not exist on this node"
+                log_info "Rewriting pyvenv.cfg home -> ${new_home}"
+                sed -i "s|^home\s*=.*|home = ${new_home}|" "${venv_dir}/pyvenv.cfg"
+                log_info "Updated pyvenv.cfg:"
+                while IFS= read -r line; do log_info "  ${line}"; done < "${venv_dir}/pyvenv.cfg"
+            fi
+        fi
+
         log_info "Activating venv: ${venv_dir}"
         # shellcheck disable=SC1091
         source "${venv_dir}/bin/activate"
+
+        # --- Diagnostics: state after activation ---
+        log_info "Post-activation:"
+        log_info "  VIRTUAL_ENV=${VIRTUAL_ENV:-<not set>}"
+        log_info "  PATH (first 3)=$(echo "$PATH" | tr ':' '\n' | head -3 | tr '\n' ':')"
+        log_info "  which python3: $(which python3 2>/dev/null || echo 'not found')"
+        log_info "  which pytest: $(which pytest 2>/dev/null || echo 'not found')"
+    else
+        log_warn "Venv directory not found: ${venv_dir}"
     fi
 
     export TT_METAL_HOME="${ws}"
@@ -49,8 +111,10 @@ native_run() {
     export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
     export LOGURU_LEVEL="${LOGURU_LEVEL:-INFO}"
 
-    log_info "TT_METAL_HOME=${TT_METAL_HOME}"
-    log_info "PYTHONPATH=${PYTHONPATH}"
+    log_info "Final environment:"
+    log_info "  TT_METAL_HOME=${TT_METAL_HOME}"
+    log_info "  PYTHONPATH=${PYTHONPATH}"
+    log_info "  LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
     log_info "Running: ${commands}"
 
     (cd "${ws}" && bash -c "set -euo pipefail; $commands")
