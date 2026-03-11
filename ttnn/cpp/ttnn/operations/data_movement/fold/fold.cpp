@@ -443,7 +443,7 @@ Tensor FoldOperation::invoke(
         // Reshard if needed for optimal fold computation
         processed_tensor = reshard_if_needed(processed_tensor, stride_h, stride_w);
 
-        return ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
+        return ttnn::prim::fold(processed_tensor, stride_h, stride_w);
     }
     // Interleaved tensor path (DRAM or L1)
     Tensor processed_tensor = input_tensor;
@@ -471,7 +471,7 @@ Tensor FoldOperation::invoke(
         processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 
-    auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
+    auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w);
 
     // Reshape output if input was tiled
     if (was_tiled) {

@@ -76,8 +76,11 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
     }
-    if (op_attr.is_dram_interleaved) {
-        ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
+    // Interleaved tensors (DRAM or L1)
+    ttnn::Shape output_logical_shape = output_shape;
+    if (input_tensor.memory_config().is_dram()) {
+        // DRAM path preserves 4D shape; for tiled inputs the caller reshapes afterward
+        output_logical_shape = ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
         if (input_tensor.layout() == Layout::ROW_MAJOR) {
             output_logical_shape = ttnn::Shape(
                 {input_shape[0],
@@ -85,16 +88,9 @@ Fold::spec_return_value_t Fold::compute_output_specs(
                  input_shape[2] / op_attr.stride_w,
                  input_shape[3] * op_attr.stride_h * op_attr.stride_w});
         }
-        return {TensorSpec(
-            output_logical_shape,
-            tt::tt_metal::TensorLayout(
-                output_dtype,
-                tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-                input_tensor.memory_config()))};
     }
-
     return {TensorSpec(
-        output_shape,
+        output_logical_shape,
         tt::tt_metal::TensorLayout(
             output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
 }
@@ -108,22 +104,10 @@ Fold::tensor_return_value_t Fold::create_output_tensors(
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
-    const ttnn::Tensor& input_tensor,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    const std::optional<const ttnn::Shape>& /*output_shape*/,
-    uint32_t /*pad_c*/,
-    uint32_t /*pad_h*/,
-    uint32_t /*pad_w*/) {
+    const ttnn::Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w) {
     using OperationType = ttnn::operations::data_movement::Fold;
-    bool is_sharded = input_tensor.is_sharded();
-    bool is_dram_interleaved =
-        input_tensor.storage_type() == StorageType::DEVICE && input_tensor.memory_config().is_dram();
     auto operation_attributes = OperationType::operation_attributes_t{
-        .stride_h = stride_h,
-        .stride_w = stride_w,
-        .is_sharded = is_sharded,
-        .is_dram_interleaved = is_dram_interleaved};
+        .stride_h = stride_h, .stride_w = stride_w, .is_sharded = input_tensor.is_sharded()};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
