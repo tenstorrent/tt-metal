@@ -207,6 +207,7 @@ class Generator(WarmupForwardMixin):
         global_user_id=None,
         batch_size=1,
         user_id=0,
+        return_hidden_states=False,
     ):
         if batch_size > 1:
             prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
@@ -229,6 +230,7 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
+                return_hidden_states=return_hidden_states,
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
             logger.info("Done Compiling Model")
@@ -245,6 +247,7 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
+                return_hidden_states=return_hidden_states,
             )
             ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -337,10 +340,13 @@ class Generator(WarmupForwardMixin):
         model_id=-1,
         prefill_seq_len=None,
         batch_size=1,
+        return_hidden_states=False,
         **kwargs,
     ):
         global_user_id = kwargs.get("global_user_id", None)
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}"
+        if return_hidden_states:
+            trace_key += "_rhs"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
@@ -350,6 +356,7 @@ class Generator(WarmupForwardMixin):
                 global_user_id=global_user_id,
                 batch_size=batch_size,
                 user_id=user_id,
+                return_hidden_states=return_hidden_states,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -597,6 +604,10 @@ class Generator(WarmupForwardMixin):
                     empty_slots=[user_id % max_batch_size_per_model],
                 )
 
+            # For batched prefill + sampling, return raw hidden states (before norm/lm_head)
+            # so extract_last_tokens_batched_prefill can pick per-user rows first.
+            _return_hidden = use_batched_prefill and sampling_enabled
+
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
@@ -607,6 +618,7 @@ class Generator(WarmupForwardMixin):
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
                     batch_size=padded_batch if use_batched_prefill else 1,
+                    return_hidden_states=_return_hidden,
                     **local_kwargs,
                 )
             else:
@@ -619,6 +631,7 @@ class Generator(WarmupForwardMixin):
                     model_id=model_id,
                     num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
                     batch_size=padded_batch if use_batched_prefill else 1,
+                    return_hidden_states=_return_hidden,
                     **local_kwargs,
                 )
             if use_batched_prefill:
@@ -627,6 +640,21 @@ class Generator(WarmupForwardMixin):
 
                 if sampling_enabled:
                     sampling_executed = True
+
+                    # Models with non-tile-aligned batch sizes (< 32) can provide
+                    # sample_batched_prefill to bypass the on-device sampling module.
+                    if hasattr(self.model[model_id], "sample_batched_prefill"):
+                        user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
+                            logits, last_token_idx, padded_batch, prefill_seq_len
+                        )
+                        tokens_host, log_probs_host = self.model[model_id].sample_batched_prefill(
+                            user_hidden, padded_batch
+                        )
+                        for local_idx, slot in enumerate(empty_slots):
+                            output_tokens[slot] = tokens_host[slot]
+                            if log_probs_host is not None:
+                                output_log_probs[slot] = log_probs_host[slot]
+                        break
 
                     combined_params = format_sampling_params(sampling_params, padded_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
@@ -803,6 +831,7 @@ class Generator(WarmupForwardMixin):
         model_id=-1,
         num_cached_tokens: int = 0,
         batch_size=1,
+        return_hidden_states=False,
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
@@ -921,6 +950,7 @@ class Generator(WarmupForwardMixin):
                 get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                return_hidden_states=return_hidden_states,
             )
             return tt_logits
 

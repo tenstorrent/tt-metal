@@ -288,6 +288,14 @@ class Model:
         ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
         # Create instance using direct initialization
+        # Fix max_local_batch_size for row-sharded mode with small batches.
+        # ModelArgs sets max_local_batch_size = max_batch_size when <= 32, but
+        # with row-sharding each row only handles max_batch_size / num_rows users.
+        max_local = args.max_local_batch_size
+        if users_row_sharded and mesh_device.shape[0] > 1:
+            max_local = max(1, args.max_batch_size // mesh_device.shape[0])
+            args.max_local_batch_size = max_local
+
         instance = cls.__new__(cls)
         instance.__init__(
             mesh_device=mesh_device,
@@ -299,7 +307,7 @@ class Model:
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
-            max_local_batch_size=args.max_local_batch_size,
+            max_local_batch_size=max_local,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
         )
@@ -328,6 +336,7 @@ class Model:
         user_id=0,
         sampling_on_device=False,
         batch_size=1,
+        return_hidden_states=False,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -360,6 +369,11 @@ class Model:
                 batch_size=batch_size,
             )
         logits = hidden_states
+
+        # For batched prefill + sampling: return hidden states before norm/lm_head
+        # so the generator can extract per-user rows cheaply first.
+        if return_hidden_states:
+            return hidden_states
 
         if get_last_token != -1:
             if len(logits.shape) == 3:
@@ -458,6 +472,7 @@ class Model:
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        return_hidden_states=False,
     ):
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
@@ -482,9 +497,54 @@ class Model:
             is_decode=False,
             user_id=user_id,
             batch_size=batch_size,
+            return_hidden_states=return_hidden_states,
         )
 
+        # When returning hidden states for batched prefill with row-sharding,
+        # each device only has its local row's portion ([1, 1, seq_len, hidden_dim]).
+        # The generator expects the full [1, 1, batch*seq_len, hidden_dim] replicated
+        # on all devices so it can reshape to [batch, 1, seq_len, hidden_dim].
+        # Gather from all rows on host and replicate back.
+        if return_hidden_states and batch_size > 1 and self.users_row_sharded:
+            logits = self._gather_row_sharded_hidden_states(logits, batch_size)
+
         return logits
+
+    def _gather_row_sharded_hidden_states(self, hidden_states, batch_size):
+        """Gather row-sharded hidden states into a single replicated tensor.
+
+        After batched prefill with row-sharding, each mesh row holds one user's
+        hidden states [1, 1, seq_len, hidden_dim] (replicated across TP columns
+        after attention all-reduce + MLP all_to_all_combine). This reads from
+        one device per row, concatenates on host, and returns a replicated
+        [1, 1, batch*seq_len, hidden_dim] tensor matching what the generator expects.
+        """
+        num_rows = self.mesh_device.shape[0]
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(hidden_states)
+
+        row_tensors = []
+        for row in range(num_rows):
+            # Column 0 of each row (all columns have identical replicated data)
+            device_idx = row * num_cols
+            row_tensors.append(ttnn.to_torch(device_tensors[device_idx]))
+
+        # Each tensor is [1, 1, seq_len, hidden_dim]
+        # Cat along dim 0 → [batch_size, 1, seq_len, hidden_dim]
+        # Flatten → [1, 1, batch_size * seq_len, hidden_dim]
+        combined = torch.cat(row_tensors, dim=0)
+        B, one, S, H = combined.shape
+        combined = combined.reshape(1, 1, B * S, H).contiguous()
+
+        hidden_states.deallocate(True)
+
+        return ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         """
@@ -500,6 +560,113 @@ class Model:
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
         return logits
+
+    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract each user's last-token hidden state from batched prefill output.
+
+        After all decoder layers, hidden states are replicated across all mesh devices
+        (attention all-reduce + MLP all_to_all_combine + column all_reduce). We read
+        from a single device, extract per-user rows on host, and replicate back.
+
+        Args:
+            hidden_states: [padded_batch, 1, prefill_seq_len, hidden_dim] on device (replicated)
+            last_token_idx_list: list of length padded_batch with per-user last token positions
+            padded_batch: number of user slots
+            prefill_seq_len: padded sequence length per user
+
+        Returns:
+            user_tokens: [1, 1, padded_batch, hidden_dim] replicated on all devices, TILE_LAYOUT
+        """
+        active_indices = [lt for lt in last_token_idx_list if lt > 0]
+        all_same = len(set(active_indices)) <= 1
+
+        if all_same and active_indices:
+            # Optimized path: all users share the same last token index.
+            # Slice just the 32-row tile block containing that index.
+            common_last = active_indices[0]
+            get_last = (common_last // 32) * 32
+            R = common_last % 32
+            block = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last, 0),
+                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
+            )
+        else:
+            block = hidden_states
+            R = None
+
+        # Read from device 0 -- all devices have the same replicated data.
+        device_tensors = ttnn.get_device_tensors(block)
+        host_full = ttnn.to_torch(device_tensors[0])
+
+        if R is not None:
+            # All users have the same last token at row R within the 32-row block.
+            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
+        else:
+            # Different last token indices -- extract each user's row individually.
+            rows = []
+            for slot in range(padded_batch):
+                lt_idx = last_token_idx_list[slot]
+                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
+            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        # Send back to all devices with replication (hidden states are replicated,
+        # not TP-sharded, after MLP all_reduce).
+        user_tokens = ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return user_tokens
+
+    def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract last tokens and run norm + lm_head once for all users."""
+        user_tokens = self.extract_last_tokens_batched_prefill(
+            hidden_states, last_token_idx_list, padded_batch, prefill_seq_len
+        )
+        return self._apply_norm_and_lm_head(user_tokens)
+
+    def _apply_norm_and_lm_head(self, hidden_states):
+        """Apply final norm and lm_head to extracted hidden states.
+
+        Used by the generator after extract_last_tokens_batched_prefill
+        to compute logits on the small [1, 1, batch, hidden_dim] tensor
+        instead of the full [1, 1, B*S, hidden_dim] tensor.
+        """
+        hidden_states = self.norm(hidden_states)
+        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        hidden_states.deallocate(True)
+        return logits
+
+    def sample_batched_prefill(self, user_hidden, padded_batch):
+        """Apply norm + lm_head and greedy-sample tokens for batched prefill.
+
+        The on-device sampling module requires batch_size % 32 == 0 and row-sharded
+        params (sampling_dp > 1), which doesn't match the replicated hidden states
+        from batched prefill with small batch sizes. This method handles sampling
+        on host via argmax after gathering column-sharded logits.
+
+        Args:
+            user_hidden: [1, 1, padded_batch, hidden_dim] replicated on all devices
+            padded_batch: number of user slots
+
+        Returns:
+            (tokens, log_probs): tokens is a 1D tensor of length padded_batch,
+                                 log_probs is None (host-side argmax has no log probs)
+        """
+        logits_tt = self._apply_norm_and_lm_head(user_hidden)
+
+        # Gather column-parallel (TP-sharded) logits: each column has vocab_size/num_cols
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(logits_tt)
+        col_logits = [ttnn.to_torch(device_tensors[col]) for col in range(num_cols)]
+        full_logits = torch.cat(col_logits, dim=-1)  # [1, 1, padded_batch, full_vocab]
+
+        tokens = torch.argmax(full_logits, dim=-1).reshape(-1)[:padded_batch]
+        logits_tt.deallocate(True)
+        return tokens, None
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
@@ -631,6 +798,10 @@ class Model:
         """
         # Embed the tokens
         device = None if trace_enabled else self.mesh_device
+
+        # Auto-detect batched prefill when generator passes [batch, seq_len] with batch_size > 1
+        if not batched_prefill and batch_size > 1 and tokens.dim() == 2 and tokens.shape[0] == batch_size:
+            batched_prefill = True
 
         if batched_prefill:
             # Row-parallel batched prefill: tokens is [num_rows, seq_len]
