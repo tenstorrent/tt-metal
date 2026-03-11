@@ -24,7 +24,7 @@ ALLCLOSE_ATOL = 1e-08  # Absolute tolerance for allclose
 ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
-NEAR_ZERO_THRESHOLD = 0.01
+NEAR_ZERO_THRESHOLD = 0.0001
 # # Padding validation configuration
 # USE_FILL_PAD = False  # Enable fill_implicit_tile_padding with TEST_PADDING_VALUE for validation
 # TEST_PADDING_VALUE = 0  # Value to fill implicit tile padding for validation
@@ -223,10 +223,10 @@ def collect_and_dump_numeric_metrics(
                 avg_ulp = float(ulp_message.split("Avg ulp Delta: ")[1].split(",")[0])
                 # if avg_ulp.startswith("tensor("):
                 #     avg_ulp = ulp_str[len("tensor(") :].rstrip(")")
-                try:
-                    avg_ulp = float(ulp_str)
-                except ValueError:
-                    avg_ulp = float("nan")
+                # try:
+                #     avg_ulp = float(avg_ulp)
+                # except ValueError:
+                #     avg_ulp = float("nan")
         else:
             avg_ulp = 0
             max_ulp = 0
