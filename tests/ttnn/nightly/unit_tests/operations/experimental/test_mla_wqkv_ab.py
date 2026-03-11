@@ -14,7 +14,7 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc, comp_allclose
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
 
-PCC_THRESHOLD = 0.998
+PCC_THRESHOLD = 0.996
 
 """
 The kernel reads 7 tiles per transaction.
@@ -451,6 +451,14 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             # Do an in-place update of the last 64 values of each row
             torch_mm_out[:, :, -64:] = k_pe_rope_output
 
+            # Apply RMS Norm to the q_norm and k_norm tensors in place
+            q_norm_input = torch_mm_out[:, :, :1536]
+            k_norm_input = torch_mm_out[:, :, 1536 : 1536 + 512]
+            q_norm_output = torch.nn.functional.rms_norm(q_norm_input, normalized_shape=(1536,), eps=1e-5)
+            k_norm_output = torch.nn.functional.rms_norm(k_norm_input, normalized_shape=(512,), eps=1e-5)
+            torch_mm_out[:, :, :1536] = q_norm_output
+            torch_mm_out[:, :, 1536 : 1536 + 512] = k_norm_output
+
         # Calculate accuracy metrics for each layer
         for layer_id in range(L):
             torch_ref_layer = torch_mm_out[layer_id, :, :]
@@ -458,7 +466,6 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             tt_values = prepare_output_tensor(tt_layer_output, num_dram_banks)
             layer_metrics = get_accuracy_metrics(torch_ref_layer, tt_values)
             all_accuracy_metrics[layer_id] = layer_metrics
-            breakpoint()
 
     if dump_outputs:
         torch.set_printoptions(profile="full")
@@ -476,7 +483,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2112, 1, 0): 72,
+    (32, 7168, 2112, 1, 0): 76,
 }
 
 

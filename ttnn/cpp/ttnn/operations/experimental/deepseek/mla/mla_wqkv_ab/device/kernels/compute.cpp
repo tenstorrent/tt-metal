@@ -155,7 +155,9 @@ void kernel_main() {
     cb_reserve_back(cb_c2w_x2, 2);
     tile_regs_wait();
 
-    pack_tile_block(0, cb_s2c_out, n_tiles_this_core);
+    for (uint32_t tile_idx = 0; tile_idx < n_tiles_this_core; tile_idx++) {
+        pack_tile</*out_of_order_output=*/true>(tile_idx, cb_s2c_out, tile_idx);
+    }
     pack_tile(7, cb_c2w_x2);
     tile_regs_release();
     cb_push_back(cb_c2w_x2, 2);
@@ -174,8 +176,10 @@ void kernel_main() {
 
         // Divide the sum by N (1536 and 512 respectively)
         binop_with_scalar_tile_init();
-        div_unary_tile(0, norm::kernel_util::generic::bit_cast<uint32_t>(1536.0f));
-        div_unary_tile(1, norm::kernel_util::generic::bit_cast<uint32_t>(512.0f));
+        constexpr float q_norm_divisor = 1 / 1536.0f;
+        constexpr float kv_norm_divisor = 1 / 512.0f;
+        div_unary_tile(0, norm::kernel_util::generic::bit_cast<uint32_t>(q_norm_divisor));
+        div_unary_tile(1, norm::kernel_util::generic::bit_cast<uint32_t>(kv_norm_divisor));
 
         // Take rsqrt of the scale factor
         rsqrt_tile_init</*legacy_compat=*/false>();
@@ -206,14 +210,17 @@ void kernel_main() {
     tile_regs_acquire();
     uint32_t scale_idx = (dram_bank_id < 9) ? 0 : 1;
 
-    for (uint32_t tile_idx = 0; tile_idx < n_tiles_this_core; tile_idx++) {
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         mul_tiles_bcast_cols(cb_s2c_out, cb_w2c_x2, tile_idx, scale_idx, tile_idx);
     }
+
     tile_regs_commit();
     cb_pop_front(cb_w2c_x2, 2);
 
     tile_regs_wait();
-    pack_tile_block(0, cb_s2c_out, n_tiles_this_core);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+        pack_tile</*out_of_order_output=*/true>(tile_idx, cb_s2c_out, tile_idx);
+    }
     tile_regs_release();
 
     // We have one extra slot reserved, which we won't use, drain it.
