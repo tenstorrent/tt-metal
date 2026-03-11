@@ -94,10 +94,6 @@ ALL_SHAPES = (
 
 LAYOUTS = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
-# Tolerances for bfloat16
-RTOL = 0.01
-ATOL = 0.05
-
 
 def _shape_id(shape):
     return f"{shape[0]}x{shape[1]}x{shape[2]}x{shape[3]}"
@@ -127,7 +123,7 @@ def test_rms_norm_minimal(device, shape, layout):
     gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-    check_output(output, expected, shape, RTOL, ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout)
+    check_output(output, expected, shape, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +157,7 @@ def test_rms_norm_standard(device, shape, layout):
     gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-    check_output(output, expected, shape, RTOL, ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout)
+    check_output(output, expected, shape, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
 
 # ---------------------------------------------------------------------------
@@ -184,4 +180,4 @@ def test_rms_norm_large(device, shape, layout):
     gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-    check_output(output, expected, shape, RTOL, ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout)
+    check_output(output, expected, shape, expected_dtype=ttnn.bfloat16, expected_layout=layout)

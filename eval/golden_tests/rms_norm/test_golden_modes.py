@@ -22,11 +22,11 @@ MODE_SHAPES = [
 
 LAYOUTS = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
-# Standard tolerances
-BF16_RTOL = 0.01
-BF16_ATOL = 0.05
-FP32_RTOL = 0.001
-FP32_ATOL = 0.01
+# PCC + RMS thresholds
+BF16_PCC = 0.999
+BF16_RMS = 0.02
+FP32_PCC = 0.999
+FP32_RMS = 0.02
 
 
 def _shape_id(shape):
@@ -56,7 +56,7 @@ def test_rms_norm_no_gamma(device, shape, layout):
     x_tt = to_ttnn(x_torch, device, dtype=ttnn.bfloat16, layout=layout)
     output = rms_norm(x_tt, epsilon=1e-6)
 
-    check_output(output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout)
+    check_output(output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ def test_rms_norm_identity_gamma(device, shape, layout):
     gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-    check_output(output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout)
+    check_output(output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ def test_rms_norm_epsilon_variations(device, shape, epsilon):
 
     output = rms_norm(x_tt, gamma=gamma_tt, epsilon=epsilon)
     check_output(
-        output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=ttnn.TILE_LAYOUT
+        output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=ttnn.TILE_LAYOUT
     )
 
 
@@ -138,9 +138,7 @@ class TestRmsNormDistributions:
         gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-        check_output(
-            output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout
-        )
+        check_output(output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
     def test_small_magnitude(self, device, shape, layout):
         """Near-zero inputs (×0.01) — slightly relaxed tolerance."""
@@ -158,8 +156,8 @@ class TestRmsNormDistributions:
             output,
             expected,
             shape,
-            BF16_RTOL * 2.0,
-            BF16_ATOL * 2.0,
+            BF16_PCC,
+            BF16_RMS,
             expected_dtype=ttnn.bfloat16,
             expected_layout=layout,
         )
@@ -176,9 +174,7 @@ class TestRmsNormDistributions:
         gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-        check_output(
-            output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout
-        )
+        check_output(output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
     def test_positive_only(self, device, shape, layout):
         """Positive-only inputs (rand + 0.5)."""
@@ -192,9 +188,7 @@ class TestRmsNormDistributions:
         gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-        check_output(
-            output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout
-        )
+        check_output(output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
     def test_negative_only(self, device, shape, layout):
         """Negative-only inputs (-(rand + 0.5))."""
@@ -208,9 +202,7 @@ class TestRmsNormDistributions:
         gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-        check_output(
-            output, expected, shape, BF16_RTOL, BF16_ATOL, expected_dtype=ttnn.bfloat16, expected_layout=layout
-        )
+        check_output(output, expected, shape, BF16_PCC, BF16_RMS, expected_dtype=ttnn.bfloat16, expected_layout=layout)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +226,7 @@ def test_rms_norm_float32(device, shape, layout):
     gamma_tt = to_ttnn(gamma_torch, device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     output = rms_norm(x_tt, gamma=gamma_tt, epsilon=1e-6)
-    check_output(output, expected, shape, FP32_RTOL, FP32_ATOL, expected_dtype=ttnn.float32, expected_layout=layout)
+    check_output(output, expected, shape, FP32_PCC, FP32_RMS, expected_dtype=ttnn.float32, expected_layout=layout)
 
 
 @pytest.mark.standard
@@ -251,5 +243,5 @@ def test_rms_norm_float32_no_gamma(device, shape):
     output = rms_norm(x_tt, epsilon=1e-6)
 
     check_output(
-        output, expected, shape, FP32_RTOL, FP32_ATOL, expected_dtype=ttnn.float32, expected_layout=ttnn.TILE_LAYOUT
+        output, expected, shape, FP32_PCC, FP32_RMS, expected_dtype=ttnn.float32, expected_layout=ttnn.TILE_LAYOUT
     )
