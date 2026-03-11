@@ -9,7 +9,7 @@
 **Plans:** 7 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Wave 0: test infrastructure scaffolding (kernels + host runner + common types)
+- [x] 01-01-PLAN.md — Wave 0: test infrastructure scaffolding (kernels + host runner + common types)
 - [ ] 01-02-PLAN.md — linear/api.h: unicast + multicast unicast + sparse multicast renames and chunking wrappers
 - [ ] 01-03-PLAN.md — linear/api.h: scatter + fused-scatter renames and chunking wrappers
 - [ ] 01-04-PLAN.md — mesh/api.h: unicast + multicast unicast renames and chunking wrappers
