@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
@@ -15,7 +14,6 @@
 #include <variant>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
 namespace ttnn::prim {
 
@@ -54,13 +52,15 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
 
     const auto& a = tensor_args.input;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / TILE_WIDTH;
-    const uint32_t Ht = H / TILE_HEIGHT;
+    const uint32_t Wt = W / tile_width;
+    const uint32_t Ht = H / tile_height;
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();

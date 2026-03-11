@@ -72,7 +72,8 @@ struct AccumulationProgramFactory {
         const std::variant<DataMovementConfig, ComputeConfig>& config,
         const std::vector<uint32_t>& runtime_args = {});
 
-    static uint32_t calc_input_tile_offset(const Shape& input_shape, const int32_t& dim);
+    static uint32_t calc_input_tile_offset(
+        const Shape& input_shape, const int32_t& dim, uint32_t tile_height = 32, uint32_t tile_width = 32);
 };
 
 }  // namespace ttnn::prim

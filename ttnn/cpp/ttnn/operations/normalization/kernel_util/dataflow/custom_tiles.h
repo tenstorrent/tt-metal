@@ -25,7 +25,12 @@ namespace norm::kernel_util::dataflow {
  * @param num_cols The number of columns in the tile that will
  * participate in the reduction
  */
-FORCE_INLINE void generate_partial_reduce_scaler(const uint32_t cb_id, const uint32_t scaler, const uint32_t num_cols) {
+FORCE_INLINE void generate_partial_reduce_scaler(
+    const uint32_t cb_id,
+    const uint32_t scaler,
+    const uint32_t num_cols,
+    const uint32_t tile_height = 32,
+    const uint32_t tile_width = 32) {
     cb_reserve_back(cb_id, 1);
 
     const uint16_t scaler_uint16 = scaler >> 16;
@@ -47,8 +52,8 @@ FORCE_INLINE void generate_partial_reduce_scaler(const uint32_t cb_id, const uin
     // Iterate over first two faces (top two) then
     // second two faces (bottom two)
     if (scaler_uint16 != 0) {
-        constexpr uint32_t face_rows = tt::constants::TILE_HEIGHT / tt::constants::FACE_HEIGHT;
-        constexpr uint32_t faces_per_row = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
+        const uint32_t face_rows = tile_height / tt::constants::FACE_HEIGHT;
+        const uint32_t faces_per_row = tile_width / tt::constants::FACE_WIDTH;
         constexpr uint32_t cols_per_face = tt::constants::FACE_WIDTH;
         uint32_t face_row_offset = 0;
         for (uint32_t i = 0; i < face_rows; ++i) {

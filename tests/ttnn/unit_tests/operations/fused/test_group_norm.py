@@ -889,7 +889,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
 @pytest.mark.parametrize(
     "input_shape, num_groups, msg_pattern",
     [
-        ((2, 1, 16, 32), 8, "must be a multiple of the tile size"),
+        ((2, 1, 16, 32), 8, "must be a multiple of the tile height"),
     ],
 )
 def test_group_norm_negative_tests(

@@ -47,8 +47,8 @@ void kernel_main() {
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
@@ -249,7 +249,7 @@ void kernel_main() {
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w;
                     row_offset = num_cols_per_group;
 
@@ -258,11 +258,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = num_cols_per_group;
 
-                } else if (row_offset > TILE_WIDTH) {
+                } else if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset + group_row_offset;
 
@@ -270,7 +270,7 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else {
-                if (row_offset > TILE_WIDTH) {
+                if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset - tile_w_minux_group_size;
                 } else {

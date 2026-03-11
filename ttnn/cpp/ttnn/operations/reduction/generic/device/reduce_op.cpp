@@ -13,8 +13,6 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-using namespace tt::constants;
-
 namespace reduce_op_utils {
 
 std::map<std::string, std::string> get_defines(

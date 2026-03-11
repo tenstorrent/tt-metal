@@ -57,8 +57,10 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W = get_arg_val<uint32_t>(9);
+    const uint32_t tile_width = get_arg_val<uint32_t>(10);
+    const uint32_t tile_height = get_arg_val<uint32_t>(11);
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(10);
+    const uint32_t H_logical = get_arg_val<uint32_t>(12);
 #endif
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
@@ -123,9 +125,10 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        const auto partial_last_tile_cols = W % tile_width;
         if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
+                cb_in_2, scaler, partial_last_tile_cols, tile_height, tile_width);
         }
     }
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;

@@ -5,7 +5,6 @@
 #include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/work_split.hpp"
 
@@ -18,8 +17,6 @@ namespace ttnn::prim {
 
 TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
     const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
-    using namespace tt::constants;
-
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& value_tensor = std::get<0>(output_tensors);
@@ -49,8 +46,10 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const auto* index_buffer = index_tensor.buffer();
 
     // Tensor shape and dimension calculations
-    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
-    const uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    const uint32_t Wt = input_shape[3] / tile_width;
 
     // Single core selection from the provided core grid
     const auto
@@ -67,7 +66,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const std::vector<CoreCoord>& cores = corerange_to_cores(core_range, total_number_of_cores, true);
 
     // Number of tiles needed to store K top elements
-    const uint32_t Ktiles = tt::div_up(args.k, tt::constants::TILE_WIDTH);
+    const uint32_t Ktiles = tt::div_up(args.k, tile_width);
 
     // Pipeline Flow:
     // Input CB -> Reader Kernel -> Transposed CBs -> Compute Kernel -> Result Prep CBs -> Output CBs -> Writer Kernel

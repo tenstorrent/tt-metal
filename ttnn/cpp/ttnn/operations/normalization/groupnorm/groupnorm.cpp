@@ -37,7 +37,13 @@ ttnn::Tensor get_mask_tensor(
             }
             num_cores_across_channel = num_virtual_cols;
         }
-        mask = create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel);
+        mask = create_group_norm_input_mask(
+            num_channel,
+            num_groups,
+            num_cores_across_channel,
+            tt::tt_metal::DataType::BFLOAT16,
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width());
         mask = mask.to_device(input_tensor.device());
     }
     return mask;
