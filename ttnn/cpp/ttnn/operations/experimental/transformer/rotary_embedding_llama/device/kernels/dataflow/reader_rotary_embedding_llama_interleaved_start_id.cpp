@@ -73,6 +73,7 @@ void kernel_main() {
                 for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
                     cb_reserve_back(cos_cb_id, Wt);
                     cb_reserve_back(sin_cb_id, Wt);
+                    cb_reserve_back(input_cb_id, Wt);
 #if COS_SIN_SHARDED_RELOAD == 1
                     uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
                     uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
@@ -85,10 +86,6 @@ void kernel_main() {
                         cos_sin_curr_idx++;
                     }
 #endif
-                    cb_push_back(cos_cb_id, Wt);
-                    cb_push_back(sin_cb_id, Wt);
-
-                    cb_reserve_back(input_cb_id, Wt);
                     uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
                     uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                     for (uint32_t j = 0; j < Wt; ++j) {
@@ -97,6 +94,8 @@ void kernel_main() {
                         input_l1_write_addr += input_tile_bytes;
                     }
                     noc_async_read_barrier();
+                    cb_push_back(cos_cb_id, Wt);
+                    cb_push_back(sin_cb_id, Wt);
                     cb_push_back(input_cb_id, Wt);
                 }
             }
