@@ -36,8 +36,27 @@ else
     _alloc="/artifacts/multihost-$(hostname -s)"
 fi
 
-TEST_CMD="pytest tests/tt_metal/multihost/physical -x --timeout=1200 \
-    --hostfile=${_alloc}/hostfile.txt \
-    --rankfile=${_alloc}/rankfile.txt"
+RANK_BINDING="tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml"
+STRICT_RANK_BINDING="tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml"
+MPI_ARGS="--hostfile ${_alloc}/hostfile.txt"
+MPIRUN_ARGS="${MPI_ARGS} --mca btl_tcp_if_exclude docker0,lo"
 
-run_test "${TEST_CMD}"
+run_test "mpirun ${MPIRUN_ARGS} -x TT_METAL_HOME -x LD_LIBRARY_PATH \
+    ./build/test/tt_metal/tt_fabric/test_physical_discovery"
+
+run_test "mpirun ${MPIRUN_ARGS} -x TT_METAL_HOME -x LD_LIBRARY_PATH \
+    ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail"
+
+run_test "tt-run --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+    --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml"
+
+run_test "tt-run --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/multi_host_fabric_tests"
+
+run_test "tt-run --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/test_mesh_socket_main \
+    --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml"
+
+run_test "tt-run --rank-binding ${STRICT_RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/multi_host_fabric_tests"

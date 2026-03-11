@@ -38,8 +38,25 @@ else
     _alloc="/artifacts/multihost-$(hostname -s)"
 fi
 
-TEST_CMD="pytest models/demos/deepseek_v3/tests/test_multihost.py -x --timeout=1800 \
-    --hostfile=${_alloc}/hostfile.txt \
-    --rankfile=${_alloc}/rankfile.txt"
+RANK_BINDING="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+MPI_ARGS="--hostfile ${_alloc}/hostfile.txt"
+TCP_INTERFACE="cnx1"
 
-run_test "${TEST_CMD}"
+export MESH_DEVICE=DUAL
+export DEEPSEEK_V3_HF_MODEL="${DEEPSEEK_V3_HF_MODEL:-/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528}"
+export DEEPSEEK_V3_CACHE="${DEEPSEEK_V3_CACHE:-/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI}"
+
+# Forward DeepSeek-specific env vars into Docker containers
+DOCKER_EXTRA_ENV="${DOCKER_EXTRA_ENV:+${DOCKER_EXTRA_ENV}
+}MESH_DEVICE=${MESH_DEVICE}
+DEEPSEEK_V3_HF_MODEL=${DEEPSEEK_V3_HF_MODEL}
+DEEPSEEK_V3_CACHE=${DEEPSEEK_V3_CACHE}"
+export DOCKER_EXTRA_ENV
+
+run_test "tt-run --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    pytest -svvv models/demos/deepseek_v3/tests/unit --timeout=1800"
+
+run_test "tt-run --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    pytest -svvv models/demos/deepseek_v3/tests \
+    --ignore=models/demos/deepseek_v3/tests/unit \
+    --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout=1800"

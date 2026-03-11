@@ -38,8 +38,22 @@ else
     _alloc="/artifacts/multihost-$(hostname -s)"
 fi
 
-TEST_CMD="pytest tests/tt_fabric/multihost -x --timeout=900 \
-    --hostfile=${_alloc}/hostfile.txt \
-    --rankfile=${_alloc}/rankfile.txt"
+RANK_BINDING="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+MPI_ARGS="--hostfile ${_alloc}/hostfile.txt"
+MPIRUN_ARGS="${MPI_ARGS} --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+TCP_INTERFACE="cnx1"
 
-run_test "${TEST_CMD}"
+run_test "mpirun ${MPIRUN_ARGS} -x TT_METAL_HOME -x LD_LIBRARY_PATH \
+    ./build/test/tt_metal/tt_fabric/test_physical_discovery"
+
+run_test "mpirun ${MPIRUN_ARGS} -x TT_METAL_HOME -x LD_LIBRARY_PATH \
+    ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail"
+
+run_test "tt-run --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter='Cluster.ReportIntermeshLinks'"
+
+run_test "tt-run --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='MultiHost.TestDualGalaxyControlPlaneInit'"
+
+run_test "tt-run --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDING} --mpi-args '${MPI_ARGS}' \
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='MultiHost.TestDualGalaxyFabric2DSanity'"
