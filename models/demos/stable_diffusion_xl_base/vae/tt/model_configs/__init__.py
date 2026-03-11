@@ -2,8 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs.model_configs_1024x1024 import (
     VAEModelOptimisations,
+)
+from models.demos.stable_diffusion_xl_base.vae.tt.model_configs.model_configs_1024x1024BH import (
+    VAEModelOptimisationsBH,
 )
 
 
@@ -15,7 +19,7 @@ def load_vae_model_optimisations(
     ff_weights_dtype=None,
 ):
     """
-    Load the appropriate VAEModelOptimisation object based on the provided image resolution.
+    Load the appropriate VAEModelOptimisation object based on the provided image resolution and hardware type.
 
     Args:
         image_resolution (tuple): A tuple of (height, width) representing the image resolution.
@@ -26,13 +30,17 @@ def load_vae_model_optimisations(
         ff_weights_dtype: Optional dtype for feedforward weights. Defaults to ttnn.bfloat8_b.
 
     Returns:
-        The appropriate VAEModelOptimisation object based on the image resolution.
+        VAEModelOptimisations or VAEModelOptimisationsBH:
+            The appropriate VAEModelOptimisation object based on the image resolution and hardware type.
+            For 1024x1024 resolution, automatically selects VAEModelOptimisationsBH for Blackhole
+            hardware or VAEModelOptimisations for Wormhole hardware.
+            For 512x512 resolution, returns VAEModelOptimisations regardless of hardware type.
 
     Raises:
         ValueError: If the image_resolution is not supported.
 
     Example:
-        >>> model_opt = load_vae_model_optimisations((1024, 1024))
+        >>> model_opt = load_vae_model_optimisations((1024, 1024))  # Auto-selects based on hardware
     """
     if not isinstance(image_resolution, (tuple, list)) or len(image_resolution) != 2:
         raise ValueError(f"image_resolution must be a tuple or list of length 2, got {image_resolution}")
@@ -55,7 +63,15 @@ def load_vae_model_optimisations(
     if (height, width) == (512, 512):
         return VAEModelOptimisations(**init_kwargs)
     elif (height, width) == (1024, 1024):
-        return VAEModelOptimisations(**init_kwargs)
+        # Check hardware type and return appropriate config
+        if is_wormhole_b0():
+            return VAEModelOptimisations(**init_kwargs)
+        elif is_blackhole():
+            return VAEModelOptimisationsBH(**init_kwargs)
+        else:
+            raise ValueError(
+                "Unsupported hardware type for 1024x1024 resolution. Only Blackhole and Wormhole_B0 are supported."
+            )
     else:
         raise ValueError(
             f"Unsupported image_resolution: {image_resolution}. "
