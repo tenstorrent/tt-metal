@@ -180,7 +180,7 @@ def create_program_descriptor(
     # ========== 5. KERNEL DESCRIPTORS ==========
 
     # --- Reader kernel ---
-    reader_ct_args = [Wt, Ht]
+    reader_ct_args = [Wt, Ht, num_rows_or_cols, num_tiles]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
