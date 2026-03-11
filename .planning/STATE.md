@@ -2,9 +2,9 @@
 
 ## Current Position
 - **Phase:** 02-silicon-data-transfer-validation
-- **Current Plan:** 2 of ? in Phase
-- **Status:** Plan 01 complete, ready for Plan 02
-- **Next:** Execute Plan 02 (multicast families)
+- **Current Plan:** 2 of 2 complete in Phase
+- **Status:** Plan 02 complete -- all 9 families have silicon test coverage
+- **Next:** Silicon test execution on hardware
 
 ## Project Reference
 
@@ -22,10 +22,13 @@
 - L1 direct I/O via WriteToDeviceL1/ReadFromDeviceL1 for BaseFabricFixture tests
 - GlobalSemaphore created fresh per test call for per-chip MeshDevice pattern
 - family_kernel_path() maps all 9 families including future multicast kernels
+- MeshGraph::chip_to_coordinate for bounding-box computation in multicast runner
+- Sparse multicast test inlined in test file (different dispatch from multicast runner)
+- Linear 1D tests reuse mesh multicast kernels (per-direction fanout degenerates in 1D)
 
 ## Blockers
 None
 
 ## Last Session
 - **Timestamp:** 2026-03-11
-- **Stopped At:** Completed 02-01-PLAN.md (unicast silicon tests)
+- **Stopped At:** Completed 02-02-PLAN.md (multicast/sparse silicon tests)
