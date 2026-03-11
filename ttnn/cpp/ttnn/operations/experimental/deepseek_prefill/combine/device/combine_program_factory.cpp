@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_device_operation.hpp"
-#include "combine_program_factory.hpp"
 #include <algorithm>
 #include <array>
 #include <utility>

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 DeepSeek
+
+# SPDX-License-Identifier: MIT
+
 import math
 from dataclasses import dataclass
 from typing import Literal, Optional, Tuple

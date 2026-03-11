@@ -112,3 +112,16 @@
       timeout: 20
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
+
+- name: t3k_DeepSeek_PREFILL
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U08E1JCMAJF
+  team: shield
+  model-name: deepseek_prefill

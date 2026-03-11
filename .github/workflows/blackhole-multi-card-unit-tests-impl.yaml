@@ -118,11 +118,13 @@ jobs:
             cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
             timeout: 15
             test-type: slow
-          - name: deepseek prefill dispatch/combine tests
+          - name: bh_DeepSeek_PREFILL
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv
             timeout: 30
             test-type: loudbox-or-qb
             owner_id: U08E1JCMAJF
