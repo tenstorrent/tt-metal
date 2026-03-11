@@ -54,18 +54,21 @@ jobs:
             "demo"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          INPUT_ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$INPUT_ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter test matrix by model
         id: filter-matrix
         if: inputs.model != 'all'
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          INPUT_MODEL: ${{ inputs.model }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          filtered=$(echo "$MATRIX" | jq -c --arg model "$INPUT_MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

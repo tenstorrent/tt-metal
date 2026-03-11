@@ -8,6 +8,9 @@ on:
       - "main"
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   find-changed-files:
     runs-on: ubuntu-latest
@@ -54,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Check SPDX licenses
-        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
+        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@ac8d2f84b93d166ddfb1af400f8cf2390d994ba4 # main
         with:
           ignore_config_file: ".github/spdx_ignore.yaml"
           verbose: "true"

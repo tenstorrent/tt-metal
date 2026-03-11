@@ -52,6 +52,7 @@ jobs:
         id: generate
         env:
           INPUT_TEST_TYPE: ${{ inputs.test-type }}
+          INPUT_ENABLE_TRACY: ${{ inputs.enable-tracy }}
         run: |
           source .github/scripts/security/input-validation.sh
           all_tests=$(jq -n '[
@@ -69,7 +70,7 @@ jobs:
           fi
 
           # Remove final-op-unit tests when Tracy profiling is not enabled
-          if [ "${{ inputs.enable-tracy }}" != "true" ]; then
+          if [ "${INPUT_ENABLE_TRACY}" != "true" ]; then
             matrix=$(echo "$matrix" | jq -c '[.[] | select(."test-type" != "final-op-unit")]')
           fi
 

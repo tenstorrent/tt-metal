@@ -485,6 +485,12 @@ validate_docker_image() {
         return 1
     fi
 
+    # Reject control characters (newlines, tabs, etc.)
+    if [[ "$image" =~ [[:cntrl:]] ]]; then
+        validation_error "Docker image cannot contain control characters"
+        return 1
+    fi
+
     # Check for dangerous characters
     if [[ "$image" =~ [\;\|\&\$\`\'\"\(\)] ]]; then
         validation_error "Docker image contains forbidden characters"
@@ -702,6 +708,11 @@ sanitize_path() {
             fi
         }
     else
+        # realpath is not available; symlinks will NOT be resolved.
+        # --base-dir containment checks rely on string comparison only.
+        if [[ -n "$base_dir" ]]; then
+            validation_warning "realpath not available; symlink resolution skipped for --base-dir check"
+        fi
         sanitized="${path//\/\//\/}"
         if [[ ! "$sanitized" =~ ^/ ]]; then
             sanitized="${PWD}/${sanitized}"
@@ -740,7 +751,9 @@ sanitize_shell_arg() {
     # Check for single quotes in the argument
     if [[ "$arg" == *"'"* ]]; then
         # Contains single quotes, use double quotes with escaping
-        # Escape: $ ` \ and ! (in some shells)
+        # Escape: $ ` \ and "
+        # Note: ! is not escaped because GitHub Actions run bash non-interactively
+        # where history expansion is disabled by default.
         local escaped="${arg//\\/\\\\}"
         escaped="${escaped//\$/\\$}"
         escaped="${escaped//\`/\\\`}"
@@ -873,21 +886,51 @@ safe_docker_exec() {
         "--device"
         "--userns=host"
         "--ipc=host"
+        "--add-host"
+        "--gpus"
+        "--runtime"
+        "--sysctl"
+        "--cgroupns=host"
+        "--uts=host"
     )
 
     # Validate docker options against blocklist
-    for opt in "${docker_opts[@]}"; do
+    local _skip_next=false
+    local i
+    for (( i=0; i<${#docker_opts[@]}; i++ )); do
+        local opt="${docker_opts[$i]}"
+
+        if [[ "$_skip_next" == true ]]; then
+            _skip_next=false
+            continue
+        fi
+
         for pattern in "${_dangerous_docker_patterns[@]}"; do
             if [[ "$opt" == "$pattern" || "$opt" == "$pattern"=* ]]; then
                 validation_error "Dangerous Docker option blocked: $opt"
                 return 1
             fi
         done
-        # Block volume mounts of host root or sensitive directories
-        if [[ "$opt" =~ ^-v$ ]] || [[ "$opt" == --volume=* ]]; then
-            local mount_src="${opt#*=}"
+
+        # Block volume mounts of host root or sensitive directories.
+        # Handle both forms: "--volume=/src:/dst" and "-v /src:/dst" (two separate args)
+        local mount_spec=""
+        if [[ "$opt" == --volume=* ]]; then
+            mount_spec="${opt#--volume=}"
+        elif [[ "$opt" == "-v" ]]; then
+            local next_idx=$((i + 1))
+            if [[ $next_idx -lt ${#docker_opts[@]} ]]; then
+                mount_spec="${docker_opts[$next_idx]}"
+                _skip_next=true
+            fi
+        elif [[ "$opt" == -v* ]]; then
+            mount_spec="${opt#-v}"
+        fi
+
+        if [[ -n "$mount_spec" ]]; then
+            local mount_src="${mount_spec%%:*}"
             if [[ "$mount_src" == "/" || "$mount_src" == /etc* || "$mount_src" == /var/run/docker* ]]; then
-                validation_error "Dangerous Docker volume mount blocked: $opt"
+                validation_error "Dangerous Docker volume mount blocked: $mount_src"
                 return 1
             fi
         fi
@@ -950,7 +993,7 @@ safe_ssh_exec() {
         fi
     fi
 
-    # Blocklist SSH options that enable arbitrary command execution
+    # Blocklist SSH options that enable arbitrary command execution or tunneling
     local -a _dangerous_ssh_patterns=(
         "ProxyCommand"
         "LocalCommand"
@@ -959,7 +1002,18 @@ safe_ssh_exec() {
         "LocalForward"
         "RemoteForward"
         "DynamicForward"
+        "ProxyJump"
+        "ProxyExec"
+        "ControlPath"
     )
+
+    # Also block -J (shorthand for ProxyJump)
+    for opt in "${ssh_opts[@]}"; do
+        if [[ "$opt" == "-J" || "$opt" == -J* ]]; then
+            validation_error "Dangerous SSH option blocked: $opt (ProxyJump shorthand)"
+            return 1
+        fi
+    done
     for opt in "${ssh_opts[@]}"; do
         for pattern in "${_dangerous_ssh_patterns[@]}"; do
             if [[ "$opt" == *"$pattern"* ]]; then

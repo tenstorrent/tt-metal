@@ -17,6 +17,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   fetch-data:
     runs-on: ubuntu-latest

@@ -83,10 +83,12 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          INPUT_ARCH: ${{ inputs.arch }}
         run: |
           source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ inputs.arch }}
-          run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+          "run_python_model_tests_${INPUT_ARCH}"
+          "run_python_model_tests_slow_runtime_mode_${INPUT_ARCH}"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

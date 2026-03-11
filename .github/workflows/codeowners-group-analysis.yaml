@@ -161,7 +161,12 @@ jobs:
 
                 # Extract all @mentions for ping users
                 PING_USERS=$(echo "$FULL_TEXT" | grep -oE '@[a-zA-Z0-9_/-]+' | tr '\n' ',' | sed 's/,$//')
-                echo "direct-ping-users=$PING_USERS" >> $GITHUB_OUTPUT
+                # Use safe delimiter to prevent injection from user-controlled comment body
+                {
+                  echo "direct-ping-users<<GITHUB_OUTPUT_DELIMITER_$(date +%s)"
+                  printf '%s\n' "$PING_USERS"
+                  echo "GITHUB_OUTPUT_DELIMITER_$(date +%s)"
+                } >> "$GITHUB_OUTPUT"
                 echo "Found users to ping: $PING_USERS"
 
                 # Extract message (everything after last @mention, strip quotes if present)

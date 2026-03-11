@@ -54,23 +54,28 @@ jobs:
             "e2e"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          INPUT_ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$INPUT_ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
+        env:
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_TIER: ${{ inputs.tier }}
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
+          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier $INPUT_TIER '[.[] | select(.tier == $tier)]')
           # Filter by model
-          if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
+          if [ "$INPUT_MODEL" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "$INPUT_MODEL" '[.[] | select(.model == $m)]')
           fi
           if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
+            echo "::warning::No tests found for tier=$INPUT_TIER, model=$INPUT_MODEL. Pipeline will be skipped."
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
