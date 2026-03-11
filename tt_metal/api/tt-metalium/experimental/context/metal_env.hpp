@@ -7,8 +7,30 @@
 #include <memory>
 #include <optional>
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
+namespace tt::tt_metal::distributed {
+class SystemMesh;
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal {
+
+// Describes the fabric topology and routing configuration for the devices in the environment.
+// These parameters determine how devices are interconnected and how data is routed between them.
+struct FabricConfigDescriptor {
+    tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
+    tt_fabric::FabricReliabilityMode reliability_mode =
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    std::optional<uint8_t> num_routing_planes = std::nullopt;
+    tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
+    tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT;
+    tt_fabric::FabricRouterConfig router_config = {};
+};
 
 // Configuration for a MetalEnv.
 //
@@ -24,15 +46,25 @@ public:
 
     explicit MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path);
 
+    MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc);
+
     bool is_mock_device() const { return mock_cluster_desc_path_.has_value(); }
     const std::string& mock_cluster_desc_path() const { return *mock_cluster_desc_path_; }
+    const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_config_desc_; }
 
 protected:
     std::optional<std::string> mock_cluster_desc_path_ = std::nullopt;
+    FabricConfigDescriptor fabric_config_desc_;
 };
+
+class MetalEnvImpl;
 
 // A MetalEnv provides an interface for the runtime environment to access a homogeneous cluster of Tenstorrent devices.
 // It exposes several query functions for the hardware capabilities and cluster configuration.
+//
+// The FabricConfigDescriptor in the MetalEnvDescriptor describes the topology of the devices — how they are
+// interconnected and how traffic is routed between them. From this topology the MetalEnv constructs the fabric
+// control plane and the system mesh, which virtualize and partition the physical hardware.
 //
 // Note, MetalEnv is a RAII object. As such, it must outlive every object that uses it (e.g. MeshDevice).
 // The MetalEnv should be destroyed before forking to avoid undefined behavior.
@@ -83,9 +115,18 @@ public:
     /// @return Representable SFPU Infinity value of this environment.
     float get_inf() const;
 
+    /// @return The fabric control plane, lazily initialized.
+    /// The control plane manages routing tables and fabric channels based on the device topology
+    /// described by the environment's FabricConfigDescriptor.
+    tt::tt_fabric::ControlPlane& get_control_plane();
+
+    /// @return The system mesh, lazily initialized.
+    /// The system mesh provides a virtualized coordinate system over the physical devices, allowing
+    /// MeshDevice instances to map logical coordinates to physical device IDs.
+    distributed::SystemMesh& get_system_mesh();
+
 private:
     friend class MetalEnvAccessor;
-    class MetalEnvImpl;
     std::unique_ptr<MetalEnvImpl> impl_;
 
     MetalEnvImpl& impl() { return *impl_; }
