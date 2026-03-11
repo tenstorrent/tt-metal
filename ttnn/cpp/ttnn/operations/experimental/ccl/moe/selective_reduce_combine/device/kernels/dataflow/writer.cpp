@@ -259,7 +259,7 @@ void kernel_main() {
             mesh_rows,
             mesh_cols,
             replicate_axis,
-            false>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
+            true>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
@@ -272,7 +272,7 @@ void kernel_main() {
             fabric_mux_termination_signal_address,
             num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
 
-        noc_semaphore_wait(semaphore_ptr, replicate_group_devices - 1);
+        noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
         noc_semaphore_set(semaphore_ptr, 0);
     } else {
         // get sync core semaphore noc address
