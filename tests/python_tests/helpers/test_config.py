@@ -861,7 +861,7 @@ class TestConfig:
             )
 
         for parameter in self.templates:
-            header_content.append(parameter.covert_to_cpp())
+            header_content.append(parameter.convert_to_cpp())
 
         if self.compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())
