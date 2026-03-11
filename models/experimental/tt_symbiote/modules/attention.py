@@ -1628,6 +1628,13 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         position_ids=None,
         **kwargs,
     ):
+        # Reset trace semaphores to 0 before each replay.
+        if hasattr(self, "_trace_ag_sems"):
+            for sem_list in self._trace_ag_sems:
+                for sem in sem_list:
+                    ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self._trace_barrier_sems:
+                ttnn.reset_global_semaphore_value(sem, 0)
         if isinstance(past_key_values, TTNNPagedAttentionKVCache):
             h = hidden_states
             if isinstance(h, TorchTTNNTensor):
