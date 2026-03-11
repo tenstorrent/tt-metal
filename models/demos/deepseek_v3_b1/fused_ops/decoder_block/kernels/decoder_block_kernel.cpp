@@ -2012,7 +2012,7 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
-        if constexpr (!Core::is_sender_core) {
+        if constexpr (!Core::is_input_core) {
 #if defined(COMPILE_FOR_NCRISC)
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
@@ -2361,7 +2361,7 @@ void kernel_main() {
             DeviceZoneScopedN("RESIDUAL_MCAST");
             residual_mcast(moe.routed.residual_mcast_args);
         }
-        if constexpr (!Core::is_sender_core) {
+        if constexpr (!Core::is_input_core) {
 #if defined(COMPILE_FOR_NCRISC)
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
