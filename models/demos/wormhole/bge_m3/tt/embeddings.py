@@ -10,7 +10,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 
 
-@dataclass(frozen=True)
+@dataclass
 class BgeM3EmbeddingsConfig:
     word_embeddings_weight: LazyWeight
     position_embeddings_weight: LazyWeight
@@ -42,6 +42,7 @@ class BgeM3Embedding(LightweightModule):
         pad_token_id: int,
     ):
         super().__init__()
+
         self.config = _resolve_embeddings_config(
             BgeM3EmbeddingsConfig(
                 word_embeddings_weight=word_embeddings_weight,
@@ -78,6 +79,7 @@ class BgeM3Embedding(LightweightModule):
         self,
         input_ids: ttnn.Tensor,
         token_type_ids: ttnn.Tensor | None = None,
+        position_ids: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         Public forward API.
@@ -85,27 +87,19 @@ class BgeM3Embedding(LightweightModule):
         Args:
             input_ids: rank-2 IDs tensor with shape [B, S].
             token_type_ids: optional rank-2 IDs tensor with shape [B, S].
+            position_ids: optional rank-2 IDs tensor with shape [B, S].
 
         Returns:
             Embedding activations with shape [B, 1, S, D].
         """
-        input_ids, input_ids_shape_2d = self._normalize_ids_to_rank2(input_ids, name="input_ids")
         if token_type_ids is None:
             token_type_ids = ttnn.subtract(input_ids, input_ids)
-        token_type_ids, token_type_shape_2d = self._normalize_ids_to_rank2(token_type_ids, name="token_type_ids")
-        if token_type_shape_2d != input_ids_shape_2d:
-            raise ValueError(
-                f"token_type_ids must match input_ids [B, S]={input_ids_shape_2d}, got {token_type_shape_2d}"
-            )
 
         self.load_device_weights()
-        batch_size, seq_len = input_ids_shape_2d
-        position_ids_2d = self._build_position_ids(batch_size=batch_size, seq_len=seq_len)
-        position_ids, position_ids_shape_2d = self._normalize_ids_to_rank2(position_ids_2d, name="position_ids")
-        if position_ids_shape_2d != input_ids_shape_2d:
-            raise ValueError(
-                f"position_ids must match input_ids [B, S]={input_ids_shape_2d}, got {position_ids_shape_2d}"
-            )
+
+        if position_ids is None:
+            batch_size, seq_len = input_ids.shape
+            position_ids = self._build_position_ids(batch_size=batch_size, seq_len=seq_len)
 
         word_embeddings = ttnn.embedding(
             input_ids,
@@ -137,40 +131,6 @@ class BgeM3Embedding(LightweightModule):
 
         embeddings = ttnn.unsqueeze(embeddings, dim=1)
         return embeddings
-
-    def _normalize_ids_to_rank2(self, ids: ttnn.Tensor, name: str) -> tuple[ttnn.Tensor, tuple[int, int]]:
-        """
-        Accept IDs as either [B, S] or [B, 1, 1, S], return rank-2 [B, S].
-        """
-        rank = len(ids.shape)
-        if rank == 2:
-            batch_size, seq_len = ids.shape
-            return self._coerce_ids_for_embedding(ids), (batch_size, seq_len)
-
-        if rank == 4:
-            batch_size, dim1, dim2, seq_len = ids.shape
-            if dim1 != 1 or dim2 != 1:
-                raise ValueError(f"{name} rank-4 shape must be [B, 1, 1, S], got {ids.shape}")
-            ids = ttnn.reshape(ids, (batch_size, seq_len))
-            return self._coerce_ids_for_embedding(ids), (batch_size, seq_len)
-
-        raise ValueError(f"{name} must have rank 2 [B, S] or rank 4 [B, 1, 1, S], got shape={ids.shape}")
-
-    def _coerce_ids_for_embedding(self, ids: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Prepare IDs for direct ttnn.embedding: interleaved DRAM + uint32 dtype.
-        """
-        ids = self._as_interleaved(ids)
-        if ids.dtype != ttnn.uint32:
-            ids = ttnn.typecast(ids, dtype=ttnn.uint32)
-        return ids
-
-    def _as_interleaved(self, ids: ttnn.Tensor) -> ttnn.Tensor:
-        if ids.is_sharded():
-            interleaved_ids = ttnn.sharded_to_interleaved(ids, self.config.embedding_memcfg)
-            ttnn.deallocate(ids)
-            return interleaved_ids
-        return ids
 
     def _build_position_ids(self, batch_size: int, seq_len: int) -> ttnn.Tensor:
         if seq_len > self.config.max_position_embeddings:

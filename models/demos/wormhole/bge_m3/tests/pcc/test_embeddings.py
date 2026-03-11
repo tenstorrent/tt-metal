@@ -4,112 +4,75 @@
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.lazy_weight import LazyWeight
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.wormhole.bge_m3.tests.test_utils import (
+    SEQUENCE_LENGTHS,
+    assert_pcc,
+    make_lazy_weight,
+    require_single_device,
+    to_torch,
+    to_ttnn_ids,
+)
 from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding
 
-
-def _lazy_weight_from_2d(weight_2d: torch.Tensor, device) -> LazyWeight:
-    return LazyWeight(
-        source=weight_2d.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+VOCAB_SIZE = 4096
+HIDDEN_SIZE = 1024
+MAX_POSITION_EMBEDDINGS = 8192
+PAD_TOKEN_ID = 1
+BATCH_SIZE = 1
 
 
-def _to_ttnn_ids(input_ids: torch.Tensor, rank: int, device) -> ttnn.Tensor:
-    if rank == 4:
-        input_ids = input_ids.reshape(input_ids.shape[0], 1, 1, input_ids.shape[1])
-
-    return ttnn.from_torch(
-        input_ids.to(torch.int32),
-        device=device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-
-
-def _to_torch_output(tt_output: ttnn.Tensor, batch_size: int, seq_len: int, hidden_size: int) -> torch.Tensor:
-    out = to_torch_auto_compose(tt_output).to(torch.float32)
-
-    expected_shape = (batch_size, 1, seq_len, hidden_size)
-    assert tuple(out.shape) == expected_shape, f"Expected output shape {expected_shape}, got {tuple(out.shape)}"
-    return out
-
-
-def _reference_sum_embeddings(
-    input_ids: torch.Tensor,
-    word_weight: torch.Tensor,
-    position_weight: torch.Tensor,
-    token_type_weight: torch.Tensor,
-    pad_token_id: int,
-) -> torch.Tensor:
-    batch_size, seq_len = input_ids.shape
-
-    word_weight_ref = word_weight.clone()
-    word_weight_ref[pad_token_id] = 0
-    word = F.embedding(input_ids, word_weight_ref)
-
-    position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).repeat(batch_size, 1)
-    pos = F.embedding(position_ids, position_weight)
-
-    token_type_ids = torch.zeros_like(input_ids)
-    typ = F.embedding(token_type_ids, token_type_weight)
-
-    return word + pos + typ
-
-
-@pytest.mark.parametrize("input_rank", [2, 4], ids=["rank2-input", "rank4-input"])
-def test_ttnn_bge_m3_embeddings_vs_reference(device, input_rank):
-    """
-    Validation target:
-      - Numerical parity (sum of token + position + token_type embeddings).
-      - Batch behavior for B=2.
-      - Input adapter behavior for both [B,S] and [B,1,1,S].
-    """
+@pytest.mark.parametrize("seq_len", SEQUENCE_LENGTHS, ids=[f"S{seq_len}" for seq_len in SEQUENCE_LENGTHS])
+def test_embeddings_vs_pytorch(device, seq_len):
+    require_single_device(device)
     torch.manual_seed(42)
 
-    vocab_size = 256
-    hidden_size = 64
-    max_position_embeddings = 64
-    pad_token_id = 0
-    batch_size = 2
-    seq_len = 32
+    word_embeddings = torch.nn.Embedding(VOCAB_SIZE, HIDDEN_SIZE, padding_idx=PAD_TOKEN_ID)
+    position_embeddings = torch.nn.Embedding(MAX_POSITION_EMBEDDINGS, HIDDEN_SIZE)
+    token_type_embeddings = torch.nn.Embedding(1, HIDDEN_SIZE)
 
-    word_weight = torch.randn(vocab_size, hidden_size, dtype=torch.bfloat16)
-    word_weight[pad_token_id] = 0
-    position_weight = torch.randn(max_position_embeddings, hidden_size, dtype=torch.bfloat16)
-    token_type_weight = torch.randn(1, hidden_size, dtype=torch.bfloat16)
+    with torch.no_grad():
+        word_embeddings.weight.copy_(torch.randn_like(word_embeddings.weight))
+        word_embeddings.weight[PAD_TOKEN_ID].zero_()
+        position_embeddings.weight.copy_(torch.randn_like(position_embeddings.weight))
+        token_type_embeddings.weight.copy_(torch.randn_like(token_type_embeddings.weight))
 
-    model = BgeM3Embedding(
-        word_embeddings_weight=_lazy_weight_from_2d(word_weight, device),
-        position_embeddings_weight=_lazy_weight_from_2d(position_weight, device),
-        token_type_embeddings_weight=_lazy_weight_from_2d(token_type_weight, device),
-        vocab_size=vocab_size,
-        max_position_embeddings=max_position_embeddings,
-        hidden_size=hidden_size,
-        pad_token_id=pad_token_id,
+    tt_model = BgeM3Embedding(
+        word_embeddings_weight=make_lazy_weight(
+            word_embeddings.weight.detach().clone(),
+            device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        position_embeddings_weight=make_lazy_weight(
+            position_embeddings.weight.detach().clone(),
+            device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        token_type_embeddings_weight=make_lazy_weight(
+            token_type_embeddings.weight.detach().clone(),
+            device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        vocab_size=VOCAB_SIZE,
+        max_position_embeddings=MAX_POSITION_EMBEDDINGS,
+        hidden_size=HIDDEN_SIZE,
+        pad_token_id=PAD_TOKEN_ID,
     )
 
-    input_ids = torch.randint(1, vocab_size, (batch_size, seq_len), dtype=torch.long)
-    tt_input_ids = _to_ttnn_ids(input_ids, rank=input_rank, device=device)
-    tt_output = model.forward(tt_input_ids)
-    tt_output_torch = _to_torch_output(tt_output, batch_size=batch_size, seq_len=seq_len, hidden_size=hidden_size)
+    input_ids = torch.randint(PAD_TOKEN_ID + 1, VOCAB_SIZE, (BATCH_SIZE, seq_len), dtype=torch.long)
+    input_ids[:, -min(8, seq_len) :] = PAD_TOKEN_ID
+    token_type_ids = torch.zeros_like(input_ids)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(BATCH_SIZE, -1)
 
-    ref_output = _reference_sum_embeddings(
-        input_ids=input_ids,
-        word_weight=word_weight.to(torch.float32),
-        position_weight=position_weight.to(torch.float32),
-        token_type_weight=token_type_weight.to(torch.float32),
-        pad_token_id=pad_token_id,
+    tt_output = tt_model.forward(
+        to_ttnn_ids(input_ids, device),
+        token_type_ids=to_ttnn_ids(token_type_ids, device),
+        position_ids=to_ttnn_ids(position_ids, device),
+    )
+    tt_output_torch = to_torch(tt_output, expected_shape=(BATCH_SIZE, 1, seq_len, HIDDEN_SIZE))
+
+    reference_output = (
+        word_embeddings(input_ids) + position_embeddings(position_ids) + token_type_embeddings(token_type_ids)
     ).unsqueeze(1)
-
-    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, 0.999)
-    allclose, allclose_message = comp_allclose(ref_output, tt_output_torch)
-    assert passing, f"PCC check failed: {pcc_message}; {allclose_message}; allclose={allclose}"
+    assert_pcc(reference_output.to(torch.float32), tt_output_torch, 0.999)
