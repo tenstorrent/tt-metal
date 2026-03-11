@@ -1057,16 +1057,17 @@ ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode, std::filesy
 }
 
 ScopedGraphCapture::~ScopedGraphCapture() {
-    if (is_active) {
-        try {
-            if (!auto_report_path.empty()) {
-                GraphProcessor::end_graph_capture_to_file(auto_report_path);
-            } else {
-                GraphProcessor::end_graph_capture();
-            }
-        } catch (const std::exception& e) {
-            log_warning(tt::LogAlways, "Exception during graph capture teardown: {}", e.what());
+    if (!is_active) {
+        return;
+    }
+    try {
+        if (!auto_report_path.empty()) {
+            GraphProcessor::end_graph_capture_to_file(auto_report_path);
+        } else {
+            GraphProcessor::end_graph_capture();
         }
+    } catch (const std::exception& e) {
+        log_warning(tt::LogAlways, "Exception during graph capture teardown: {}", e.what());
     }
 }
 
