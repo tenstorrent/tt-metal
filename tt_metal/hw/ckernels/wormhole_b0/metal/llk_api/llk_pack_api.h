@@ -10,6 +10,7 @@
 #include "cpack_common.h"
 #include "ckernel_globals.h"
 #include "internal/circular_buffer_interface.h"
+#include "api/debug/assert.h"
 
 #include "llk_io.h"
 #include "llk_defs.h"

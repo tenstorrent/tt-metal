@@ -10,6 +10,8 @@
 #include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cpack_common.h"
+#include "api/debug/assert.h"
+
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_outputs.h"
