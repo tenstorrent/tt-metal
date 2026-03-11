@@ -7,3 +7,8 @@
 {"event":"cb_sync_check","stage":"data_pipeline_w","balanced":true,"cb_summary":"c0:1push/1wait_per_tile c2:1push/persistent c16:1push/1wait_per_tile","ts":"2026-03-11T17:50:21+00:00"}
 {"event":"test_run","status":"pass","stage":"data_pipeline_w","test_file":"test_stage_data_pipeline_w.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-11T17:52:05+00:00"}
 {"event":"stage_complete","stage":"data_pipeline_w","attempts":1,"upstream_fixes":["Fixed all 5 test pytorch_reference functions: missing return statements and wrong variable names"],"design_deviations":[],"ts":"2026-03-11T17:52:13+00:00"}
+{"event":"stage_start","stage":"exp_w","description":"Add exp_tile to each tile in compute_w. Output = exp(input).","ts":"2026-03-11T17:52:51+00:00"}
+{"event":"kernel_implemented","stage":"exp_w","kernel":"compute_w","approach":"Added exp_tile_init and exp_tile(0) after copy_tile to apply exp to each tile in DST before packing","ts":"2026-03-11T17:53:06+00:00"}
+{"event":"cb_sync_check","stage":"exp_w","balanced":true,"cb_summary":"c0:1push/1wait_per_tile c2:1push/persistent c16:1push/1wait_per_tile (same as stage1, only DST ops changed)","ts":"2026-03-11T17:53:13+00:00"}
+{"event":"test_run","status":"pass","stage":"exp_w","test_file":"test_stage_exp_w.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-11T17:55:58+00:00"}
+{"event":"stage_complete","stage":"exp_w","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-11T17:56:06+00:00"}
