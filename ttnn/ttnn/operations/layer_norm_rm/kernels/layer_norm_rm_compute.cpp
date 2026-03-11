@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // layer_norm_rm - Compute Kernel
-// Stage 2: tilize, reduce_row(mean), sub(COL), square, untilize
+// Stage 2: tilize, reduce_row(mean via 1/W scaler), sub(COL), square, untilize
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
-
 // CB indices
 constexpr uint32_t cb_rm_input = 0;    // RM input sticks
 constexpr uint32_t cb_scaler = 8;      // Reduce scaler (1/W)
@@ -33,6 +32,7 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
     // Wait for scaler CB (persists entire program)
+    // Scaler contains 1/W, so reduce<SUM> with this scaler computes mean directly
     cb_wait_front(cb_scaler, 1);
 
     // Main loop: per block
@@ -42,6 +42,7 @@ void kernel_main() {
             tilize<cb_rm_input, cb_tilized, compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit>(Wt, 1);
 
         // Phase 2: Reduce Row for mean (c_24, c_8 -> c_25)
+        // Scaler CB has 1/W; reduce<SUM> computes: sum(x_i * (1/W)) = mean
         // WaitUpfrontNoPop: c_24 tiles persist for Phase 3
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
@@ -57,12 +58,13 @@ void kernel_main() {
             cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
         cb_pop_front(cb_tilized, Wt);  // Manual pop for NoWaitNoPop A
 
-        // Phase 4: Square centered values (c_26 * c_26 -> c_27)
-        // For stage 2: use WaitAndPopPerTile since c_26 not needed after this
+        // Phase 4: Square centered (c_26 -> c_27)
+        // WaitUpfrontNoPop: c_26 tiles persist for Phase 7 (normalize)
+        // For this stage, we untilize from c_27 (squared output)
         compute_kernel_lib::square<compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
             cb_centered, cb_squared, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
-        // Untilize from c_27 (squared output for this stage)
+        // Untilize from c_27 (squared output)
         compute_kernel_lib::
             untilize<Wt, cb_squared, cb_rm_output, compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit>(
                 1);
