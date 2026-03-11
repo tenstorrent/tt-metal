@@ -32,7 +32,7 @@ Tensor normal(
     auto u1 = ttnn::rand(shape, device, DataType::FLOAT32, Layout::TILE, memory_config, 1e-6f, 1.0f, effective_seed);
     auto u2 = ttnn::rand(shape, device, DataType::FLOAT32, Layout::TILE, memory_config, 0.0f, 1.0f, effective_seed + 1);
 
-    auto log_u1 = ttnn::log(u1, memory_config);
+    auto log_u1 = ttnn::log(u1, false, memory_config);
     auto neg2log = ttnn::multiply(log_u1, -2.0f, std::nullopt, memory_config);
     auto r = ttnn::sqrt(neg2log, false, memory_config);
 
