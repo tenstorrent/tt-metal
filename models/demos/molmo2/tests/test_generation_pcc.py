@@ -226,19 +226,14 @@ def _run_generation_comparison_impl(num_tokens: int = 20):
             hidden_states=hidden_states,
             kv_caches=generator.kv_caches,
             current_pos=generator.current_pos,
+            rot_mat_idxs=generator.rot_mat_idxs,
         )
         ttnn.synchronize_device(device)
 
-        # Update position
+        # On-device position increment
+        ttnn.plus_one(generator.current_pos)
+        ttnn.plus_one(generator.rot_mat_idxs)
         generator.decode_position += 1
-        new_pos_ttnn = ttnn.from_torch(
-            torch.tensor([generator.decode_position], dtype=torch.int32),
-            dtype=ttnn.int32,
-            device=device,
-            mesh_mapper=generator.mesh_mapper,
-        )
-        ttnn.copy(new_pos_ttnn, generator.current_pos)
-        ttnn.deallocate(new_pos_ttnn)
         ttnn.deallocate(hidden_states)
 
         ttnn_logits_torch = ttnn.to_torch(ttnn_logits)
