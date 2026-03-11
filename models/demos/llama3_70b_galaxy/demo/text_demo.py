@@ -849,7 +849,7 @@ def test_demo_text(
             frequency_penalty=frequency_penalty,
             repetition_penalty=repetition_penalty,
             seed=seed,
-            enable_log_probs=log_probs,
+            num_logprobs=1 if log_probs else 0,
         )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")

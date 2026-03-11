@@ -42,7 +42,7 @@ class WarmupForwardMixin:
                     frequency_penalty = [1.2] * batch_size
                     repetition_penalty = [1.5] * batch_size
 
-                enable_log_probs = [log_probs] * batch_size
+                num_logprobs = [1 if log_probs else 0] * batch_size
 
                 temperature = [1.0] * batch_size
                 top_k = [10] * batch_size
@@ -56,7 +56,7 @@ class WarmupForwardMixin:
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
                         repetition_penalty=repetition_penalty,
-                        enable_log_probs=enable_log_probs,
+                        num_logprobs=num_logprobs,
                     )
                 )
 

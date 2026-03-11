@@ -36,7 +36,9 @@ class SamplingParams:
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
-    enable_log_probs: bool | list[bool] = False
+    # Number of top log-probs to return per token (1-20), or 0/None to disable.
+    # Values above 20 are capped to 20. Values below 1 (except 0/None) will assert.
+    num_logprobs: int | list[int] = 0
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -201,7 +203,7 @@ class SamplingGenerator:
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
-            enable_log_probs=sampling_params.enable_log_probs,
+            num_logprobs=sampling_params.num_logprobs,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
@@ -220,7 +222,7 @@ class SamplingGenerator:
             self.tt_penalties.reset_params(
                 sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
             )
-        self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
+        self._log_probs_active = self.tt_sampling.log_probs_calculator.num_logprobs > 0
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
@@ -381,6 +383,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
         "seed": None,
+        "num_logprobs": 0,
     }
 
     def _pad(lst, name):
@@ -409,6 +412,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     frequency_penalty = _normalise_and_pad("frequency_penalty")
     repetition_penalty = _normalise_and_pad("repetition_penalty")
     seed = _normalise_and_pad("seed")
+    num_logprobs = _normalise_and_pad("num_logprobs")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
@@ -433,6 +437,13 @@ def format_sampling_params(sampling_params, max_batch_size):
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]
 
+        # num_logprobs: cap at 20, assert on negative values
+        if num_logprobs[i] is None:
+            num_logprobs[i] = 0
+        assert num_logprobs[i] >= 0, f"num_logprobs must be >= 0, got {num_logprobs[i]}"
+        if num_logprobs[i] > 20:
+            num_logprobs[i] = 20
+
     return replace(
         sampling_params,
         temperature=temperature,
@@ -442,6 +453,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         frequency_penalty=frequency_penalty,
         repetition_penalty=repetition_penalty,
         seed=seed,
+        num_logprobs=num_logprobs,
     )
 
 

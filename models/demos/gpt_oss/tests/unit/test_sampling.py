@@ -408,7 +408,7 @@ def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_see
 def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
     """Test that log probability calculation produces valid results.
 
-    Verifies that with enable_log_probs=True:
+    Verifies that with num_logprobs=1:
     - Log probs are finite
     - Log probs are <= 0 (log of probability)
     - Log probs are not all identical (actual computation ran)
@@ -427,7 +427,7 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
             temperature=1.0,
             top_k=32,
             top_p=0.95,
-            enable_log_probs=True,
+            num_logprobs=1,
             seed=42,
         ),
         BATCH_SIZE,

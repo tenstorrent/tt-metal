@@ -344,7 +344,7 @@ def prepare_generator_args(
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "enable_log_probs": [True] * 32,
+                "num_logprobs": [1] * 32,
             },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
@@ -1032,9 +1032,7 @@ def test_demo_text(
                 repetition_penalty=sampling_params["repetition_penalty"]
                 if "repetition_penalty" in sampling_params
                 else 1.0,
-                enable_log_probs=sampling_params["enable_log_probs"]
-                if "enable_log_probs" in sampling_params
-                else False,
+                num_logprobs=sampling_params["num_logprobs"] if "num_logprobs" in sampling_params else 0,
             )
             if model[0]._supports_on_device_sampling
             else None
@@ -1049,7 +1047,7 @@ def test_demo_text(
             # host sampling only supports single sample param for all users in a batch
             sampling_params["temperature"] = sampling_params["temperature"][0]
             sampling_params["top_p"] = sampling_params["top_p"][0]
-            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+            sampling_params["num_logprobs"] = sampling_params["num_logprobs"][0]
 
         prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 

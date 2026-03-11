@@ -323,8 +323,16 @@ class TTSampling(LightweightModule):
             topology=ttnn.Topology.Linear,
         )
 
-    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
-        """Update sampling parameters (k, p, temperature) dynamically."""
+    def reset_params(self, k, p, temp, num_logprobs: int | list[int] = None):
+        """Update sampling parameters (k, p, temperature) dynamically.
+
+        Args:
+            k: Top-k values per user
+            p: Top-p values per user
+            temp: Temperature values per user
+            num_logprobs: Number of logprobs to return (0=disabled, 1-20=enabled).
+                Values above 20 are capped to 20. Can be int or list[int].
+        """
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -360,7 +368,7 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
-        self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
+        self.log_probs_calculator.set_num_logprobs(num_logprobs)
 
     def forward(
         self,
@@ -409,8 +417,8 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 use_multicore=True,
             )
-            # Return dummy log-probs tensor with same shape as regular log-probs would be
-            # to satisfy the return type and for later post-processing
+            # For argmax path, use legacy single-token logprob calculation.
+            # The full top-k logprobs path is used in the non-argmax sampling path.
             self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
             return tt_out_tok, self.tt_log_probs
 
@@ -557,11 +565,14 @@ class TTSampling(LightweightModule):
             output_tensor=tt_out_tok,
         )
 
+        # Calculate top-k logprobs using the gathered values and indices from the
+        # top_k op. This avoids re-gathering individual token logits and instead
+        # computes logprobs for all top-32 candidates at once.
+        self.tt_log_probs = self.log_probs_calculator.calculate_top_k_log_probs(
+            x, topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved_untilised
+        )
+
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
-
-        # Return dummy log-probs tensor with same shape as regular log-probs would be
-        # to satisfy the return type and for later post-processing
-        self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
 
         return tt_out_tok, self.tt_log_probs
