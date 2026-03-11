@@ -6,6 +6,16 @@
 End-to-end PCC test comparing PyTorch reference vs TTNN implementation.
 
 Builds PyTorch reference from weights directly (no HuggingFace model loading).
+Tests embedding, single block, and full 36-layer model.
+
+NOTE: This file is a standalone script-style test that creates its own device.
+For a pytest-fixture-based version comparing against HuggingFace, see test_pcc_e2e.py.
+
+PCC threshold rationale:
+- Embedding: >= 0.99 (lookup table, should be exact)
+- Single block (layer 0): >= 0.95 (individual block with bfloat16 precision)
+- Full 36-layer model: >= 0.90 (cumulative precision loss over depth; 0.90 is a
+  conservative lower bound that still indicates correct behavior)
 """
 
 import torch
