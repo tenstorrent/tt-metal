@@ -251,7 +251,7 @@ jobs:
             should-run: ${{ inputs.run_blackhole_post_commit }}
             arch: ""  # blackhole-post-commit doesn't use architecture parameter
           - workflow: "tt-metal-l2-nightly.yaml"
-            name: "TT-Metal L2 Nightly APC"
+            name: "TT-Metal L2 Nightly and Sanity"
             output-key: "tt-metal-l2-nightly-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
             arch: "dynamic"  # architecture determined at runtime based on enabled tests
@@ -549,7 +549,7 @@ jobs:
             # Check results for each workflow type
             check_workflow_result "sanity-tests.yaml" "Sanity tests" "${{ inputs.run_all_post_commit }}"
             check_workflow_result "blackhole-post-commit.yaml" "Blackhole Post-Commit Tests" "${{ inputs.run_blackhole_post_commit }}"
-            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC Tests" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
+            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly Tests and Sanity" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
             check_workflow_result "perf-device-models.yaml" "Device Perf Regressions" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
 
             echo "" >> $GITHUB_STEP_SUMMARY
