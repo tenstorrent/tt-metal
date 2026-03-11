@@ -312,12 +312,6 @@ def run(args, context: Context):
     """Entry point for triage framework."""
     from triage import set_verbose_level
 
-    if context.devices[0].is_blackhole():
-        log_warning(
-            "Currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
-        )
-        return
-
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
