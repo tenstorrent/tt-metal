@@ -55,6 +55,9 @@ OPTIONS
                             Overrides the auto-detected GIT_REF.
   --pipeline-id ID          Set an explicit pipeline ID instead of the default
                             auto-generated <timestamp>-<short-sha> format.
+  --tcp-interface IFACE     Network interface for MPI TCP communication
+                            (e.g., 'eno1', 'cnx1'). Passed through to mpirun
+                            and tt-run --tcp-interface in multihost workflows.
   --dry-run                 Print the sbatch command that would be executed
                             without actually submitting the job.
   -h, --help                Show this help message and exit.
@@ -73,6 +76,7 @@ ENVIRONMENT VARIABLES
   DOCKER_IMAGE              Docker image for the workflow (same as --docker-image).
   ARCH_NAME                 Target architecture (same as --arch).
   GIT_REF                   Git ref to build/test (same as --ref).
+  TCP_INTERFACE             MPI TCP network interface (same as --tcp-interface).
   MLPERF_BASE               Mount point for MLPerf / model data.
                             Default: /mnt/MLPerf
   CONTAINER_WORKDIR         Working directory inside Docker containers.
@@ -215,6 +219,7 @@ OPT_ARCH=""
 OPT_REF=""
 OPT_PIPELINE_ID=""
 OPT_PARTITION=""
+OPT_TCP_INTERFACE=""
 DRY_RUN=0
 EXTRA_SBATCH_ARGS=()
 
@@ -225,6 +230,7 @@ while [[ $# -gt 0 ]]; do
         --arch)          OPT_ARCH="${2:?--arch requires a value}"; shift 2 ;;
         --ref)           OPT_REF="${2:?--ref requires a value}"; shift 2 ;;
         --pipeline-id)   OPT_PIPELINE_ID="${2:?--pipeline-id requires a value}"; shift 2 ;;
+        --tcp-interface)  OPT_TCP_INTERFACE="${2:?--tcp-interface requires a value}"; shift 2 ;;
         --no-docker)     NO_DOCKER=1; shift ;;
         --dry-run)       DRY_RUN=1; shift ;;
         --)              shift; EXTRA_SBATCH_ARGS=("$@"); break ;;
@@ -309,8 +315,9 @@ fi
 [[ -n "$OPT_DOCKER_IMAGE" ]] && DOCKER_IMAGE="$OPT_DOCKER_IMAGE"
 [[ -n "$OPT_ARCH" ]] && ARCH_NAME="$OPT_ARCH"
 [[ -n "$OPT_REF" ]] && GIT_REF="$OPT_REF"
+[[ -n "$OPT_TCP_INTERFACE" ]] && TCP_INTERFACE="$OPT_TCP_INTERFACE"
 
-export PIPELINE_ID DOCKER_IMAGE="${DOCKER_IMAGE:-}" ARCH_NAME="${ARCH_NAME:-}" GIT_REF NO_DOCKER="${NO_DOCKER:-0}"
+export PIPELINE_ID DOCKER_IMAGE="${DOCKER_IMAGE:-}" ARCH_NAME="${ARCH_NAME:-}" GIT_REF NO_DOCKER="${NO_DOCKER:-0}" TCP_INTERFACE="${TCP_INTERFACE:-}"
 
 ARTIFACT_DIR="$(get_artifact_dir "$PIPELINE_ID")"
 LOG_DIR="${LOG_BASE}/${PIPELINE_ID}"
@@ -358,6 +365,7 @@ log_info "  Git SHA:     ${GIT_SHORT_SHA}"
 log_info "  Git Ref:     ${GIT_REF}"
 log_info "  Arch:        ${ARCH_NAME:-default}"
 log_info "  Docker:      ${DOCKER_IMAGE:-<to be resolved>}"
+log_info "  TCP iface:   ${TCP_INTERFACE:-<auto>}"
 log_info "  Artifacts:   ${ARTIFACT_DIR}"
 log_info "  Logs:        ${LOG_DIR}"
 log_info "=============================================="
@@ -396,7 +404,7 @@ SBATCH_CMD=(
     "--job-name=ci-${WORKFLOW_NAME}-${PIPELINE_ID}"
     "--output=${LOG_DIR}/%x-%j.out"
     "--error=${LOG_DIR}/%x-%j.err"
-    "--export=ALL,PIPELINE_ID=${PIPELINE_ID},ARTIFACT_DIR=${ARTIFACT_DIR},LOG_DIR=${LOG_DIR},SLURM_SCRIPTS_DIR=${SLURM_SCRIPTS_DIR}"
+    "--export=ALL,PIPELINE_ID=${PIPELINE_ID},ARTIFACT_DIR=${ARTIFACT_DIR},LOG_DIR=${LOG_DIR},SLURM_SCRIPTS_DIR=${SLURM_SCRIPTS_DIR},TCP_INTERFACE=${TCP_INTERFACE:-}"
 )
 
 if [[ -n "${RESOLVED_PARTITION}" ]]; then

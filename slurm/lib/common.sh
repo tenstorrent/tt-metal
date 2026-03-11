@@ -148,6 +148,7 @@ parse_common_args() {
             --arch)          export ARCH_NAME="${2:?--arch requires a value}"; shift 2 ;;
             --ref)           export GIT_REF="${2:?--ref requires a value}"; shift 2 ;;
             --pipeline-id)   export PIPELINE_ID="${2:?--pipeline-id requires a value}"; shift 2 ;;
+            --tcp-interface) export TCP_INTERFACE="${2:?--tcp-interface requires a value}"; shift 2 ;;
             --partition)     shift 2 ;;  # consumed by submit.sh, ignored here
             --)              break ;;
             *)               log_warn "Unknown arg passed to workflow: $1"; shift ;;

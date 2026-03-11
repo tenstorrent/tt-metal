@@ -40,7 +40,7 @@ fi
 
 RANK_BINDING="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
 MPI_ARGS="--hostfile ${_alloc}/hostfile.txt"
-TCP_INTERFACE="cnx1"
+TCP_INTERFACE="${TCP_INTERFACE:-cnx1}"
 
 export MESH_DEVICE=DUAL
 export DEEPSEEK_V3_HF_MODEL="${DEEPSEEK_V3_HF_MODEL:-/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528}"
