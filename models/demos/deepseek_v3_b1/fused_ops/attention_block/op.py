@@ -179,8 +179,8 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores():
-        # 14 from pre-SDPA, 3 from post
-        return 17
+        # 14 from pre-SDPA, 4 from post
+        return 18
 
     @staticmethod
     def create_semaphores(mesh_device):
@@ -372,6 +372,7 @@ class AttentionBlock:
 
         # Get full device grid
         device = input_tensor_sample.device()
+        input_noc_coord = device.worker_core_from_logical_core(rmsnorm_core)
         device_grid_size = device.compute_with_storage_grid_size()
         full_device_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
@@ -560,6 +561,7 @@ class AttentionBlock:
         # CCL sender core: (11, 9) - adjacent to gather core
         ccl_sender_core = ttnn.CoreCoord(11, 9)
         ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
+        num_ccl_sender_cores = ccl_sender_core_grid.num_cores()
 
         # TODO: Subtract the pipeline core
         is_full_mcast_grid_core = ttnn.CoreRangeSet([main_grid]).subtract(rmsnorm_core_grid)
@@ -592,6 +594,7 @@ class AttentionBlock:
         sdpa_forwarder_scratch_sample = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
         sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
         sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
+        num_sdpa_forwarder_cores = len(sdpa_forwarder_cores)
 
         # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
         full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
@@ -803,6 +806,9 @@ class AttentionBlock:
         ccl_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
         ccl_semaphore_addr = ttnn.get_global_semaphore_address(ccl_semaphore)
+        ccl_sync_semaphore = attention_block_semaphores[semaphore_index]
+        semaphore_index += 1
+        ccl_sync_semaphore_addr = ttnn.get_global_semaphore_address(ccl_sync_semaphore)
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -1744,6 +1750,11 @@ class AttentionBlock:
                 ("sdpa_fwd_r2_buffer_offset", sdpa_fwd_r2_buffer_offset),
                 # Scatter arrival semaphore
                 ("scatter_arrival_semaphore_id", scatter_arrival_semaphore_id),
+                # Input NOC coord
+                ("input_noc_coord_x", input_noc_coord.x),
+                ("input_noc_coord_y", input_noc_coord.y),
+                # CCL sync semaphore
+                ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
             ]
         )
 
@@ -1790,6 +1801,13 @@ class AttentionBlock:
             ("ccl_sender_remote_receiver_noc_y", ccl_receiver_noc_core.y),
             ("ccl_sender_dst_num_hops", 1),
             ("ccl_sender_num_connections", 1),
+            ("ccl_sender_num_cores", num_ccl_sender_cores),
+            ("sdpa_fwd_num_cores", num_sdpa_forwarder_cores),
+            # Input NOC coord
+            ("input_noc_coord_x", input_noc_coord.x),
+            ("input_noc_coord_y", input_noc_coord.y),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
         ]
 
         # Add SDPA BRISC compile-time args when enabled
