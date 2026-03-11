@@ -43,6 +43,17 @@ prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     fuse_batch=False,
                     fused_activation=None,)
 
+prog_config_mm4_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+                    in0_block_w=8,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    per_core_M=2,
+                    per_core_N=4,
+                    fuse_batch=False,
+                    fused_activation=None,
+                    mcast_in0=False,)
+
 SEQ_LEN = 32 * 1024
 HIDDEN_SIZE = 7168
 NUM_HEADS = 128
@@ -68,8 +79,8 @@ NUM_HEADS = 128
         #(1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 1536, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, None),
         #(1, 1, SEQ_LEN, 1536, True, False, None, ttnn.bfloat16, 1, 1, 1536, 24576, True, 3, ttnn.bfloat8_b, ttnn.bfloat16, None),
         #(1, NUM_HEADS, SEQ_LEN, 128, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 128, 512, True, 1, ttnn.bfloat8_b, ttnn.bfloat16, None),
-        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh),
-        #(1, NUM_HEADS, SEQ_LEN, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, None),
+        # (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh),
+        (1, NUM_HEADS, SEQ_LEN, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, prog_config_mm4_bh),
         #(1, 1, SEQ_LEN, 16384, True, True, 3, ttnn.bfloat16, 1, 1, 16384, 7168, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm5_bh),
     ]
 )
