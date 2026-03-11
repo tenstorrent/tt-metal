@@ -258,7 +258,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         hf_config.max_seq_len = 4096
 
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
-        weight_cache_root = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
+        weight_cache_base = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
+        weight_cache_root = weight_cache_base / ("mtp_on" if self.enable_mtp else "mtp_off")
         weight_cache_root.mkdir(parents=True, exist_ok=True)
 
         self.model_weight_config = get_weight_config(

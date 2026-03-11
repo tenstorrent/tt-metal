@@ -172,8 +172,8 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--mtp",
         choices=["on", "off"],
-        default="on",
-        help="Control MTP usage: on (default, requires MTP weights), off.",
+        default="off",
+        help="Control MTP usage: on (requires MTP weights), off (default).",
     )
     p.add_argument(
         "--min-mtp-accept-rate",
@@ -335,7 +335,7 @@ def run_demo(
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
     force_recalculate: bool = False,
-    enable_mtp: bool = True,
+    enable_mtp: bool = False,
     min_mtp_accept_rate: float | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
