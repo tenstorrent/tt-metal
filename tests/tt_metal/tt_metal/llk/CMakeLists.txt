@@ -14,7 +14,22 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines
+)
+set_source_files_properties(
+    test_matmul_fidelity_schedule_bh.cpp
+    PROPERTIES
+        INCLUDE_DIRECTORIES
+            "${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+set_source_files_properties(
+    test_matmul_fidelity_schedule_wh.cpp
+    PROPERTIES
+        INCLUDE_DIRECTORIES
+            "${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
 )
 set_target_properties(
     unit_tests_llk

@@ -4,13 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include "../../../../tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul_fidelity.h"
+#include "tt_llk_blackhole/llk_lib/llk_math_matmul_fidelity.h"
 
 namespace tt::tt_metal::unit_tests::compute::matmul {
 
-TEST(MatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
+TEST(BlackholeMatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
     EXPECT_TRUE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
-        ckernel::MathFidelity::HiFi3, ::DataFormat::Float16_b, ::DataFormat::Bfp4));
+        ckernel::MathFidelity::HiFi3, ::DataFormat::Float16_b, ::DataFormat::Bfp4_b));
     EXPECT_EQ(
         ckernel::get_matmul_fidelity_phase_count(
             ckernel::MathFidelity::HiFi3,
@@ -25,7 +25,7 @@ TEST(MatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
         2u);
 }
 
-TEST(MatmulFidelitySchedule, KeepsStandardHiFi3ScheduleForNonBfp4Inputs) {
+TEST(BlackholeMatmulFidelitySchedule, KeepsStandardHiFi3ScheduleForNonBfp4Inputs) {
     EXPECT_FALSE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
         ckernel::MathFidelity::HiFi3, ::DataFormat::Float16_b, ::DataFormat::Float16_b));
     EXPECT_EQ(
@@ -42,7 +42,7 @@ TEST(MatmulFidelitySchedule, KeepsStandardHiFi3ScheduleForNonBfp4Inputs) {
         1u);
 }
 
-TEST(MatmulFidelitySchedule, KeepsStandardHiFi2ScheduleForBfloat16TimesBfp4) {
+TEST(BlackholeMatmulFidelitySchedule, KeepsStandardHiFi2ScheduleForBfloat16TimesBfp4) {
     EXPECT_FALSE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
         ckernel::MathFidelity::HiFi2, ::DataFormat::Float16_b, ::DataFormat::Bfp4_b));
     EXPECT_EQ(
