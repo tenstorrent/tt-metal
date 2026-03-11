@@ -115,7 +115,7 @@ def test_transformer(
     spatial_seq_len = (latents_height // patch_size) * (latents_width // patch_size)
 
     tt_model_forward = (
-        Tracer(tt_model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
+        Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
         if traced
         else tt_model.forward
     )

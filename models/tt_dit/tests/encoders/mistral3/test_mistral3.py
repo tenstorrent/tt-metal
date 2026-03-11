@@ -362,7 +362,7 @@ def test_transformer(*, mesh_device: ttnn.MeshDevice, batch_size: int, skip_laye
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
     )
-    tracer = Tracer(model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(model.forward, device=mesh_device, clone_prep_inputs=False)
 
     tokens = torch.randint(0, config.vocab_size, [batch_size, sequence_length])
     lengths = torch.randint(sequence_length // 4, 3 * sequence_length // 4, [batch_size])

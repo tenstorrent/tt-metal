@@ -163,7 +163,7 @@ class QwenImagePipeline:
             for i, submesh_device in enumerate(self._submesh_devices)
         ]
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
             for device in self._submesh_devices
         ]
         self._transformers_loaded = False
@@ -216,16 +216,16 @@ class QwenImagePipeline:
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
                 self._vae_decoder_tracer = Tracer(
-                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
+                    self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
                 )
 
             # Load VAE weights based on configuration
             if not dynamic_load_vae:
                 self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
 
-        self.allocate_persistent_buffers()
+        self._allocate_persistent_buffers()
 
-    def allocate_persistent_buffers(self) -> None:
+    def _allocate_persistent_buffers(self) -> None:
         """Allocate persistent buffers by running a pipeline pass without tracing.
 
         This is important so they do not get allocated after trace capture, which would lead to

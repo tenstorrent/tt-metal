@@ -92,7 +92,7 @@ def test_vae_flux2_decoder(
         latents = latents.reshape(b, c // (2 * 2), h * 2, w * 2)
         torch_output = torch_model.decode(latents).sample
 
-    tracer = Tracer(tt_model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
 
     tt_inp = tt_model.preprocess_and_unpatchify(
         tt_inp, height=height // vae_scale_factor, width=width // vae_scale_factor

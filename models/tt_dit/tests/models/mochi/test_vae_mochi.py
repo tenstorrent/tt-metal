@@ -787,7 +787,7 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         nonlinearity=config["nonlinearity"],
         output_nonlinearity=config["output_nonlinearity"],
     )
-    tracer = Tracer(tt_model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
 
     # Create input tensor (latent representation)
     torch_input = torch.randn(N, C, T, H, W)

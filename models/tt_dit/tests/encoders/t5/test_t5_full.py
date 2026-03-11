@@ -122,7 +122,7 @@ def test_t5_encoder(
 
     tt_encoder = T5Encoder(config, encoder_submesh, ccl_manager, parallel_config)
     tt_encoder.load_torch_state_dict(hf_model.state_dict())
-    tracer = Tracer(tt_encoder.forward, device=encoder_submesh, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(tt_encoder.forward, device=encoder_submesh, clone_prep_inputs=False)
 
     # time TT model inference only
     tt_start_time = time.time()

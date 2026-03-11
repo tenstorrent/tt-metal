@@ -227,7 +227,7 @@ class MochiPipeline(DiffusionPipeline):
             is_fsdp=True,
         )
         self._transformer_tracer = Tracer(
-            self.transformer.forward, device=mesh_device, num_prep_runs=0, clone_prep_inputs=False
+            self.transformer.forward, device=mesh_device, prep_run=False, clone_prep_inputs=False
         )
 
         # Load state dict into TT transformer
@@ -273,7 +273,7 @@ class MochiPipeline(DiffusionPipeline):
             )
             self.vae.load_torch_state_dict(torch_vae.decoder.state_dict())
             self._vae_decoder_tracer = Tracer(
-                self.vae.decode, device=self.mesh_device, num_prep_runs=0, clone_prep_inputs=False
+                self.vae.decode, device=self.mesh_device, prep_run=False, clone_prep_inputs=False
             )
 
             # Reshape the device mesh back to the DiT mesh shape:
@@ -292,9 +292,9 @@ class MochiPipeline(DiffusionPipeline):
             vae=self.vae,
         )
 
-        self.allocate_persistent_buffers()
+        self._allocate_persistent_buffers()
 
-    def allocate_persistent_buffers(self) -> None:
+    def _allocate_persistent_buffers(self) -> None:
         """Allocate persistent buffers by running a pipeline pass without tracing.
 
         This is important so they do not get allocated after trace capture, which would lead to
@@ -781,7 +781,7 @@ class MochiPipeline(DiffusionPipeline):
                 is_fsdp=True,
             )
             self._transformer_tracer = Tracer(
-                self.transformer.forward, device=self.mesh_device, num_prep_runs=0, clone_prep_inputs=False
+                self.transformer.forward, device=self.mesh_device, prep_run=False, clone_prep_inputs=False
             )
 
             # Load state dict into TT transformer

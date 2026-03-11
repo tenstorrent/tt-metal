@@ -1076,7 +1076,7 @@ def test_wan_decoder3d(
         dtype=dtype,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
-    tracer = Tracer(tt_model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
     traced = True
 
     num_convs = count_convs(tt_model)

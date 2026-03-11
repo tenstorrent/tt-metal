@@ -634,7 +634,7 @@ def test_sd35_vae_vae_decoder(
         ccl_manager=ccl_manager,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
-    tracer = Tracer(tt_model.forward, device=submesh_device, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(tt_model.forward, device=submesh_device, clone_prep_inputs=False)
 
     torch_input = torch.randn(batch, in_channels, height, width)
 

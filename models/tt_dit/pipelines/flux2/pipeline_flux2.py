@@ -160,7 +160,7 @@ class Flux2Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
             for device in self._submesh_devices
         ]
 
@@ -194,7 +194,7 @@ class Flux2Pipeline:
                 )
                 self._vae_decoder.load_torch_state_dict(self._torch_vae.state_dict())
                 self._vae_decoder_tracer = Tracer(
-                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
+                    self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
                 )
             else:
                 self._vae_decoder = None
@@ -203,9 +203,9 @@ class Flux2Pipeline:
             if self.encoder_device is not None:
                 ttnn.synchronize_device(self.encoder_device)
 
-        self.allocate_persistent_buffers()
+        self._allocate_persistent_buffers()
 
-    def allocate_persistent_buffers(self) -> None:
+    def _allocate_persistent_buffers(self) -> None:
         """Allocate persistent buffers by running a pipeline pass without tracing.
 
         This is important so they do not get allocated after trace capture, which would lead to

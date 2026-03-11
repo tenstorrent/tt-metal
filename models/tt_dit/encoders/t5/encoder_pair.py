@@ -56,7 +56,7 @@ class T5TokenizerEncoderPair:
         self._tracer = (
             None
             if use_torch or not enabled
-            else Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
         )
 
     def load_torch_model(self, checkpoint: str) -> T5EncoderModel:

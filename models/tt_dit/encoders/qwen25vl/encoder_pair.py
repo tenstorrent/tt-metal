@@ -52,7 +52,7 @@ class Qwen25VlTokenizerEncoderPair:
         self._tracer = (
             None
             if use_torch
-            else Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
         )
 
     def _load_encoder(

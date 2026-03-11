@@ -173,7 +173,7 @@ def test_clip_encoder(
         eos_token_id=eos_token_id,
     )
     tt_clip.load_torch_state_dict(hf_model.state_dict())
-    tracer = Tracer(tt_clip.forward, device=encoder_submesh, num_prep_runs=1, clone_prep_inputs=False)
+    tracer = Tracer(tt_clip.forward, device=encoder_submesh, clone_prep_inputs=False)
 
     # times TT model inference only
     tt_start_time = time.time()

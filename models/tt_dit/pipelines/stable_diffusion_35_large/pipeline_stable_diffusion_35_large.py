@@ -176,7 +176,7 @@ class StableDiffusion3Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
             for device in self.submesh_devices
         ]
 
@@ -251,10 +251,10 @@ class StableDiffusion3Pipeline:
         self._text_encoder_2.load_torch_state_dict(text_encoder_2_state_dict)
 
         self._clip_tracer_1 = Tracer(
-            self._text_encoder_1.forward, device=encoder_device, num_prep_runs=0, clone_prep_inputs=False
+            self._text_encoder_1.forward, device=encoder_device, prep_run=False, clone_prep_inputs=False
         )
         self._clip_tracer_2 = Tracer(
-            self._text_encoder_2.forward, device=encoder_device, num_prep_runs=0, clone_prep_inputs=False
+            self._text_encoder_2.forward, device=encoder_device, prep_run=False, clone_prep_inputs=False
         )
 
         if enable_t5_text_encoder:
@@ -288,7 +288,7 @@ class StableDiffusion3Pipeline:
             # Load state dict into new encoder
             self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3_state_dict)
             self._t5_tracer = Tracer(
-                self._text_encoder_3.forward, device=encoder_device, num_prep_runs=0, clone_prep_inputs=False
+                self._text_encoder_3.forward, device=encoder_device, prep_run=False, clone_prep_inputs=False
             )
         else:
             self._text_encoder_3 = None
@@ -306,7 +306,7 @@ class StableDiffusion3Pipeline:
             ccl_manager=self.ccl_managers[vae_submesh_idx],
         )
         self._vae_decoder_tracer = Tracer(
-            self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
+            self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
         )
 
         if self.desired_encoder_submesh_shape != self.original_submesh_shape:
@@ -314,7 +314,7 @@ class StableDiffusion3Pipeline:
             # If reshaping, vae device is same as encoder device
             self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
-    def allocate_persistent_buffers(self) -> None:
+    def _allocate_persistent_buffers(self) -> None:
         """Allocate persistent buffers by running a pipeline pass without tracing.
 
         This is important so they do not get allocated after trace capture, which would lead to
@@ -343,7 +343,7 @@ class StableDiffusion3Pipeline:
         self._prepared_max_t5_sequence_length = max_t5_sequence_length
         self._prepared_prompt_sequence_length = prompt_sequence_length
 
-        self.allocate_persistent_buffers()
+        self._allocate_persistent_buffers()
 
     @staticmethod
     def create_pipeline(

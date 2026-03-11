@@ -44,7 +44,7 @@ class CLIPTokenizerEncoderPair:
         self._tracer = (
             None
             if use_torch
-            else Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
         )
 
         self._sequence_length = sequence_length if sequence_length is not None else self._tokenizer.model_max_length

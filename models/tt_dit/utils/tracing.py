@@ -29,7 +29,7 @@ class Tracer:
         /,
         *,
         device: ttnn.MeshDevice,
-        num_prep_runs: int = 2,
+        prep_run: bool = True,
         clone_prep_inputs: bool = True,
     ) -> None:
         """Initialize the tracer.
@@ -41,12 +41,12 @@ class Tracer:
         Args:
             function: Function to be traced.
             device: Device on which to capture and execute the trace.
-            num_prep_runs: Number of times to run the function before capturing the trace.
-            clone_prep_inputs: Whether to clone tensor inputs before the preparation runs.
+            prep_run: Whether to run the function once before capturing the trace.
+            clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
         """
         self._function = function
         self._device = device
-        self._num_prep_runs = num_prep_runs
+        self._prep_run = prep_run
         self._clone_prep_inputs = clone_prep_inputs
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
@@ -101,17 +101,16 @@ class Tracer:
             self._args = _tree_map(self._tensor_to_device, args, path_label="args")
             self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
-            if self._clone_prep_inputs and self._num_prep_runs > 0:
-                prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
-                prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
-            else:
-                prep_args = self._args
-                prep_kwargs = self._kwargs
+            if self._prep_run:
+                if self._clone_prep_inputs:
+                    prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
+                    prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
+                else:
+                    prep_args = self._args
+                    prep_kwargs = self._kwargs
 
-            for _ in range(self._num_prep_runs):
                 self._function(*prep_args, **prep_kwargs)
-
-            del prep_args, prep_kwargs
+                del prep_args, prep_kwargs
 
             # capture trace
             logger.debug("capturing trace...")
