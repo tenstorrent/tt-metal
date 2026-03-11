@@ -277,6 +277,7 @@ class WanCausalConv3d(Module):
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
+        # PERSISTENT VALUABLE BUFFER
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -716,6 +717,7 @@ class WanConv2d(Module):
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
+        # PERSISTENT VALUABLE BUFFER
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

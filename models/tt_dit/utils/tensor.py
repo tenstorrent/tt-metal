@@ -311,7 +311,9 @@ def arange(
     return ttnn.cumsum(x, 0) + (start - step)
 
 
+# PERSISTENT VALUABLE BUFFER
 _tril_cache: dict[tuple, ttnn.Tensor] = {}
+# PERSISTENT VALUABLE BUFFER
 _triu_cache: dict[tuple, ttnn.Tensor] = {}
 
 

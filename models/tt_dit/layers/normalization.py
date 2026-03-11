@@ -240,6 +240,7 @@ class DistributedLayerNorm(Module):
     # Shared dictionary to store reciprocal tensors
     # Key: (device id, width_per_device)
     # Value: recip_tensor
+    # PERSISTENT VALUABLE BUFFER
     _recip_tensors: ClassVar[dict[tuple[int, int], ttnn.Tensor]] = {}
 
     def __init__(

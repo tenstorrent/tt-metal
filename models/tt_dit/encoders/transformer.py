@@ -712,7 +712,9 @@ class TransformerRmsNorm(Module):
 
 class Cache:
     def __init__(self, *, device: ttnn.MeshDevice, size: int) -> None:
+        # PERSISTENT VALUABLE BUFFER
         self.k_cache = {}
+        # PERSISTENT VALUABLE BUFFER
         self.v_cache = {}
 
         self._position = 0

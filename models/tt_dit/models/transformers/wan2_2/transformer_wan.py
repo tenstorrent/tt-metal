@@ -255,6 +255,7 @@ class WanTransformer3DModel(Module):
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
+        # PERSISTENT VALUABLE BUFFER
         self.cached_rope_features = {}
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"

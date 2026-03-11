@@ -514,6 +514,7 @@ class RelativePositionEmbeddings(Module):
         )
 
         # If we are using max sequence length. We can just precompute. This seems to be the same for all subset of the max. We can also discard it if we want to save memory.
+        # PERSISTENT VALUABLE BUFFER
         self.relative_bias_cache = None
 
     def forward(self, seq_length: int) -> ttnn.Tensor:

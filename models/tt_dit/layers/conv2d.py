@@ -234,7 +234,9 @@ class Conv2d(Module):
             on_host=True,
         )
 
+        # PERSISTENT VALUABLE BUFFER
         self._prepared_weight = None
+        # PERSISTENT VALUABLE BUFFER
         self._prepared_bias = None
 
         self.in_channels = in_channels
