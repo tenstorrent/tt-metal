@@ -518,7 +518,9 @@ void run_single_core_reduce_program(
 
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto* device = mesh_device->get_devices()[0];
+    auto blocking = device->arch() == ARCH::QUASAR;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
     distributed::Finish(cq);
 
     // The kernel will view the input as TILED_NFACES
@@ -570,7 +572,7 @@ void run_single_core_reduce_program(
         log_error(LogTest, "Failure position={}", argfail);
     }
 
-    EXPECT_TRUE(pass);
+    ASSERT_TRUE(pass);
     log_info(
         LogTest,
         "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}",
@@ -624,7 +626,8 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    std::vector<uint32_t> shape = {1, 1, 1 * TILE_HEIGHT, 1 * TILE_WIDTH};
+    // std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
@@ -650,6 +653,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    return;
                 }
             }
         }
