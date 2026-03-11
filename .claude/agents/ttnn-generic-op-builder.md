@@ -36,7 +36,7 @@ You read `op_design.md` Part 1 for architecture details and `.tdd_state.json` to
 - nanobind bindings
 - C++ device operations
 - ttnn namespace registration
-- Actual kernel math implementations (kernels MUST be stubs initially)
+- Actual kernel implementations — kernels MUST be completely empty stubs (no logic, no data copy, no passthrough, no CB operations — just an empty `kernel_main()` body with includes)
 
 ## Required Knowledge - READ BEFORE IMPLEMENTATION
 
@@ -224,7 +224,18 @@ compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
 4. **Assemble ProgramDescriptor**
 
 ### Step 5: Implement Stub Kernels
-Create minimal kernels that compile but don't perform real computation.
+Create **completely empty** kernel files — just includes and an empty `kernel_main()`. No logic whatsoever.
+
+**Stubs must be truly empty.** Do NOT add any code inside `kernel_main()`:
+- No data copy or passthrough logic
+- No CB push/pop operations
+- No tile read/write operations
+- No semaphore signals
+- No "signal completion" code
+- No initialization code
+- Just `void kernel_main() {}` with the right includes — nothing else
+
+The kernel-writer agent will implement all kernel logic later during TDD stages. Any logic you add to stubs will cause device hangs (e.g., CB synchronization deadlocks) and break the pipeline.
 
 **CRITICAL: Generate includes from op_design.md.** Scan Part 2 of the design document for helper references and emit the corresponding `#include` lines in stub kernels. This prevents wasted compilation-error retries during TDD.
 
@@ -252,8 +263,6 @@ Also always include:
 // + includes derived from op_design.md (e.g., reduce_helpers_dataflow, tensor_accessor)
 
 void kernel_main() {
-    // Stub: Just signal completion to compute
-    // Real implementation will read from DRAM to CB
 }
 ```
 
@@ -263,8 +272,6 @@ void kernel_main() {
 // + includes derived from op_design.md (e.g., tilize_helpers, binary_op_helpers, rsqrt)
 
 void kernel_main() {
-    // Stub: Initialize and return
-    // Real implementation will process tiles
 }
 ```
 
@@ -274,10 +281,10 @@ void kernel_main() {
 // + includes derived from op_design.md (e.g., tensor_accessor)
 
 void kernel_main() {
-    // Stub: Just complete
-    // Real implementation will write from CB to DRAM
 }
 ```
+
+**Reminder: These stubs are intentionally empty.** The body of `kernel_main()` must contain zero lines of code. The kernel-writer agent fills them in later.
 
 ### Step 6: Implement Tests
 
@@ -475,7 +482,7 @@ def test_{op_name}_runs(device):
 - `ImportError: cannot import name` → check import paths (use `ttnn.operations.X`, not `ttnn.ttnn.operations.X`)
 - `AttributeError: 'Tensor' object has no attribute 'buffer'` → use `tensor.buffer_address()`
 
-**If the test hangs** (no output for >30 seconds), kill it (`pkill -9 -f pytest`), reset the device (`tt-smi -r`), and investigate the CB synchronization in your stub kernels.
+**If the test hangs** (no output for >30 seconds), kill it (`pkill -9 -f pytest`), reset the device (`tt-smi -r`), and verify your stub kernels are truly empty (no CB push/pop, no semaphore signals, no data movement — just an empty `kernel_main()` body). Any logic in stubs causes hangs.
 
 ## Deliverable Summary
 
