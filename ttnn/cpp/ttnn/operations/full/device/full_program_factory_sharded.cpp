@@ -50,14 +50,18 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         num_compute_cores =
             std::min(num_compute_cores, num_shards);  // If the number of banks to shard over is more than the number
                                                       // of shards, only num_shards DRAM banks will have data.
-        auto all_dram_workers =
-            output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-        runtime_cores.assign(
-            all_dram_workers.begin(),
-            all_dram_workers.begin() +
-                num_compute_cores);  // TODO: We can optimize worker cores chosen for each DRAM bank. We may not
-                                     // necessarily specify the DRAM bank starting at (0,0), so this may not always
-                                     // return the most optimal worker core assignments for the DRAM banks with shards.
+        auto all_dram_workers = output.device()->get_optimal_dram_bank_to_logical_worker_assignment(
+            tt::tt_metal::NOC::RISCV_0_default);  // Getting optimal worker core for each DRAM bank index.
+        bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+        auto shard_grid_cores = corerange_to_cores(
+            output_shard_spec.grid, num_compute_cores, is_row_major);  // Getting the DRAM banks with shards in order.
+        runtime_cores.reserve(shard_grid_cores.size());
+        for (const auto& dram_core : shard_grid_cores) {
+            uint32_t dram_channel =
+                output.device()->dram_channel_from_logical_core(dram_core);  // For each DRAM coord, get its bank ID.
+            runtime_cores.push_back(all_dram_workers[dram_channel]);  // Get the worker core for the DRAM bank and add
+                                                                      // it to the vector of worker cores.
+        }
         compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(runtime_cores));
     } else {
         if (num_compute_cores >

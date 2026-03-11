@@ -420,7 +420,7 @@ std::vector<CoreCoord> Tensor::get_cores_with_shards() const {
 
         const auto& buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
             this->padded_shape(),
-            Shape({this->shard_spec()->shape[0], this->shard_spec()->shape[1]}),
+            Shape(this->shard_spec()->shape),
             this->tensor_spec().tensor_layout().compute_page_shape(this->tensor_spec().physical_shape()),
             this->shard_spec()->grid,
             this->shard_spec()->orientation,
