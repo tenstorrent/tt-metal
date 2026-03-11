@@ -27,9 +27,9 @@ template <uint32_t KT_DIM, uint32_t CT_DIM>
 FORCE_INLINE void custom_mm_compressed_block_runtime(
     uint32_t fmt_l1_addr, uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
+    static_assert(CT_DIM == 1 || CT_DIM % 2 == 0, "CT_DIM must be 1 or even");
     static_assert(
-        (CT_DIM == 1 && (KT_DIM % 2 == 0)) || (CT_DIM > 1 && (CT_DIM % 2 == 0)),
-        "ct=1 requires even KT_DIM; ct>1 requires even CT_DIM");
+        CT_DIM == 1 || KT_DIM % 2 == 0 || CT_DIM % 2 == 0, "ct=1 requires even KT_DIM; ct>1 requires even CT_DIM");
 
     UNPACK(({
         volatile uint* cfg = get_cfg_pointer();
