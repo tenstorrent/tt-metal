@@ -59,6 +59,22 @@ OBS_CAM_LEFT_WRIST = "observation.images.cam_left_wrist"
 OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
 
+# Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
+VAE_ENC_CACHE_FILENAME = "vae_encoded_obs.pt"
+# Cache file for text (prompt) embeddings; if present and prompt matches, skip running the text encoder.
+TEXT_EMB_CACHE_FILENAME = "text_emb_cache.pt"
+
+# Seed for reproducible inference (latents/actions init, etc.).
+REPRODUCIBLE_SEED = 42
+
+
+def _set_seed(seed: int = REPRODUCIBLE_SEED) -> None:
+    """Set random seeds so that inference is reproducible."""
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
 
 def build_infer_obs(
     cam_high: np.ndarray,
@@ -255,6 +271,19 @@ def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_
     prompt = [prompt] if isinstance(prompt, str) else prompt
     batch_size = len(prompt)
 
+    cache_path = getattr(config, "text_emb_cache_path", None)
+    if cache_path and os.path.isfile(cache_path):
+        try:
+            cached = torch.load(cache_path, map_location="cpu", weights_only=False)
+            if cached.get("prompt") == prompt and "prompt_embeds" in cached:
+                logger.info("Loading text embeddings from cache: %s", cache_path)
+                prompt_embeds = cached["prompt_embeds"].to(device=device, dtype=dtype)
+                neg = cached.get("negative_prompt_embeds")
+                negative_prompt_embeds = neg.to(device=device, dtype=dtype) if neg is not None else None
+                return prompt_embeds, negative_prompt_embeds
+        except Exception as e:
+            logger.warning("Failed to load text emb cache: %s", e)
+
     prompt_embeds = _get_t5_prompt_embeds(
         models, prompt=prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
     )
@@ -266,6 +295,21 @@ def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_
             models, prompt=negative_prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
         )
 
+    if cache_path:
+        try:
+            torch.save(
+                {
+                    "prompt": prompt,
+                    "prompt_embeds": prompt_embeds.cpu(),
+                    "negative_prompt_embeds": negative_prompt_embeds.cpu()
+                    if negative_prompt_embeds is not None
+                    else None,
+                },
+                cache_path,
+            )
+            logger.info("Saved text embeddings to cache: %s", cache_path)
+        except Exception as e:
+            logger.warning("Failed to save text emb cache: %s", e)
     return prompt_embeds, negative_prompt_embeds
 
 
@@ -388,13 +432,20 @@ def _prepare_latent_input(
 
 def _encode_obs(models, state, obs):
     config = models["config"]
+    device = models["device"]
+    dtype = models["dtype"]
+
+    cache_path = getattr(config, "vae_enc_cache_path", None)
+    if cache_path and os.path.isfile(cache_path):
+        logger.info("Loading VAE encode output from cache: %s", cache_path)
+        video_latent = torch.load(cache_path, map_location=device, weights_only=True)
+        return video_latent.to(dtype)
+
     env_type = models["env_type"]
     height = state["height"]
     width = state["width"]
     streaming_vae = models["streaming_vae"]
     streaming_vae_half = models["streaming_vae_half"]
-    device = models["device"]
-    dtype = models["dtype"]
     vae = models["vae"]
 
     images = obs["obs"]
@@ -438,7 +489,15 @@ def _encode_obs(models, state, obs):
     latents_std = torch.tensor(vae.config.latents_std).to(mu.device)
     mu_norm = _normalize_latents(mu, latents_mean, 1.0 / latents_std)
     video_latent = torch.cat(mu_norm.split(1, dim=0), dim=-1)
-    return video_latent.to(device)
+    video_latent = video_latent.to(device)
+
+    if cache_path:
+        try:
+            torch.save(video_latent.cpu(), cache_path)
+            logger.info("Saved VAE encode output to cache: %s", cache_path)
+        except Exception as e:
+            logger.warning("Failed to save VAE encode cache: %s", e)
+    return video_latent
 
 
 def _reset_state(models, state, prompt):
@@ -452,7 +511,7 @@ def _reset_state(models, state, prompt):
     save_root = config.save_root
 
     logger.info("Reset.")
-    state["use_cfg"] = (config.guidance_scale > 1) or (config.action_guidance_scale > 1)
+    state["use_cfg"] = False  # Fixed to batch_size=1 for this demo
     state["frame_st_id"] = 0
     state["init_latent"] = None
 
@@ -746,6 +805,7 @@ def run_inference(
     if not checkpoint_path.is_dir():
         raise FileNotFoundError(f"Checkpoint dir not found: {checkpoint_path}")
 
+    _set_seed()
     os.chdir(_REPO_ROOT)
     config = deepcopy(VA_CONFIGS["robotwin"])
     config.wan22_pretrained_model_name_or_path = str(checkpoint_path)
@@ -755,6 +815,8 @@ def run_inference(
     if save_dir is None:
         save_dir = _SCRIPT_DIR / "out_inference"
     config.save_root = str(save_dir)
+    config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
+    config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
 
     models = _load_models(config)
     state = {}
@@ -787,6 +849,7 @@ def run_generate(
         if not (images_dir / f"{key}.png").exists():
             raise FileNotFoundError(f"Missing {images_dir / f'{key}.png'} for generate()")
 
+    _set_seed()
     os.chdir(_REPO_ROOT)
     config = deepcopy(VA_CONFIGS["robotwin"])
     config.wan22_pretrained_model_name_or_path = str(checkpoint_path)
@@ -794,6 +857,8 @@ def run_generate(
     config.rank = 0
     config.world_size = 1
     config.save_root = str(save_dir)
+    config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
+    config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
     config.input_img_path = str(images_dir)
     config.prompt = prompt
     config.num_chunks_to_infer = num_chunks

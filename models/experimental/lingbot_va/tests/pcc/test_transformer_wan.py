@@ -24,7 +24,7 @@ _tt_metal_root = Path(__file__).resolve().parent.parent.parent.parent.parent.par
 if str(_tt_metal_root) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(_tt_metal_root))
 
-from models.experimental.lingbot_va.reference.model import (
+from models.experimental.lingbot_va.reference.transformer_wan import (
     WanTransformer3DModel as TorchWanTransformer3DModel,
 )
 from models.experimental.lingbot_va.tt.transformer_wan import WanTransformer3DModel
