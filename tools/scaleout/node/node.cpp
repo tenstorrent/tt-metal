@@ -7,8 +7,8 @@
 
 #include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/tt_device/tt_device.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -574,8 +574,9 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
 NodeType get_node_type_from_system() {
     std::vector<int> pci_devices = tt::umd::PCIDevice::enumerate_devices();
     if (pci_devices.empty()) {
-        std::cerr << "Warning: PCIe device not accessible - cannot determine node type from system, "
-                     "defaulting to BH_GALAXY_REV_AB\n";
+        log_warning(
+            tt::LogDistributed,
+            "PCIe device not accessible - cannot determine node type from system, defaulting to BH_GALAXY_REV_AB");
         return NodeType::BH_GALAXY_REV_AB;
     }
     auto device = tt::umd::TTDevice::create(pci_devices[0]);
@@ -583,10 +584,10 @@ NodeType get_node_type_from_system() {
     uint64_t board_id = device->get_board_id();
     uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
     if (revision_bits >= 3) {
-        std::cout << "BH Galaxy Rev C detected, using in place of BH_GALAXY\n";
+        log_info(tt::LogDistributed, "BH Galaxy Rev C detected, using in place of BH_GALAXY");
         return NodeType::BH_GALAXY_REV_C;
     } else {
-        std::cout << "BH Galaxy Rev AB detected, using in place of BH_GALAXY\n";
+        log_info(tt::LogDistributed, "BH Galaxy Rev AB detected, using in place of BH_GALAXY");
         return NodeType::BH_GALAXY_REV_AB;
     }
 }
