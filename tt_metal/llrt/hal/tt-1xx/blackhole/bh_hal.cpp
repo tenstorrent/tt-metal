@@ -259,7 +259,8 @@ public:
     }
 };
 
-void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool is_simulator) {
+void Hal::initialize_bh(
+    bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool is_simulator) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
