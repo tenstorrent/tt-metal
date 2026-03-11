@@ -853,13 +853,11 @@ CablingGenerator::CablingGenerator(
         initialize_cluster(cluster_descriptor, deployment_descriptor);
         populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
         // Ensure deployment_hosts_ is ordered by DFS-assigned host_id, not deployment file order.
-        {
-            std::unordered_map<std::string, Host> all_hosts;
-            for (const auto& host : deployment_hosts_) {
-                all_hosts[host.hostname] = host;
-            }
-            rebuild_deployment_hosts_in_dfs_order(all_hosts);
+        std::unordered_map<std::string, Host> all_hosts;
+        for (const auto& host : deployment_hosts_) {
+            all_hosts[host.hostname] = host;
         }
+        rebuild_deployment_hosts_in_dfs_order(all_hosts);
     }
 }
 
