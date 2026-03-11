@@ -5,6 +5,7 @@
 // RM path: reads 32 sticks per tile-row into c_0 (Wt tile-pages)
 // TILE path: reads Wt tiles per tile-row into c_1
 // Also generates reduce scaler in c_2, epsilon in c_5
+// If gamma: loads gamma sticks into c_0 before main loop (for compute to tilize)
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -22,7 +23,8 @@ constexpr uint32_t eps_bits = get_compile_time_arg_val(2);
 constexpr uint32_t input_is_rm = get_compile_time_arg_val(3);
 constexpr uint32_t has_gamma = get_compile_time_arg_val(4);
 constexpr uint32_t Wt = get_compile_time_arg_val(5);
-constexpr auto input_accessor_args = TensorAccessorArgs<6>();
+constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(6);  // W * element_size (gamma is always RM)
+constexpr auto input_accessor_args = TensorAccessorArgs<7>();
 
 void kernel_main() {
     // Runtime args
@@ -38,22 +40,10 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_or_tile_size);
 
     // ---- Generate reduce scaler tile in c_2 (1/W as bfloat16) ----
-    // Use prepare_reduce_scaler with the float value reconstructed from bits
-    // The scaler_bits is a packed bf16 value (bf16 << 16 | bf16), but we need
-    // to pass a float to prepare_reduce_scaler. The scaler CB is always bf16 format.
-    // Actually, the scaler value 1/W was packed as bf16 by the host. We need to
-    // pass the actual float 1/W. Let's reconstruct from the bits.
-    // scaler_bits is actually (bf16 << 16 | bf16). We can just pass 1.0f/W.
-    // But we don't have W at compile time. We have Wt = W/32.
-    // Actually 1/W = 1/(Wt * 32).
     constexpr float scaler_float = 1.0f / static_cast<float>(Wt * 32);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_float);
 
     // ---- Generate epsilon tile in c_5 ----
-    // eps_bits is float32 representation of epsilon
-    // We need to fill tile[0][0] with epsilon. Use similar pattern to scaler.
-    // Actually epsilon needs to be in the input data format. For bf16, we fill row0.
-    // Re-interpret eps_bits as float
     union {
         uint32_t u;
         float f;
@@ -61,6 +51,33 @@ void kernel_main() {
     eps_conv.u = eps_bits;
     float eps_f = eps_conv.f;
     dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_f);
+
+    // ---- Load gamma into c_0 before main loop (if gamma provided) ----
+    // Gamma is (1,1,1,W) in ROW_MAJOR: 1 stick of W elements.
+    // Load into c_0 as Wt tile-pages (32 sticks * W elements = full tile-row).
+    // Replicate the single gamma stick across all 32 rows so that after tilize,
+    // every row of every tile in c_7 has the gamma values. This is needed because
+    // ROW broadcast reads per-row data from each B tile face, not just row 0.
+    if constexpr (has_gamma) {
+        // Gamma accessor args follow input accessor args (only present when has_gamma=1)
+        // Use gamma_stick_size as page size since gamma is always RM (W * element_size)
+        constexpr auto gamma_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
+        const auto gamma_accessor = TensorAccessor(gamma_accessor_args, gamma_addr, gamma_stick_size);
+
+        cb_reserve_back(cb_input_rm, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_input_rm);
+
+        // Read gamma stick 32 times to fill all rows of the tile-row
+        constexpr uint32_t TILE_H = 32;
+        uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+        for (uint32_t s = 0; s < TILE_H; ++s) {
+            noc_async_read(gamma_noc_addr, l1_write_addr, gamma_stick_size);
+            l1_write_addr += gamma_stick_size;
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(cb_input_rm, Wt);
+    }
 
     if constexpr (input_is_rm) {
         // RM path: read 32 sticks per tile-row into c_0

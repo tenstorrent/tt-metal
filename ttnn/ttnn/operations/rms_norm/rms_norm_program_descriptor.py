@@ -19,6 +19,7 @@ CB layout:
   c_5  - cb_eps:       Epsilon constant                             [1 page]
   c_6  - cb_rms_inv:   rsqrt(mean+eps)                             [1 page]
   c_7  - cb_gamma:     Gamma weights (tilized)                     [Wt pages]
+  c_8  - cb_norm_temp: Normalize intermediate (gamma path only)    [Wt pages]
   c_16 - cb_out:       Output tiles                                 [Wt pages]
   c_17 - cb_untilized: Untilized output (RM path only)             [Wt pages]
 """
@@ -126,9 +127,9 @@ def create_program_descriptor(
     cbs = []
 
     # c_0: cb_input_rm - RM sticks in tile-sized pages (for tilize)
-    # Even for TILE path, allocate minimally (kernel won't use it but CB must exist
-    # if referenced in compile-time args)
-    cb0_pages = Wt if is_rm else 1
+    # Needs Wt pages for: RM input tilize OR gamma loading (gamma is always RM)
+    # Even for TILE path with gamma, c_0 is used for gamma stick loading before tilize
+    cb0_pages = Wt if (is_rm or has_gamma) else 1
     cbs.append(
         ttnn.CBDescriptor(
             total_size=cb0_pages * tile_size,
@@ -189,7 +190,7 @@ def create_program_descriptor(
         )
     )
 
-    # c_4: cb_rms - Reduce output (2 pages, double-buffered)
+    # c_4: cb_rms - Reduce output (2 pages, no longer reused for gamma mul output)
     cbs.append(
         ttnn.CBDescriptor(
             total_size=2 * tile_size,
@@ -250,6 +251,23 @@ def create_program_descriptor(
         )
     )
 
+    # c_8: cb_norm_temp - Normalize intermediate when gamma active (Wt pages)
+    CB_NORM_TEMP = 8
+    if has_gamma:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=Wt * tile_size,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_NORM_TEMP,
+                        data_format=input_dtype,
+                        page_size=tile_size,
+                    )
+                ],
+            )
+        )
+
     # c_16: cb_out - Output tiles (Wt pages)
     cbs.append(
         ttnn.CBDescriptor(
@@ -298,8 +316,12 @@ def create_program_descriptor(
         1 if is_rm else 0,  # 3: input_is_rm
         1 if has_gamma else 0,  # 4: has_gamma
         Wt,  # 5: Wt (tiles in width)
+        stick_size,  # 6: gamma_stick_size (W * element_size, for gamma RM accessor page size)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Gamma TensorAccessor args follow input accessor args (kernel uses next_compile_time_args_offset)
+    if has_gamma:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
 
     # -- Writer kernel --
     output_W = output_tensor.shape[-1]

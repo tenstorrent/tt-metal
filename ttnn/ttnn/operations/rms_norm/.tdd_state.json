@@ -188,12 +188,74 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "[\"bfloat16\"]",
-      "status": "in_progress",
+      "status": "passed",
       "commit": null,
-      "attempts": 0,
+      "attempts": 5,
       "free_retries": 0,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "runtime_error",
+          "summary": "RuntimeError: Timeout waiting for Ethernet core service remote IO request.",
+          "details": {
+            "error_type": "RuntimeError",
+            "message": "Timeout waiting for Ethernet core service remote IO request."
+          },
+          "suggested_action": "Check runtime args indexing. Verify tensor addresses and buffer sizes. Look for off-by-one errors in tile counting.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "gamma",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 6.4375",
+          "details": {
+            "max_diff": "6.4375"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "gamma",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 6.4375",
+          "details": {
+            "max_diff": "6.4375"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 3,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "gamma",
+          "remaining_attempts": 3,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 6.4375",
+          "details": {
+            "max_diff": "6.4375"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 4,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "gamma",
+          "remaining_attempts": 2,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
     }
   ]
 }

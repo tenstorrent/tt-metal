@@ -3,7 +3,7 @@
 
 // RMS Norm - Writer Kernel
 // RM path: waits for Wt tile-pages in c_17, extracts 32 sticks, writes to DRAM
-// TILE path: waits for tiles in c_16 one at a time, writes to DRAM
+// TILE path: waits for tiles in c_16 (no gamma) or c_4 (with gamma) one at a time, writes to DRAM
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -17,6 +17,11 @@ constexpr uint32_t input_is_rm = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t has_gamma = get_compile_time_arg_val(3);
 constexpr auto output_accessor_args = TensorAccessorArgs<4>();
+
+// TILE path: always read from cb_out (c_16)
+// When has_gamma, compute writes gamma*norm result to cb_out
+// When no gamma, compute writes normalize result to cb_out
+constexpr uint32_t cb_tile_source = cb_out;
 
 void kernel_main() {
     // Runtime args
@@ -50,16 +55,16 @@ void kernel_main() {
             cb_pop_front(cb_untilized, Wt);
         }
     } else {
-        // TILE path: read from c_16, write one tile at a time
+        // TILE path: read from cb_tile_source, write one tile at a time
         for (uint32_t row = 0; row < num_rows; ++row) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_wait_front(cb_out, 1);
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
+                cb_wait_front(cb_tile_source, 1);
+                uint32_t l1_read_addr = get_read_ptr(cb_tile_source);
                 uint32_t tile_id = start_id + row * Wt + wt;
                 uint64_t noc_addr = output_accessor.get_noc_addr(tile_id);
                 noc_async_write(l1_read_addr, noc_addr, stick_or_tile_size);
                 noc_async_write_barrier();
-                cb_pop_front(cb_out, 1);
+                cb_pop_front(cb_tile_source, 1);
             }
         }
     }
