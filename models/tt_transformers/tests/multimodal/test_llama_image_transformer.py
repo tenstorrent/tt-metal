@@ -59,10 +59,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     dim = model_args.vision_dim
     ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
     weights_path = model_args.model_base_path.__str__()
-    # the following lines are memory intensive and create big overhead
-    # config = MllamaConfig.from_pretrained(weights_path)
-    # model = MllamaForConditionalGeneration(config).to(torch.bfloat16)
-    # model.model.vision_model.load_state_dict(partial_state_dict, strict=False)
 
     model = MllamaForConditionalGeneration.from_pretrained(
         weights_path,
@@ -140,13 +136,12 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             0, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
-        feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask)
+
+        feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask, output_hidden_states=True)
         reference_output = feats.last_hidden_state
         if return_intermediate != None:
-            intermediates = [tens_input[:, :ntok, :]]
-            for l in range(n_layers):
-                intermediates.append(callable_reference.layers[l](tt_intermed_torch[l])[0])
-            reference_output = intermediates[n_layers]
+            intermediates = feats.hidden_states
+
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
         if not passing:
