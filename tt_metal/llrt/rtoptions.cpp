@@ -202,7 +202,8 @@ enum class EnvVarID {
     // ========================================
     // JIT BUILD CONFIGURATION
     // ========================================
-    TT_METAL_BACKEND_DUMP_RUN_CMD,  // Dump JIT build commands to stdout
+    TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1344,6 +1345,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_BACKEND_DUMP_RUN_CMD=1
         case EnvVarID::TT_METAL_BACKEND_DUMP_RUN_CMD: this->dump_build_commands = is_env_enabled(value); break;
+
+        // TT_METAL_DISABLE_PRECOMPILED_FW
+        // Disable use of pre-compiled firmware and force JIT compilation instead.
+        // Default: false
+        // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
+        case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
     }
 }
 
