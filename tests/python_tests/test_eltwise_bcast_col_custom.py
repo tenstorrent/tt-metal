@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 class CT_DIM(TemplateParameter):
     ct_dim: int
 
-    def covert_to_cpp(self) -> str:
+    def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t CT_DIM = {self.ct_dim};"
 
 
