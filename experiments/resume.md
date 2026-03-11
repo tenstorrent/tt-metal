@@ -27,7 +27,13 @@
 | 1 | Build venv and validate existing tests pass | Done | |
 | 2 | Profile dense layers with Tracy | Done | 1316 ops, 54.3 ms. Full model OOM on MoE experts. |
 | 3 | Record baselines in baseline.yaml | Done | Partial — dense layer baselines recorded |
-| 4 | Extract runtime_config.py | **NEXT** | First refactoring step (lowest risk) |
+| 4 | Extract runtime_config.py | Done | Created tt/runtime_config.py with Glm4RuntimeConfig dataclass |
+| 5 | Extract linear_helpers.py | Done | Created tt/linear_helpers.py with 6 functions |
+| 5b | Extract attention_decode.py | Done | kv_cache_update, q_projection, flash_mla_and_output |
+| 5c | Extract mlp_decode.py | Done | dense_mlp_forward, moe_mlp_forward |
+| 5d | Wire modules into decoder_layer_tt.py | Done | 2113 -> 1098 lines. Decode fn body: ~1040 -> ~100 lines |
+| 5e | Split model_tt.py | Done | Created mtp_forward.py (212 lines) and decode_trace_state.py (60 lines) |
+| 6 | Hardware validation | **NEXT** | Run tests on device to confirm PCC after refactoring |
 | 6 | Extract linear_helpers.py | pending | Prerequisite for attention/mlp |
 | 7 | Extract attention/ package | pending | Core modularity improvement |
 | 8 | Extract mlp/ package | pending | Core modularity improvement |
