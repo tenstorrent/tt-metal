@@ -2048,7 +2048,39 @@ FORCE_INLINE void noc_inline_dw_write(
         customized_src_addr);
     WAYPOINT("NWID");
 }
+// clang-format off
 
+/**
+ * Initiates an asynchronous multicast write of a 32-bit value to a rectangular grid of NOC destinations.
+ * This is the multicast variant of \a noc_inline_dw_write. The destinations are specified using a uint64_t
+ * encoding referencing an on-chip grid of nodes located at NOC coordinate range (x_start,y_start,x_end,y_end)
+ * and a local address created using \a get_noc_multicast_addr function.
+ *
+ * The destination nodes can only be Tensix cores + L1 memory address. The destination L1 memory address must be
+ * the same on all destination nodes. This API does not support DRAM addresses.
+ *
+ * Return value: None
+ *
+ * | Argument                                 | Description                                                | Type     | Valid Range                                | Required |
+ * |------------------------------------------|------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | addr                                     | Encoding of the destination rectangle (x,y,x,y)+address    | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | val                                      | The value to be written                                    | uint32_t | Any uint32_t value                         | True     |
+ * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                                    | False    |
+ * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                                     | False    |
+ * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Multicast VCs)                        | False    |
+ * | customized_src_addr                      | Custom source address for storing the value to be written  | uint32_t | Any uint32_t value                         | False    |
+ * |                                          | (required when `flush` is false)                           |          |                                            |          |
+ * | num_dest                                 | Number of destinations in the multicast rectangle          | uint32_t | 1..(number of cores - 1)                   | False    |
+ * | dst_type            (template parameter) | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst | DEFAULT, L1, REG                 | False    |
+ * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                              | False    |
+ * | flush               (template parameter) | Whether to flush the NOC transaction before issuing the    | bool     | true or false                              | False    |
+ * |                                          | write (`false` callers must prevent races on the caller    |          |                                            |          |
+ * |                                          | side)                                                      |          |                                            |          |
+ *
+ * When `flush` is disabled the caller is responsible for providing a valid `customized_src_addr` scratch location and
+ * ensuring no outstanding inline write uses that address before issuing another write.
+ */
+// clang-format on
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_mcast_dw_write(
     uint64_t addr,
