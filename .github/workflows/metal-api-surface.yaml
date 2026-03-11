@@ -54,6 +54,7 @@ jobs:
       - name: Send Slack message to a channel
         uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
         with:
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "date: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}"

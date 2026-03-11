@@ -66,6 +66,7 @@ jobs:
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
         uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
         with:
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "A new ${{ env.EVENT_TYPE }} has been created by a non-org member `${{ env.USERNAME }}`: ${{ env.EVENT_URL }}",

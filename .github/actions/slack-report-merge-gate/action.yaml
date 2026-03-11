@@ -21,6 +21,7 @@ runs:
     - name: Report Github Pipeline Status Slack Action
       uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
       with:
+        webhook-type: incoming-webhook
         payload: |
           {
             "text": "${{ steps.format_mentions.outputs.mentions }} ${{ github.workflow }} is failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} \nfailing commit: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}"
