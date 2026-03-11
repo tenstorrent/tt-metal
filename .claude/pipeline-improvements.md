@@ -103,6 +103,50 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 ---
 
+### 12. DST register mode incompatibility undocumented
+**Status**: Proposed — HIGH PRIORITY
+**Discovered**: softmax pipeline run (2026-03-11)
+
+Mixing `acquire_dst/release_dst` (full-sync, used by matmul accumulation) with `tile_regs_acquire/release` (half-sync, used by reduce helpers and per-tile pack) causes DST register deadlocks. In the softmax run, the architect recommended matmul-based sum accumulation (from tt-train reference) which uses `acquire_dst`. The kernel writer implemented it alongside reduce helper calls, causing a device hang that consumed 2 hard attempts and ~18 minutes.
+
+Neither the architect's instructions, the kernel writer's instructions, nor any reference documentation warns about this incompatibility.
+
+**Proposal**: Add a "DST Register Mode Compatibility" section to both the architect and kernel writer agent prompts:
+- `tile_regs_acquire/release` = half-sync mode (reduce helpers, per-tile compute+pack)
+- `acquire_dst/release_dst` = full-sync mode (matmul accumulation, persistent DST)
+- These modes CANNOT be mixed in the same compute phase
+- When a design needs both reduce helpers and sum accumulation, use `reduce<SUM>` with `post_reduce_op` instead of manual matmul accumulation
+
+---
+
+### 13. Architect stage test generation produces invalid Python
+**Status**: Proposed
+**Discovered**: softmax pipeline run (2026-03-11)
+
+The architect's auto-generated stage test files consistently contain syntax errors: missing `return` in `pytorch_reference()`, missing commas between parameters and `extra_args` in function signatures, wrong variable names (`x` instead of `input_tensor`), and relative import paths that fail from the test directory. The builder must fix all stage test files every time.
+
+In the softmax run, all 4 stage test files needed fixes (commit 51d95a2417 shows 17-23 lines modified per file).
+
+**Proposal**: After generating each stage test file, the architect should validate with `python -c "import ast; ast.parse(open(path).read())"`. The template should be fixed to:
+1. Always prefix reference body with `return`
+2. Separate `extra_args` from parameters with `, ` not raw concatenation
+3. Use `input_tensor` consistently (not `x`) as the reference function parameter
+
+---
+
+### 14. Architect uses "mandatory" for precision preferences, blocking fallback exploration
+**Status**: Proposed
+**Discovered**: softmax pipeline run (2026-03-11)
+
+The architect's design doc stated matmul-based sum was "mandatory for the sum phase" (op_design.md line 307). This was actually a precision preference, not a hardware constraint. The kernel writer invested ~18 minutes trying to make matmul work before discovering `reduce<SUM>` achieves acceptable precision (tests pass at rtol=0.05, atol=0.2).
+
+**Proposal**: Introduce terminology standards for design docs:
+- "REQUIRED" / "MUST" = hardware constraint or correctness requirement (e.g., "scaler CB MUST be Float16_b")
+- "RECOMMENDED" / "SHOULD" = best practice with explicit fallback (e.g., "RECOMMENDED: matmul-based sum for precision. FALLBACK: reduce<SUM> + recip_tile post_reduce_op")
+- Each "RECOMMENDED" item should include CB sizing implications for the fallback path
+
+---
+
 ## Priority Matrix
 
 | # | Issue | Impact | Effort | Priority |
@@ -115,3 +159,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | DST register mode incompatibility | HIGH | SMALL | HIGH |
+| 13 | Stage test generation invalid Python | MEDIUM | SMALL | MEDIUM |
+| 14 | "Mandatory" vs "recommended" ambiguity | MEDIUM | SMALL | MEDIUM |
