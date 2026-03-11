@@ -126,13 +126,40 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
             if ((face_2xr_cnt + rem_blocks_in_row) >= (FACE_HEIGHT / 2))
             {
                 // Run MOP
-                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff);               // Run the MOP
+                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
+                // Fix issue #37960: The MOP's last iteration advances TILE_OFFSET past the last
+                // tile and loads it into the offset register. The UNPACR below would read OOB
+                // when the buffer ends at the L1 boundary. Reset offset to 0 so it reads from
+                // the CB base (always valid), then restore TILE_OFFSET for the next batch.
+                // The next MOP's leading DMANOP will wait for the restore's REG2FLOP to complete.
+                if (0 == unp_cfg_context)
+                {
+                    TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+                }
+                else
+                {
+                    TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+                }
+                TTI_DMANOP;                                                                     // Wait for offset reset to complete
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
                 TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
                 TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;
+                // Restore offset register to TILE_OFFSET for the next batch's MOP, if any remain.
+                // The next MOP's leading DMANOP will wait for this REG2FLOP to complete.
+                if (rem_blocks_in_row != 0)
+                {
+                    if (0 == unp_cfg_context)
+                    {
+                        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
+                    }
+                    else
+                    {
+                        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
+                    }
+                }
             }
             else
             {
