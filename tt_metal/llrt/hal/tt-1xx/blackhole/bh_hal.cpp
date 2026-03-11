@@ -259,7 +259,7 @@ public:
     }
 };
 
-void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool is_simulator) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -275,8 +275,11 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
     HalCoreInfoType idle_eth_mem_map = blackhole::create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
 
-    HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
-    this->core_info_.push_back(dram_mem_map);
+    if (!is_simulator) {
+        // Dram cores are not yet supported in simulator.
+        HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
+        this->core_info_.push_back(dram_mem_map);
+    }
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
