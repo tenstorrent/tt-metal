@@ -75,7 +75,7 @@ Tensor create_tt_tensor_from_host_data(
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR, optional_tile), MemoryConfig{});
+        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{});
 
         if (mesh_mapper != nullptr) {
             // Distributed tensors must be created via the factory function: the per-shard
