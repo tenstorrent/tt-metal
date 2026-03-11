@@ -294,6 +294,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         set_layout(layout);
     }
 
+    TT_FATAL(output.dtype() == dst_dtype, "Output dtype mismatch. Expected: {}, Got: {}", dst_dtype, output.dtype());
     GraphTracker::instance().track_function_end(output);
     return output;
 }
