@@ -147,9 +147,9 @@ def run_sdpa_determinism(
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
 
-    # Run SDPA multiple times and collect outputs
-    outputs = []
-    for _ in range(num_iterations):
+    # Run SDPA multiple times and compare each output to the first
+    reference = None
+    for i in range(num_iterations):
         tt_out = ttnn.transformer.scaled_dot_product_attention(
             tt_Q,
             tt_K,
@@ -160,9 +160,17 @@ def run_sdpa_determinism(
         )
         # Convert to torch and slice out padding
         torch_out = ttnn.to_torch(tt_out)[:, :, :sq, :]
-        outputs.append(torch_out)
-
-    return outputs
+        if reference is None:
+            reference = torch_out
+        elif not torch.equal(reference, torch_out):
+            diff_mask = reference != torch_out
+            num_diffs = diff_mask.sum().item()
+            max_diff = (reference - torch_out).abs().max().item()
+            pytest.fail(
+                f"SDPA output at iteration {i} differs from iteration 0: "
+                f"{num_diffs} differing elements, max diff = {max_diff}"
+            )
+    logger.info(f"SDPA determinism verified: all {num_iterations} outputs are exactly equal")
 
 
 # WAN 2.2 model shapes for BH
@@ -207,7 +215,7 @@ def test_sdpa_sweep_perf_impl(device, b, nh, s, d, q_chunk_size, k_chunk_size, d
 def test_sdpa_accuracy(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
     """
     Test SDPA accuracy for the given shapes and chunk size configurations.
-    Verifies PCC > 0.994 against PyTorch reference.
+    Verifies PCC > 0.9997 against PyTorch reference.
     """
     # nkv = nh for non-GQA case
     pcc_threshold = 0.9997
@@ -242,24 +250,7 @@ def test_sdpa_determinism(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype
     Test SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
     """
     num_iterations = 10
-    outputs = run_sdpa_determinism(
-        device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations
-    )
-
-    # Compare all outputs to the first one - they should be exactly equal
-    reference = outputs[0]
-    for i in range(1, num_iterations):
-        if not torch.equal(reference, outputs[i]):
-            # Find where they differ for debugging
-            diff_mask = reference != outputs[i]
-            num_diffs = diff_mask.sum().item()
-            max_diff = (reference - outputs[i]).abs().max().item()
-            logger.error(
-                f"Iteration {i} differs from iteration 0: " f"{num_diffs} differing elements, max diff = {max_diff}"
-            )
-            assert False, f"SDPA output at iteration {i} differs from iteration 0"
-
-    logger.info(f"SDPA determinism verified: all {num_iterations} outputs are exactly equal")
+    run_sdpa_determinism(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
 
 
 def post_process_ops_log(

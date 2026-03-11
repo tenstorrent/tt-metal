@@ -216,6 +216,9 @@ def generate_input_shapes():
     during pytest collection, which would block subprocess profiling.
     """
     num_devices = detect_devices_without_opening()
+    if num_devices < 2:
+        return [], []
+
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
 
     if arch_type.startswith("galaxy"):
@@ -251,7 +254,6 @@ def run_ring_joint_sdpa(
     q_chunk_size,
     k_chunk_size,
     dtype,
-    sk=None,
     pcc_threshold=DEFAULT_PCC_THRESHOLD,
     rmse_threshold=None,
     do_check=True,
@@ -277,9 +279,6 @@ def run_ring_joint_sdpa(
     """
     # Ensure reproducible results
     torch.manual_seed(1234)
-    if sk is None:
-        sk = sq
-
     if nh != nkv:
         pytest.skip(f"Ring joint attention currently requires nh == nkv, got nh={nh}, nkv={nkv}")
 
@@ -303,27 +302,26 @@ def run_ring_joint_sdpa(
 
     joint_seq_len = 0  # Use empty joint sequence (WAN 2.2 compatible)
 
+    if sp_size < 2:
+        pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={sp_size}")
+
     # Open mesh device based on calculated configuration
     mesh_shape = ttnn.MeshShape(tp_size, sp_size)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
     num_links = 2
 
     try:
-        # Validate constraints for ring joint attention
-        if sp_size < 2:
-            pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={sp_size}")
-
         if tp_size > 1 and nh % tp_size != 0:
             pytest.skip(f"num_heads ({nh}) must be divisible by TP size ({tp_size}) for multi-ring architecture")
 
         # Configure compute grid and CCL coordination - USING HARDCODED GRIDS
         # Use hardcoded grid sizes to handle firmware differences across versions
         if arch_type.startswith("galaxy"):
-            sdpa_compute_grid = (GALAXY_SDPA_COLS, GALAXY_GRID_ROWS)  # 10x10 for SDPA
-            ccl_column = GALAXY_CCL_COLUMN  # Column 10 for CCL
+            sdpa_compute_grid = (GALAXY_SDPA_COLS, GALAXY_GRID_ROWS)  # 11x10 for SDPA
+            ccl_column = GALAXY_CCL_COLUMN  # Column 11 for CCL
         else:
-            sdpa_compute_grid = (NON_GALAXY_SDPA_COLS, NON_GALAXY_GRID_ROWS)  # 9x10 for SDPA
-            ccl_column = NON_GALAXY_CCL_COLUMN  # Column 9 for CCL
+            sdpa_compute_grid = (NON_GALAXY_SDPA_COLS, NON_GALAXY_GRID_ROWS)  # 10x10 for SDPA
+            ccl_column = NON_GALAXY_CCL_COLUMN  # Column 10 for CCL
 
         # Get actual device grid for sub-device creation
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -468,9 +466,9 @@ def run_ring_joint_sdpa(
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
 
-        # Run ring joint attention (loop for determinism testing)
-        outputs = []
-        for _ in range(num_iterations):
+        # Run ring joint attention
+        reference_output = None
+        for i in range(num_iterations):
             tt_out, tt_joint_out, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
@@ -503,45 +501,51 @@ def run_ring_joint_sdpa(
                 ),
             )
             tt_out_torch = tt_out_torch[:, :, :sq, :]
-            outputs.append(tt_out_torch)
 
-        # For determinism testing, return all outputs without accuracy check
+            # Determinism mode: compare each output to the first
+            if num_iterations > 1:
+                if reference_output is None:
+                    reference_output = tt_out_torch
+                elif not torch.equal(reference_output, tt_out_torch):
+                    diff_mask = reference_output != tt_out_torch
+                    num_diffs = diff_mask.sum().item()
+                    max_diff = (reference_output - tt_out_torch).abs().max().item()
+                    pytest.fail(
+                        f"Ring joint SDPA output at iteration {i} differs from iteration 0: "
+                        f"{num_diffs} differing elements, max diff = {max_diff}"
+                    )
+
         if num_iterations > 1:
-            return outputs
-
-        tt_out_torch = outputs[0]
+            logger.info(f"Ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
+            return
 
         if not do_check:
             return
 
-        # Convert joint output to torch tensors with appropriate mesh composer
-        if arch_type.startswith("galaxy"):
-            joint_row_dim = sdpa_joint_shard_dims[0] if sdpa_joint_shard_dims[0] is not None else -1
-            joint_col_dim = sdpa_joint_shard_dims[1] if sdpa_joint_shard_dims[1] is not None else -1
-            tt_joint_out_torch = ttnn.to_torch(
-                tt_joint_out,
-                mesh_composer=ttnn.create_mesh_composer(
-                    mesh_device, ttnn.MeshComposerConfig(joint_row_dim, joint_col_dim)
-                ),
-            )
+        # Convert and verify joint output (only if joint_seq_len > 0)
+        if joint_seq_len > 0:
+            if arch_type.startswith("galaxy"):
+                joint_row_dim = sdpa_joint_shard_dims[0] if sdpa_joint_shard_dims[0] is not None else -1
+                joint_col_dim = sdpa_joint_shard_dims[1] if sdpa_joint_shard_dims[1] is not None else -1
+                tt_joint_out_torch = ttnn.to_torch(
+                    tt_joint_out,
+                    mesh_composer=ttnn.create_mesh_composer(
+                        mesh_device, ttnn.MeshComposerConfig(joint_row_dim, joint_col_dim)
+                    ),
+                )
+            else:
+                tt_joint_out_torch = ttnn.to_torch(
+                    tt_joint_out,
+                    mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(1, -1)),
+                )
+
+            if tt_joint_out_torch.shape[3] != d:
+                tt_joint_out_torch = tt_joint_out_torch[:, :, :, :d]
+            if tt_joint_out_torch.shape[0] > 1:
+                tt_joint_out_torch = tt_joint_out_torch[0:1, :, :, :]
+            tt_joint_out_torch = tt_joint_out_torch[:, :, :joint_seq_len, :]
         else:
-            # Single ring: use original hardcoded pattern
-            tt_joint_out_torch = ttnn.to_torch(
-                tt_joint_out,
-                mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(1, -1)),
-            )
-
-        # Fix head dimension if needed
-        expected_head_dim = d
-        if tt_joint_out_torch.shape[3] != expected_head_dim:
-            tt_joint_out_torch = tt_joint_out_torch[:, :, :, :expected_head_dim]
-
-        # Handle batch dimension if needed
-        if tt_joint_out_torch.shape[0] > 1:
-            tt_joint_out_torch = tt_joint_out_torch[0:1, :, :, :]
-
-        # Slice joint output
-        tt_joint_out_torch = tt_joint_out_torch[:, :, :joint_seq_len, :]
+            logger.info("Joint output - Dummy tensors (seq_len=0), skipping accuracy check (wan2.2 compatible)")
 
         # Compute PyTorch reference using ring size (SP dimension)
         gt_main, gt_joint = torch_joint_sdpa_reference(Q, K, V, joint_Q, joint_K, joint_V)
@@ -551,23 +555,17 @@ def run_ring_joint_sdpa(
         rmse_main = torch.sqrt(((gt_main - tt_out_torch) ** 2).mean()).item()
         logger.info(f"Main output - PCC: {out_pcc_main}, RMSE: {rmse_main:.6f}")
 
-        # Verify accuracy for joint output (only if joint_seq_len > 0)
+        if rmse_threshold is not None:
+            assert rmse_main < rmse_threshold, f"Main RMSE {rmse_main:.6f} exceeds threshold {rmse_threshold}"
+        assert out_pass_main, f"Main PCC {out_pcc_main} below threshold {pcc_threshold}"
+
+        # Verify accuracy for joint output
         if joint_seq_len > 0:
             out_pass_joint, out_pcc_joint = comp_pcc(gt_joint, tt_joint_out_torch, pcc_threshold)
             rmse_joint = torch.sqrt(((gt_joint - tt_joint_out_torch) ** 2).mean()).item()
             logger.info(f"Joint output - PCC: {out_pcc_joint}, RMSE: {rmse_joint:.6f}")
-        else:
-            logger.info("Joint output - Dummy tensors (seq_len=0), skipping accuracy check (wan2.2 compatible)")
-            out_pass_joint = True
-            rmse_joint = 0.0
-
-        if rmse_threshold is not None:
-            assert rmse_main < rmse_threshold, f"Main RMSE {rmse_main:.6f} exceeds threshold {rmse_threshold}"
-            if joint_seq_len > 0:
+            if rmse_threshold is not None:
                 assert rmse_joint < rmse_threshold, f"Joint RMSE {rmse_joint:.6f} exceeds threshold {rmse_threshold}"
-
-        assert out_pass_main, f"Main PCC {out_pcc_main} below threshold {pcc_threshold}"
-        if joint_seq_len > 0:
             assert out_pass_joint, f"Joint PCC {out_pcc_joint} below threshold {pcc_threshold}"
 
     finally:
@@ -575,12 +573,7 @@ def run_ring_joint_sdpa(
         ttnn.close_mesh_device(mesh_device)
 
         # Restore fabric to disabled state
-        ttnn.set_fabric_config(
-            ttnn.FabricConfig.DISABLED,
-            ttnn.FabricReliabilityMode.RELAXED_INIT,
-            None,
-            ttnn.FabricTensixConfig.DISABLED,
-        )
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # Generate input shapes dynamically based on detected hardware
@@ -655,22 +648,7 @@ def test_ring_joint_attention_sdpa_determinism(b, nh, s, d, q_chunk_size, k_chun
     Test ring joint attention SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
     """
     num_iterations = 10
-    outputs = run_ring_joint_sdpa(b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
-
-    # Compare all outputs to the first one - they should be exactly equal
-    reference = outputs[0]
-    for i in range(1, num_iterations):
-        if not torch.equal(reference, outputs[i]):
-            # Find where they differ for debugging
-            diff_mask = reference != outputs[i]
-            num_diffs = diff_mask.sum().item()
-            max_diff = (reference - outputs[i]).abs().max().item()
-            logger.error(
-                f"Iteration {i} differs from iteration 0: " f"{num_diffs} differing elements, max diff = {max_diff}"
-            )
-            assert False, f"Ring joint SDPA output at iteration {i} differs from iteration 0"
-
-    logger.info(f"Ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
+    run_ring_joint_sdpa(b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
 
 
 # === TEST 4: PERFORMANCE TABLE GENERATOR (skipped on CI) ===
@@ -697,12 +675,10 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d):
 
     # Use hardcoded grid constants (cannot query device due to TLB conflicts with subprocess tests)
     if arch_type.startswith("galaxy"):
-        full_grid_cols = GALAXY_GRID_COLS
         full_grid_rows = GALAXY_GRID_ROWS
         total_compute_cores = GALAXY_SDPA_CORES
         total_cores = GALAXY_TOTAL_CORES
     else:
-        full_grid_cols = NON_GALAXY_GRID_COLS
         full_grid_rows = NON_GALAXY_GRID_ROWS
         total_compute_cores = NON_GALAXY_SDPA_CORES
         total_cores = NON_GALAXY_TOTAL_CORES
