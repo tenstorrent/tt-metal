@@ -179,18 +179,15 @@ def run(
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
-    # 4D weights with batch > 1 require MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.
-    # Without it (program_config=None on single device), ttnn.linear hits TT_FATAL.
-    # Return early instead of crashing.
-    if program_config is None and len(shape_b) >= 4:
+    # Detect 4D batched weights (batch > 1 in weight tensor).
+    # ttnn.linear hits TT_FATAL with batched weights (requires batch_b == 1).
+    # Use ttnn.matmul instead, which handles batched matmul natively.
+    is_batched_weight = False
+    if len(shape_b) >= 4:
         batch_b = 1
         for d in shape_b[:-2]:
             batch_b *= d
-        if batch_b > 1:
-            return [
-                (False, f"Batched weight shape {shape_b} requires DRAMSharded program_config (galaxy-only config)"),
-                0.0,
-            ]
+        is_batched_weight = batch_b > 1
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -251,7 +248,8 @@ def run(
         torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight_for_linear, torch_bias)
 
     # Apply activation to golden reference to match ttnn.linear behavior
-    if activation is not None:
+    # Skip for batched weights (ttnn.matmul path doesn't apply activation)
+    if activation is not None and not is_batched_weight:
         act = str(activation).lower()
         if "silu" in act or "swish" in act:
             torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
@@ -314,39 +312,51 @@ def run(
         # Host storage
         ttnn_b = ttnn.from_torch(torch_b, dtype=input_b_dtype, layout=input_b_layout)
 
-    # Run TTNN linear
+    # Run TTNN op
     start_time = start_measuring_time()
 
-    # Prepare linear kwargs
-    linear_kwargs = {
-        "bias": ttnn_bias,
-        "transpose_a": transpose_a,
-        "transpose_b": transpose_b,
-    }
+    if is_batched_weight:
+        # 4D batched weights: use ttnn.matmul which handles batched matmul natively.
+        # ttnn.linear requires batch_b == 1 and hits TT_FATAL otherwise.
+        # Use DRAM interleaved (sharded configs cleared above) with no program_config.
+        matmul_kwargs = {}
+        if compute_kernel_config is not None:
+            matmul_kwargs["compute_kernel_config"] = compute_kernel_config
+        if dtype is not None:
+            matmul_kwargs["dtype"] = dtype
+        output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+    else:
+        # Standard linear path
+        linear_kwargs = {
+            "bias": ttnn_bias,
+            "transpose_a": transpose_a,
+            "transpose_b": transpose_b,
+        }
 
-    # Add optional parameters from traced config
-    if memory_config is not None:
-        linear_kwargs["memory_config"] = memory_config
-    elif output_memory_config is not None:
-        linear_kwargs["memory_config"] = output_memory_config
+        # Add optional parameters from traced config
+        if memory_config is not None:
+            linear_kwargs["memory_config"] = memory_config
+        elif output_memory_config is not None:
+            linear_kwargs["memory_config"] = output_memory_config
 
-    if dtype is not None:
-        linear_kwargs["dtype"] = dtype
+        if dtype is not None:
+            linear_kwargs["dtype"] = dtype
 
-    if program_config is not None:
-        linear_kwargs["program_config"] = program_config
+        if program_config is not None:
+            linear_kwargs["program_config"] = program_config
 
-    if compute_kernel_config is not None:
-        linear_kwargs["compute_kernel_config"] = compute_kernel_config
+        if compute_kernel_config is not None:
+            linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-    if core_grid is not None:
-        linear_kwargs["core_grid"] = core_grid
+        if core_grid is not None:
+            linear_kwargs["core_grid"] = core_grid
 
-    if activation is not None:
-        linear_kwargs["activation"] = activation
+        if activation is not None:
+            linear_kwargs["activation"] = activation
 
-    linear_kwargs.update(parsed_op_kwargs)
-    output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+        linear_kwargs.update(parsed_op_kwargs)
+        output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
