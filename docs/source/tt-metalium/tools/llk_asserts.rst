@@ -135,7 +135,7 @@ LLK asserts are fully integrated into the tt-metal CI/CD system through the ``en
 
 The following workflows support LLK asserts:
 
-- ``all-post-commit-workflows.yaml`` - Selective APC test execution
+- ``sanity-tests.yaml`` - Selective sanity test execution
 
 When to Use LLK Asserts
 ------------------------
