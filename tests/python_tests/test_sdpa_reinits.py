@@ -107,6 +107,8 @@ def test_sdpa_reinits(
         input_A_dimensions=input_dimensions,
         input_B_dimensions=input_dimensions,
         tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
 
     # Operation 1: ReduceBlockMax(A) -> output2
@@ -157,6 +159,8 @@ def test_sdpa_reinits(
         input_A_dimensions=input_dimensions,
         input_B_dimensions=input_dimensions,
         tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
 
     # Calculate tile count

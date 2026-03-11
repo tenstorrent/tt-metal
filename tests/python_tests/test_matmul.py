@@ -56,11 +56,7 @@ def generate_format_aware_matmul_combinations(
 
 # Generate format-aware combinations
 MATMUL_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-    ]
+    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32, DataFormat.Bfp8_b]
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
@@ -112,6 +108,8 @@ def test_matmul(
         input_B_dimensions=input_B_dimensions,
         # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
         tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
     )
 
     if formats.input_format != DataFormat.Bfp8_b:
