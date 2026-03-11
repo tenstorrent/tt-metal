@@ -14,6 +14,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines
 )
 set_target_properties(
     unit_tests_llk
