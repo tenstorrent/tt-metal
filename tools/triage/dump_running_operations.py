@@ -59,6 +59,7 @@ from triage import (
     log_check_risc,
     triage_field,
     run_script,
+    ScriptPriority,
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate

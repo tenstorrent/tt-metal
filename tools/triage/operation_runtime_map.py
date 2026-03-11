@@ -20,7 +20,7 @@ Owner:
 
 from __future__ import annotations
 
-from triage import ScriptConfig, triage_singleton, run_script, log_check
+from triage import ScriptConfig, triage_singleton, run_script, log_check, ScriptPriority
 from inspector_data import run as get_inspector_data, InspectorData
 
 script_config = ScriptConfig(
