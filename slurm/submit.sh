@@ -225,6 +225,7 @@ while [[ $# -gt 0 ]]; do
         --arch)          OPT_ARCH="${2:?--arch requires a value}"; shift 2 ;;
         --ref)           OPT_REF="${2:?--ref requires a value}"; shift 2 ;;
         --pipeline-id)   OPT_PIPELINE_ID="${2:?--pipeline-id requires a value}"; shift 2 ;;
+        --no-docker)     NO_DOCKER=1; shift ;;
         --dry-run)       DRY_RUN=1; shift ;;
         --)              shift; EXTRA_SBATCH_ARGS=("$@"); break ;;
         *)               log_fatal "Unknown option: $1 (use -- before extra sbatch args)" ;;
@@ -309,7 +310,7 @@ fi
 [[ -n "$OPT_ARCH" ]] && ARCH_NAME="$OPT_ARCH"
 [[ -n "$OPT_REF" ]] && GIT_REF="$OPT_REF"
 
-export PIPELINE_ID DOCKER_IMAGE="${DOCKER_IMAGE:-}" ARCH_NAME="${ARCH_NAME:-}" GIT_REF
+export PIPELINE_ID DOCKER_IMAGE="${DOCKER_IMAGE:-}" ARCH_NAME="${ARCH_NAME:-}" GIT_REF NO_DOCKER="${NO_DOCKER:-0}"
 
 ARTIFACT_DIR="$(get_artifact_dir "$PIPELINE_ID")"
 LOG_DIR="${LOG_BASE}/${PIPELINE_ID}"
