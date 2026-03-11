@@ -294,7 +294,7 @@ class TextModel(LightweightModule):
         kv_caches: List[Tuple[ttnn.Tensor, ttnn.Tensor]],
         current_pos: ttnn.Tensor,
         rot_mats: Optional[List[ttnn.Tensor]] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        rot_mat_idxs: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass (single token at a time).
@@ -307,23 +307,14 @@ class TextModel(LightweightModule):
             kv_caches: List of (k_cache, v_cache) per layer
             current_pos: Current decode position tensor [batch]
             rot_mats: Optional pre-computed [cos, sin] rotation matrices (for tracing)
-            position_ids: Optional position IDs tensor for computing rot_mats
+            rot_mat_idxs: Optional device tensor [1, padded_batch] for RoPE lookup
 
         Returns:
             Logits tensor
         """
-        # Get RoPE embeddings for current position
         if rot_mats is None:
-            if position_ids is None:
-                # For multi-device, need mesh_composer to convert position tensor
-                if self.mesh_device.__class__.__name__ == "MeshDevice" and self.mesh_device.get_num_devices() > 1:
-                    mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                    position_ids = torch.tensor(
-                        [ttnn.to_torch(current_pos, mesh_composer=mesh_composer)[0].item()], dtype=torch.int32
-                    )
-                else:
-                    position_ids = torch.tensor([ttnn.to_torch(current_pos)[0].item()], dtype=torch.int32)
-            rot_mats = self.rotary_setup.get_rot_mats_decode(position_ids)
+            assert rot_mat_idxs is not None, "Either rot_mats or rot_mat_idxs must be provided"
+            rot_mats = self.rotary_setup.get_rot_mats_decode_traced(rot_mat_idxs)
 
         # Get decode transformation matrix
         transformation_mat = self.transformation_mats["decode"]
