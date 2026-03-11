@@ -33,7 +33,8 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool is_local_shards_only = is_sharded(output.buffer()->buffer_layout()) and !output.nd_shard_spec().has_value();
+    bool is_local_shards_only =
+        is_sharded(output.buffer()->buffer_layout()) and !output.memory_config().created_with_nd_shard_spec();
 
     uint32_t input_element_size_bytes = a.element_size();
 

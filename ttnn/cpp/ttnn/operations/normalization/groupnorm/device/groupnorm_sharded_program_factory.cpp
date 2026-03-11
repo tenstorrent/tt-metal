@@ -5,6 +5,7 @@
 #include "groupnorm_sharded_program_factory.hpp"
 #include "groupnorm_program_utils.hpp"
 
+#include <bit>
 #include <string>
 #include <optional>
 
@@ -12,11 +13,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -29,6 +28,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     const auto& input_mask = tensor_args.input_mask;
     const auto& negative_mask = tensor_args.negative_mask;
     auto& output = tensor_return_value;
+
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
     const auto& program_config = std::get<GroupNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
     float eps = operation_attributes.eps;
@@ -90,10 +93,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     // shard shape per core
     uint32_t per_core_M = a.shard_spec().value().shape[0];
     uint32_t per_core_N = a.shard_spec().value().shape[1];
-    uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
-    uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
+    uint32_t per_core_Mt = per_core_M / tile_height;
+    uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
     uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
-    bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
+    bool reader_repack_output = (per_core_N % tile_width) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
     // tensor shape
@@ -102,7 +105,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t W = shape[3];
     uint32_t num_datum_row_per_group = W / num_groups;
     uint32_t num_datum_row_per_group_mod_tile_w =
-        num_datum_row_per_group % TILE_WIDTH == 0 ? TILE_WIDTH : num_datum_row_per_group % TILE_WIDTH;
+        num_datum_row_per_group % tile_width == 0 ? tile_width : num_datum_row_per_group % tile_width;
     uint32_t group_size = W / num_groups;
     // grid
     uint32_t num_cores_c = grid_size.x;
@@ -125,10 +128,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         per_core_N,
         num_datum_row_per_group);
     TT_FATAL(
-        per_core_M % TILE_HEIGHT == 0,
-        "per_core_M ({}) must be divisible by TILE_HEIGHT ({})",
+        per_core_M % tile_height == 0,
+        "per_core_M ({}) must be divisible by tile_height ({})",
         per_core_M,
-        TILE_HEIGHT);
+        tile_height);
     if (per_core_N != W) {
         if (shard_orientation == ShardOrientation::COL_MAJOR) {
             TT_FATAL(
@@ -160,10 +163,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     }
 
     TT_FATAL(
-        per_core_M % TILE_HEIGHT == 0,
-        "per_core_M ({}) must be divisible by TILE_HEIGHT ({})",
+        per_core_M % tile_height == 0,
+        "per_core_M ({}) must be divisible by tile_height ({})",
         per_core_M,
-        TILE_HEIGHT);
+        tile_height);
 
     TT_FATAL(W % num_groups == 0, "Tensor W ({}) must be divisible by num_groups ({})", W, num_groups);
     TT_FATAL(H % per_core_M == 0, "H dim ({}) must be divisible by per_core_M ({})", H, per_core_M);
@@ -283,10 +286,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     if (input_mask.has_value()) {
         TT_FATAL(
-            input_mask.value().padded_shape()[3] == block_wt * TILE_WIDTH,
-            "input mask width ({}) must have the same width as block_wt * TILE_WIDTH ({})",
+            input_mask.value().padded_shape()[3] == block_wt * tile_width,
+            "input mask width ({}) must have the same width as block_wt * tile_width ({})",
             input_mask.value().padded_shape()[3],
-            block_wt * TILE_WIDTH);
+            block_wt * tile_width);
     }
 
     // get sharded addr
@@ -474,13 +477,14 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         (std::uint32_t)num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N_bytes_padded,
-        (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
+        (std::uint32_t)per_core_Nt * tile_width * datum_size_bytes,
         (std::uint32_t)datum_size_bytes,
         (std::uint32_t)per_core_Mt,
-        (std::uint32_t)TILE_HEIGHT};
+        (std::uint32_t)tile_height};
     if (use_welford) {
         reader_mcast_sender_compile_time_args.push_back(block_ht * block_wt);
         reader_mcast_sender_compile_time_args.push_back(num_groups_per_core);
+        reader_mcast_sender_compile_time_args.push_back(tile_width);
     }
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
@@ -488,12 +492,13 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         (std::uint32_t)num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N_bytes_padded,
-        (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
+        (std::uint32_t)per_core_Nt * tile_width * datum_size_bytes,
         (std::uint32_t)per_core_Mt,
-        (std::uint32_t)TILE_HEIGHT};
+        (std::uint32_t)tile_height};
     if (use_welford) {
         reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
         reader_mcast_receiver_compile_time_args.push_back(num_groups_per_core);
+        reader_mcast_receiver_compile_time_args.push_back(tile_width);
     }
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -528,6 +533,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     // writer defines
     std::map<std::string, std::string> writer_defines;
+    writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
     if (negative_mask.has_value()) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
     }
@@ -539,7 +545,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_N,
         (std::uint32_t)per_core_N * datum_size_bytes,
-        (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
+        (std::uint32_t)per_core_Nt * tile_width * datum_size_bytes,
         (std::uint32_t)num_groups_per_core,
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)block_wt};
@@ -551,7 +557,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
         writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
     } else {
-        writer_mcast_sender_compile_time_args.push_back(TILE_HW * datum_size_bytes);
+        writer_mcast_sender_compile_time_args.push_back(tile_hw * datum_size_bytes);
     }
 
     // Append TensorAccessorArgs for sharded writer kernel
@@ -620,18 +626,19 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_Mt * per_core_Nt,
 
-        (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
+        (std::uint32_t)per_core_Nt * tile_hw * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
         (std::uint32_t)per_core_Mt * per_core_Nt / num_batches_per_core,
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - ((block_wt - 1) * TILE_WIDTH)};
+        (std::uint32_t)num_datum_row_per_group < tile_width,
+        (std::uint32_t)num_datum_row_per_group - ((block_wt - 1) * tile_width)};
     if (use_welford) {
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
+    mcast_sender_compute_compile_time_args.push_back(tile_width);
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -653,18 +660,19 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_Mt * per_core_Nt,
 
-        (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
+        (std::uint32_t)per_core_Nt * tile_hw * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
         (std::uint32_t)per_core_Mt * per_core_Nt / num_batches_per_core,
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
-        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - ((block_wt - 1) * TILE_WIDTH)};
+        (std::uint32_t)num_datum_row_per_group < tile_width,
+        (std::uint32_t)num_datum_row_per_group - ((block_wt - 1) * tile_width)};
     if (use_welford) {
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
+    mcast_receiver_compute_compile_time_args.push_back(tile_width);
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -867,11 +875,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
     bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = eps;
+    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", num_rows_per_batch_per_core);
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
@@ -998,7 +1002,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         std::vector<uint32_t> writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(packed_cinv_value);
         writer_mcast_sender_args.push_back(packed_winv_value);
-        writer_mcast_sender_args.push_back(e.u);
+        writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
         writer_mcast_sender_args.push_back(input_mask_dram_addr);
@@ -1011,16 +1015,16 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
         if (gamma.has_value()) {
             gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
-                                  (gamma.value().physical_volume() / TILE_WIDTH);
+                                  (gamma.value().physical_volume() / tile_width);
         }
         if (beta.has_value()) {
             beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
-                                 (beta.value().physical_volume() / TILE_WIDTH);
+                                 (beta.value().physical_volume() / tile_width);
         }
         if (input_mask.has_value()) {
             // Tile id for negative mask is same as input mask
             input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
-                                       (input_mask.value().physical_volume() / TILE_HW);
+                                       (input_mask.value().physical_volume() / tile_hw);
         }
     }
 
