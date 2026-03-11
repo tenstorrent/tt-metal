@@ -326,14 +326,28 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         identical_shard_specs |= input_tensor_a.shard_spec().has_value() && output_tensor.shard_spec().has_value() &&
                                  input_tensor_a.shard_spec().value() == output_tensor.shard_spec().value();
         if (identical_shard_specs) {
-            return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+            // Skip fast path if sharding is uneven — last core has fewer tiles than shard spec
+            // and the identical-shard-spec factory uses compile-time block count for all cores.
+            const auto& shard = input_tensor_a.shard_spec().value();
+            const auto t_width = input_tensor_a.padded_shape()[-1];
+            const auto t_height = input_tensor_a.physical_volume() / t_width;
+            const bool evenly_sharded = (t_height % shard.shape[0] == 0);
+            if (evenly_sharded) {
+                return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+            }
+            // Uneven: fall through to UntilizeMultiCoreProgramFactory which handles per-core block counts
         }
         identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
                                  output_tensor.nd_shard_spec().has_value() &&
                                  input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
 
         if (identical_shard_specs) {
-            return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
+            const auto& nd_shard = input_tensor_a.nd_shard_spec().value();
+            const bool nd_uneven = is_uneven_nd_sharding(input_tensor_a.logical_shape(), nd_shard.shape);
+            if (!nd_uneven) {
+                return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
+            }
+            // Uneven: fall through
         }
     }
 
