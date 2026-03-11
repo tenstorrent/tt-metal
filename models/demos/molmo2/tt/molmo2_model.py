@@ -134,56 +134,105 @@ class Molmo2Model(LightweightModule):
         self,
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Tuple[ttnn.Tensor, torch.Tensor]:
         """
-        Process image through vision backbone.
+        Process image through vision backbone (fully on TTNN).
 
         Args:
-            pixel_values: Preprocessed image tensor [B, C, H, W] or [B, T, C, H, W]
+            pixel_values: Preprocessed image tensor [B, C, H, W]
             pooled_patches_idx: Patch indices for pooling [B, N_out, K_pool]
 
         Returns:
-            Visual embeddings [num_valid_tokens, hidden_dim]
+            Tuple of:
+              - visual_embeddings: [1, 1, N_out, hidden_dim] on device (unfiltered)
+              - valid_token: [B, N_out] bool tensor on CPU
         """
-        # This is a simplified version - full implementation would handle
-        # patch embedding and positional encoding here
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
 
-        # For now, assume pixel_values are already embedded patches
-        # In production, this would call patch_embed + pos_embed
+        batch_size = pooled_patches_idx.shape[0]
+        n_out = pooled_patches_idx.shape[1]
+        k_pool = pooled_patches_idx.shape[2]
 
-        # Forward through vision backbone
-        visual_embeddings = self.vision_backbone(
-            images_embedded=pixel_values,
-            pooled_patches_idx=pooled_patches_idx,
+        # Patch embedding on TTNN: CPU unfold only, linear+pos_embed on device
+        embedded_ttnn = self.vision_backbone.image_vit.patch_embed_ttnn(pixel_values)
+
+        # Prepare gather indices and masks (CPU, fast)
+        valid = pooled_patches_idx >= 0
+        valid_token = torch.any(valid, dim=-1)  # [B, N_out] bool
+        clipped_idx = torch.clip(pooled_patches_idx, min=0)
+        flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+        valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+        idx_ttnn = ttnn.from_torch(
+            flat_idx,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        valid_mask_ttnn = ttnn.from_torch(
+            valid_mask,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        valid_token_ttnn = ttnn.from_torch(
+            valid_token.flatten().float(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
 
-        return visual_embeddings
+        visual_embeddings = self.vision_backbone.forward_ttnn(
+            images_embedded=embedded_ttnn,
+            pooled_patches_idx_ttnn=idx_ttnn,
+            valid_mask_ttnn=valid_mask_ttnn,
+            valid_token_ttnn=valid_token_ttnn,
+            n_out=n_out,
+            k_pool=k_pool,
+            batch_size=batch_size,
+        )
+
+        ttnn.deallocate(embedded_ttnn)
+        ttnn.deallocate(idx_ttnn)
+        ttnn.deallocate(valid_mask_ttnn)
+        ttnn.deallocate(valid_token_ttnn)
+
+        return visual_embeddings, valid_token
 
     def prepare_inputs_for_multimodal(
         self,
         input_ids: torch.Tensor,
-        visual_embeddings: torch.Tensor,
-    ) -> torch.Tensor:
+        visual_embeddings_ttnn: ttnn.Tensor,
+        valid_token: torch.Tensor,
+    ) -> ttnn.Tensor:
         """
-        Prepare input embeddings by fusing text and visual tokens.
+        Fuse text and visual embeddings on device using selector matmul.
 
-        Replaces image_patch_id tokens with corresponding visual embeddings.
+        No CPU roundtrip: text embed + selector matmul + add all on device.
 
         Args:
             input_ids: Token IDs with image_patch_id placeholders [batch, seq_len]
-            visual_embeddings: Visual embeddings from vision backbone [num_visual_tokens, hidden_dim]
+            visual_embeddings_ttnn: Visual embeddings [1, 1, N_out, hidden_dim] on device
+            valid_token: [B, N_out] bool mask for which visual tokens are valid (CPU)
 
         Returns:
-            Fused embeddings [seq_len, hidden_dim]
+            Fused embeddings [1, 1, seq_len, hidden_dim] on device
         """
         batch_size, seq_len = input_ids.shape
         assert batch_size == 1, "Only batch_size=1 is currently supported"
+        hidden_dim = self.text_hidden_dim
 
-        # Check if mesh device
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
 
-        # Get text embeddings
+        # Get text embeddings on device
         input_ids_ttnn = ttnn.from_torch(
             input_ids,
             device=self.mesh_device,
@@ -192,33 +241,62 @@ class Molmo2Model(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
-        text_embeddings = self.text_model.embed_tokens(input_ids_ttnn)
-        # Shape: [1, 1, seq_len, hidden_dim] -> [seq_len, hidden_dim]
-        if is_mesh_device:
-            text_embeddings_torch = (
-                ttnn.to_torch(text_embeddings, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
-                .squeeze(0)
-                .squeeze(0)
-            )
-        else:
-            text_embeddings_torch = ttnn.to_torch(text_embeddings).squeeze(0).squeeze(0)
+        text_embeddings_ttnn = self.text_model.embed_tokens(input_ids_ttnn)
+        ttnn.deallocate(input_ids_ttnn)
 
-        # Find image patch positions (flatten for batch_size=1)
+        # Filter valid visual embeddings on device via ttnn.embedding (gather)
+        valid_indices = valid_token.flatten().nonzero(as_tuple=True)[0].to(torch.int32)
+        num_valid = len(valid_indices)
+
+        if num_valid == 0:
+            return text_embeddings_ttnn
+
+        valid_indices_ttnn = ttnn.from_torch(
+            valid_indices.unsqueeze(0),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        # visual_embeddings_ttnn: [1, 1, N_out, hidden_dim] -> [1, N_out, hidden_dim] for gather
+        visual_for_gather = ttnn.reshape(visual_embeddings_ttnn, [1, -1, hidden_dim])
+        valid_visual_ttnn = ttnn.embedding(valid_indices_ttnn, visual_for_gather)
+        ttnn.deallocate(valid_indices_ttnn)
+
+        # valid_visual_ttnn: [1, num_valid, hidden_dim] -> [1, 1, num_valid, hidden_dim]
+        valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, hidden_dim])
+
+        # Build selector matrix on CPU (fast, input_ids-sized sparse matrix)
         image_positions = (input_ids[0] == self.image_patch_id).nonzero(as_tuple=True)[0]
+        if len(image_positions) != num_valid:
+            ttnn.deallocate(valid_visual_ttnn)
+            return text_embeddings_ttnn
 
-        # Add visual embeddings to image patch token positions
-        # This matches HuggingFace: x[is_image_patch] += image_features
-        # The image_patch_id tokens have learned embeddings that are added to visual features
-        if len(image_positions) > 0:
-            num_visual_tokens = visual_embeddings.shape[0]
-            assert (
-                len(image_positions) == num_visual_tokens
-            ), f"Mismatch: {len(image_positions)} placeholders vs {num_visual_tokens} visual tokens"
+        selector = torch.zeros(seq_len, num_valid, dtype=torch.bfloat16)
+        for i, pos in enumerate(image_positions):
+            selector[pos, i] = 1.0
 
-            for i, seq_idx in enumerate(image_positions):
-                text_embeddings_torch[seq_idx] += visual_embeddings[i]
+        selector_ttnn = ttnn.from_torch(
+            selector.unsqueeze(0).unsqueeze(0),  # [1, 1, seq_len, num_valid]
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
 
-        return text_embeddings_torch
+        # visual_contribution = selector @ valid_visual: [1, 1, seq_len, hidden_dim]
+        visual_contribution = ttnn.matmul(selector_ttnn, valid_visual_ttnn)
+        ttnn.deallocate(selector_ttnn)
+        ttnn.deallocate(valid_visual_ttnn)
+
+        # Fuse: text + visual_contribution (on device, no host roundtrip)
+        fused_ttnn = ttnn.add(text_embeddings_ttnn, visual_contribution)
+        ttnn.deallocate(text_embeddings_ttnn)
+        ttnn.deallocate(visual_contribution)
+
+        return fused_ttnn
 
     def forward(
         self,
@@ -243,10 +321,11 @@ class Molmo2Model(LightweightModule):
         Returns:
             Tuple of (logits, new_kv_caches)
         """
-        # Process images if provided
+        # Process images if provided -- fully on TTNN, no CPU roundtrip
         if pixel_values is not None and pooled_patches_idx is not None:
-            visual_embeddings = self.embed_image(pixel_values, pooled_patches_idx)
-            hidden_states = self.prepare_inputs_for_multimodal(input_ids, visual_embeddings)
+            visual_embeddings_ttnn, valid_token = self.embed_image(pixel_values, pooled_patches_idx)
+            hidden_states_ttnn = self.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
+            ttnn.deallocate(visual_embeddings_ttnn)
         else:
             # Text-only forward
             is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
@@ -260,30 +339,8 @@ class Molmo2Model(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
             )
-            hidden_states = self.text_model.embed_tokens(input_ids_ttnn)
-
-            # Convert to torch for shape manipulation
-            if is_mesh_device:
-                # Take first device's output (they're all replicated)
-                hidden_states = ttnn.to_torch(
-                    hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                )[0]
-            else:
-                hidden_states = ttnn.to_torch(hidden_states)
-            hidden_states = hidden_states.squeeze(0).squeeze(0)
-
-        # Convert to TTNN
-        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
-
-        hidden_states_ttnn = ttnn.from_torch(
-            hidden_states.unsqueeze(0).unsqueeze(0),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+            hidden_states_ttnn = self.text_model.embed_tokens(input_ids_ttnn)
+            ttnn.deallocate(input_ids_ttnn)
 
         # Forward through text model (handles both prefill and decode via KV cache)
         logits, new_kv_caches = self.text_model(
