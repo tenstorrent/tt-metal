@@ -19,6 +19,7 @@
 #include "api/compute/compute_kernel_api.h"
 
 #include "api/debug/assert.h"
+#include "experimental/circular_buffer.h"
 
 // clang-format off
 // 3 Loops in code
@@ -82,6 +83,8 @@ void apply_fused_scale_mask(
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_fused_scale_mask);
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
@@ -90,8 +93,8 @@ void apply_fused_scale_mask(
             blk = cb_length_t- cur_blk;
         }
         tile_regs_acquire();
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_out_obj.reserve_back(blk);
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
@@ -103,14 +106,18 @@ void apply_fused_scale_mask(
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
-        cb_pop_front(cb_in, blk);
+        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(blk);
         tile_regs_release();
     }
 }
 void apply_fused_attn_mask(
     uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk, bool do_mask) {
     auto cb_mask_padded = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_fused_attn_mask_obj(cb_fused_attn_mask);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_fused_attn_mask);
     pack_reconfig_data_format(cb_out);
 #ifdef CAUSAL_MASK
@@ -124,9 +131,9 @@ void apply_fused_attn_mask(
             blk = cb_length_t- cur_blk;
         }
         tile_regs_wait();
-        cb_wait_front(cb_in, blk);
-        cb_wait_front(cb_fused_attn_mask, blk);  // cumulative wait for up to wt tiles
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_fused_attn_mask_obj.wait_front(blk);  // cumulative wait for up to wt tiles
+        cb_out_obj.reserve_back(blk);
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
@@ -143,16 +150,16 @@ void apply_fused_attn_mask(
             // add mask to the last register to pad with -inf
             reconfig_data_format_srca(cb_mask_padded);
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded);
-            cb_wait_front(cb_mask_padded, 1);
+            cb_mask_padded_obj.wait_front(1);
             binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded, 0, blk - 1);
         }
         tile_regs_commit();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
-        cb_pop_front(cb_in, blk);
-        cb_pop_front(cb_fused_attn_mask, blk);
+        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(blk);
+        cb_fused_attn_mask_obj.pop_front(blk);
         tile_regs_release();
     }
 }
@@ -160,20 +167,23 @@ void apply_fused_attn_mask(
 // applies pad to the last pass cb if needed
 void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     auto cb_mask_padded = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_mask_padded);
     pack_reconfig_data_format(cb_out);
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_out_obj.reserve_back(blk);
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
                 add_tiles_init(cb_in, cb_mask_padded);
-                cb_wait_front(cb_mask_padded, 1);
+                cb_mask_padded_obj.wait_front(1);
                 add_tiles(cb_in, cb_mask_padded, cur_dst, 0, cur_dst);
             } else {
                 copy_tile(cb_in, cur_dst, cur_dst);
@@ -184,8 +194,8 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
-        cb_pop_front(cb_in, blk);
+        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(blk);
         tile_regs_release();
     }
 }
@@ -198,6 +208,8 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
     ASSERT(cb_length_t % blk == 0);
 
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 #ifdef NUMERIC_STABLE
@@ -212,8 +224,8 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_out_obj.reserve_back(blk);
         tile_regs_acquire();
 #ifdef NUMERIC_STABLE
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
@@ -224,7 +236,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
             copy_tile(cb_in, cur_dst, cur_dst);
         }
 #endif
-        cb_pop_front(cb_in, blk);
+        cb_in_obj.pop_front(blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             exp_tile<EXP_APPROX>(cur_dst);  // exp on DST[0]
         }
@@ -233,7 +245,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
+        cb_out_obj.push_back(blk);
         tile_regs_release();
     }
 }
@@ -251,20 +263,23 @@ void reduce_cb(
     //   len(Data) fed into cb_in, does not need all at once== cb_length_t
     //   len(cb_out) == 1
 
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_prev_out_obj(cb_prev_out);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
     reduce_init<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, cb_out);
     tile_regs_acquire();
-    cb_reserve_back(cb_out, 1);
+    cb_out_obj.reserve_back(1);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
-        cb_wait_front(cb_in, 1);
+        cb_in_obj.wait_front(1);
         reduce_tile<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, 0, 0, 0);
-        cb_pop_front(cb_in, 1);
+        cb_in_obj.pop_front(1);
     }
 
     if (use_prev_reduce) {
         reconfig_data_format_srca(cb_prev_out);
-        cb_wait_front(cb_prev_out, 1);
+        cb_prev_out_obj.wait_front(1);
         copy_tile_init(cb_prev_out);
         copy_tile(cb_prev_out, 0, 1);
         if (reduce_type == PoolType::MAX) {
@@ -278,22 +293,25 @@ void reduce_cb(
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
         }
-        cb_pop_front(cb_prev_out, 1);
+        cb_prev_out_obj.pop_front(1);
     }
     tile_regs_wait();
     tile_regs_commit();
     pack_tile(0, cb_out);
-    cb_push_back(cb_out, 1);
+    cb_out_obj.push_back(1);
     tile_regs_release();
     reduce_uninit();
 }
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_recip_obj(cb_recip);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_recip);
     pack_reconfig_data_format(cb_out);
-    cb_wait_front(cb_recip, 1);
+    cb_recip_obj.wait_front(1);
     mul_bcast_cols_init_short(cb_in, cb_recip);
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
-        cb_wait_front(cb_in, blk);
+        cb_in_obj.wait_front(blk);
         tile_regs_acquire();
         tile_regs_wait();
         if (cb_length_t - cur_blk < blk) {
@@ -303,12 +321,12 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
             mul_tiles_bcast_cols(cb_in, cb_recip, cur_dst, 0, cur_dst);
         }
         tile_regs_commit();
-        cb_reserve_back(cb_out, blk);
+        cb_out_obj.reserve_back(blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_pop_front(cb_in, blk);
-        cb_push_back(cb_out, blk);
+        cb_in_obj.pop_front(blk);
+        cb_out_obj.push_back(blk);
         tile_regs_release();
     }
 }
@@ -341,13 +359,17 @@ void kernel_main() {
     auto cb_recip = tt::CBIndex::c_16;
     auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
+    experimental::CircularBuffer cb_recip_obj(cb_recip);
+    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded);
 
-    cb_wait_front(tt::CBIndex::c_2, 1);  // comes from the reader
+    cb_scaler_obj.wait_front(1);  // comes from the reader
 
 #if FUSED_SCALE_MASK
-    cb_wait_front(cb_fused_scale, 1);
+    cb_fused_scale_obj.wait_front(1);
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
@@ -400,7 +422,7 @@ void kernel_main() {
         cur_cb_length_t = cb_length_t;
 #endif
 #ifdef NUMERIC_STABLE
-        cb_wait_front(cb_max, 1);
+        experimental::CircularBuffer(cb_max).wait_front(1);
 #endif
 
         /*
@@ -447,7 +469,7 @@ void kernel_main() {
          * --------------------------------------------------------
          * --------------------------------------------------------
          */
-        cb_wait_front(cb_sumexps, 1);
+        experimental::CircularBuffer(cb_sumexps).wait_front(1);
 
         reconfig_data_format_srca(cb_sumexps);
         pack_reconfig_data_format(cb_sumexps, cb_recip);
@@ -455,7 +477,7 @@ void kernel_main() {
         copy_tile_init(cb_sumexps);
         copy_tile(cb_sumexps, 0, dst0);
 
-        cb_pop_front(cb_sumexps, 1);
+        experimental::CircularBuffer(cb_sumexps).pop_front(1);
 
         recip_tile_init();
         recip_tile(dst0);
@@ -463,13 +485,13 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_recip, 1);
+        cb_recip_obj.reserve_back(1);
         pack_tile(dst0, cb_recip);
-        cb_push_back(cb_recip, 1);
+        cb_recip_obj.push_back(1);
 
         tile_regs_release();
 
-        cb_wait_front(cb_recip, 1);
+        cb_recip_obj.wait_front(1);
         /*
          * --------------------------------------------------------
          * --------------------------------------------------------
@@ -501,10 +523,10 @@ void kernel_main() {
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
-        cb_pop_front(cb_recip, 1);
+        cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
-        cb_pop_front(cb_max, 1);
+        experimental::CircularBuffer(cb_max).pop_front(1);
 #endif
     }
-    cb_pop_front(cb_mask_padded, 1);
+    cb_mask_padded_obj.pop_front(1);
 }  // MAIN

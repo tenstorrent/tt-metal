@@ -94,6 +94,11 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
     std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     if (!core_range.ranges().empty()) {
         CreateKernel(
             program,
@@ -101,6 +106,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_args,
             });
     }
@@ -111,6 +117,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_args_cliff,
             });
     }
