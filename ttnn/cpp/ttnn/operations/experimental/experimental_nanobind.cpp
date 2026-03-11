@@ -61,7 +61,6 @@
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/moe_gpt_fused/moe_gpt_fused_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -141,7 +140,6 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
-    moe_gpt_fused::detail::bind_moe_gpt_fused(mod);
 }
 
 }  // namespace ttnn::operations::experimental
