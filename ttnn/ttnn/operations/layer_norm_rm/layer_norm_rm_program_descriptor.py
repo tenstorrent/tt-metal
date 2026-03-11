@@ -340,8 +340,11 @@ def create_program_descriptor(
     # num_tile_rows varies per core (cliff), so it's a runtime arg instead
     compute_ct_args = [Wt, has_gamma, has_beta]
 
-    # Writer compile-time args: stick_size, Wt, TensorAccessorArgs(output)
-    writer_ct_args = [stick_size, Wt]
+    # Writer compile-time args: output_stick_size, output_Wt, TensorAccessorArgs(output)
+    output_W = output_tensor.shape[-1]
+    output_stick_size = output_W * output_tensor.element_size()
+    output_Wt = output_W // 32
+    writer_ct_args = [output_stick_size, output_Wt]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # --- Runtime args ---

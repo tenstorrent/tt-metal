@@ -2,15 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Stage 1 (data_pipeline): tilize c_0 -> c_1, untilize c_1 -> c_17
+// Stage 2 (reduce_mean): tilize c_0->c_1, reduce_row c_1->c_24 (mean), untilize c_24->c_17
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 constexpr uint32_t c_0 = 0;    // RM input staging for tilize
 constexpr uint32_t c_1 = 1;    // Tilized input tiles
-constexpr uint32_t c_2 = 2;    // Reduce scaler (unused in stage 1)
+constexpr uint32_t c_2 = 2;    // Reduce scaler 1/W
+constexpr uint32_t c_24 = 24;  // Row-wise mean (1 tile)
 constexpr uint32_t c_17 = 17;  // Untilized RM output
 
 // Compile-time args
@@ -34,10 +36,19 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Wt, 1);
 
-        // Phase 13: Untilize c_1 -> c_17 (direct passthrough for stage 1)
+        // Phase 2: Reduce row -> mean
+        // reduce<SUM, REDUCE_ROW> with WaitAndPopPerTile (streaming), INPUT_AND_OUTPUT reconfig
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+            c_1, c_2, c_24, compute_kernel_lib::ReduceInputBlockShape::of(1, Wt));
+
+        // Phase 13: Untilize c_24 -> c_17 (reduced: 1 tile per tile-row)
         compute_kernel_lib::untilize<
-            Wt,
-            c_1,
+            1,
+            c_24,
             c_17,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
