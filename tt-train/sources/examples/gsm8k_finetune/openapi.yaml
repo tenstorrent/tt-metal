@@ -1,0 +1,695 @@
+openapi: 3.0.3
+info:
+  title: TT Training Service API
+  description: |
+    SLURM training service that accepts dashboard format and dispatches real
+    sbatch jobs. Resolves model IDs to model config paths, dataset URLs/names,
+    and cluster IDs to SLURM partitions internally.
+
+    **Supported datasets:** HuggingFace names (gsm8k, math_qa, aqua_rat, svamp, mawps)
+    or JSONL (local path, https://, s3://). JSONL requires "question"/"answer" columns.
+
+    **Unsupported:** `trainer` values other than `sft` (lora, grpo) and `optimizer`
+    values other than `adamw` (sgd, muon) return `400` with error code
+    `unsupported_trainer` or `unsupported_optimizer`.
+
+    **Timestamps:** All date-time fields use RFC3339 in UTC with `Z` suffix
+    (e.g. `2026-03-10T20:00:33.578901Z`).
+  version: 1.0.0
+  contact:
+    name: TT Training Team
+
+servers:
+  - url: http://localhost:8085
+    description: Training service
+
+tags:
+  - name: jobs
+    description: Training job lifecycle
+  - name: catalog
+    description: Supported models, datasets, compute sizes (for UI)
+  - name: health
+    description: Health checks
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Bridge health (proxies to training service)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /v1/jobs:
+    get:
+      tags: [jobs]
+      summary: List jobs
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/X-TT-Organization"
+      responses:
+        "200":
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [jobs]
+      summary: Create job (accepts dashboard format, translates internally)
+      description: |
+        Accepts the **dashboard format** and translates internally (model → model_config,
+        epochs → max_steps, etc.). See `CreateJobRequest` for the full schema.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/X-TT-Organization"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "201":
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          description: |
+            Validation error (missing fields) or unsupported trainer/optimizer.
+            Unsupported values return `unsupported_trainer` or `unsupported_optimizer` in error.code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/jobs/{id}:
+    get:
+      tags: [jobs]
+      summary: Get job by ID
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/X-TT-Organization"
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [jobs]
+      summary: Cancel job (uses POST /cancel on backend)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/X-TT-Organization"
+      responses:
+        "200":
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/jobs/{id}/metrics:
+    get:
+      tags: [jobs]
+      summary: Get job metrics
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/X-TT-Organization"
+      responses:
+        "200":
+          description: Metric points
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/jobs/{id}/logs:
+    get:
+      tags: [jobs]
+      summary: Get job logs
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/X-TT-Organization"
+      responses:
+        "200":
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/jobs/{id}/checkpoints:
+    get:
+      tags: [jobs]
+      summary: Get job checkpoints
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/X-TT-Organization"
+      responses:
+        "200":
+          description: Checkpoints
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Checkpoint"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/catalog:
+    get:
+      tags: [catalog]
+      summary: Get capabilities and options for UI (no auth)
+      description: |
+        **Dashboard alignment:** Call on load. Use `supported` flags to enable/disable
+        options. Unsupported choices will return 400 on POST /v1/jobs.
+
+        **Clusters:** Returns `clusters` (legal cluster values with resolved partition).
+      responses:
+        "200":
+          description: Catalog with supported flags
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    xTTOrg:
+      type: apiKey
+      in: header
+      name: X-TT-Organization
+
+  parameters:
+    JobId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    X-TT-Organization:
+      name: X-TT-Organization
+      in: header
+      required: false
+      description: Required when JWT_SECRET is unset (dev mode)
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Job not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    # --- External dashboard format (what the bridge accepts) ---
+    CreateJobRequest:
+      type: object
+      required:
+        - model
+        - dataset_url
+        - cluster
+        - training_params
+        - optimizer_params
+      properties:
+        model:
+          type: string
+          description: |
+            Model identifier. Supported values (mapped to model_config path):
+            - tinyllama-1.1b → model_configs/tinyllama.yaml
+            - gpt2 | gpt2s → model_configs/gpt2s.yaml
+            - llama-3.1-8b → model_configs/llama8b.yaml (if available)
+            Any other value is passed through; training service does not validate.
+          example: tinyllama-1.1b
+        dataset_url:
+          type: string
+          description: |
+            HuggingFace dataset name (gsm8k, math_qa, aqua_rat, svamp, mawps),
+            JSONL file path, or URL (s3://, https://). JSONL expects
+            "question"/"answer" or "instruction"/"response" columns.
+          example: gsm8k
+        optimizer_params:
+          $ref: "#/components/schemas/OptimizerParams"
+        cluster:
+          type: string
+          description: |
+            Cluster (hardware scale). Legal values: GET /v1/catalog clusters[].id.
+            User picks one; service schedules on an available partition.
+          example: 8xp150
+        training_params:
+          $ref: "#/components/schemas/TrainingParams"
+      additionalProperties: false
+
+    TrainingParams:
+      type: object
+      required: [type, params]
+      description: Discriminated by type. params schema depends on type (sft → SFTParams, etc.).
+      properties:
+        type:
+          type: string
+          enum: [sft, lora, grpo]
+          description: Trainer type; serves as the trainer selector.
+        params:
+          oneOf:
+            - $ref: "#/components/schemas/SFTParams"
+            - $ref: "#/components/schemas/LoraParams"
+            - $ref: "#/components/schemas/GRPOParams"
+
+    BaseParams:
+      type: object
+      description: |
+        Common params shared across all trainer types. Scheduler params go under
+        `scheduler_config` (warmup_steps, hold_steps, min_lr, max_lr). DDP is always
+        enabled (no enable_ddp param). mesh_shape is derived from
+        cluster/partition (8xp150/lb→[8,1], galaxy→[32,1]).
+      properties:
+        epochs:
+          type: integer
+          default: 3
+          minimum: 1
+          maximum: 100
+        batch_size:
+          type: integer
+          default: 8
+          minimum: 1
+          maximum: 256
+          description: Must be divisible by 32 for Galaxy cluster (mesh [32,1])
+        max_steps:
+          type: integer
+          description: Override epochs*20; used if provided
+        eval_every:
+          type: integer
+          default: 20
+        gradient_accumulation_steps:
+          type: integer
+          default: 1
+        max_sequence_length:
+          type: integer
+          default: 512
+        validation_batch_size:
+          type: integer
+          default: 4
+        scheduler_config:
+          type: object
+          description: Learning rate schedule (warmup, hold, min/max LR)
+          properties:
+            warmup_steps:
+              type: integer
+              default: 20
+              minimum: 0
+            hold_steps:
+              type: integer
+              default: 40
+              minimum: 0
+            min_lr:
+              type: number
+              format: double
+              default: 0.00003
+              minimum: 1e-7
+              description: Minimum LR (decay target)
+            max_lr:
+              type: number
+              format: double
+              default: 0.0001
+              minimum: 1e-7
+              description: Maximum LR (peak)
+
+    SFTParams:
+      allOf:
+        - $ref: "#/components/schemas/BaseParams"
+        - type: object
+          description: SFT-specific params. No extra fields beyond BaseParams.
+
+    LoraParams:
+      allOf:
+        - $ref: "#/components/schemas/BaseParams"
+        - type: object
+          properties:
+            lora_rank:
+              type: integer
+            lora_alpha:
+              type: number
+            lora_dropout:
+              type: number
+            group_size:
+              type: integer
+              description: Grouped-query attention
+
+    GRPOParams:
+      allOf:
+        - $ref: "#/components/schemas/BaseParams"
+        - type: object
+          properties:
+            kl_coeff:
+              type: number
+
+    OptimizerParams:
+      type: object
+      required: [type, params]
+      description: Discriminated by type. params schema depends on optimizer (adamw → AdamWParams, etc.).
+      properties:
+        type:
+          type: string
+          enum: [adamw, sgd, muon]
+        params:
+          oneOf:
+            - $ref: "#/components/schemas/AdamWParams"
+            - $ref: "#/components/schemas/SGDParams"
+            - $ref: "#/components/schemas/MuonParams"
+
+    AdamWParams:
+      type: object
+      properties:
+        weight_decay:
+          type: number
+        beta1:
+          type: number
+          default: 0.9
+        beta2:
+          type: number
+          default: 0.999
+        epsilon:
+          type: number
+          default: 1e-8
+
+    SGDParams:
+      type: object
+      properties:
+        momentum:
+          type: number
+        weight_decay:
+          type: number
+
+    MuonParams:
+      type: object
+      description: Muon optimizer-specific params.
+      properties:
+        beta:
+          type: number
+        c:
+          type: number
+
+    # --- Job response ---
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+        created_by_user_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+          description: |
+            SLURM status mapping:
+            - PENDING/PD → queued
+            - RUNNING/R → running
+            - COMPLETED/CD → completed
+            - FAILED/F → failed
+            - CANCELLED/CA → cancelled
+        trainer:
+          type: string
+        model:
+          type: string
+        dataset_url:
+          type: string
+        optimizer:
+          type: string
+        training_params:
+          type: object
+        cluster:
+          type: string
+        estimated_cost_cents:
+          type: number
+          nullable: true
+        actual_cost_cents:
+          type: number
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC (Z suffix)
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC (Z suffix)
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC (Z suffix)
+          example: "2026-03-10T20:00:33.578901Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC (Z suffix)
+          example: "2026-03-10T20:00:33.578901Z"
+
+    JobListResponse:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+
+    MetricsResponse:
+      type: array
+      items:
+        $ref: "#/components/schemas/MetricPoint"
+      description: List of metric points over training steps.
+
+    MetricPoint:
+      type: object
+      properties:
+        step:
+          type: integer
+        epoch:
+          type: integer
+        train_loss:
+          type: number
+        val_loss:
+          type: number
+        grad_norm:
+          type: number
+        learning_rate:
+          type: number
+
+    LogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          description: RFC3339 UTC (Z suffix)
+        type:
+          type: string
+          enum: [info, error, checkpoint]
+        message:
+          type: string
+        step:
+          type: integer
+
+    Checkpoint:
+      type: object
+      properties:
+        id:
+          type: string
+        step:
+          type: integer
+        epoch:
+          type: integer
+        metrics:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC (Z suffix)
+        ckpt_type:
+          type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        slurm:
+          type: boolean
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+            code:
+              type: string
+              description: e.g. unsupported_trainer, unsupported_optimizer, invalid_training_params, invalid_optimizer_params, invalid_batch_size
+
+    Catalog:
+      type: object
+      description: |
+        Capabilities and options for UI. Dashboard should call on load and use
+        `supported` to enable/disable options. Single source of truth for server capabilities.
+      properties:
+        supported:
+          type: object
+          description: Quick lookup of supported trainer/optimizer IDs
+          properties:
+            trainers:
+              type: array
+              items:
+                type: string
+            optimizers:
+              type: array
+              items:
+                type: string
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              display_name:
+                type: string
+              model_config:
+                type: string
+              supported:
+                type: boolean
+        datasets:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              display_name:
+                type: string
+              supported:
+                type: boolean
+        trainers:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              display_name:
+                type: string
+              supported:
+                type: boolean
+        optimizers:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              display_name:
+                type: string
+              supported:
+                type: boolean
+        clusters:
+          type: array
+          description: Legal clusters (id), resolved partition, mesh shape, and topology.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Cluster ID (8xp150, bh_glx, 4bh_glx, 5x4bh_glx).
+              partition:
+                type: string
+                description: SLURM partition the service will schedule on.
+              mesh_shape:
+                type: array
+                items:
+                  type: integer
+                minItems: 2
+                maxItems: 2
+                description: Per-node device mesh [rows, cols]. batch_size must be divisible by mesh_shape[0]*mesh_shape[1].
+              topology:
+                type: object
+                description: Multi-host topology; devices_per_node = mesh_shape[0]*mesh_shape[1], total_devices = nodes × devices_per_node.
+                properties:
+                  mesh_shape:
+                    type: array
+                    items:
+                      type: integer
+                    description: Per-node mesh [rows, cols].
+                  nodes:
+                    type: integer
+                    description: Total nodes (hosts) in partition.
+                  pods:
+                    type: integer
+                    description: Number of pods (e.g. 5 for superpod).
+                  nodes_per_pod:
+                    type: integer
+                    description: Nodes per pod (e.g. 4 for 4×32 GLX).
+                  total_devices:
+                    type: integer
+                    description: Total devices across all nodes.
+                  topology:
+                    type: string
+                    description: Human-readable e.g. "4×32×1" (4 nodes × 32×1 mesh), "5×4×32×1" (5 pods × 4 nodes × 32×1).
+
+security:
+  - bearerAuth: []
+  - xTTOrg: []
