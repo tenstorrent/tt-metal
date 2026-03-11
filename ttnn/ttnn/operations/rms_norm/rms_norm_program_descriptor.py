@@ -174,10 +174,10 @@ def create_program_descriptor(
         )
     )
 
-    # c_3: cb_sq - Squared tiles (2 pages, double-buffered for streaming)
+    # c_3: cb_sq - Squared tiles (Wt pages, square fills before reduce consumes)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=2 * tile_size,
+            total_size=Wt * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -302,10 +302,13 @@ def create_program_descriptor(
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # -- Writer kernel --
+    output_W = output_tensor.shape[-1]
+    output_stick_size = output_W * element_size
+    output_Wt = output_W // TILE_W
     writer_ct_args = [
-        stick_size if is_rm else tile_size,  # 0: stick_size or tile_size
+        output_stick_size if is_rm else tile_size,  # 0: stick_size or tile_size
         1 if is_rm else 0,  # 1: input_is_rm
-        Wt,  # 2: Wt
+        output_Wt,  # 2: Wt (output tiles in width)
         1 if has_gamma else 0,  # 3: has_gamma
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -339,22 +342,25 @@ def create_program_descriptor(
             for y in range(cr.start.y, cr.end.y + 1):
                 for x in range(cr.start.x, cr.end.x + 1):
                     if is_rm:
-                        # For RM path, start_id is the stick index (row * 32 * Wt sticks = row * 32)
-                        # Actually start_id = tile-row index for the reader to compute stick offsets
-                        start_stick_id = current_row * TILE_H
+                        # Reader: start stick in input tensor
+                        reader_start = current_row * TILE_H
+                        # Writer: start stick in output tensor (same H, different W)
+                        writer_start = current_row * TILE_H
                     else:
-                        # For TILE path, start_id is the tile index
-                        start_tile_id = current_row * Wt
+                        # Reader: start tile in input tensor
+                        reader_start = current_row * Wt
+                        # Writer: start tile in output tensor (uses output_Wt)
+                        writer_start = current_row * output_Wt
 
                     reader_rt_args[x][y] = [
                         input_addr,
-                        start_stick_id if is_rm else start_tile_id,
+                        reader_start,
                         rows_per_core,
                         gamma_addr,
                     ]
                     writer_rt_args[x][y] = [
                         output_addr,
-                        start_stick_id if is_rm else start_tile_id,
+                        writer_start,
                         rows_per_core,
                     ]
                     # Compute runtime args: actual Ht for this core

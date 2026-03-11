@@ -2,16 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RMS Norm - Compute Kernel
-// Stage 1 (data_pipeline): tilize(RM), identity copy c_1->c_16, untilize(RM)
+// Stage 2: tilize(RM), square, reduce_row, add_eps+rsqrt, copy to output, untilize(RM)
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+#include "api/compute/eltwise_unary/rsqrt.h"
 
 constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_tilized = 1;
 constexpr uint32_t cb_scaler = 2;
+constexpr uint32_t cb_sq = 3;
+constexpr uint32_t cb_rms = 4;
+constexpr uint32_t cb_eps = 5;
+constexpr uint32_t cb_rms_inv = 6;
 constexpr uint32_t cb_out = 16;
 constexpr uint32_t cb_untilized = 17;
 
@@ -42,15 +49,43 @@ void kernel_main() {
                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(Wt, 1);
         }
 
-        // Identity copy: c_1 -> c_16 (tile-by-tile)
+        // Phase 2: Square c_1 -> c_3
+        // WaitAndPopPerTile on c_1 since we don't need to reuse it in Stage 2
+        compute_kernel_lib::square<
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryOutputPolicy::PerTile,
+            compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+            cb_tilized, cb_sq, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+
+        // Phase 3: Reduce SUM REDUCE_ROW c_3 -> c_4 with c_2 scaler
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+            cb_sq, cb_scaler, cb_rms, compute_kernel_lib::ReduceInputBlockShape::of(1, Wt, 1));
+
+        // Phase 4: Add epsilon + rsqrt: c_4 + c_5 -> c_6
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::SCALAR,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop,
+            compute_kernel_lib::BinaryOutputPolicy::PerTile,
+            compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+            cb_rms, cb_eps, cb_rms_inv, compute_kernel_lib::BinaryInputBlockShape::of(1, 1), [](uint32_t dst_idx) {
+                rsqrt_tile_init();
+                rsqrt_tile(dst_idx);
+            });
+
+        // Copy c_6 -> c_16 (1 tile, the reduced output)
         compute_kernel_lib::copy_tiles<
             compute_kernel_lib::CopyInputPolicy::WaitAndPop,
-            compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(cb_tilized, cb_out, Wt);
+            compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(cb_rms_inv, cb_out, 1);
 
-        // Phase 7: Untilize (RM path only) c_16 -> c_17
+        // Phase 7: Untilize (RM path only) c_16 -> c_17 (1 tile output)
         if constexpr (input_is_rm) {
             compute_kernel_lib::untilize<
-                Wt,
+                1,
                 cb_out,
                 cb_untilized,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,

@@ -6,8 +6,8 @@
     "TILE_LAYOUT",
     "ROW_MAJOR_LAYOUT"
   ],
-  "current_stage_index": 1,
-  "last_passing_commit": "973bfa8eccfe9da219e6470ffacf097ff40306f1",
+  "current_stage_index": 2,
+  "last_passing_commit": "afb293132708739abdca75490ec29a51029b9a53",
   "stages": [
     {
       "name": "data_pipeline",
@@ -68,12 +68,67 @@
       "output_shape_expr": "list(shape[:-1]) + [32]",
       "compare_slice": "[:,:,:,0:1]",
       "dtype_parametrize": "[\"bfloat16\"]",
-      "status": "in_progress",
-      "commit": null,
-      "attempts": 0,
+      "status": "passed",
+      "commit": "afb293132708739abdca75490ec29a51029b9a53",
+      "attempts": 3,
       "free_retries": 0,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "runtime_error",
+          "summary": "TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:",
+          "details": {
+            "error_type": "TypeError",
+            "message": "__getitem__(): incompatible function arguments. The following argument types are supported:"
+          },
+          "suggested_action": "Check runtime args indexing. Verify tensor addresses and buffer sizes. Look for off-by-one errors in tile counting.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_rsqrt",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_cb_deadlock",
+          "summary": "unknown RISC-V stuck at cb_wait_front(inactive)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": "inactive",
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check CB sync: total pushes must equal total pops. Verify the stuck CB is fed by its producer. Do NOT add CB ops around helpers.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_rsqrt",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_cb_deadlock",
+          "summary": "unknown RISC-V stuck at cb_wait_front(inactive)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": "inactive",
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check CB sync: total pushes must equal total pops. Verify the stuck CB is fed by its producer. Do NOT add CB ops around helpers.",
+          "attempt": 3,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "square_reduce_rsqrt",
+          "remaining_attempts": 3,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "normalize",
@@ -100,7 +155,7 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "[\"bfloat16\"]",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
