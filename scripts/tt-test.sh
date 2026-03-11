@@ -4,7 +4,7 @@
 # Uses flock to serialize device access across multiple agents/terminals.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
 # dispatch layer (does not penalize setup/compilation time).
-# Automatically resets the device after any failure, ensuring the next runner
+# Automatically resets the device after every run, ensuring the next runner
 # always gets a clean device.
 #
 # Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
@@ -160,37 +160,17 @@ EXIT_CODE=$?
 
 echo "========================================" >&2
 
-# --- Handle result ---
-if [[ $EXIT_CODE -eq 0 ]]; then
-    rm -f "$DIRTY_FLAG"
-    rm -f "$TRIAGE_LOG"
-    echo "TT_TEST_RESULT: PASS" >&2
-    exit 0
-fi
-
-# Pytest exit code 5 = no tests collected (typo in path, bad marker filter, etc.)
-if [[ $EXIT_CODE -eq 5 ]]; then
-    rm -f "$DIRTY_FLAG"
-    rm -f "$TRIAGE_LOG"
-    echo "TT_TEST_ERROR: No tests collected" >&2
-    exit 3
-fi
-
-# Determine if this was a hang:
-#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
-IS_HANG=false
-if [[ -s "$TRIAGE_LOG" ]]; then
-    IS_HANG=true
-fi
+# --- Cleanup: always kill orphans and reset device ---
 
 # Kill any remaining child processes and their descendants.
-for child_pid in $(pgrep -P $$ 2>/dev/null); do
-    pkill -9 -P "$child_pid" 2>/dev/null || true
-    kill -9 "$child_pid" 2>/dev/null || true
-done
+if [[ $EXIT_CODE -ne 0 ]]; then
+    for child_pid in $(pgrep -P $$ 2>/dev/null); do
+        pkill -9 -P "$child_pid" 2>/dev/null || true
+        kill -9 "$child_pid" 2>/dev/null || true
+    done
+fi
 
-# Always reset device on failure. Even non-hang failures can leave device state
-# dirty in ways that affect subsequent tests.
+# Always reset device after every run to guarantee a clean slate.
 echo "TT_TEST: Resetting device..." >&2
 if tt-smi -r; then
     sleep 2
@@ -200,7 +180,24 @@ else
     echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
 fi
 
-if [[ "$IS_HANG" == true ]]; then
+# --- Handle result ---
+
+if [[ $EXIT_CODE -eq 0 ]]; then
+    rm -f "$TRIAGE_LOG"
+    echo "TT_TEST_RESULT: PASS" >&2
+    exit 0
+fi
+
+# Pytest exit code 5 = no tests collected (typo in path, bad marker filter, etc.)
+if [[ $EXIT_CODE -eq 5 ]]; then
+    rm -f "$TRIAGE_LOG"
+    echo "TT_TEST_ERROR: No tests collected" >&2
+    exit 3
+fi
+
+# Determine if this was a hang:
+#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
+if [[ -s "$TRIAGE_LOG" ]]; then
     echo "TT_TEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
     echo "" >&2
 
