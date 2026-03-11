@@ -92,6 +92,7 @@ def test_demo(
     enable_trace: bool,
     artifact_name: str,
     profile_decode: bool,
+    force_recalculate_weight_config: bool,
 ):
     """
     DeepSeek v3 demo test with prompts loaded from JSON file.
@@ -119,6 +120,7 @@ def test_demo(
         max_new_tokens=max_new_tokens,
         repeat_batches=repeat_batches,
         profile_decode=profile_decode,
+        force_recalculate=force_recalculate_weight_config,
         signpost=True,
     )
     if override_num_layers is not None:
