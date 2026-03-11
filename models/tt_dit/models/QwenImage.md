@@ -15,7 +15,7 @@ The model consists of a Qwen2.5-VL text encoder together with its tokenizer, a s
 
 ## Performance
 
-Current performance and target performance for two systems are detailed below. Performance is measured in seconds per image, where the image size is 1024x1024px with 50 inference steps.
+Current performance for two systems are detailed below. Performance is measured in seconds per image, where the image size is 1024x1024px with 50 inference steps.
 
 | System   | CFG | SP | TP | Encoding | Denoising (50 steps) | VAE   | Total |
 |----------|-----|----|----|----------|----------------------|-------|-------|
