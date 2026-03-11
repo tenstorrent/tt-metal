@@ -310,6 +310,17 @@ bool is_configured_target(uint32_t linearized_dest_mesh_coord) {
     }
 }
 
+template <uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
+uint32_t get_intra_cluster_id_from_linearized_mesh_coord(uint32_t linearized_dest_mesh_coord) {
+    if constexpr (Axis == ReplicateGroup::COLS) {
+        return linearized_dest_mesh_coord / MeshCols;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {
+        return linearized_dest_mesh_coord % MeshCols;
+    } else {
+        return linearized_dest_mesh_coord;
+    }
+}
+
 template <tt::tt_fabric::Topology Topology>
 constexpr bool has_wrap_around() {
     return Topology == tt::tt_fabric::Topology::Ring || Topology == tt::tt_fabric::Topology::Torus;
