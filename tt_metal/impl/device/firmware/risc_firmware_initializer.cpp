@@ -350,8 +350,7 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
 }
 
 void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
-    bool has_dram_fw =
-        hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
+    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
