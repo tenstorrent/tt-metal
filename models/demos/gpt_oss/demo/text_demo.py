@@ -422,11 +422,12 @@ def test_gpt_oss_demo(
     is_ci_env,
     request,
 ):
+    model_path = os.getenv("HF_MODEL", None)
+
     # Set to False to optimize for execution time.
     # If True, will always try to load HF weights if path is set.
     load_model = False
     if load_model:
-        model_path = os.getenv("HF_MODEL", None)
         if model_path is None:
             logger.warning(
                 "HF_MODEL environment variable not set. Skipping model loading. Will attempt loading from cache"
@@ -488,7 +489,6 @@ def test_gpt_oss_demo(
     num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
     users_per_row = global_batch_size // mesh_device.shape[0]
 
-    model_path = os.getenv("HF_MODEL", None)
     if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
         real_prompts = input_prompts * num_real_users
     elif isinstance(input_prompts, str):  # Inputs from file
