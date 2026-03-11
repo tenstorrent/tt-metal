@@ -1246,21 +1246,23 @@ void kernel_main() {
 
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
 
+        // Run RMSNorm + Mcast even if skip_attention is true
+        // This is to make sure downstream ccls are blocked by the mcast
+        // ====================================================================
+        // Input core: RMSNorm + Mcast send
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+            rmsnorm(rmsnorm_args);
+        }
+
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
+        }
+
         if (!skip_attention) {
-            // ====================================================================
-            // Input core: RMSNorm + Mcast send
-            // ====================================================================
-            {
-                DeviceZoneScopedN("RMSNORM");
-                deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-                rmsnorm(rmsnorm_args);
-            }
-
-            {
-                DeviceZoneScopedN("MCAST");
-                mcast(mcast_args);
-            }
-
             // ====================================================================
             // Matmul operation
             // ====================================================================
@@ -1440,17 +1442,25 @@ void kernel_main() {
                 // The first mcast syncs the ncrisc, so we need to also make sure brisc waits for the first mcast
 #if defined(COMPILE_FOR_NCRISC)
                 volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-                // Make sure the value is different from the mcasted value
+                    get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
                 // The wait below is for safety if this runs on the same core as another doing the same sync
                 // If that is the case we don't actually need to do another sync
-                noc_semaphore_wait(sync_sem, 0);
-                noc_semaphore_set(sync_sem, 2);
+                noc_semaphore_wait(sync_sem, INVALID);
+                noc_semaphore_set(sync_sem, VALID);
 #elif defined(COMPILE_FOR_BRISC)
                 volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-                noc_semaphore_wait(sync_sem, 2);
-                noc_semaphore_set(sync_sem, 0);
+                    get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+                noc_semaphore_wait(sync_sem, VALID);
+                noc_semaphore_set(sync_sem, INVALID);
+#endif
+                sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+                constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore_addr");
+                constexpr uint32_t input_noc_coord_x = get_named_compile_time_arg_val("input_noc_coord_x");
+                constexpr uint32_t input_noc_coord_y = get_named_compile_time_arg_val("input_noc_coord_y");
+                uint64_t ccl_sync_sem_noc_addr = get_noc_addr(input_noc_coord_x, input_noc_coord_y, ccl_sync_sem_addr);
+                noc_semaphore_inc(ccl_sync_sem_noc_addr, 1);
+                noc_async_atomic_barrier();
 #endif
                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
             }
@@ -1555,12 +1565,11 @@ void kernel_main() {
             // to fabric. Alternative is to move brisc connection logic after the cb wait
             // The first mcast syncs the ncrisc, so we need to also make sure brisc waits for the first mcast
             volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-            // Make sure the value is different from the mcasted value
+                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
             // The wait below is for safety if this runs on the same core as another doing the same sync
             // If that is the case we don't actually need to do another sync
-            noc_semaphore_wait(sync_sem, 0);
-            noc_semaphore_set(sync_sem, 2);
+            noc_semaphore_wait(sync_sem, INVALID);
+            noc_semaphore_set(sync_sem, VALID);
 
             // Wait for gather3 to complete before reading from gather core
             constexpr uint32_t gather3_completion_semaphore_id =
@@ -1574,11 +1583,17 @@ void kernel_main() {
             ccl_sender_reader(ccl_sender_args);
 #elif defined(COMPILE_FOR_BRISC)
             volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-            noc_semaphore_wait(sync_sem, 2);
-            noc_semaphore_set(sync_sem, 0);
+                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+            noc_semaphore_wait(sync_sem, VALID);
+            noc_semaphore_set(sync_sem, INVALID);
             deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
             ccl_sender_writer(ccl_sender_args);
+            constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore_addr");
+            constexpr uint32_t input_noc_coord_x = get_named_compile_time_arg_val("input_noc_coord_x");
+            constexpr uint32_t input_noc_coord_y = get_named_compile_time_arg_val("input_noc_coord_y");
+            uint64_t ccl_sync_sem_noc_addr = get_noc_addr(input_noc_coord_x, input_noc_coord_y, ccl_sync_sem_addr);
+            noc_semaphore_inc(ccl_sync_sem_noc_addr, 1);
+            noc_async_atomic_barrier();
 #endif
         }
 
@@ -1592,6 +1607,15 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_TRISC)
             deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
             ccl_receiver_compute(ccl_receiver_args);
+#elif defined(COMPILE_FOR_BRISC)
+            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+            // SDPA forwarder cores use both riscs to send over fabric, so we need to wait for both
+            noc_semaphore_wait(
+                ccl_sync_sem,
+                2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores") +
+                    get_named_compile_time_arg_val("ccl_sender_num_cores"));
+            noc_semaphore_set(ccl_sync_sem, 0);
 #endif
         }
     };
