@@ -955,6 +955,7 @@ format_results() {
 
     if [[ $total_issues -eq 0 ]]; then
         echo -e "${GREEN}No security issues found!${NC}"
+        echo ""
     else
         echo -e "${YELLOW}Found $total_issues potential security issues${NC}"
         echo ""
@@ -963,6 +964,7 @@ format_results() {
         echo "  - HIGH: Fix immediately - direct shell injection risk"
         echo "  - MEDIUM: Fix soon - potential injection or supply chain risk"
         echo "  - LOW: Defense in depth - address in regular maintenance"
+        echo ""
     fi
 
     # Set exit code based on issues found
@@ -1008,6 +1010,7 @@ if [[ "$MACHINE_OUTPUT" != "true" ]]; then
 
     if [[ $ISSUES_FOUND -eq 0 ]]; then
         echo -e "${GREEN}No security issues found!${NC}"
+        echo ""
         exit 0
     else
         echo -e "${YELLOW}Found $ISSUES_FOUND potential security issues${NC}"
@@ -1019,6 +1022,7 @@ if [[ "$MACHINE_OUTPUT" != "true" ]]; then
         echo "  - LOW: Defense in depth - address in regular maintenance"
         echo ""
         echo "For more details, see the security remediation plan."
+        echo ""
 
         if [[ "$STRICT_MODE" == "true" ]]; then
             exit 1

@@ -6,8 +6,10 @@
 #   -h, --help    Show help message
 #   -j N          Number of parallel jobs (default: 0 = all available CPUs)
 #   --strict      Exit with error code if any issues found
+#   --precommit   Pre-commit mode: skip if no files provided (don't scan all)
 #
 # If no FILEs are provided, scans all .yml/.yaml files in .github/workflows and .github/actions.
+# In --precommit mode, if no FILEs are provided, shows "Skipped" and exits.
 
 set -euo pipefail
 
@@ -18,6 +20,7 @@ MAIN_SCRIPT="$SCRIPT_DIR/check-actions-security.sh"
 
 PARALLEL_JOBS=0
 STRICT_MODE=false
+PRECOMMIT_MODE=false
 FILES=()
 
 usage() {
@@ -28,11 +31,13 @@ Options:
   -h, --help    Show this help message and exit
   -j N          Number of parallel jobs (default: 0 = all available CPUs)
   --strict      Exit with error code if any issues found
+  --precommit   Pre-commit mode: skip if no files provided (don't scan all)
 
 This wrapper runs security checks in parallel for better performance.
 Per-file checks run in parallel using xargs -P, then aggregate checks run once.
 
 If no FILEs are provided, scans all .yml/.yaml files in .github/workflows and .github/actions.
+In --precommit mode, if no FILEs are provided, shows "Skipped" and exits.
 
 For check descriptions, run: ./check-actions-security.sh --help
 EOF
@@ -57,6 +62,10 @@ while [[ $# -gt 0 ]]; do
             STRICT_MODE=true
             shift
             ;;
+        --precommit)
+            PRECOMMIT_MODE=true
+            shift
+            ;;
         *)
             FILES+=("$1")
             shift
@@ -68,17 +77,26 @@ done
 RESULTS_FILE=$(mktemp)
 trap 'rm -f "$RESULTS_FILE"' EXIT
 
-# Default to finding all files if none provided
+# Handle no files case
 if [[ ${#FILES[@]} -eq 0 ]]; then
-    while IFS= read -r -d '' f; do
-        FILES+=("$f")
-    done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" \
-        \( -name "*.yml" -o -name "*.yaml" \) -print0 2>/dev/null)
+    if [[ "$PRECOMMIT_MODE" == "true" ]]; then
+        # In pre-commit mode with no files, show skipped message
+        echo "Skipped (no .github workflow files in commit)"
+        echo ""
+        exit 0
+    else
+        # Default mode: scan all workflow files
+        while IFS= read -r -d '' f; do
+            FILES+=("$f")
+        done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" \
+            \( -name "*.yml" -o -name "*.yaml" \) -print0 2>/dev/null)
+    fi
 fi
 
-# Exit early if no files to check
+# Exit early if still no files to check
 if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "No workflow files found to check."
+    echo ""
     exit 0
 fi
 
