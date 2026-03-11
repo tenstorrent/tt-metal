@@ -6,7 +6,6 @@
 
 #include "dev_mem_map.h"
 #include "api/compute/common.h"
-#include "api/debug/dprint.h"
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 
@@ -39,12 +38,7 @@ public:
     explicit Semaphore(uint32_t semaphore_id) :
         local_l1_addr_(
             MEM_L1_UNCACHED_BASE +
-            ((uintptr_t)sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] + semaphore_id * L1_ALIGNMENT)) {
-        DPRINT << "Semaphore ID: " << semaphore_id << ENDL();
-        DPRINT << "Semaphore base address: " << sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] << ENDL();
-        DPRINT << "L1 alignment: " << L1_ALIGNMENT << ENDL();
-        DPRINT << "Semaphore address: " << local_l1_addr_ << ENDL();
-    }
+            ((uintptr_t)sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] + semaphore_id * L1_ALIGNMENT)) {}
 
     /**
      * @brief Increment the semaphore by the specified value.
@@ -54,9 +48,7 @@ public:
      */
     void up(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
-        DPRINT << "Incrementing semaphore " << local_l1_addr_ << " by " << value << ENDL();
         *sem_addr += value;
-        DPRINT << "Semaphore " << local_l1_addr_ << " incremented to " << *sem_addr << ENDL();
     }
 
     /**
@@ -70,9 +62,7 @@ public:
         WAYPOINT("TSDW");
         while ((*sem_addr) < value);
         WAYPOINT("TSDD");
-        DPRINT << "Decrementing semaphore " << local_l1_addr_ << " by " << value << ENDL();
         *sem_addr -= value;
-        DPRINT << "Semaphore " << local_l1_addr_ << " decremented to " << *sem_addr << ENDL();
     }
 
     // The following methods provide parity with existing semaphore API, but have non-standard semantics.
@@ -84,11 +74,9 @@ public:
      */
     void wait(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
-        DPRINT << "Waiting for semaphore to be set to " << value << ENDL();
         WAYPOINT("TSWW");
         while ((*sem_addr) != value);
         WAYPOINT("TSWD");
-        DPRINT << "Semaphore set to " << *sem_addr << ENDL();
     }
 
     /**

@@ -23,15 +23,11 @@ void kernel_main() {
 
     semaphore.wait(signal_value);
 
-    // volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)((uintptr_t)signal_address);
-    // while (*signal_addr != signal_value);
-
     DPRINT << "Reading " << dram_buffer_size << " bytes from DRAM address " << dram_src_address << " in bank "
            << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address << ENDL();
 
     noc.async_read(src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_src_address}, {});
     noc.async_read_barrier();
 
-    // *signal_addr = signal_value + 1;
     semaphore.up(1);
 }
