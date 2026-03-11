@@ -80,5 +80,27 @@
       "error": 19.5,
       "warning": 25
     }
+  },
+  "sdxl-lora": {
+    "perf": {
+      "functional": 125,
+      "complete":   25,
+      "target":     12.5
+    },
+    "perf-tp": {
+      "functional": 62.5,
+      "complete":   12.5,
+      "target":     6.25
+    },
+    "accuracy": {
+      "fid_valid_range_full_dataset": [158.15, 162.15],
+      "clip_valid_range_full_dataset": [35.1, 35.3],
+      "clip_valid_range_100": [35.0188, 35.8188],
+      "fid_valid_range_100": [276.0, 284.0]
+    },
+    "clip_score_thresholds": {
+      "error": 20,
+      "warning": 28
+    }
   }
 }
