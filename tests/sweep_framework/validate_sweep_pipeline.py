@@ -55,11 +55,6 @@ def _run(cmd: list[str], env: dict[str, str] | None = None, dry_run: bool = Fals
         sys.exit(result.returncode)
 
 
-def _safe_op_dirname(op_name: str) -> str:
-    """Mirror split_model_trace.py's directory naming: dots become underscores."""
-    return op_name.replace(".", "_")
-
-
 def _module_basename(module_name: str) -> str:
     """Extract the last dotted component: 'model_traced.foo_model_traced' -> 'foo_model_traced'."""
     return module_name.rsplit(".", 1)[-1]
