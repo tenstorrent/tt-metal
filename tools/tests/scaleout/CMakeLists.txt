@@ -135,7 +135,7 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
 
-target_include_directories(test_host_id_assignment SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(test_host_id_assignment SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
     test_host_id_assignment

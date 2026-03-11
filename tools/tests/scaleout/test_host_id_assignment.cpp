@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <google/protobuf/text_format.h>
 
 #include <cabling_generator/cabling_generator.hpp>
