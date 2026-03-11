@@ -1,0 +1,15 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct MaskedBincountParams {
+    const uint32_t n_routed_experts;
+};
+
+}  // namespace ttnn::experimental::prim
