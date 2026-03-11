@@ -45,6 +45,11 @@ bool can_use_sharded_optimized_factories(
         }
     }
 
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+
     if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
         return false;
     }
