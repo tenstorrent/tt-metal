@@ -722,10 +722,15 @@ def test_gpt_oss_demo(
                 prompt_lens=decoding_pos,
                 empty_slots=list(range(global_batch_size)),
                 enable_trace=enable_prefill_trace,
+                sampling_params=device_sampling_params,
             )
 
-            # Non-sampling batched prefill returns per-user logits [batch, 1, vocab]
-            prefilled_token = torch.argmax(prefill_result, dim=-1).view(-1)
+            # Generator returns (output_tokens, output_log_probs) when sampling is enabled
+            if isinstance(prefill_result, tuple):
+                prefilled_token, _ = prefill_result
+                prefilled_token = prefilled_token.view(-1).long()
+            else:
+                prefilled_token = torch.argmax(prefill_result, dim=-1).view(-1)
 
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Generator batched prefill finished")

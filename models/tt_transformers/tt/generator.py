@@ -628,6 +628,18 @@ class Generator(WarmupForwardMixin):
                 if sampling_enabled:
                     sampling_executed = True
 
+                    # Models with non-tile-aligned batch sizes (< 32) can provide
+                    # sample_batched_prefill to bypass the on-device sampling module.
+                    if hasattr(self.model[model_id], "sample_batched_prefill"):
+                        tokens_host, log_probs_host = self.model[model_id].sample_batched_prefill(
+                            logits, last_token_idx, padded_batch, prefill_seq_len
+                        )
+                        for local_idx, slot in enumerate(empty_slots):
+                            output_tokens[slot] = tokens_host[slot]
+                            if log_probs_host is not None:
+                                output_log_probs[slot] = log_probs_host[slot]
+                        break
+
                     combined_params = format_sampling_params(sampling_params, padded_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(padded_batch, max_prompt_len, dtype=torch.long)

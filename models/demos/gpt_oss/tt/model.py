@@ -643,6 +643,39 @@ class Model:
         hidden_states.deallocate(True)
         return logits
 
+    def sample_batched_prefill(self, logits, last_token_idx, padded_batch, prefill_seq_len):
+        """Sample tokens from batched prefill logits via host-side argmax.
+
+        The on-device sampling module requires batch_size % 32 == 0, which
+        doesn't hold for small batches (e.g. 4 users on 4x8). This method
+        gathers TP-sharded logits on host and does greedy sampling there.
+
+        Args:
+            logits: [padded_batch, 1, prefill_seq_len, vocab/tp] on device
+            last_token_idx: list of per-user last token positions
+            padded_batch: number of user slots
+            prefill_seq_len: padded sequence length per user
+
+        Returns:
+            (tokens, log_probs): tokens is 1D tensor of length padded_batch,
+                                 log_probs is None (host-side argmax)
+        """
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(logits)
+        # Read from row 0, all TP columns (rows are identical after gather+replicate)
+        col_logits = [ttnn.to_torch(device_tensors[col]) for col in range(num_cols)]
+        full_logits = torch.cat(col_logits, dim=-1)  # [padded_batch, 1, seq_len, full_vocab]
+
+        tokens = torch.zeros(padded_batch, dtype=torch.long)
+        for slot in range(padded_batch):
+            lt = last_token_idx[slot]
+            if lt > 0:
+                user_logits = full_logits[slot, 0, lt, : self.vocab_size]
+                tokens[slot] = torch.argmax(user_logits).item()
+
+        logits.deallocate(True)
+        return tokens, None
+
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
         Prepare inputs for decode mode - matches tt_transformers interface (4 values).
