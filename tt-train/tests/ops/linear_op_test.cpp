@@ -10,6 +10,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
+#include "core/system_utils.hpp"
 
 class LinearOpTest : public ::testing::Test {
 protected:
@@ -54,18 +55,25 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
 }
 
 TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
+    SKIP_FOR_LLK_ASSERTS(
+        "LLK_ASSERT(semaphore_read(index) < semaphore::SEMAPHORE_MAX_VALUE, Semaphore must not be already at max "
+        "value.)");
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    tensor->set_requires_grad(true);
 
     auto weight = ttml::autograd::create_tensor();
     ttml::init::uniform_init(weight, ttnn::Shape({1, 1, 64, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    weight->set_requires_grad(true);
 
     auto bias = ttml::autograd::create_tensor();
     ttml::init::uniform_init(bias, ttnn::Shape({1, 1, 1, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    bias->set_requires_grad(true);
 
     auto out = ttml::autograd::create_tensor();
     ttml::init::uniform_init(out, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
     out->set_grad(out->get_value());
+    out->set_requires_grad(true);
 
     ttml::ops::ttnn_linear_backward(tensor, weight, bias, out);
     auto ttnn_tensor_grad = tensor->get_grad();
@@ -99,6 +107,9 @@ void test_linear(uint32_t batch, uint32_t emb_dim) {
     ttml::ops::linear_op(tensor, weight, bias);
 }
 TEST_F(LinearOpTest, TTNNLargeLinearOpWithBias) {
+    SKIP_FOR_LLK_ASSERTS(
+        "LLK_ASSERT(semaphore_read(index) < semaphore::SEMAPHORE_MAX_VALUE, Semaphore must not be already at max "
+        "value.)");
     uint32_t dim = 4096;
     uint32_t batch = 32;  // it works with batch = 1, please try to check from 4 to 64
     EXPECT_NO_FATAL_FAILURE(test_linear(batch, 4 * dim));

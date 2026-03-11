@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight
 from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
@@ -23,6 +23,32 @@ NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
+MAX_TOP_K = 32
+
+
+def make_deepseek_sampling_args(
+    mesh_device,
+    vocab_size: int,
+    *,
+    max_top_k: int = MAX_TOP_K,
+    max_batch_size: int = USERS_PER_ROW,
+    sampling_all_gather_axis: int = 1,
+) -> DeepseekSamplingArgs:
+    cluster_shape = tuple(mesh_device.shape)
+    sampling_dp = int(cluster_shape[0])  # one sampling group per row
+    num_tp = int(cluster_shape[1])
+    per_device_vocab = int(math.ceil(vocab_size / num_tp))
+    padded_per_device_vocab = int(math.ceil(per_device_vocab / ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
+    padded_vocab_size = padded_per_device_vocab * num_tp
+    return DeepseekSamplingArgs(
+        vocab_size=vocab_size,
+        padded_vocab_size=padded_vocab_size,
+        max_top_k=max_top_k,
+        max_batch_size=max_batch_size,
+        sampling_dp=sampling_dp,
+        cluster_shape=cluster_shape,
+        sampling_all_gather_axis=sampling_all_gather_axis,
+    )
 
 
 # Compute kernel configurations
