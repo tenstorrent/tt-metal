@@ -197,8 +197,8 @@ def test_persistent_decoder_15_stages(
         s = None
         if is_moe_stage:
             layer_idx = 0
-            enable_routing = False
-            use_hardcoded_expert_index = False
+            enable_routing = True
+            use_hardcoded_expert_index = True
             num_routed_experts = 1
             position_id = 0
             max_seq_len = 32 * 1024
