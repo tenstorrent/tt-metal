@@ -624,19 +624,7 @@ class TtTransformer(LightweightModule):
                 buffer_key="SAMPLING",
             )
 
-            # Use single-core untilize to avoid sub-device core mismatch when sub-devices are active
-            tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
-
-            # Save logits for PCC check if requested
-            if tt_out_logits_saved is not None:
-                tt_out_logits = ttnn.to_torch(
-                    tt_logits,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
-                    ),
-                )
-                tt_out_logits = tt_out_logits[0, 0, 0, : self.args.vocab_size]
-                tt_out_logits_saved.copy_(tt_out_logits)
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
 
             return tt_logits, None
 
