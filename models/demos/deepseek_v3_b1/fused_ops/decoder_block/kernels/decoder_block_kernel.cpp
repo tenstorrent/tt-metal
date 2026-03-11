@@ -2631,7 +2631,7 @@ void kernel_main() {
             // IsReduceCore includes both worker cores and fabric cores
             constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
             deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
-            // reduce_op(moe.routed.reduce_rt_args);
+            reduce_op(moe.routed.reduce_rt_args);
         }
 #endif
 
