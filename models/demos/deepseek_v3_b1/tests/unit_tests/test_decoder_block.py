@@ -53,6 +53,7 @@ def create_decoder_block_tensors(
     layer_idx,
     num_routed_experts,
     max_seq_len,
+    reduce_root_coord=ttnn.MeshCoordinate(1, 1),
 ):
     """Create all tensors required by DecoderBlock.op() using a single BlitzDecodeWeights.
     This avoids the L1 OOM caused by allocating overlapped attention weights twice
@@ -542,7 +543,6 @@ def create_decoder_block_tensors(
     # ══════════════════════════════════════════════════════════════════════════
     # Reduce-to-one tensors
     # ══════════════════════════════════════════════════════════════════════════
-    root_coord = (1, 1)
     reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
     reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
     tile_1x32 = ttnn.Tile([1, 32])
@@ -569,9 +569,9 @@ def create_decoder_block_tensors(
         mesh_mapper=reduce_mesh_mapper,
     )
 
-    compute_grid = submesh.compute_with_storage_grid_size()
-    reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+    shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+    aggregator_core = shard_cores_list[0]
+    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
     reduce_output_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -720,7 +720,7 @@ def create_decoder_block_tensors(
         # Reduce-to-one
         "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,
-        "reduce_root_coord": root_coord,
+        "reduce_root_coord": reduce_root_coord,
         # Standalone MoE ref tensors
         "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
         "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
@@ -1002,7 +1002,7 @@ def test_decoder(
             reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
             reduce_output_tensor=d["reduce_output_tensor"],
             reduce_semaphores=reduce_semaphores,
-            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+            reduce_root_coord=d["reduce_root_coord"],
             # Shared parameters
             enable_routing=True,
             bcast_cluster_axis=bcast_cluster_axis,

@@ -74,7 +74,6 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -82,7 +81,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 @pytest.mark.parametrize("embedding_dim", [7168])
 @pytest.mark.parametrize("iterations", [4000])
 @pytest.mark.timeout(120000)
-def test_persistent_moe_15_stages(
+def test_persistent_decoder_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
 ):
     """
@@ -200,13 +199,13 @@ def test_persistent_moe_15_stages(
             layer_idx = 0
             enable_routing = False
             use_hardcoded_expert_index = False
-            num_routed_experts = 8
+            num_routed_experts = 1
             position_id = 0
             max_seq_len = 32 * 1024
             logger.info("Preparing model state dict...")
             state_dict = get_reference_model_state_dict(
                 layer_idx=layer_idx,
-                is_moe=False,
+                is_moe=True,
                 seed=RoutedExpert.SEED,
                 num_routed_experts=num_routed_experts,
             )
@@ -225,17 +224,19 @@ def test_persistent_moe_15_stages(
             moe_semaphores = MoeOp.create_semaphores(mesh_device)
             reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 1)
+            sender_coord = pipeline_config[my_mesh_id].entry_node_coord
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
                 mesh_device.shape[1],
-                d["sender_coord"].x,
-                d["sender_coord"].y,
+                sender_coord.row,
+                sender_coord.col,
                 position_id,
                 state_dict,
                 layer_idx,
                 num_routed_experts,
                 max_seq_len,
+                root_coord=pipeline_config[my_mesh_id].exit_node_coord,
             )
             ttnn.synchronize_device(mesh_device)
 
@@ -340,7 +341,7 @@ def test_persistent_moe_15_stages(
                 reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
                 reduce_output_tensor=d["reduce_output_tensor"],
                 reduce_semaphores=reduce_semaphores,
-                reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+                reduce_root_coord=reduce_root_coord,
                 # Shared parameters
                 enable_routing=enable_routing,
                 use_hardcoded_expert_index=use_hardcoded_expert_index,
