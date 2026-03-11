@@ -27,4 +27,19 @@
 - All 3 analyses COMPLETE
 
 ## Phase 2: Design
-- Launching ttnn-operation-architect...
+- Launched ttnn-operation-architect (Hybrid mode: tilize + batch_norm + untilize)
+- **op_design.md**: 408 lines — full architecture + kernel implementation design
+- **TDD stages registered**: 3 stages (normalize, gamma, affine)
+- **Test files generated**: test_stage_normalize.py, test_stage_gamma.py, test_stage_affine.py
+- Phase 2 COMPLETE
+
+## Phase 3: Build
+- Launched ttnn-generic-op-builder
+- **Created**: __init__.py, layer_norm_rm.py, layer_norm_rm_program_descriptor.py
+- **Created**: kernels/ with reader, compute, writer stubs
+- **Created**: test infrastructure (conftest.py, __init__.py, layer_norm_rm.py re-export, test_layer_norm_rm.py)
+- CB layout: 13 CBs
+- Phase 3 COMPLETE
+
+## Phase 4: TDD Kernels
+- Launching ttnn-kernel-writer-tdd...
