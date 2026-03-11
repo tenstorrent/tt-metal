@@ -177,7 +177,6 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # Handle reduce_scatter if input was TP-sharded
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
-            ccl_moe = cfg["moe"]["ccl"]
 
             if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
@@ -191,6 +190,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                     summed_experts, **cfg["moe"]["ring_final_output_reduce_scatter"]
                 )
             else:
+                ccl_moe = cfg["moe"]["ccl"]
+
                 summed_experts = ttnn.sum(
                     combined_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
                 )
