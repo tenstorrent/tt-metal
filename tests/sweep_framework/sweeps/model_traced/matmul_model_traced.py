@@ -105,12 +105,8 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
 
-    # Parse program_config if present
-    program_config = kwargs.get("program_config")
-    if isinstance(program_config, dict):
-        program_config = dict_to_program_config(program_config, input_b_memory_config, input_a_memory_config)
-    if program_config is not None and program_config != "__ABSENT__":
-        op_kwargs["program_config"] = program_config
+    # Skip traced program_config: block dimensions (out_block_w, per_core_N, etc.) are computed
+    # for the original device grid and don't match the local device. Let ttnn auto-compute.
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

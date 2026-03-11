@@ -133,8 +133,14 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Build op kwargs from traced config (compute_kernel_config, numeric_stable, etc.)
-    op_kwargs = build_op_kwargs(kwargs, exclude={"dim"}, output_memory_config=output_memory_config)
+    # Build op kwargs from traced config; exclude program_config since ttnn.softmax
+    # doesn't accept it (sharded program config is computed internally)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"dim", "program_config"}, output_memory_config=output_memory_config)
+
+    # Sharded softmax with random test data needs numeric_stable=True to avoid
+    # exp() overflow producing all-zero output
+    if input_is_sharded and not is_host:
+        op_kwargs["numeric_stable"] = True
 
     start_time = start_measuring_time()
     output_tensor = ttnn.softmax(input_tensor_a, dim=dim, **op_kwargs)

@@ -199,6 +199,7 @@ def run(
         mask_tensor = ttnn.from_torch(torch_mask_tensor, dtype=mask_dtype, layout=mask_layout)
 
     # Run operation (in-place operation modifies input)
+    # Note: attention_softmax_ does NOT support numeric_stable parameter
     # Do NOT use causal_mask parameter - use the binary mask instead
     start_time = start_measuring_time()
     result = ttnn.transformer.attention_softmax_(

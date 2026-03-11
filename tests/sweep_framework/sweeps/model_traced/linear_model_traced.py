@@ -137,8 +137,10 @@ def run(
             if isinstance(dtype, dict)
             else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
         )
-    if isinstance(program_config, dict):
-        program_config = dict_to_program_config(program_config, input_b_memory_config, input_a_memory_config)
+    # Skip traced program_config: block dimensions and grid sizes are computed for the
+    # original device/mesh and don't match the test device. Let ttnn auto-compute.
+    # The fallback below clears sharded configs when program_config is None.
+    program_config = None
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -148,12 +150,10 @@ def run(
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
 
-    # Use build_op_kwargs to parse dict values for op kwargs (memory_config, core_grid,
-    # compute_kernel_config, dtype). Exclude program_config since it needs special handling
-    # with input_b_memory_config. Also exclude activation since it's used for golden too.
-    parsed_op_kwargs = build_op_kwargs(
-        kwargs, exclude={"program_config", "activation"}, output_memory_config=output_memory_config
-    )
+    # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
+    # Exclude program_config (handled above), activation (used for golden too), and
+    # memory_config (handled explicitly below after sharded config cleanup).
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation"})
 
     # When program_config can't be reconstructed (incomplete traced data), the
     # shard_spec in memory_config/output_memory_config was computed by the
