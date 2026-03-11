@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Visualization utilities for MoE dispatch/combine debugging."""
 
 from typing import List, Set, Tuple
