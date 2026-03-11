@@ -828,12 +828,17 @@ def _compute_args_signature(args) -> Tuple:
     return tuple(sigs)
 
 
+# Kwarg names that may contain the main tensor input when module is called with kwargs
+_TRACE_INPUT_KWARG_NAMES = ("hidden_states", "x")
+
+
 @dataclass(slots=True)
 class TraceEntry:
     """Single trace cache entry."""
 
     trace_id: int
     trace_inputs: List[Any]
+    trace_input_sources: List[Tuple[str, Any]]  # [('arg', 0), ('kwarg', 'hidden_states'), ...]
     trace_output: Any
     device: Any
 
@@ -924,9 +929,17 @@ class TracedRun(LightweightRun):
         return len(to_remove)
 
     @staticmethod
-    def _make_cache_key(module_name: str, args) -> Tuple:
+    def _make_cache_key(module_name: str, args, kwargs=None) -> Tuple:
         """Create cache key from module name and input signatures."""
-        return (module_name, _compute_args_signature(args))
+        sig = _compute_args_signature(args)
+        if not sig and kwargs:
+            # Include kwargs signature when args is empty
+            kw_sigs = []
+            for name in _TRACE_INPUT_KWARG_NAMES:
+                if name in kwargs:
+                    kw_sigs.append(_compute_tensor_signature(kwargs[name]))
+            sig = tuple(s for s in kw_sigs if s)
+        return (module_name, sig)
 
     @staticmethod
     def _invalidate_output_cache(trace_output) -> None:
@@ -943,28 +956,39 @@ class TracedRun(LightweightRun):
             _clear(trace_output)
 
     @staticmethod
-    def _copy_inputs_to_trace_buffer(new_args, trace_inputs) -> None:
-        """Copy new inputs to trace input buffers."""
-        trace_idx = 0
-        for arg in new_args:
-            if trace_idx >= len(trace_inputs):
-                break
-            trace_input = trace_inputs[trace_idx]
-            if trace_input is None:
-                trace_idx += 1
-                continue
-
-            if isinstance(arg, ttnn.Tensor):
-                ttnn.copy(arg, trace_input)
-                trace_idx += 1
-            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
-                ttnn.copy(arg.ttnn_tensor, trace_input)
-                trace_idx += 1
+    def _copy_inputs_to_trace_buffer(new_args, trace_inputs, trace_input_sources, new_kwargs=None) -> None:
+        """Copy new inputs to trace input buffers. Uses trace_input_sources to get values from args or kwargs."""
+        if not trace_input_sources:
+            # Iterate over args only
+            for trace_idx, (arg, trace_input) in enumerate(zip(new_args, trace_inputs)):
+                if trace_idx >= len(trace_inputs) or trace_input is None:
+                    break
+                if isinstance(arg, ttnn.Tensor):
+                    ttnn.copy(arg, trace_input)
+                elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                    ttnn.copy(arg.ttnn_tensor, trace_input)
+        else:
+            for trace_input, source in zip(trace_inputs, trace_input_sources):
+                if trace_input is None:
+                    continue
+                src_type, src_key = source
+                if src_type == "arg":
+                    arg = new_args[src_key] if src_key < len(new_args) else None
+                else:
+                    arg = (new_kwargs or {}).get(src_key) if new_kwargs else None
+                if arg is None:
+                    continue
+                if isinstance(arg, ttnn.Tensor):
+                    ttnn.copy(arg, trace_input)
+                elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                    ttnn.copy(arg.ttnn_tensor, trace_input)
 
     @staticmethod
     def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
         """Capture trace for module."""
         from loguru import logger
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
         device = module.device
         cq_id = TracedRun._cq_id
@@ -974,24 +998,43 @@ class TracedRun(LightweightRun):
 
         # Allocate persistent input buffers
         trace_inputs = []
+        trace_input_sources = []
         trace_func_args = []
+        trace_func_kwargs = dict(func_kwargs)
 
-        for arg in func_args:
+        def _add_trace_input(arg, source):
             if isinstance(arg, ttnn.Tensor):
                 trace_input = ttnn.clone(arg, memory_config=arg.memory_config(), dtype=arg.dtype)
                 trace_inputs.append(trace_input)
-                trace_func_args.append(trace_input)
+                trace_input_sources.append(source)
+                return trace_input
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
                 t = arg.ttnn_tensor
                 trace_input = ttnn.clone(t, memory_config=t.memory_config(), dtype=t.dtype)
                 trace_inputs.append(trace_input)
-                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-                new_arg = TorchTTNNTensor(trace_input)
-                trace_func_args.append(new_arg)
+                trace_input_sources.append(source)
+                return TorchTTNNTensor(trace_input)
             else:
                 trace_inputs.append(None)
-                trace_func_args.append(arg)
+                trace_input_sources.append(source)
+                return arg
+
+        # Build trace inputs from args first
+        for i, arg in enumerate(func_args):
+            repl = _add_trace_input(arg, ("arg", i))
+            trace_func_args.append(repl)
+
+        # If no tensor args, extract from kwargs
+        if not any(t is not None for t in trace_inputs):
+            trace_inputs.clear()
+            trace_input_sources.clear()
+            trace_func_args = list(func_args)
+            for name in _TRACE_INPUT_KWARG_NAMES:
+                if name in func_kwargs:
+                    val = func_kwargs[name]
+                    repl = _add_trace_input(val, ("kwarg", name))
+                    trace_func_kwargs[name] = repl
+                    break
 
         # Warm-up
         _ = module.forward(*func_args, **func_kwargs)
@@ -999,7 +1042,7 @@ class TracedRun(LightweightRun):
         global _TRACE_CAPTURING
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
         _TRACE_CAPTURING = True
-        trace_output = module.forward(*trace_func_args, **func_kwargs)
+        trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
         _TRACE_CAPTURING = False
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(device)
@@ -1007,6 +1050,7 @@ class TracedRun(LightweightRun):
         entry = TraceEntry(
             trace_id=trace_id,
             trace_inputs=trace_inputs,
+            trace_input_sources=trace_input_sources,
             trace_output=trace_output,
             device=device,
         )
@@ -1065,14 +1109,16 @@ class TracedRun(LightweightRun):
             return post_process_ttnn_module_output(self, result)
 
         # Traced execution path
-        cache_key = TracedRun._make_cache_key(self.module_name, func_args)
+        cache_key = TracedRun._make_cache_key(self.module_name, func_args, func_kwargs)
 
         if cache_key in TracedRun._trace_cache:
             print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             entry = TracedRun._trace_cache[cache_key]
             if hasattr(self, "pre_trace_execute"):
                 self.pre_trace_execute(*args, **kwds)
-            TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
+            TracedRun._copy_inputs_to_trace_buffer(
+                func_args, entry.trace_inputs, entry.trace_input_sources, func_kwargs
+            )
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             TracedRun._invalidate_output_cache(entry.trace_output)
             result = entry.trace_output
