@@ -240,15 +240,109 @@ class TokenizedDataset(torch.utils.data.Dataset):
         return self.X[idx], self.y[idx]
 
 
+# Dataset name -> (hf_path, config, question_col, answer_col)
+# All datasets are normalized to "question"/"answer" for tokenize_dataset.
+DATASET_CONFIG = {
+    "gsm8k": ("gsm8k", "main", "question", "answer"),
+    "math_qa": ("allenai/math_qa", None, "Problem", "Rationale"),
+    "aqua_rat": ("deepmind/aqua_rat", None, "question", "rationale"),
+    "svamp": ("EleutherAI/svamp", None, "Question", "Answer"),
+    "mawps": ("allenai/mawps", None, "question", "ans"),
+}
+
+
+def _is_jsonl_source(src: str) -> bool:
+    """True if source is a JSONL file (path or URL)."""
+    s = src.strip()
+    return (
+        s.endswith(".jsonl")
+        or ".jsonl?" in s
+        or s.startswith("s3://")
+        or s.startswith("https://")
+        or s.startswith("http://")
+    )
+
+
+def _load_jsonl(jsonl_path_or_url: str):
+    """Load JSONL file (local path, http(s) or s3 URL) and normalize to {question, answer}."""
+    ds = datasets.load_dataset(
+        "json",
+        data_files={"all": jsonl_path_or_url},
+        split="all",
+    )
+    # Expect "question" and "answer" columns; fallback to common alternatives
+    cols = ds.column_names
+    q_col = (
+        "question"
+        if "question" in cols
+        else ("instruction" if "instruction" in cols else "prompt")
+    )
+    a_col = (
+        "answer"
+        if "answer" in cols
+        else ("response" if "response" in cols else "output")
+    )
+    if q_col not in cols or a_col not in cols:
+        raise ValueError(
+            f"JSONL must have 'question'/'answer' or 'instruction'/'response' columns. Found: {cols}"
+        )
+    rows = [{"question": str(s[q_col]), "answer": str(s[a_col])} for s in ds]
+    # 90/10 train/test split
+    n = len(rows)
+    split_idx = max(1, int(n * 0.9))
+    return rows[:split_idx], rows[split_idx:]
+
+
+def _load_dataset(dataset_name: str):
+    """Load dataset: HF name (gsm8k, math_qa, ...) or JSONL path/URL."""
+    if _is_jsonl_source(dataset_name):
+        return _load_jsonl(dataset_name)
+
+    spec = DATASET_CONFIG.get(dataset_name.strip().lower())
+    if not spec:
+        spec = (dataset_name, None, "question", "answer")
+    hf_path, config, q_col, a_col = spec
+
+    def _load_split(split: str):
+        try:
+            return datasets.load_dataset(hf_path, config, split=split)
+        except Exception as e:
+            if "NonMatchingSplitsSizesError" in type(
+                e
+            ).__name__ or "NonMatchingSplits" in str(e):
+                # Cache/Hub metadata out of sync with parquet; bypass verification and use actual data
+                return datasets.load_dataset(
+                    hf_path,
+                    config,
+                    split=split,
+                    download_mode="force_redownload",
+                    ignore_verifications=True,
+                )
+            raise
+
+    train_ds = _load_split("train")
+    test_ds = _load_split("test")
+
+    def _norm(split):
+        return [{"question": str(s[q_col]), "answer": str(s[a_col])} for s in split]
+
+    return _norm(train_ds), _norm(test_ds)
+
+
 def tokenize_dataset(data, tokenizer: AutoTokenizer) -> TokenizedDataset:
     """
     Tokenizes the questions and answers in the dataset using the provided tokenizer.
 
-    data: dataset with "question" and "answer" fields
+    data: dataset with "question" and "answer" fields (list of dicts or HF Dataset)
     tokenizer: HuggingFace tokenizer
     """
-    X = [sample["question"] for sample in data]
-    y = [sample["answer"] for sample in data]
+    if hasattr(data, "__iter__") and not hasattr(data, "keys"):
+        # List of dicts from _load_dataset
+        X = [s["question"] for s in data]
+        y = [s["answer"] for s in data]
+    else:
+        X = [sample["question"] for sample in data]
+        y = [sample["answer"] for sample in data]
 
     tok = lambda texts: tokenizer(texts, return_tensors="np", add_special_tokens=False)[
         "input_ids"
@@ -354,10 +448,10 @@ def train():
 
     padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
 
-    # Load dataset
-    print("Loading GSM8K dataset...")
-    training_data = datasets.load_dataset("gsm8k", "main", split="train")
-    testing_data = datasets.load_dataset("gsm8k", "main", split="test")
+    # Load dataset (from config or default gsm8k)
+    dataset_name = yaml_config.get("training_config", {}).get("dataset", "gsm8k")
+    print(f"Loading dataset: {dataset_name}...")
+    training_data, testing_data = _load_dataset(dataset_name)
 
     training_data = tokenize_dataset(training_data, tokenizer)
     testing_data = tokenize_dataset(testing_data, tokenizer)
@@ -497,12 +591,12 @@ def train():
             postfix["val_loss"] = f"{float(last_val_loss):.4f}"
         bar.set_postfix(postfix, refresh=False)
 
-        # Disable validation by commenting out for demo
-        # Validation every eval_every steps
-        if (
+        # Validation every eval_every steps (and on last step)
+        ran_validation = (
             total_steps % training_config.eval_every == 0
             or total_steps + 1 == training_config.steps
-        ):
+        )
+        if ran_validation:
             start_time = time.time()
             last_val_loss = validate(
                 tt_model,
@@ -517,12 +611,18 @@ def train():
             )
             val_losses.append(last_val_loss)
             end_time = time.time()
-            print(f"Validation time: {end_time - start_time} seconds")
+            print(f"Validation at step {total_steps} ({end_time - start_time:.1f}s)")
 
         with open("output.txt", "a") as f:
-            f.write(
-                f"LR: {float(lr_now):.6f}, training_loss: {float(step_loss):.4f}, val_loss: {float(last_val_loss):.4f}, step: {total_steps}, epoch: 1\n"
-            )
+            # Only include val_loss when we actually ran validation
+            if ran_validation and last_val_loss is not None:
+                f.write(
+                    f"LR: {float(lr_now):.6f}, training_loss: {float(step_loss):.4f}, val_loss: {float(last_val_loss):.4f}, step: {total_steps}, epoch: 1\n"
+                )
+            else:
+                f.write(
+                    f"LR: {float(lr_now):.6f}, training_loss: {float(step_loss):.4f}, step: {total_steps}, epoch: 1\n"
+                )
         total_steps += 1
 
     print("Training completed!")

@@ -12,7 +12,7 @@ import os
 import subprocess
 import shutil
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from enum import Enum
@@ -58,6 +58,26 @@ PARTITION_DEVICE_MAPPING = {
         "mesh_shape": [8, 1],
         "description": "LoudBox Single Node (8x1)",
         "max_nodes": 1,
+    },
+    "bh_single": {
+        "mesh_shape": [32, 1],
+        "description": "BH BLX",
+        "max_nodes": 1,
+    },
+    "bh_pod_4x32_B45": {
+        "mesh_shape": [32, 1],
+        "description": "4 BH GLX",
+        "max_nodes": 4,
+    },
+    "bh_pod_4x32_B89": {
+        "mesh_shape": [32, 1],
+        "description": "4 BH GLX",
+        "max_nodes": 4,
+    },
+    "bh_sp_5x4x32_C1_C10": {
+        "mesh_shape": [32, 1],
+        "description": "5 x 4 BH GLX",
+        "max_nodes": 20,
     },
     "bh_lb_multi": {
         "mesh_shape": [8, 1],
@@ -214,10 +234,11 @@ class JobManager:
 
         Returns:
             List of partition info dictionaries with name, description, etc.
-            Duplicates are removed (keeps first occurrence).
+            Aggregates multiple sinfo lines per partition; has_free_nodes is True
+            if any node group is idle or mix.
         """
         partitions = []
-        seen_names = set()
+        partition_by_name: Dict[str, Dict] = {}
 
         try:
             result = subprocess.run(
@@ -234,31 +255,32 @@ class JobManager:
                     parts = line.split("|")
                     if len(parts) >= 4:
                         name = parts[0].rstrip("*")
-
-                        # Skip duplicates
-                        if name in seen_names:
-                            continue
-                        seen_names.add(name)
-
                         avail = parts[1]
                         nodes = parts[2]
-                        state = parts[3]
+                        state = (parts[3] or "").lower()
 
-                        partition_info = {
-                            "name": name,
-                            "available": avail == "up",
-                            "nodes": nodes,
-                            "state": state,
-                        }
-
-                        if name in PARTITION_DEVICE_MAPPING:
-                            partition_info.update(PARTITION_DEVICE_MAPPING[name])
+                        if name not in partition_by_name:
+                            partition_info = {
+                                "name": name,
+                                "available": avail == "up",
+                                "nodes": nodes,
+                                "state": state,
+                                "has_free_nodes": "idle" in state or "mix" in state,
+                            }
+                            if name in PARTITION_DEVICE_MAPPING:
+                                partition_info.update(PARTITION_DEVICE_MAPPING[name])
+                            else:
+                                partition_info["mesh_shape"] = [1, 1]
+                                partition_info[
+                                    "description"
+                                ] = f"{name} (unknown config)"
+                                partition_info["max_nodes"] = 1
+                            partition_by_name[name] = partition_info
                         else:
-                            partition_info["mesh_shape"] = [1, 1]
-                            partition_info["description"] = f"{name} (unknown config)"
-                            partition_info["max_nodes"] = 1
+                            if "idle" in state or "mix" in state:
+                                partition_by_name[name]["has_free_nodes"] = True
 
-                        partitions.append(partition_info)
+                partitions = list(partition_by_name.values())
 
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
             print(f"Warning: Could not query SLURM partitions: {e}")
@@ -271,6 +293,7 @@ class JobManager:
                         "available": True,
                         "nodes": "N/A",
                         "state": "unknown",
+                        "has_free_nodes": False,
                         **info,
                     }
                 )
@@ -297,8 +320,11 @@ class JobManager:
         Returns:
             Generated SLURM script content
         """
-        script_dir = Path(__file__).parent
-        script_path = script_dir / "gsm8k_finetune.py"
+        # Use script path in same base as output_dir (e.g. /data when jobs are under /data)
+        # so compute nodes can access it when /home may not be mounted
+        script_path = output_dir.parent.parent / "gsm8k_finetune.py"
+        if not script_path.exists():
+            script_path = Path(__file__).parent / "gsm8k_finetune.py"
 
         is_lb_partition = "lb" in partition.lower()
 
@@ -308,9 +334,10 @@ class JobManager:
         else:
             reset_command = "tt-smi -glx_reset"
 
-        # For non-lb partitions, add nodelist directive if a node is selected
+        # Nodelist: omit by default so SLURM can schedule on any free node (job queues).
+        # Set TT_USE_NODELIST=1 to pin to GALAXY_NODES for non-lb partitions.
         nodelist_directive = ""
-        if not is_lb_partition:
+        if not is_lb_partition and os.environ.get("TT_USE_NODELIST") == "1":
             nodelist_directive = f"#SBATCH --nodelist={','.join(GALAXY_NODES)}"
 
         # Paths to job-specific config files
@@ -377,6 +404,9 @@ class JobManager:
         # Add model_config if specified
         if config.get("model_config"):
             training_config["model_config"] = config["model_config"]
+        # Add dataset (HF name or URL) for training script
+        if config.get("dataset"):
+            training_config["dataset"] = config["dataset"]
 
         scheduler_config = {
             "warmup_steps": config.get("warmup_steps", 20),
@@ -502,7 +532,9 @@ class JobManager:
                 partition=partition,
                 nodes=nodes,
                 status=JobStatus.PENDING.value,
-                submit_time=datetime.now().isoformat(),
+                submit_time=datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 config=config,
                 output_dir=str(job_dir),
             )
@@ -551,11 +583,20 @@ class JobManager:
                 else:
                     return JobStatus.UNKNOWN
             else:
+                # Job not in squeue - check sacct. Use -S to look back 30 days
+                # (default sacct window may exclude older completed/cancelled jobs).
+                # Use -X to get job allocation only (not individual steps).
+                start_str = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(
+                    "%Y-%m-%d"
+                )
                 result = subprocess.run(
                     [
                         "sacct",
                         "-j",
                         job_id,
+                        "-S",
+                        start_str,
+                        "-X",  # job allocation only
                         "--noheader",
                         "--format=State",
                         "--parsable2",
@@ -567,18 +608,24 @@ class JobManager:
 
                 if result.returncode == 0 and result.stdout.strip():
                     status_str = result.stdout.strip().split("\n")[0].upper()
-                    if "COMPLETED" in status_str:
+                    if "COMPLETED" in status_str or status_str == "CD":
                         return JobStatus.COMPLETED
-                    elif "FAILED" in status_str:
+                    elif (
+                        "FAILED" in status_str
+                        or "TIMEOUT" in status_str
+                        or "OUT_OF_MEMORY" in status_str
+                        or "NODE_FAIL" in status_str
+                        or status_str == "F"
+                    ):
                         return JobStatus.FAILED
-                    elif "CANCELLED" in status_str:
+                    elif "CANCELLED" in status_str or status_str == "CA":
                         return JobStatus.CANCELLED
-                    elif "RUNNING" in status_str:
+                    elif "RUNNING" in status_str or status_str == "R":
                         return JobStatus.RUNNING
-                    elif "PENDING" in status_str:
+                    elif "PENDING" in status_str or status_str == "PD":
                         return JobStatus.PENDING
 
-                return JobStatus.COMPLETED
+                return JobStatus.UNKNOWN
 
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return JobStatus.UNKNOWN
@@ -603,7 +650,9 @@ class JobManager:
             if result.returncode == 0:
                 if job_id in self._jobs_cache:
                     self._jobs_cache[job_id].status = JobStatus.CANCELLED.value
-                    self._jobs_cache[job_id].end_time = datetime.now().isoformat()
+                    self._jobs_cache[job_id].end_time = (
+                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    )
                     self._save_job_status(self._jobs_cache[job_id])
                 return True, f"Job {job_id} cancelled successfully"
             else:
@@ -631,14 +680,18 @@ class JobManager:
                 job_info.status = new_status.value
 
                 if new_status == JobStatus.RUNNING and job_info.start_time is None:
-                    job_info.start_time = datetime.now().isoformat()
+                    job_info.start_time = (
+                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    )
 
                 if new_status in [
                     JobStatus.COMPLETED,
                     JobStatus.FAILED,
                     JobStatus.CANCELLED,
                 ]:
-                    job_info.end_time = datetime.now().isoformat()
+                    job_info.end_time = (
+                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    )
 
                 self._save_job_status(job_info)
 
