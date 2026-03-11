@@ -72,8 +72,7 @@ def ds_mul_ttnn(
     TTNN implementation for the mul fused op with SILU activation.
 
     This performs: silu(w1_out) * w3_out
-    - For prefill: Uses fused activation in ttnn.mul
-    - For decode: Applies MLP._silu_workaround before calling the wrapper
+    - Uses fused activation in ttnn.mul
 
     Args:
         w1_out: Input tensor that will have SILU applied
@@ -95,13 +94,9 @@ def ds_mul_ttnn(
             mul_cfg.pop("input_tensor_a_activations", None)
             # Apply SILU before mul for DRAM output
             if mode == "decode":
-                w1_out = MLP._silu_workaround(w1_out)
+                w1_out = ttnn.silu(w1_out)
             else:  # prefill
                 w1_out = ttnn.silu(w1_out, memory_config=output_mem_config)
-    else:
-        # For non-DRAM output in decode mode, apply the workaround before calling the wrapper
-        if mode == "decode":
-            w1_out = MLP._silu_workaround(w1_out)
 
     # Call the MLP wrapper
     return MLP._fwd_mul(w1_out, w3_out, mul_cfg)
