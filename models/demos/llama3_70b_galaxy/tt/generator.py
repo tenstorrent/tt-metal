@@ -474,6 +474,9 @@ class Generator(WarmupForwardMixin):
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
 
+        # Enable trace mode to skip input deallocation during capture
+        self.model.set_enable_trace(True)
+
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)

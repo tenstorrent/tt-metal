@@ -198,6 +198,9 @@ class TtLlamaAttention(LightweightModule):
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
+        # OLMo: Save unpadded WO for prefill before padding for decode
+        pt_wo_unpadded = pt_wo if self.is_olmo else None
+
         # OLMo decode fix: Pad WO input dimension from 5120 to 8192 to match padded Q heads
         # Original: 5120 (40 heads * 128), Per device: 640
         # Padded: 8192 (1024 per device * 8 devices) to match 8 padded Q heads
@@ -243,6 +246,24 @@ class TtLlamaAttention(LightweightModule):
             ),
             cache_file_name=cache_name("wo_width_sharded_2d_dram"),
         )
+        # OLMo: Create unpadded WO for prefill (decode uses padded WO for fused RoPE compatibility)
+        if pt_wo_unpadded is not None:
+            self.wo_interleaved_unpadded = ttnn.as_tensor(
+                pt_wo_unpadded,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                    mesh_shape=configuration.cluster_shape,
+                ),
+                cache_file_name=cache_name("wo_width_sharded_2d_dram_unpadded"),
+            )
+            print(f"OLMo: Created unpadded WO for prefill with K={pt_wo_unpadded.shape[-2]}")
+        else:
+            self.wo_interleaved_unpadded = None
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -1108,10 +1129,12 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        # OLMo: Use unpadded WO for prefill (padded WO is for decode with padded Q heads)
+        wo_weight = self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
         if seq_len < 4096 or batch_size > 1:
             output_11SH = ttnn.linear(
                 attn_output_11SH,
-                self.wo_interleaved,
+                wo_weight,
                 compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1120,7 +1143,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             output_11SH = ttnn.experimental.minimal_matmul(
                 input_tensor=attn_output_11SH,
-                weight_tensor=self.wo_interleaved,
+                weight_tensor=wo_weight,
                 config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
                 compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

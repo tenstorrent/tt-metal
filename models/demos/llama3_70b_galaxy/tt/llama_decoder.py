@@ -48,6 +48,7 @@ class TtTransformerBlock(LightweightModule):
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         self.unfuse_res_add = args.unfuse_res_add
+        self.enable_trace = False  # Set to True during trace capture to skip input deallocation
 
         self.attention = TtLlamaAttention(
             mesh_device=mesh_device,
@@ -205,7 +206,8 @@ class TtTransformerBlock(LightweightModule):
 
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
-            x.deallocate(True)
+            if not self.enable_trace:  # Skip deallocation during trace capture
+                x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
         if mode == "decode":
             if self.unfuse_res_add:

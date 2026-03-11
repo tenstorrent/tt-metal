@@ -747,6 +747,15 @@ class TtTransformer(LightweightModule):
             ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
         return lm_head_output
 
+    def set_enable_trace(self, enable: bool):
+        """Enable or disable trace mode on all layers.
+
+        When enabled, layers skip deallocating input tensors during prefill,
+        which is required for trace capture to work correctly.
+        """
+        for layer in self.layers:
+            layer.enable_trace = enable
+
     def __del__(self):
         self.tt_ccl.close()
 

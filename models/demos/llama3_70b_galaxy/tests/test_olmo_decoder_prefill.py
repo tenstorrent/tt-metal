@@ -305,7 +305,6 @@ def test_olmo_decoder_prefill(
     # Calculate metrics
     total_time = end_time - start_time
     avg_time_per_iter = total_time / num_iterations
-    tokens_per_second = seq_len / avg_time_per_iter
 
     logger.info(f"\n{'='*60}")
     logger.info(f"OLMo Decoder Prefill Performance Results")
@@ -313,8 +312,7 @@ def test_olmo_decoder_prefill(
     logger.info(f"  Sequence Length: {seq_len}")
     logger.info(f"  Number of Layers: {num_layers}")
     logger.info(f"  Batch Size: {batch_size}")
-    logger.info(f"  Average Latency: {avg_time_per_iter*1000:.2f} ms")
-    logger.info(f"  Tokens/Second: {tokens_per_second:.2f}")
+    logger.info(f"  Average TTFT: {avg_time_per_iter*1000:.2f} ms (includes tensor prep overhead)")
     logger.info(f"{'='*60}\n")
 
     # Basic sanity check
@@ -328,6 +326,219 @@ def test_olmo_decoder_prefill(
     tt_ccl.close()
 
     logger.info("OLMo Decoder Prefill Performance Test PASSED!")
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],  # Galaxy TG mesh shape
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_seq_len", [128, 4096], ids=["128", "4k"])
+@pytest.mark.parametrize("trace_num_layers", [1, 64], ids=["1layer", "64layers"])
+def test_olmo_prefill_trace(mesh_device, device_params, reset_seeds, ensure_gc, trace_seq_len, trace_num_layers):
+    """Test that prefill trace capture and execution works correctly."""
+    seq_len = trace_seq_len
+    num_layers = trace_num_layers
+    batch_size = 1
+    dtype = ttnn.bfloat8_b
+
+    logger.info(f"Testing OLMo prefill tracing with seq_len={seq_len}, layers={num_layers}")
+
+    # Initialize model args
+    model_args = TtOlmoModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=seq_len,
+    )
+    model_args.n_layers = num_layers
+    model_args.use_prefetcher = False
+
+    # Create prefetcher and CCL
+    mode = "prefill"
+    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=num_layers, mode=mode)
+    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+    tt_ccl = TT_CCL(
+        mesh_device,
+        model_args,
+        prefetcher_setup.worker_sub_device_id,
+        mode=mode,
+        is_qwen=False,
+        is_olmo=True,
+    )
+    state_dict = model_args.load_state_dict()
+
+    # Get transformation matrices for RoPE
+    transformation_mat = ttnn.from_torch(
+        get_rot_transformation_mat(dhead=model_args.head_dim),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    transformation_mats = {"decode": transformation_mat, "prefill": transformation_mat}
+
+    # Create all layers
+    logger.info(f"Loading {num_layers} decoder layers...")
+    layers = []
+    for i in range(num_layers):
+        layer = TtTransformerBlock(
+            model_args,
+            mesh_device,
+            dtype,
+            state_dict,
+            layer_num=i,
+            n_layers=num_layers,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            transformation_mats=transformation_mats,
+            paged_attention_config=None,
+            use_paged_kv_cache=False,
+            prefetcher_setup=prefetcher_setup,
+            tt_ccl=tt_ccl,
+        )
+        layers.append(layer)
+        if (i + 1) % 16 == 0:
+            logger.info(f"  Loaded {i + 1}/{num_layers} layers")
+    logger.info("Finished loading decoder layers.")
+
+    # Create rotation matrices
+    ttnn_cos, ttnn_sin, _ = precompute_freqs_yarn(
+        dim=model_args.head_dim,
+        end=seq_len * 2,
+        theta=model_args.rope_theta,
+        scaling_factor=model_args.rope_scaling_factor,
+        original_max_position_embeddings=model_args.original_max_position_embeddings,
+        beta_fast=model_args.yarn_beta_fast,
+        beta_slow=model_args.yarn_beta_slow,
+        attention_factor=model_args.yarn_attention_factor,
+    )
+    position_ids = torch.arange(seq_len)
+    cos_gathered, sin_gathered = gather_cos_sin(position_ids, ttnn_cos, ttnn_sin)
+    rot_mats = [
+        ttnn.from_torch(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+        ttnn.from_torch(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+    ]
+
+    # Create input tensor
+    pt_prefill_input = torch.randn(1, seq_len, model_args.dim) * 0.02
+
+    # Test 1: Regular forward (no trace)
+    logger.info("Test 1: Regular forward without trace...")
+    tt_input = model_args.prepare_residual_tensor_prefill(pt_prefill_input)
+    x, h = tt_input, None
+    for layer in layers:
+        x, h = layer(x, h, current_pos=None, rot_mats=rot_mats, user_id=0, mode=mode)
+    ttnn.synchronize_device(mesh_device)
+    out_torch_1 = ttnn.to_torch(
+        x, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
+    )
+    x.deallocate(True)
+    logger.info(f"  Output shape: {out_torch_1.shape}, max: {out_torch_1.abs().max():.4f}")
+
+    # Test 2: Enable trace on all layers
+    logger.info("Test 2: Enabling trace mode on all layers...")
+    for layer in layers:
+        layer.enable_trace = True
+
+    # Compile run
+    logger.info("Test 3: Compile run for trace...")
+    tt_input = model_args.prepare_residual_tensor_prefill(pt_prefill_input)
+    x, h = tt_input, None
+    for layer in layers:
+        x, h = layer(x, h, current_pos=None, rot_mats=rot_mats, user_id=0, mode=mode)
+    ttnn.synchronize_device(mesh_device)
+    x.deallocate(True)
+    logger.info("  Compile run done")
+
+    # Trace capture
+    logger.info("Test 4: Capturing trace...")
+    tt_input_trace = model_args.prepare_residual_tensor_prefill(pt_prefill_input)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    x, h = tt_input_trace, None
+    for layer in layers:
+        x, h = layer(x, h, current_pos=None, rot_mats=rot_mats, user_id=0, mode=mode)
+    out_trace = x
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    logger.info("  Trace captured!")
+
+    # Test 5: Measure non-trace performance
+    logger.info("Test 5: Measure non-trace performance...")
+    num_perf_iters = 3
+    for layer in layers:
+        layer.enable_trace = False  # Disable trace mode
+    ttnn.synchronize_device(mesh_device)
+    start_time = time.perf_counter()
+    for _ in range(num_perf_iters):
+        tt_input = model_args.prepare_residual_tensor_prefill(pt_prefill_input)
+        x, h = tt_input, None
+        for layer in layers:
+            x, h = layer(x, h, current_pos=None, rot_mats=rot_mats, user_id=0, mode=mode)
+        ttnn.synchronize_device(mesh_device)
+    end_time = time.perf_counter()
+    non_trace_ttft = (end_time - start_time) / num_perf_iters * 1000
+    logger.info(f"  Non-trace TTFT: {non_trace_ttft:.2f} ms")
+
+    # Test 6: Measure trace performance
+    logger.info("Test 6: Measure trace performance...")
+    ttnn.synchronize_device(mesh_device)
+    start_time = time.perf_counter()
+    for _ in range(num_perf_iters):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    end_time = time.perf_counter()
+    trace_ttft = (end_time - start_time) / num_perf_iters * 1000
+    logger.info(f"  Trace TTFT: {trace_ttft:.2f} ms")
+
+    # Performance summary
+    speedup = non_trace_ttft / trace_ttft if trace_ttft > 0 else 0
+    logger.info(f"\n{'='*60}")
+    logger.info(f"OLMo Prefill Performance ({num_layers} layers, {seq_len} seq_len)")
+    logger.info(f"  Non-trace TTFT: {non_trace_ttft:.2f} ms")
+    logger.info(f"  Trace TTFT:     {trace_ttft:.2f} ms")
+    logger.info(f"  Speedup:        {speedup:.2f}x")
+    logger.info(f"{'='*60}\n")
+
+    # Test 7: Verify trace output
+    logger.info("Test 7: Verify trace output...")
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    out_torch_2 = ttnn.to_torch(
+        out_trace,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
+    logger.info(f"  Output shape: {out_torch_2.shape}, max: {out_torch_2.abs().max():.4f}")
+
+    # Verify outputs are reasonable
+    assert not torch.isnan(out_torch_1).any(), "Regular output contains NaN"
+    assert not torch.isinf(out_torch_1).any(), "Regular output contains Inf"
+    assert not torch.isnan(out_torch_2).any(), "Trace output contains NaN"
+    assert not torch.isinf(out_torch_2).any(), "Trace output contains Inf"
+
+    # Outputs 1 and 2 should be the same (same input)
+    assert torch.allclose(out_torch_1, out_torch_2, rtol=0.01, atol=0.01), "Trace output differs from regular output"
+    logger.info("  Trace output matches regular output!")
+
+    # Cleanup
+    ttnn.release_trace(mesh_device, trace_id)
+    tt_ccl.close()
+
+    logger.info("OLMo Prefill Trace Test PASSED!")
 
 
 if __name__ == "__main__":

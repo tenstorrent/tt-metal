@@ -1119,7 +1119,8 @@ class TT_CCL:
         persistent_buffers = (
             self.persistent_buffers[B * seqlen].get(buffer_key, None) if B * seqlen in self.persistent_buffers else None
         )
-        persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
+        # reduce_scatter_minimal_async expects only output buffers, not intermediate
+        persistent_buffers_list = [persistent_buffers["output"]] if persistent_buffers else None
         num_links = 4
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:

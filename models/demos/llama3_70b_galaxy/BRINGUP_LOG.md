@@ -5,22 +5,28 @@
 ### Summary
 | Component | Status | Performance |
 |-----------|--------|-------------|
-| **Prefill (64 layers)** | ✅ DONE | 5,632 tok/s @ 4k seq_len |
+| **Prefill (64 layers)** | ✅ DONE | TTFT: 400 ms @ 4k (traced), 51 ms @ 128 (traced) |
 | **Decode (64 layers)** | ✅ DONE | 10 iterations pass, hybrid CCL |
 | **Device-side CCL** | 🟡 PARTIAL | 3/5 operations on device |
 | **End-to-End Demo** | 🟡 CREATED | Needs full model testing |
-| **Tracing** | ❌ TODO | Not yet enabled |
+| **Tracing (Prefill)** | ✅ DONE | Added enable_trace flag to skip input deallocation |
 
 ---
 
 ## What's DONE ✅
 
 ### Prefill Mode (Complete)
-- [x] 64-layer prefill working at 5,632 tok/s (4k seq_len, without trace)
+- [x] 64-layer prefill working with tracing enabled
 - [x] YaRN RoPE integrated (PCC=0.99999)
 - [x] Sliding window attention (4096 window, 3 sliding + 1 full pattern)
 - [x] Ring distributed SDPA with sliding_window_size parameter
 - [x] All memory configs tuned for OLMo dimensions
+
+**Prefill Performance (64 layers, batch=1)**
+| Seq Length | Non-trace | Trace | Speedup |
+|------------|-----------|-------|---------|
+| 128 | 323 ms | **51 ms** | **6.38x** |
+| 4096 | 707 ms | **400 ms** | **1.77x** |
 
 ### Decode Mode (Complete - Hybrid CCL)
 - [x] 10 decode iterations pass with reasonable output (mean=0.0022, std=0.58)
@@ -77,7 +83,10 @@ BINARY_MUL buffer (OLMo)         # 3840 width (padded intermediate)
 - [ ] Update test files to use proper assertions
 
 ### Performance Optimization
-- [ ] Enable tracing for prefill
+- [x] Enable tracing for prefill
+  - **Fixed**: Added `enable_trace` flag to skip input deallocation during trace capture
+  - **Fixed**: CCL ring_reduce_scatter buffer fix (use only output buffer, not intermediate)
+  - All 4 trace tests pass (1/64 layers × 128/4k seq_len)
 - [ ] Enable tracing for decode
 - [ ] Measure decode tok/s
 
@@ -87,8 +96,11 @@ BINARY_MUL buffer (OLMo)         # 3840 width (padded intermediate)
 
 ```bash
 # Prefill test (64 layers, 4k seq)
-export HF_MODEL=~/models/models--allenai--Olmo-3.1-32B-Think && export LINE_RS=1
+export HF_MODEL=~/models/models--allenai--Olmo-3.1-32B-Think
 pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py -v -x -k "64layers and 4k"
+
+# Prefill trace test (64 layers, 4k seq)
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py::test_olmo_prefill_trace -v -k "64layers and 4k"
 
 # Decode test (10 iterations)
 pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decode.py::test_olmo_decoder_decode -v -x
@@ -699,7 +711,7 @@ export HF_MODEL=~/models/models--allenai--Olmo-3.1-32B-Think
 | 1.5 | GQA Attention (no sliding) | > 0.95 | **DONE** (PCC=0.9626) |
 | 1.6 | GQA Attention (with sliding) | > 0.95 | **DONE** (kernel + prefill integrated) |
 | 1.7 | Decoder Block (1 layer) | > 0.95 | **DONE** (PCC=0.9998) |
-| 1.8 | Full Model Prefill (64 layers) | > 0.95 | **DONE** (5,632 tok/s) |
+| 1.8 | Full Model Prefill (64 layers) | > 0.95 | **DONE** (TTFT: 716 ms @ 4k) |
 
 ### Phase 2: DECODE 🚧 BLOCKED
 | Step | Component | PCC Target | Status |
@@ -846,6 +858,84 @@ OLMo has 40 Q heads → 5 local Q heads per device (40/8=5), but the fused RoPE 
 **Test Command**:
 ```bash
 pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decode.py::test_olmo_decoder_decode -v -x
+```
+
+---
+
+### 2026-03-11 (Prefill WO Weight Fix)
+**Status**: Prefill Test FIXED
+**PCC**: N/A (test passing, no crashes)
+
+**Problem**:
+- Prefill test crashed with `minimal_matmul inner dimensions must match, got K=640 and K_w=1024`
+- Root cause: WO weight was padded for decode mode (5→8 heads) but prefill uses unpadded SDPA output
+
+**Fix Applied** (in `llama_attention.py`):
+1. Save original unpadded `pt_wo` before padding
+2. Create `wo_interleaved_unpadded` for OLMo prefill
+3. Use unpadded WO weight in prefill forward path
+
+**Key Changes**:
+```python
+# Before WO padding, save unpadded version
+pt_wo_unpadded = pt_wo if self.is_olmo else None
+
+# Create unpadded WO for prefill
+if pt_wo_unpadded is not None:
+    self.wo_interleaved_unpadded = ttnn.as_tensor(pt_wo_unpadded, ...)
+
+# In forward_prefill, use unpadded WO
+wo_weight = self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
+```
+
+**Test Result**:
+```
+PASSED models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py::test_olmo_decoder_prefill[64layers-4k]
+```
+Note: Test measures ~1650ms avg latency (includes host-device transfer overhead in loop). Pure forward TTFT remains ~716ms.
+
+**Test Command**:
+```bash
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py -v -x -k "64layers and 4k"
+```
+
+---
+
+### 2026-03-11 (Prefill Tracing Enabled)
+**Status**: Prefill Tracing WORKING
+**PCC**: N/A (trace output matches regular output)
+
+**Problem**:
+- Prefill tracing was blocked because `x.deallocate(True)` in layer forward deallocated input buffers
+- Trace capture requires persistent input buffers for replay
+
+**Fix Applied**:
+1. Added `enable_trace` flag to `TtTransformerBlock` in `llama_decoder.py`
+2. Skip `x.deallocate(True)` when `enable_trace=True` in prefill mode
+3. Added `set_enable_trace()` method to `TtTransformer` in `llama_model.py`
+4. Modified `_capture_trace_prefill` in `generator.py` to enable trace mode before capture
+
+**Key Changes** (`llama_decoder.py`):
+```python
+# In __init__:
+self.enable_trace = False
+
+# In forward, prefill mode:
+if mode == "prefill":
+    h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
+    if not self.enable_trace:  # Skip deallocation during trace capture
+        x.deallocate(True)
+```
+
+**Test Result**:
+```
+PASSED models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py::test_olmo_prefill_trace
+  - Trace output matches regular output!
+```
+
+**Test Command**:
+```bash
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py::test_olmo_prefill_trace -v -x
 ```
 
 ---
