@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 
 import torch
-import ttnn
 from transformers import AutoTokenizer
 
+import ttnn
 from models.demos.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up
 from models.demos.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
 from models.demos.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
@@ -86,13 +86,21 @@ def main() -> int:
     ap.add_argument("--kv-cache-dtype", default="bf16", help="bf16 (correctness) or bf8 (memory/perf).")
     ap.add_argument("--block-size", type=int, default=64)
     ap.add_argument("--min-cache-tokens", type=int, default=128, help="Allocate at least this many tokens in KV cache.")
+    ap.add_argument(
+        "--phase",
+        choices=["prefill", "decode", "both"],
+        default="both",
+        help="Which phase to profile: prefill (real flash_mla_prefill), decode, or both.",
+    )
     args = ap.parse_args()
 
     model_id = str(args.model_id)
     snap = Path(resolve_best_effort_snapshot_dir(model_id))
     missing = find_missing_shards(snap)
     if missing:
-        raise SystemExit(f"Snapshot missing {len(missing)} shards; run ensure_glm47_weights.sh first (example: {missing[0]})")
+        raise SystemExit(
+            f"Snapshot missing {len(missing)} shards; run ensure_glm47_weights.sh first (example: {missing[0]})"
+        )
 
     tok = AutoTokenizer.from_pretrained(snap, local_files_only=True, use_fast=True)
     enc = tok(str(args.prompt), return_tensors="pt", add_special_tokens=True)
@@ -128,7 +136,7 @@ def main() -> int:
     _set_default_fabric_config(mesh_cols)
     open_kwargs = {
         "mesh_shape": ttnn.MeshShape(1, mesh_cols),
-        "dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
+        "dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
     }
     if device_ids is not None:
         open_kwargs["physical_device_ids"] = device_ids
@@ -154,21 +162,41 @@ def main() -> int:
         ]
         page_table = _alloc_contiguous_page_table(batch=1, blocks_per_seq=blocks_per_seq)
 
-        # Prefill KV caches via iterative decode for simplicity.
-        t0 = time.perf_counter()
-        logits = None
-        for t in range(prompt_len):
-            tok_in = prompt_ids[:, t : t + 1].contiguous()
-            pos = torch.tensor([t], dtype=torch.int32)
-            logits = runner.decode(tokens=tok_in, start_pos=pos, page_table=page_table, kv_cache=kv_cache)
-        assert logits is not None
-        prefill_s = time.perf_counter() - t0
+        phase = str(args.phase)
 
+        # -- Prefill phase --
+        if phase in ("prefill", "both"):
+            t0 = time.perf_counter()
+            logits = runner.prefill(
+                tokens=prompt_ids,
+                prompt_lens=[prompt_len],
+                page_table=page_table,
+                kv_cache=kv_cache,
+                seq_pad_multiple=block_size,
+            )
+            prefill_s = time.perf_counter() - t0
+            print(f"\n=== Prefill (real flash_mla_prefill) ===", flush=True)
+            print(f"prompt_len={prompt_len} prefill_s={prefill_s:.3f}", flush=True)
+            if phase == "prefill":
+                for t in kv_cache:
+                    ttnn.deallocate(t)
+                ttnn.close_mesh_device(mesh_device)
+                return 0
+        else:
+            t0 = time.perf_counter()
+            logits = None
+            for t in range(prompt_len):
+                tok_in = prompt_ids[:, t : t + 1].contiguous()
+                pos = torch.tensor([t], dtype=torch.int32)
+                logits = runner.decode(tokens=tok_in, start_pos=pos, page_table=page_table, kv_cache=kv_cache)
+            assert logits is not None
+            prefill_s = time.perf_counter() - t0
+
+        # -- Decode phase --
         generated: list[int] = []
         token_in = int(torch.argmax(logits.reshape(-1)).item())
         generated.append(token_in)
 
-        # Decode loop (host argmax).
         t_decode0 = time.perf_counter()
         for step in range(max_new_tokens - 1):
             pos = torch.tensor([prompt_len + step], dtype=torch.int32)
@@ -183,12 +211,16 @@ def main() -> int:
         print("")
         print("=== TT greedy decode (direct) ===", flush=True)
         print(
-            f"mesh_shape=(1,{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} kv_cache_dtype={args.kv_cache_dtype}",
+            f"mesh_shape=(1,{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} "
+            f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase}",
             flush=True,
         )
         print(f"prompt_len={prompt_len} new_tokens={len(generated)} blocks_per_seq={blocks_per_seq}", flush=True)
         if decode_s > 0:
-            print(f"prefill_s={prefill_s:.3f} decode_tok_s={decode_s/ max(1,len(generated)-1):.4f} tok_s={(len(generated)-1)/decode_s:.2f}", flush=True)
+            print(
+                f"prefill_s={prefill_s:.3f} decode_tok_s={decode_s/ max(1,len(generated)-1):.4f} tok_s={(len(generated)-1)/decode_s:.2f}",
+                flush=True,
+            )
         print("")
         print(text, flush=True)
 

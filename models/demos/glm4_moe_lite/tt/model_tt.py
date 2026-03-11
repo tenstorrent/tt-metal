@@ -12,12 +12,14 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import torch
-
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+
+_PROFILER_FLUSH_INTERVAL = 10
+_PROFILER_ENABLED = os.environ.get("TT_METAL_DEVICE_PROFILER", "") == "1"
 from models.demos.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_and_positions_tt,
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
@@ -29,20 +31,16 @@ from models.demos.glm4_moe_lite.tt.layer_weights import (
     _env_dense_dtype,
     _env_tp_enabled,
     _linear_weight_tt,
-    _tp_axis_and_size,
-    _tp_mesh_mapper,
     convert_decoder_layer_weights,
 )
-from models.demos.glm4_moe_lite.tt.tt_embedding import (
-    convert_embedding_weight_to_tt,
-    run_tt_embedding,
-)
+from models.demos.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
 from models.demos.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
 
 @dataclass
 class _DecodeTraceSamplingState:
     """Per-bucket state for batch-bucketed decode traces."""
+
     trace_id: Any | None = None
     batch: int = 0
     page_table_width: int = 0
@@ -57,7 +55,7 @@ class _DecodeTraceSamplingState:
     rope_sharded_mem_config: Any | None = None
     rot_idxs_padded_batch: int = 0
     # Batch-expansion serial cache update: two position tensors with alternating -1 masks
-    positions_main_tt: ttnn.Tensor | None = None   # [B] int32 - draft lanes = -1
+    positions_main_tt: ttnn.Tensor | None = None  # [B] int32 - draft lanes = -1
     positions_draft_tt: ttnn.Tensor | None = None  # [B] int32 - main lanes = -1
     # Persistent outputs
     logits_tt: ttnn.Tensor | None = None
@@ -66,12 +64,12 @@ class _DecodeTraceSamplingState:
     # MTP: hidden state preserved from before final_norm (persistent buffer)
     mtp_hidden_tt: ttnn.Tensor | None = None
     # MTP trace state (Phase B2)
-    mtp_tokens_tt: ttnn.Tensor | None = None       # [B,1] uint32 - main model output token
-    mtp_positions_tt: ttnn.Tensor | None = None     # [B] int32 - MTP positions (start_pos+1)
-    mtp_rot_idxs_tt: ttnn.Tensor | None = None      # [1, padded_B] uint32
+    mtp_tokens_tt: ttnn.Tensor | None = None  # [B,1] uint32 - main model output token
+    mtp_positions_tt: ttnn.Tensor | None = None  # [B] int32 - MTP positions (start_pos+1)
+    mtp_rot_idxs_tt: ttnn.Tensor | None = None  # [1, padded_B] uint32
     mtp_rot_idxs_padded_batch: int = 0
-    mtp_cos_batch_tt: ttnn.Tensor | None = None     # [1,B,1,rope_dim] bf16 SHARDED
-    mtp_sin_batch_tt: ttnn.Tensor | None = None     # [1,B,1,rope_dim] bf16 SHARDED
+    mtp_cos_batch_tt: ttnn.Tensor | None = None  # [1,B,1,rope_dim] bf16 SHARDED
+    mtp_sin_batch_tt: ttnn.Tensor | None = None  # [1,B,1,rope_dim] bf16 SHARDED
     mtp_trans_matrix_tt: ttnn.Tensor | None = None
     mtp_rope_sharded_mem_config: Any | None = None
     mtp_trace_id: int | None = None
@@ -392,7 +390,9 @@ class Glm4MoeLiteDenseOnlyTT:
             mtp_shared_head_w = _linear_weight_tt(
                 device=device,
                 torch_weight_out_in=mtp_state["model.layers.47.shared_head.head.weight"],
-                cache_file=mtp_cache / f"shared_head_w_{lm_head_variant}" if lm_head_variant else mtp_cache / "shared_head_w",
+                cache_file=mtp_cache / f"shared_head_w_{lm_head_variant}"
+                if lm_head_variant
+                else mtp_cache / "shared_head_w",
                 dtype=dense_dtype,
                 mesh_mapper=lm_head_mapper,
             )
@@ -438,8 +438,6 @@ class Glm4MoeLiteDenseOnlyTT:
             mtp_shared_head_w=mtp_shared_head_w,
             mtp_decoder_w=mtp_decoder_w,
         )
-
-
 
     def _ensure_layer_weights(self, layer_idx: int) -> Any:
         layer_idx = int(layer_idx)
@@ -489,11 +487,7 @@ class Glm4MoeLiteDenseOnlyTT:
         total_s = float(stages.get("total_s", 0.0))
         agg_tps = (tokens / total_s) if total_s > 0 else 0.0
 
-        top = [
-            (k, float(v))
-            for k, v in stages.items()
-            if k != "total_s" and float(v) > 0.0
-        ]
+        top = [(k, float(v)) for k, v in stages.items() if k != "total_s" and float(v) > 0.0]
         top.sort(key=lambda item: item[1], reverse=True)
         top = top[:8]
         top_str = ", ".join(f"{k}={1000.0 * v / tokens:.3f}ms/tok" for k, v in top)
@@ -600,9 +594,7 @@ class Glm4MoeLiteDenseOnlyTT:
             )
         except Exception as e:
             if preserve_trace and any(s.trace_id is not None for s in self._decode_trace_states.values()):
-                logger.warning(
-                    "Prefill failed with preserved trace; releasing trace and retrying: {}", e
-                )
+                logger.warning("Prefill failed with preserved trace; releasing trace and retrying: {}", e)
                 self._release_decode_trace()
                 return self._prefill_compute_inner(
                     tokens=tokens,
@@ -690,9 +682,8 @@ class Glm4MoeLiteDenseOnlyTT:
             # accidentally deallocate the cached base RoPE tensor. Avoid slicing when we want the
             # full table.
             rope_slices_owned = True
-            if (
-                int(padded_len) == int(self.rope["cos_matrix"].shape[2])
-                and int(rope_dim) == int(self.rope["cos_matrix"].shape[3])
+            if int(padded_len) == int(self.rope["cos_matrix"].shape[2]) and int(rope_dim) == int(
+                self.rope["cos_matrix"].shape[3]
             ):
                 cos_matrix = self.rope["cos_matrix"]
                 sin_matrix = self.rope["sin_matrix"]
@@ -736,6 +727,8 @@ class Glm4MoeLiteDenseOnlyTT:
                         prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
                 ttnn.deallocate(x, force=False)
                 x = x_next
+                if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
+                    ttnn.ReadDeviceProfiler(self.device)
 
             # Logits for the last *real* prompt token only.
             x_last = ttnn.slice(x, [0, 0, prompt_len - 1, 0], [1, 1, prompt_len, hidden])
@@ -836,7 +829,9 @@ class Glm4MoeLiteDenseOnlyTT:
         profile_token_count = sum(int_prompt_lens)
         logger.info(
             "Batched prefill: B={}, S_max={}, prompt_lens={}",
-            batch, s_max, int_prompt_lens,
+            batch,
+            s_max,
+            int_prompt_lens,
         )
 
         # Build concatenated token tensor [1, B*S_max] with per-request padding.
@@ -859,9 +854,8 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # Slice RoPE tables to S_max.
         rope_slices_owned = True
-        if (
-            int(s_max) == int(self.rope["cos_matrix"].shape[2])
-            and int(rope_dim) == int(self.rope["cos_matrix"].shape[3])
+        if int(s_max) == int(self.rope["cos_matrix"].shape[2]) and int(rope_dim) == int(
+            self.rope["cos_matrix"].shape[3]
         ):
             cos_matrix = self.rope["cos_matrix"]
             sin_matrix = self.rope["sin_matrix"]
@@ -907,6 +901,8 @@ class Glm4MoeLiteDenseOnlyTT:
                     prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
             ttnn.deallocate(x, force=False)
             x = x_next
+            if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
+                ttnn.ReadDeviceProfiler(self.device)
 
         # Extract per-request logits from the batched output [1,1,B*S_max,hidden].
         # For each request i, the last real token is at offset i*S_max + prompt_lens[i]-1.
@@ -1163,15 +1159,18 @@ class Glm4MoeLiteDenseOnlyTT:
         use_decode_rope = enable_trace or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
         cos_decode = sin_decode = trans_decode = rope_sharded_cfg = None
         if use_decode_rope:
-            cos_decode, sin_decode, trans_decode, rope_sharded_cfg = (
-                prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
-                    device=self.device,
-                    cos_batch=cos_batch,
-                    sin_batch=sin_batch,
-                    trans_matrix=self.rope["trans_matrix"],
-                    batch=active,
-                    rope_dim=int(self.hparams.qk_rope_head_dim),
-                )
+            (
+                cos_decode,
+                sin_decode,
+                trans_decode,
+                rope_sharded_cfg,
+            ) = prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+                device=self.device,
+                cos_batch=cos_batch,
+                sin_batch=sin_batch,
+                trans_matrix=self.rope["trans_matrix"],
+                batch=active,
+                rope_dim=int(self.hparams.qk_rope_head_dim),
             )
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)
@@ -1206,18 +1205,24 @@ class Glm4MoeLiteDenseOnlyTT:
             pos_main = positions.clone()
             pos_draft = positions.clone()
             # Main tensor: mask draft lanes (n..2n-1) to -1
-            pos_main[n:2*n] = -1
+            pos_main[n : 2 * n] = -1
             # Draft tensor: mask main lanes (0..n-1) to -1
             pos_draft[:n] = -1
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
             positions_main_tt = ttnn.from_torch(
-                pos_main, device=self.device, dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                pos_main,
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
             )
             positions_draft_tt = ttnn.from_torch(
-                pos_draft, device=self.device, dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                pos_draft,
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
             )
 
@@ -1254,6 +1259,8 @@ class Glm4MoeLiteDenseOnlyTT:
                     decode_profile[stage_key] = decode_profile.get(stage_key, 0.0) + float(value)
             ttnn.deallocate(x, force=False)
             x = x_next
+            if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
+                ttnn.ReadDeviceProfiler(self.device)
 
         # Preserve hidden state for MTP before final_norm
         mtp_hidden = None
@@ -1353,9 +1360,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 for b in range(active):
                     best_val = None
                     best_global = None
-                    for shard_idx, max_tensor, argmax_tensor in zip(
-                        shard_indices, local_max_torch, local_argmax_torch
-                    ):
+                    for shard_idx, max_tensor, argmax_tensor in zip(shard_indices, local_max_torch, local_argmax_torch):
                         max_val = float(max_tensor.reshape(-1)[b].item())
                         local_idx = int(argmax_tensor.reshape(-1)[b].item())
                         global_idx = int(shard_idx * vocab_per_shard + local_idx)
@@ -1387,7 +1392,7 @@ class Glm4MoeLiteDenseOnlyTT:
             if self.mtp_enabled and mtp_hidden is not None:
                 # MTP acceptance: compare prev draft with current main model output
                 global _mtp_total, _mtp_accepted
-                prev = getattr(self, '_prev_draft_ids', None)
+                prev = getattr(self, "_prev_draft_ids", None)
                 if prev is not None:
                     cur = next_ids_flat.reshape(-1).to(torch.int32).cpu()
                     n = min(len(prev), len(cur))
@@ -1396,9 +1401,12 @@ class Glm4MoeLiteDenseOnlyTT:
                         _mtp_total += n
                         _mtp_accepted += match
                         if _mtp_total <= 5 or _mtp_total % 500 == 0:
-                            logger.info("MTP acceptance [eager]: {}/{} = {:.1%}",
-                                        _mtp_accepted, _mtp_total,
-                                        _mtp_accepted / _mtp_total if _mtp_total > 0 else 0.0)
+                            logger.info(
+                                "MTP acceptance [eager]: {}/{} = {:.1%}",
+                                _mtp_accepted,
+                                _mtp_total,
+                                _mtp_accepted / _mtp_total if _mtp_total > 0 else 0.0,
+                            )
                     self._prev_draft_ids = None
 
                 mtp_positions = start_pos[:active].to(torch.int32) + 1
@@ -1476,20 +1484,18 @@ class Glm4MoeLiteDenseOnlyTT:
     def _mtp_forward_eager(
         self,
         *,
-        main_token_ids: torch.Tensor,     # [B,1] int32
-        hidden_state: ttnn.Tensor,         # [1,1,B,hidden] TILE
-        mtp_positions: torch.Tensor,       # [B] int32 (= main start_pos + 1)
-        page_table: torch.Tensor,          # [B,W] int32
-        kv_cache: list[ttnn.Tensor],       # full list including kv_cache[47]
+        main_token_ids: torch.Tensor,  # [B,1] int32
+        hidden_state: ttnn.Tensor,  # [1,1,B,hidden] TILE
+        mtp_positions: torch.Tensor,  # [B] int32 (= main start_pos + 1)
+        page_table: torch.Tensor,  # [B,W] int32
+        kv_cache: list[ttnn.Tensor],  # full list including kv_cache[47]
     ) -> torch.Tensor:
         """Run MTP layer 47 eagerly. Returns draft_token_ids [B] int32 on CPU."""
         batch = int(main_token_ids.shape[0])
         hidden = int(self.hparams.hidden_size)
 
         # 1. Embed main model's predicted tokens (reuse shared embed_tokens)
-        x_embed = run_tt_embedding(
-            device=self.device, token_ids=main_token_ids, tt_weight=self.embed_w
-        )
+        x_embed = run_tt_embedding(device=self.device, token_ids=main_token_ids, tt_weight=self.embed_w)
         if x_embed.layout != ttnn.TILE_LAYOUT:
             x_embed = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT)
         x_embed = ttnn.reshape(x_embed, (1, batch, 1, hidden))
@@ -1512,21 +1518,22 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.deallocate(concat, force=False)
 
         # 4. Prepare RoPE and positions for MTP (reuse same helpers as eager decode)
-        mtp_positions_clamped = mtp_positions.to(torch.int32).clamp(
-            min=0, max=max(0, int(self.max_seq_len) - 1)
-        )
+        mtp_positions_clamped = mtp_positions.to(torch.int32).clamp(min=0, max=max(0, int(self.max_seq_len) - 1))
         tt_positions, cos_batch, sin_batch = prepare_decode_rope_and_positions_tt(
             device=self.device, rope=self.rope, positions=mtp_positions_clamped
         )
-        cos_decode, sin_decode, trans_decode, rope_sharded_cfg = (
-            prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
-                device=self.device,
-                cos_batch=cos_batch,
-                sin_batch=sin_batch,
-                trans_matrix=self.rope["trans_matrix"],
-                batch=batch,
-                rope_dim=int(self.hparams.qk_rope_head_dim),
-            )
+        (
+            cos_decode,
+            sin_decode,
+            trans_decode,
+            rope_sharded_cfg,
+        ) = prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+            device=self.device,
+            cos_batch=cos_batch,
+            sin_batch=sin_batch,
+            trans_matrix=self.rope["trans_matrix"],
+            batch=batch,
+            rope_dim=int(self.hparams.qk_rope_head_dim),
         )
 
         # Page table to device
@@ -1607,9 +1614,7 @@ class Glm4MoeLiteDenseOnlyTT:
             for b in range(batch):
                 best_val = None
                 best_global = None
-                for shard_idx, max_tensor, argmax_tensor in zip(
-                    shard_indices, local_max_torch, local_argmax_torch
-                ):
+                for shard_idx, max_tensor, argmax_tensor in zip(shard_indices, local_max_torch, local_argmax_torch):
                     max_val = float(max_tensor.reshape(-1)[b].item())
                     local_idx = int(argmax_tensor.reshape(-1)[b].item())
                     global_idx = int(shard_idx * vocab_per_shard + local_idx)
@@ -1630,9 +1635,12 @@ class Glm4MoeLiteDenseOnlyTT:
                 _, next_ids_tt = max_out
             else:
                 next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
-            draft_token_ids = _tt_to_torch_for_vllm_output(
-                tensor=next_ids_tt, device=self.device
-            ).reshape(-1).to(dtype=torch.int32).cpu()
+            draft_token_ids = (
+                _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
+                .reshape(-1)
+                .to(dtype=torch.int32)
+                .cpu()
+            )
             ttnn.deallocate(logits_rm, force=False)
             ttnn.deallocate(logits_rm_tight, force=False)
             ttnn.deallocate(next_ids_tt, force=False)
@@ -1715,14 +1723,23 @@ class Glm4MoeLiteDenseOnlyTT:
         # Free old persistent inputs if they exist.
         if state is not None:
             for t in (
-                state.tokens_tt, state.positions_tt, state.rot_idxs_tt,
-                state.cos_batch_tt, state.sin_batch_tt, state.trans_matrix_tt,
+                state.tokens_tt,
+                state.positions_tt,
+                state.rot_idxs_tt,
+                state.cos_batch_tt,
+                state.sin_batch_tt,
+                state.trans_matrix_tt,
                 state.page_table_tt,
                 # Batch-expansion serial cache update
-                state.positions_main_tt, state.positions_draft_tt,
+                state.positions_main_tt,
+                state.positions_draft_tt,
                 # MTP persistent inputs
-                state.mtp_tokens_tt, state.mtp_positions_tt, state.mtp_rot_idxs_tt,
-                state.mtp_cos_batch_tt, state.mtp_sin_batch_tt, state.mtp_trans_matrix_tt,
+                state.mtp_tokens_tt,
+                state.mtp_positions_tt,
+                state.mtp_rot_idxs_tt,
+                state.mtp_cos_batch_tt,
+                state.mtp_sin_batch_tt,
+                state.mtp_trans_matrix_tt,
             ):
                 if t is not None:
                     try:
@@ -1818,14 +1835,16 @@ class Glm4MoeLiteDenseOnlyTT:
         if self.batch_expand:
             state.positions_main_tt = ttnn.from_torch(
                 torch.zeros((batch,), dtype=torch.int32),
-                device=self.device, dtype=ttnn.int32,
+                device=self.device,
+                dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
             state.positions_draft_tt = ttnn.from_torch(
                 torch.zeros((batch,), dtype=torch.int32),
-                device=self.device, dtype=ttnn.int32,
+                device=self.device,
+                dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
@@ -2007,17 +2026,23 @@ class Glm4MoeLiteDenseOnlyTT:
             n = self._batch_expand_num_main
             pos_main = start_pos.to(torch.int32).clone()
             pos_draft = start_pos.to(torch.int32).clone()
-            pos_main[n:2*n] = -1  # mask draft lanes
-            pos_draft[:n] = -1    # mask main lanes
+            pos_main[n : 2 * n] = -1  # mask draft lanes
+            pos_draft[:n] = -1  # mask main lanes
             host_pos_main = ttnn.from_torch(
-                pos_main, device=None, dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                pos_main,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
             ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt)
             host_pos_draft = ttnn.from_torch(
-                pos_draft, device=None, dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                pos_draft,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
             ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt)
@@ -2079,9 +2104,12 @@ class Glm4MoeLiteDenseOnlyTT:
         """Resolve global token IDs from main trace output (handles vocab-sharded)."""
         batch = int(state.batch)
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            return _tt_to_torch_for_vllm_output(
-                tensor=state.top1_indices_tt, device=self.device
-            ).reshape(-1).to(torch.int32).cpu()
+            return (
+                _tt_to_torch_for_vllm_output(tensor=state.top1_indices_tt, device=self.device)
+                .reshape(-1)
+                .to(torch.int32)
+                .cpu()
+            )
 
         # Vocab-sharded: resolve global token from per-shard max/argmax
         assert state.top1_values_tt is not None
@@ -2107,9 +2135,7 @@ class Glm4MoeLiteDenseOnlyTT:
         for b in range(batch):
             best_val = None
             best_global = None
-            for shard_idx, max_tensor, argmax_tensor in zip(
-                shard_indices, local_max_torch, local_argmax_torch
-            ):
+            for shard_idx, max_tensor, argmax_tensor in zip(shard_indices, local_max_torch, local_argmax_torch):
                 max_val = float(max_tensor.reshape(-1)[b].item())
                 local_idx = int(argmax_tensor.reshape(-1)[b].item())
                 global_idx = int(shard_idx * vocab_per_shard + local_idx)
@@ -2123,14 +2149,15 @@ class Glm4MoeLiteDenseOnlyTT:
             main_ids[b] = int(best_global)
         return main_ids
 
-    def _resolve_token_ids_from_trace_output(
-        self, *, top1_values_tt, top1_indices_tt, batch: int
-    ) -> torch.Tensor:
+    def _resolve_token_ids_from_trace_output(self, *, top1_values_tt, top1_indices_tt, batch: int) -> torch.Tensor:
         """Resolve global token IDs from trace output tensors (reusable for MTP)."""
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            return _tt_to_torch_for_vllm_output(
-                tensor=top1_indices_tt, device=self.device
-            ).reshape(-1).to(torch.int32).cpu()
+            return (
+                _tt_to_torch_for_vllm_output(tensor=top1_indices_tt, device=self.device)
+                .reshape(-1)
+                .to(torch.int32)
+                .cpu()
+            )
 
         assert top1_values_tt is not None
         mesh_rows, mesh_cols = int(self.device.shape[0]), int(self.device.shape[1])
@@ -2155,9 +2182,7 @@ class Glm4MoeLiteDenseOnlyTT:
         for b in range(batch):
             best_val = None
             best_global = None
-            for shard_idx, max_tensor, argmax_tensor in zip(
-                shard_indices, local_max_torch, local_argmax_torch
-            ):
+            for shard_idx, max_tensor, argmax_tensor in zip(shard_indices, local_max_torch, local_argmax_torch):
                 max_val = float(max_tensor.reshape(-1)[b].item())
                 local_idx = int(argmax_tensor.reshape(-1)[b].item())
                 global_idx = int(shard_idx * vocab_per_shard + local_idx)
@@ -2328,6 +2353,8 @@ class Glm4MoeLiteDenseOnlyTT:
             )
             ttnn.deallocate(x, force=False)
             x = x_next
+            if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
+                ttnn.ReadDeviceProfiler(self.device)
 
         # Preserve hidden state for MTP before final_norm consumes it.
         # Use ttnn.clone (not ttnn.copy) so the trace graph allocates a fresh
@@ -2442,7 +2469,9 @@ class Glm4MoeLiteDenseOnlyTT:
                 mtp_positions = start_pos[:batch].to(torch.int32) + 1
 
                 # Copy MTP inputs for warm-up
-                self._copy_mtp_trace_inputs(state=state, main_token_ids=main_ids.view(-1, 1), mtp_positions=mtp_positions)
+                self._copy_mtp_trace_inputs(
+                    state=state, main_token_ids=main_ids.view(-1, 1), mtp_positions=mtp_positions
+                )
                 ttnn.synchronize_device(self.device)
 
                 # Warm-up compile run (not captured)
@@ -2450,7 +2479,9 @@ class Glm4MoeLiteDenseOnlyTT:
                 mtp_logits_rm_warm = ttnn.to_layout(mtp_logits_warm, ttnn.ROW_MAJOR_LAYOUT)
                 if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
                     vocab_per_shard = int(self.lm_head_vocab_per_shard)
-                    mtp_logits_rm_warm_view = ttnn.slice(mtp_logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
+                    mtp_logits_rm_warm_view = ttnn.slice(
+                        mtp_logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard]
+                    )
                     mtp_max_out_warm = ttnn.max(mtp_logits_rm_warm_view, dim=3, keepdim=True)
                     if isinstance(mtp_max_out_warm, tuple):
                         ttnn.deallocate(mtp_max_out_warm[0], force=False)
@@ -2468,7 +2499,9 @@ class Glm4MoeLiteDenseOnlyTT:
                 ttnn.deallocate(mtp_logits_warm, force=False)
 
                 # Re-copy MTP inputs (warm-up consumed them)
-                self._copy_mtp_trace_inputs(state=state, main_token_ids=main_ids.view(-1, 1), mtp_positions=mtp_positions)
+                self._copy_mtp_trace_inputs(
+                    state=state, main_token_ids=main_ids.view(-1, 1), mtp_positions=mtp_positions
+                )
                 ttnn.synchronize_device(self.device)
 
                 # Capture MTP trace
@@ -2483,11 +2516,15 @@ class Glm4MoeLiteDenseOnlyTT:
                         state.mtp_top1_values_tt, state.mtp_top1_indices_tt = mtp_max_out
                     else:
                         state.mtp_top1_values_tt = mtp_max_out
-                        state.mtp_top1_indices_tt = ttnn.argmax(mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                        state.mtp_top1_indices_tt = ttnn.argmax(
+                            mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True
+                        )
                 else:
                     mtp_logits_rm_view = ttnn.slice(mtp_logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
                     state.mtp_top1_values_tt = None
-                    state.mtp_top1_indices_tt = ttnn.argmax(mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                    state.mtp_top1_indices_tt = ttnn.argmax(
+                        mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True
+                    )
                 ttnn.end_trace_capture(self.device, mtp_trace_id, cq_id=0)
                 ttnn.synchronize_device(self.device)
                 state.mtp_trace_id = mtp_trace_id
@@ -2513,7 +2550,9 @@ class Glm4MoeLiteDenseOnlyTT:
         page_table_width = int(page_table.shape[1])
         state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
         if state.trace_id is None:
-            state = self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
+            state = self._capture_decode_trace_sampling(
+                tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache
+            )
         assert state.trace_id is not None
         assert state.logits_tt is not None
         assert state.top1_indices_tt is not None
@@ -2531,7 +2570,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 main_ids = self._resolve_main_token_ids(state)
 
                 # MTP acceptance: compare prev draft with current main model output
-                prev = getattr(self, '_prev_draft_ids', None)
+                prev = getattr(self, "_prev_draft_ids", None)
                 if prev is not None:
                     n = min(len(prev), len(main_ids))
                     if n > 0:
@@ -2540,9 +2579,13 @@ class Glm4MoeLiteDenseOnlyTT:
                         _mtp_accepted += match
                         if _mtp_total <= 5 or _mtp_total % 500 == 0:
                             mtp_mode = "trace" if state.mtp_trace_id is not None else "eager"
-                            logger.info("MTP acceptance [{}]: {}/{} = {:.1%}",
-                                        mtp_mode, _mtp_accepted, _mtp_total,
-                                        _mtp_accepted / _mtp_total if _mtp_total > 0 else 0.0)
+                            logger.info(
+                                "MTP acceptance [{}]: {}/{} = {:.1%}",
+                                mtp_mode,
+                                _mtp_accepted,
+                                _mtp_total,
+                                _mtp_accepted / _mtp_total if _mtp_total > 0 else 0.0,
+                            )
                     self._prev_draft_ids = None
 
                 mtp_positions = start_pos[:batch].to(torch.int32) + 1
@@ -2594,7 +2637,9 @@ class Glm4MoeLiteDenseOnlyTT:
         page_table_width = int(page_table.shape[1])
         state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
         if state.trace_id is None:
-            state = self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
+            state = self._capture_decode_trace_sampling(
+                tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache
+            )
         assert state.trace_id is not None
         assert state.logits_tt is not None
 
@@ -2612,7 +2657,9 @@ class Glm4MoeLiteDenseOnlyTT:
                 logits_tt_for_mtp = state.logits_tt
                 vocab = int(self.hparams.vocab_size)
                 if not _is_mesh_device(self.device) or not self.lm_head_sharded_vocab:
-                    logits_torch_tmp = _tt_to_torch_for_vllm_output(tensor=logits_tt_for_mtp, device=self.device)[..., :vocab]
+                    logits_torch_tmp = _tt_to_torch_for_vllm_output(tensor=logits_tt_for_mtp, device=self.device)[
+                        ..., :vocab
+                    ]
                     main_ids = logits_torch_tmp.reshape(-1, vocab).argmax(dim=-1).to(torch.int32).cpu()
                 else:
                     shards_tmp = ttnn.get_device_tensors(logits_tt_for_mtp)
@@ -2621,7 +2668,7 @@ class Glm4MoeLiteDenseOnlyTT:
                     main_ids = logits_full_tmp.reshape(-1, vocab).argmax(dim=-1).to(torch.int32).cpu()
 
                 # MTP acceptance tracking
-                prev = getattr(self, '_prev_draft_ids', None)
+                prev = getattr(self, "_prev_draft_ids", None)
                 if prev is not None:
                     n = min(len(prev), len(main_ids))
                     if n > 0:
@@ -2630,9 +2677,13 @@ class Glm4MoeLiteDenseOnlyTT:
                         _mtp_accepted += match
                         if _mtp_total <= 5 or _mtp_total % 500 == 0:
                             mtp_mode = "trace" if state.mtp_trace_id is not None else "eager"
-                            logger.info("MTP acceptance [{}]: {}/{} = {:.1%}",
-                                        mtp_mode, _mtp_accepted, _mtp_total,
-                                        _mtp_accepted / _mtp_total if _mtp_total > 0 else 0.0)
+                            logger.info(
+                                "MTP acceptance [{}]: {}/{} = {:.1%}",
+                                mtp_mode,
+                                _mtp_accepted,
+                                _mtp_total,
+                                _mtp_accepted / _mtp_total if _mtp_total > 0 else 0.0,
+                            )
                     self._prev_draft_ids = None
 
                 mtp_positions = start_pos[:batch].to(torch.int32) + 1
