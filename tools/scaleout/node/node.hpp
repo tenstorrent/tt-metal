@@ -32,6 +32,8 @@ public:
 // Factory function to create node descriptors by name
 tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descriptor(NodeType node_type);
 
+NodeType get_node_type_from_system();
+
 // Helper function to get topology for a NodeType (uses virtual function from node instances)
 Topology get_node_type_topology(NodeType node_type);
 
