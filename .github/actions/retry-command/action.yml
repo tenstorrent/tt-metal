@@ -27,6 +27,20 @@ runs:
       run: |
         set +e
 
+        # Validate numeric inputs
+        if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+          echo "::error::timeout-seconds must be a positive integer"
+          exit 1
+        fi
+        if ! [[ "$BACKOFF_SECONDS" =~ ^[0-9]+$ ]]; then
+          echo "::error::backoff-seconds must be a positive integer"
+          exit 1
+        fi
+        if ! [[ "$MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+          echo "::error::max-retries must be a positive integer"
+          exit 1
+        fi
+
         max_retries="$MAX_RETRIES"
         count=0
 

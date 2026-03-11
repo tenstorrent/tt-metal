@@ -49,6 +49,4 @@ runs:
           echo "Changing dir to $PATH_INPUT"
           cd -- "$PATH_INPUT" || { validation_error "Failed to change directory to $PATH_INPUT"; exit 1; }
         fi
-        # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection for known hosts)
-        # For full security, consider using a pre-populated known_hosts file
-        sftp -oStrictHostKeyChecking=accept-new -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"
+        sftp -oStrictHostKeyChecking=false -i id_key -b "$SFTP_BATCHFILE" "$SFTP_USERNAME@$SFTP_HOSTNAME"

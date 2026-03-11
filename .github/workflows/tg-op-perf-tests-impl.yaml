@@ -61,6 +61,7 @@ jobs:
       - name: Run op perf regression tests
         timeout-minutes: 10
         uses: ./.github/actions/docker-run
+        # TEST_CMD in step env is used by run_args; -e TEST_CMD forwards it into the container
         env:
           LOGURU_LEVEL: INFO
           TEST_CMD: ${{ matrix.test-group.cmd }}
@@ -71,7 +72,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e "TEST_CMD=${{ matrix.test-group.cmd }}"
+            -e TEST_CMD
           install_wheel: true
           run_args: |
             # Write command to script file to safely handle quotes and special characters

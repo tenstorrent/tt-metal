@@ -77,7 +77,7 @@ jobs:
       labels: exabox-multihost-with-nfs
     env:
       OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
       PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile

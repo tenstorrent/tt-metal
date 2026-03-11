@@ -151,8 +151,9 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
           TEST_CMD: ${{ matrix.test-group.cmd }}
+          SLOW_DISPATCH: ${{ matrix.test-group.slow_dispatch }}
         run: |
-          if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
+          if [ "$SLOW_DISPATCH" = "true" ]; then
             export TT_METAL_SLOW_DISPATCH_MODE=1
           fi
           # Write command to script file to safely handle quotes and special characters

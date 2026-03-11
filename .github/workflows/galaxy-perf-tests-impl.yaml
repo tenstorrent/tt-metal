@@ -104,6 +104,7 @@ jobs:
       - name: Run model perf regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./.github/actions/docker-run
+        # TEST_CMD in step env is used by run_args; -e TEST_CMD forwards it into the container
         env:
           LOGURU_LEVEL: INFO
           TEST_CMD: ${{ matrix.test-group.cmd }}
@@ -114,7 +115,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e "TEST_CMD=${{ matrix.test-group.cmd }}"
+            -e TEST_CMD
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |

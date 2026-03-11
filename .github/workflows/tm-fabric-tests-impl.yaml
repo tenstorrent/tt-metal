@@ -381,13 +381,15 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
+          TEST_GROUP_NAME: ${{ matrix.test-group.name }}
+          RUNNER_LABEL: ${{ matrix.runner-group.runner-label }}
         run: |
           # Write command to script file to safely handle quotes and special characters
           cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
           #!/bin/bash
           set -euo pipefail
           SCRIPT_EOF
-          if [[ "${{ matrix.test-group.name }}" == "fabric system health tests" && "${{ matrix.runner-group.runner-label }}" == "BH-DeskBox" ]]; then
+          if [[ "$TEST_GROUP_NAME" == "fabric system health tests" && "$RUNNER_LABEL" == "BH-DeskBox" ]]; then
             printf '%s --min-connections 4\n' "$TEST_CMD" >> /tmp/test_cmd.sh
           else
             printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh

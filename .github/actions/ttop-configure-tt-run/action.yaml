@@ -136,20 +136,19 @@ runs:
             continue
           fi
           # Create directory on worker
-          # NOTE: accept-new accepts new keys but rejects changed keys (MITM protection)
-          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mkdir -p '$DIRECTORY'"
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mkdir -p '$DIRECTORY'"
 
           # Copy mgd.textproto to worker. Always copy our generated one - empty or not.
-          scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/mgd.textproto" "$hostname":/tmp/mgd.textproto
-          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/mgd.textproto '$DIRECTORY/mgd.textproto'"
+          scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/mgd.textproto" "$hostname":/tmp/mgd.textproto
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/mgd.textproto '$DIRECTORY/mgd.textproto'"
 
           # Copy rank_bindings.yaml to worker
-          scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/rank_bindings.yaml" "$hostname":/tmp/rank_bindings.yaml
-          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/rank_bindings.yaml '$DIRECTORY/rank_bindings.yaml'"
+          scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/rank_bindings.yaml" "$hostname":/tmp/rank_bindings.yaml
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/rank_bindings.yaml '$DIRECTORY/rank_bindings.yaml'"
 
           # Copy hostfile to worker
-          scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/hostfile" "$hostname":/tmp/hostfile
-          ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/hostfile '$DIRECTORY/hostfile'"
+          scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$DIRECTORY/hostfile" "$hostname":/tmp/hostfile
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/hostfile '$DIRECTORY/hostfile'"
 
         done < "$DIRECTORY/hostfile"
         echo "TT-Run data copied to all the workers"
