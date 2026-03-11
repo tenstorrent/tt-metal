@@ -145,8 +145,11 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         CreateKernel(program, write_kernel_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, {}));
 
     if (convert_dtype) {
-        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-            get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
+        const auto& kernel_config = operation_attributes.compute_kernel_config;
+        MathFidelity math_fidelity = kernel_config.math_fidelity;
+        bool math_approx_mode = kernel_config.math_approx_mode;
+        bool fp32_dest_acc_en = kernel_config.fp32_dest_acc_en;
+        bool dst_full_sync_en = kernel_config.dst_full_sync_en;
         auto create_compute_kernel = [&](const auto& core_group, uint32_t num_units_per_core) {
             if (!core_group.ranges().empty()) {
                 std::vector<uint32_t> compute_kernel_args = {
