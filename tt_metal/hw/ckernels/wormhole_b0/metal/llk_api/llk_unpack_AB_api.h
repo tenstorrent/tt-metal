@@ -40,7 +40,7 @@ inline void llk_unpack_AB(
     std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-    LLK_ASSERT(
+    LLK_ASSERT_TEMP(
         (are_unpacker_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],

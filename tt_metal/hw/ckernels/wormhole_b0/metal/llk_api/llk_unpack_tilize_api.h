@@ -94,7 +94,7 @@ inline void llk_unpack_tilizeA_B_init(
     // const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
-    LLK_ASSERT(
+    LLK_ASSERT_TEMP(
         (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
@@ -139,7 +139,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-    LLK_ASSERT(
+    LLK_ASSERT_TEMP(
         (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],

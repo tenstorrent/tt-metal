@@ -171,6 +171,8 @@ class RunTimeOptions {
 
     bool enable_llk_asserts = false;
 
+    bool enable_llk_asserts_temp = false;
+
     bool disable_sfploadmacro = false;
 
     // Fabric profiling settings
@@ -401,6 +403,9 @@ public:
 
     bool get_llk_asserts() const { return enable_llk_asserts; }
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
+
+    bool get_llk_asserts_temp() const { return enable_llk_asserts_temp; }
+    void set_llk_asserts_temp(bool enabled) { enable_llk_asserts_temp = enabled; }
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 

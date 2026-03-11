@@ -186,7 +186,8 @@ enum class EnvVarID {
     // ========================================
     // LLK ASSERTIONS
     // ========================================
-    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+    TT_METAL_LLK_ASSERTS,       // Enable LLK assertions
+    TT_METAL_LLK_ASSERTS_TEMP,  // Enable LLK temporary assertions
 
     // ========================================
     // DEVICE MANAGER
@@ -1278,6 +1279,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (disabled)
         // Usage: export TT_METAL_LLK_ASSERTS=1
         case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
+
+        // TT_METAL_LLK_ASSERTS_TEMP
+        // Enables LLK temporary assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS_TEMP=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS_TEMP: this->enable_llk_asserts_temp = true; break;
 
         // ========================================
         // DEVICE MANAGER

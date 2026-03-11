@@ -46,7 +46,7 @@ inline void llk_unpack_A_init(
         llk_unpack_dbg_feature_disable();
     }
 
-    LLK_ASSERT(
+    LLK_ASSERT_TEMP(
         (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
             operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces)),
         "");
@@ -71,7 +71,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
-    LLK_ASSERT(
+    LLK_ASSERT_TEMP(
         (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
             unpack_src_format[operand_id],
             unpack_dst_format[operand_id],

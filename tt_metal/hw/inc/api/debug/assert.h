@@ -46,6 +46,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             assert_and_hang(__LINE__, ##__VA_ARGS__); \
     } while (0)
 
+#define LLK_ASSERT_TEMP(condition, message)
 #define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
@@ -60,6 +61,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             asm volatile("ebreak"); \
     } while (0)
 
+#define LLK_ASSERT_TEMP(condition, message)
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 0
@@ -67,6 +69,20 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 #elif defined(ENABLE_LLK_ASSERT)
 
 #define ASSERT(condition, ...)
+#define LLK_ASSERT_TEMP(condition, message)
+
+#define ASSERT_ENABLED 0
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
+#define WATCHER_ASSERT_ENABLED 0
+
+#elif defined(ENABLE_LLK_ASSERT_TEMP)
+
+#define ASSERT(condition, ...)
+#define LLK_ASSERT_TEMP(condition, message) \
+    do {                                    \
+        if (!(condition))                   \
+            asm volatile("ebreak");         \
+    } while (0)
 
 #define ASSERT_ENABLED 0
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
