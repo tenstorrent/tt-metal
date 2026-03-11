@@ -17,52 +17,6 @@ source "${SLURM_CI_LIB_DIR}/common.sh"
 _SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 
 # ---------------------------------------------------------------------------
-# reset_devices - Run tt-smi -r on every node in the Slurm allocation
-# ---------------------------------------------------------------------------
-# Resets Tenstorrent accelerators before tests, matching the GitHub Actions
-# runner setup behaviour. Uses srun when available (preferred), falls back
-# to parallel SSH.
-reset_devices() {
-    if ! command -v tt-smi &>/dev/null; then
-        log_warn "tt-smi not found in PATH, skipping device reset"
-        return 0
-    fi
-
-    log_info "Resetting Tenstorrent devices on all allocated nodes..."
-
-    if is_slurm_job && command -v srun &>/dev/null; then
-        srun --ntasks-per-node=1 bash -c \
-            'echo "[$(hostname)] Resetting devices..." && tt-smi -r' || {
-            log_warn "srun tt-smi -r returned non-zero (rc=$?), continuing anyway"
-        }
-    elif [[ -n "${SLURM_JOB_NODELIST:-}" ]]; then
-        local -a hosts
-        if command -v scontrol &>/dev/null; then
-            mapfile -t hosts < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
-        else
-            IFS=',' read -ra hosts <<< "$SLURM_JOB_NODELIST"
-        fi
-        local local_host
-        local_host="$(hostname -s)"
-        local host
-        for host in "${hosts[@]}"; do
-            log_info "  Resetting devices on ${host}..."
-            if [[ "${host}" == "${local_host}" || "${host}" == "$(hostname)" ]]; then
-                tt-smi -r || log_warn "tt-smi -r failed on ${host} (rc=$?)"
-            else
-                ssh "${_SSH_OPTS[@]}" "${host}" "tt-smi -r" || \
-                    log_warn "tt-smi -r failed on ${host} (rc=$?)"
-            fi
-        done
-    else
-        log_info "  Resetting devices on $(hostname)..."
-        tt-smi -r || log_warn "tt-smi -r failed (rc=$?)"
-    fi
-
-    log_info "Device reset complete"
-}
-
-# ---------------------------------------------------------------------------
 # multihost_setup - Generate TT-Run config from the Slurm node allocation
 # ---------------------------------------------------------------------------
 # Usage: multihost_setup <output_dir> [mgd_file]

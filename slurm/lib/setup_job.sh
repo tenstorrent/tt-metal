@@ -13,6 +13,43 @@ source "${SLURM_CI_LIB_DIR}/common.sh"
 source "${SLURM_CI_LIB_DIR}/artifacts.sh"
 
 # ---------------------------------------------------------------------------
+# _reset_tt_devices - Reset Tenstorrent accelerators on all job nodes
+# ---------------------------------------------------------------------------
+# Mirrors the GitHub Actions runner pre-job reset (tt-smi -r).
+# Skipped automatically when tt-smi is not available or no TT device exists.
+# Set SKIP_DEVICE_RESET=1 to disable (e.g., for build-only jobs).
+_reset_tt_devices() {
+    if [[ "${SKIP_DEVICE_RESET:-0}" == "1" ]]; then
+        return 0
+    fi
+
+    if ! command -v tt-smi &>/dev/null; then
+        log_debug "tt-smi not found, skipping device reset"
+        return 0
+    fi
+
+    if [[ ! -e "${TT_DEVICE_PATH:-/dev/tenstorrent}" ]]; then
+        log_debug "No Tenstorrent device found, skipping device reset"
+        return 0
+    fi
+
+    local num_nodes="${SLURM_JOB_NUM_NODES:-1}"
+
+    if (( num_nodes > 1 )) && command -v srun &>/dev/null; then
+        log_info "Resetting TT devices on ${num_nodes} nodes (srun)..."
+        srun --ntasks-per-node=1 bash -c \
+            'echo "[$(hostname)] tt-smi -r" && tt-smi -r' 2>&1 | \
+            while IFS= read -r line; do log_info "  ${line}"; done || \
+            log_warn "tt-smi -r returned non-zero on one or more nodes (rc=$?), continuing"
+    else
+        log_info "Resetting TT devices on $(hostname)..."
+        tt-smi -r 2>&1 | \
+            while IFS= read -r line; do log_info "  ${line}"; done || \
+            log_warn "tt-smi -r failed (rc=$?), continuing"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # setup_job - Main prologue function
 # ---------------------------------------------------------------------------
 # Controlled by environment variables:
@@ -38,6 +75,9 @@ setup_job() {
     log_info "Workspace: ${workspace}"
     log_info "Node:      ${SLURM_CI_NODELIST}"
     log_info "Job:       ${SLURM_CI_JOB_NAME} (${SLURM_CI_JOB_ID}/${SLURM_CI_ARRAY_TASK})"
+
+    # -- Reset TT devices (mirrors GH Actions runner pre-job reset) --
+    _reset_tt_devices
 
     # -- Create workspace --
     mkdir -p "$workspace"
