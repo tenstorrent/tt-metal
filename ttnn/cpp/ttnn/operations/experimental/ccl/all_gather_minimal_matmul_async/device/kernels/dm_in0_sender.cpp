@@ -91,11 +91,24 @@ bool valid_targets(const bool direction) {
 }  // namespace detail
 
 void kernel_main() {
-    // Load input/output addresses and range parameters
+    // Load common runtime args (same for all cores, updated in override_runtime_arguments)
+    uint32_t cargidx = 0;
+    const uint32_t in0_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t in2_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t in3_addr = get_common_arg_val<uint32_t>(cargidx++);
+    size_t out_ready_sem_backward = get_common_arg_val<uint32_t>(cargidx++);
+    size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
+
+#ifdef FUSE_TERNARY
+    const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(cargidx++);
+#endif  // FUSE_TERNARY
+
+    // Output tensor addresses from common args
+    const uint32_t out_addr_common_arg_start = cargidx;
+
+    // Load per-core runtime args
     uint32_t argidx = 0;
-    const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -113,26 +126,18 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint8_t out_ready_sem_injector_noc0_x = get_arg_val<uint32_t>(argidx++);
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
-    size_t out_ready_sem_backward = get_arg_val<uint32_t>(argidx++);
-    size_t out_ready_sem_forward = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
-
-#ifdef FUSE_TERNARY
-    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
-    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
-#endif  // FUSE_TERNARY
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
-    // Always create tuple of output accessors (size = N_chunks)
+    // Always create tuple of output accessors (size = N_chunks) - addresses from common args
     constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, argidx, out_tile_size);
-    argidx = argidx + N_chunks;
+    auto outputs_tuple =
+        make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 
 #ifdef USE_MUX
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;

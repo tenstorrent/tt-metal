@@ -29,10 +29,21 @@ void kernel_main() {
     constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
 
-    // Load input/output addresses and range parameters
+    // Load common runtime args (same for all cores, updated in override_runtime_arguments)
+    uint32_t cargidx = 0;
+    const uint32_t in1_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t in2_addr = get_common_arg_val<uint32_t>(cargidx++);
+
+#ifdef FUSE_TERNARY
+    const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(cargidx++);
+#endif  // FUSE_TERNARY
+
+    // Output tensor addresses from common args
+    const uint32_t out_addr_common_arg_start = cargidx;
+
+    // Load per-core runtime args
     uint32_t argidx = 0;
-    const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -47,20 +58,15 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
-#ifdef FUSE_TERNARY
-    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
-    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
-#endif  // FUSE_TERNARY
-
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<20>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
-    // Always create tuple of output accessors (size = N_chunks)
+    // Always create tuple of output accessors (size = N_chunks) - addresses from common args
     constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, argidx, out_tile_size);
+    auto outputs_tuple =
+        make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();

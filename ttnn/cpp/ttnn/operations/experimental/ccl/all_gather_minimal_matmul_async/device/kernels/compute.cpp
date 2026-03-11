@@ -297,7 +297,7 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
-    const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
+    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(0);
 #else
     // Default value when ternary is not fused (not used, helps compiler optimize)
     constexpr uint32_t fused_ternary_scalar_uint = 0;
