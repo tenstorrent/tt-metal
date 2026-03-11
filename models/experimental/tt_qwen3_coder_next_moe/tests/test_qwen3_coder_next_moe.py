@@ -22,7 +22,11 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.common import Mode
 from models.experimental.tt_qwen3_coder_next_moe import Qwen3CoderNextMoEConfig, TtQwen3CoderNextMoELayer
-from models.experimental.tt_symbiote.tests.test_qwen3_moe import _load_qwen3_moe_from_cache
+from models.experimental.tt_symbiote.tests.test_qwen3_moe import (
+    _load_qwen3_moe_from_cache,
+    MESH_DEVICE,
+    MESH_SHAPE_MAP,
+)
 
 
 def _make_qwen3_moe_state_dict_and_ref(
@@ -54,7 +58,11 @@ def _make_qwen3_moe_state_dict_and_ref(
     return state_dict, config, ref
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [MESH_SHAPE_MAP.get(MESH_DEVICE, (1, 8))],
+    indirect=True,
+)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
 def test_qwen3_coder_next_moe_vs_torch(mesh_device, reset_seeds, device_params):
     """Compare TtQwen3CoderNextMoELayer output to Qwen3NextSparseMoeBlock (synthetic weights)."""
@@ -110,10 +118,19 @@ def test_qwen3_coder_next_moe_vs_torch(mesh_device, reset_seeds, device_params):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_out = tt_moe(tt_input, mode=Mode.DECODE)
-    tt_out_t = ttnn.to_torch(tt_out)
+    mesh_composer = (
+        ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+        if hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+        else None
+    )
+    tt_out_t = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
     if isinstance(tt_out_t, (list, tuple)):
         tt_out_t = tt_out_t[0]
-    tt_out_t = torch.Tensor(tt_out_t).reshape(1, batch_seq, hidden_size).float()
+    tt_out_t = torch.Tensor(tt_out_t)
+    if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        num_devices = mesh_device.get_num_devices()
+        tt_out_t = tt_out_t.reshape(1, batch_seq, num_devices, -1)[..., 0, :]
+    tt_out_t = tt_out_t.reshape(1, batch_seq, hidden_size).float()
 
     pcc_threshold = 0.98  # MoE mixes device bfloat16 + CPU torch; 0.99 used for pure-device modules
     passing, actual_pcc = comp_pcc(ref_out, tt_out_t, pcc_threshold)
@@ -121,7 +138,11 @@ def test_qwen3_coder_next_moe_vs_torch(mesh_device, reset_seeds, device_params):
     assert passing, f"Qwen3 Coder Next MoE PCC below {pcc_threshold}: {actual_pcc}"
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [MESH_SHAPE_MAP.get(MESH_DEVICE, (1, 8))],
+    indirect=True,
+)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
 def test_qwen3_coder_next_moe_real_weights(mesh_device, reset_seeds, device_params):
     """Compare TtQwen3CoderNextMoELayer to a real HF Qwen3NextSparseMoeBlock layer."""
@@ -181,10 +202,19 @@ def test_qwen3_coder_next_moe_real_weights(mesh_device, reset_seeds, device_para
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_out = tt_moe(tt_input, mode=Mode.DECODE)
-    tt_out_t = ttnn.to_torch(tt_out)
+    mesh_composer = (
+        ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+        if hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+        else None
+    )
+    tt_out_t = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
     if isinstance(tt_out_t, (list, tuple)):
         tt_out_t = tt_out_t[0]
-    tt_out_t = torch.Tensor(tt_out_t).reshape(1, batch_seq, hidden_size).float()
+    tt_out_t = torch.Tensor(tt_out_t)
+    if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        num_devices = mesh_device.get_num_devices()
+        tt_out_t = tt_out_t.reshape(1, batch_seq, num_devices, -1)[..., 0, :]
+    tt_out_t = tt_out_t.reshape(1, batch_seq, hidden_size).float()
 
     pcc_threshold = 0.98
     passing, actual_pcc = comp_pcc(ref_out, tt_out_t, pcc_threshold)
