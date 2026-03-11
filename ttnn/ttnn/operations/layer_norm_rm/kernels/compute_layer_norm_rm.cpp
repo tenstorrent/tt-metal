@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Stage 3 (subtract_mean): Pass 1 (tilize+reduce->mean), Pass 2 (tilize+sub->centered)
+// Stage 4 (variance): Pass 1 (tilize+reduce->mean), Pass 2 (tilize+sub+square+reduce->variance)
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -15,6 +15,7 @@ constexpr uint32_t c_1 = 1;    // Tilized input tiles
 constexpr uint32_t c_2 = 2;    // Reduce scaler 1/W
 constexpr uint32_t c_24 = 24;  // Row-wise mean (1 tile)
 constexpr uint32_t c_25 = 25;  // Intermediate tiles
+constexpr uint32_t c_26 = 26;  // Row-wise variance (1 tile)
 constexpr uint32_t c_17 = 17;  // Untilized RM output
 
 // Compile-time args
@@ -69,10 +70,25 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
             c_1, c_24, c_25, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
-        // Phase 13: Untilize c_25 -> c_17
+        // Phase 5: Square centered: square(c_25) -> c_1
+        compute_kernel_lib::square<
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryOutputPolicy::PerTile,
+            compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+            c_25, c_1, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
+
+        // Phase 6: Reduce row -> variance: reduce<SUM,REDUCE_ROW>(c_1) -> c_26
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+            c_1, c_2, c_26, compute_kernel_lib::ReduceInputBlockShape::of(1, Wt));
+
+        // Untilize c_26 (1 tile, variance) -> c_17
         compute_kernel_lib::untilize<
-            Wt,
-            c_25,
+            1,
+            c_26,
             c_17,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
