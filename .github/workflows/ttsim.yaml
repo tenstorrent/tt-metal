@@ -88,8 +88,10 @@ jobs:
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
       - name: Compute ttsim asset name
         id: ttsim-asset
+        env:
+          MATRIX_BUILD_SUFFIX: ${{ matrix.build_suffix }}
         run: |
-          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${MATRIX_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
       - name: Download ttsim binary
@@ -102,11 +104,12 @@ jobs:
       - name: Install ttsim
         env:
           TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
+          MATRIX_SOC_DESC: ${{ matrix.soc_desc }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
-          cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp $TT_METAL_HOME/tt_metal/soc_descriptors/${MATRIX_SOC_DESC} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: Build and Run Metal Examples
         timeout-minutes: 3
         run: |
@@ -240,8 +243,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Compute ttsim asset name
         id: ttsim-asset
+        env:
+          MATRIX_ARCH_BUILD_SUFFIX: ${{ matrix.arch.build_suffix }}
         run: |
-          asset_suffix="${{ matrix.arch.build_suffix }}"
+          asset_suffix="${MATRIX_ARCH_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
       - name: Download ttsim binary
@@ -254,19 +259,22 @@ jobs:
       - name: Install ttsim
         env:
           TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
+          MATRIX_ARCH_SOC_DESC: ${{ matrix.arch.soc_desc }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
-          cp /work/tt_metal/soc_descriptors/${{ matrix.arch.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp /work/tt_metal/soc_descriptors/${MATRIX_ARCH_SOC_DESC} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: Install pytest-xdist for parallel execution
         run: uv pip install pytest-xdist
         # Note: The skip list YAML is available from the full checkout above (line 227-230).
         # No sparse checkout is needed because the ttnn-pytests job does a full checkout with submodules.
       - name: Build skip list arguments
         id: skip-list
+        env:
+          MATRIX_ARCH_NAME: ${{ matrix.arch.name }}
         run: |
-          ARCH="${{ matrix.arch.name }}"
+          ARCH="${MATRIX_ARCH_NAME}"
           SKIP_ARGS=$(yq -r ".${ARCH}[]" "$TTSIM_SKIP_LIST_YAML" | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
           echo "[info] Loaded skip list for arch: $ARCH from $TTSIM_SKIP_LIST_YAML"
           echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
@@ -329,8 +337,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Compute ttsim asset name
         id: ttsim-asset
+        env:
+          MATRIX_BUILD_SUFFIX: ${{ matrix.build_suffix }}
         run: |
-          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${MATRIX_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
       - name: Download ttsim binary
@@ -343,15 +353,18 @@ jobs:
       - name: Install ttsim
         env:
           TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
+          MATRIX_SOC_DESC: ${{ matrix.soc_desc }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
-          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp /work/tt_metal/soc_descriptors/${MATRIX_SOC_DESC} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: C++ tests
         timeout-minutes: 5
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
         run: |
-          if [[ "${{ matrix.arch }}" == "quasar" ]]; then
+          if [[ "${MATRIX_ARCH}" == "quasar" ]]; then
             # ToDo: Re-enable this test once tt-sim supports NOC
             # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim/issues/24
             # ./build/test/tt_metal/test_single_dm_l1_write
@@ -416,8 +429,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Compute ttsim asset name
         id: ttsim-asset
+        env:
+          MATRIX_BUILD_SUFFIX: ${{ matrix.build_suffix }}
         run: |
-          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${MATRIX_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
       - name: Download ttsim binary
@@ -430,11 +445,12 @@ jobs:
       - name: Install ttsim
         env:
           TTSIM_ASSET_NAME: ${{ steps.ttsim-asset.outputs.asset_name }}
+          MATRIX_SOC_DESC: ${{ matrix.soc_desc }}
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${TTSIM_ASSET_NAME} $TT_METAL_SIMULATOR_HOME/libttsim.so
-          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp /work/tt_metal/soc_descriptors/${MATRIX_SOC_DESC} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: C++ tests
         timeout-minutes: 5
         run: |

@@ -25,6 +25,7 @@ runs:
       shell: bash
       env:
         IMAGE: ${{ inputs.image }}
+        REPOSITORY: ${{ github.repository }}
       run: |
         BUILD_TAG=$(cat \
           install_dependencies.sh \
@@ -34,4 +35,4 @@ runs:
           tests/sweep_framework/requirements-sweeps.txt \
           | sha1sum | cut -d' ' -f1)
         echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
-        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${IMAGE}:${BUILD_TAG}" >> $GITHUB_ENV
+        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${REPOSITORY}/${IMAGE}:${BUILD_TAG}" >> $GITHUB_ENV

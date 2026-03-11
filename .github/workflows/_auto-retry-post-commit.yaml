@@ -34,14 +34,17 @@ jobs:
         env:
           TEST_WORKFLOW_RUN_ID: ${{ inputs.test_workflow_run_id }}
           TEST_WORKFLOW_RUN_ATTEMPT: ${{ inputs.test_workflow_run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
-          event_name="${{ github.event_name }}"
+          event_name="$EVENT_NAME"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
             run_id="$TEST_WORKFLOW_RUN_ID"
             attempt_number="$TEST_WORKFLOW_RUN_ATTEMPT"
           elif [[ "$event_name" == "workflow_run" ]]; then
-            run_id="${{ github.event.workflow_run.id }}"
-            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            run_id="$WORKFLOW_RUN_ID"
+            attempt_number="$WORKFLOW_RUN_ATTEMPT"
             [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
             [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
           else

@@ -34,6 +34,8 @@ jobs:
           WF_RUN_EVENT: ${{ github.event.workflow_run.event }}
           WF_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           WF_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           # Default values
           SHOULD_NOTIFY="false"
@@ -45,12 +47,12 @@ jobs:
           SOURCE_GIT_SHA=""
           SOURCE_GIT_BRANCH=""
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             # Manual trigger - fetch source run details and apply same gating as workflow_run
             RUN_ID="$INPUT_RUN_ID"
 
             # Get workflow run details
-            WORKFLOW_INFO=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
+            WORKFLOW_INFO=$(gh api repos/$REPOSITORY/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
             CONCLUSION=$(echo "$WORKFLOW_INFO" | jq -r '.conclusion // "unknown"')
             RUN_NAME=$(echo "$WORKFLOW_INFO" | jq -r '.name // ""')
             RUN_NUMBER=$(echo "$WORKFLOW_INFO" | jq -r '.run_number // ""')
@@ -78,7 +80,7 @@ jobs:
               echo "Skipping: requires lead_models + schedule + main (got type=$RUN_TYPE, event=$EVENT_TYPE, branch=$SOURCE_GIT_BRANCH)"
             fi
 
-          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+          elif [[ "$EVENT_NAME" == "workflow_run" ]]; then
             # Triggered by workflow_run event
             RUN_ID="$WF_RUN_ID"
             RUN_NUMBER="$WF_RUN_NUMBER"

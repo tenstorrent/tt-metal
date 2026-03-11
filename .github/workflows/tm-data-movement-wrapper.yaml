@@ -77,11 +77,12 @@ jobs:
           RUN_N150: ${{ inputs.run-n150 }}
           RUN_N300: ${{ inputs.run-n300 }}
           RUN_P150B: ${{ inputs.run-p150b }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           matrix_items=()
 
           # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             run_n150="$RUN_N150"
             run_n300="$RUN_N300"
             run_p150b="$RUN_P150B"

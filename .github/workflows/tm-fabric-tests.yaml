@@ -119,11 +119,12 @@ jobs:
           INPUT_BH_RUNNER_LOUDBOX: ${{ inputs.bh-runner-loudbox }}
           INPUT_BH_RUNNER_P300: ${{ inputs.bh-runner-p300 }}
           INPUT_BH_RUNNER_QB_GE: ${{ inputs.bh-runner-qb-ge }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           matrix_items=()
 
           # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             run_wh_n300="$INPUT_RUN_WH_N300_FABRIC_TESTS"
             run_wh_t3k="$INPUT_RUN_WH_T3K_FABRIC_TESTS"
             run_wh_6u="$INPUT_RUN_WH_6U_FABRIC_TESTS"

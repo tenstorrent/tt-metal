@@ -88,8 +88,10 @@ jobs:
           echo "## ⏱️ Wall Time: ${wall_time}s (${wall_fmt})  |  CPU Time: ${cpu_time}s (${cpu_fmt})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 🔑 Verify metrics repo PAT
+        env:
+          CLANGSA_RESULTS_PAT: ${{ secrets.CLANGSA_RESULTS_PAT }}
         run: |
-          if [ -z "${{ secrets.CLANGSA_RESULTS_PAT }}" ]; then
+          if [ -z "${CLANGSA_RESULTS_PAT}" ]; then
             echo "::error::CLANGSA_RESULTS_PAT secret is not set. Add a PAT with repo scope for tenstorrent/tt-metal-compile-time-tracker."
             exit 1
           fi

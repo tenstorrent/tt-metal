@@ -88,10 +88,12 @@ jobs:
           SLACK_CHANNEL_ID: "C0AJF4YF5QF"
           GH_TOKEN: ${{ github.token }}
           MENTIONED_CSV: ${{ steps.check-mention.outputs.mentioned }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
         run: |
-          EVENT_NAME="${{ github.event_name }}"
+          EVENT_NAME="$EVENT_NAME"
           SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
-          REPO="${{ github.repository }}"
+          REPO="$REPO"
           SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
 
           find_slack_user_id() {

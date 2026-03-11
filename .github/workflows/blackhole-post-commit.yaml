@@ -190,12 +190,14 @@ jobs:
         shell: bash
         env:
           RUNNER_LABEL: ${{ inputs.runner-label || '["P150"]' }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           # Store runner-label with fallback in a variable for reuse
           runner_label="$RUNNER_LABEL"
 
           # Check if this is a scheduled P100-only run at 7:00 UTC (daily)
-          if [[ "${{ github.event_name }}" = "schedule" && "${{ github.event.schedule }}" = "0 7 * * *" ]]; then
+          if [[ "$EVENT_NAME" = "schedule" && "$EVENT_SCHEDULE" = "0 7 * * *" ]]; then
             matrix='["P100"]'
             civ2_matrix='["P100a"]'
             civ2_viommu_matrix='["P100a-viommu"]'
@@ -232,8 +234,6 @@ jobs:
           echo "Final matrix values:"
           echo "matrix: $matrix"
           echo "civ2_matrix: $civ2_matrix"
-          secrets:
-            REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
 
   build-artifact:
     if: ${{ inputs.dev-docker-image == '' }}
@@ -264,6 +264,9 @@ jobs:
           INPUT_DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
           INPUT_BUILD_ARTIFACT_NAME: ${{ inputs.build-artifact-name }}
           INPUT_WHEEL_ARTIFACT_NAME: ${{ inputs.wheel-artifact-name }}
+          NEEDS_DEV_DOCKER_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          NEEDS_BUILD_ARTIFACT_NAME: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          NEEDS_WHEEL_ARTIFACT_NAME: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         run: |
           # Validate pre-built artifact inputs - all three must be provided together
           if [[ -n "$INPUT_DEV_DOCKER_IMAGE" || -n "$INPUT_BUILD_ARTIFACT_NAME" || -n "$INPUT_WHEEL_ARTIFACT_NAME" ]]; then
@@ -282,10 +285,9 @@ jobs:
             echo "build-artifact-name=$INPUT_BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=$INPUT_WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           else
-            echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
-            echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
-            secrets:
-              SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+            echo "dev-docker-image=$NEEDS_DEV_DOCKER_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=$NEEDS_BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=$NEEDS_WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           fi
 
   run-profiler-regression:

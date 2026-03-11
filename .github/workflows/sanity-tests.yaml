@@ -228,6 +228,9 @@ jobs:
           INPUT_DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
           INPUT_BUILD_ARTIFACT_NAME: ${{ inputs.build-artifact-name }}
           INPUT_WHEEL_ARTIFACT_NAME: ${{ inputs.wheel-artifact-name }}
+          BUILT_DEV_DOCKER_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          BUILT_BUILD_ARTIFACT_NAME: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          BUILT_WHEEL_ARTIFACT_NAME: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         run: |
           # Validate pre-built artifact inputs - all three must be provided together
           img="$INPUT_DEV_DOCKER_IMAGE"
@@ -249,9 +252,9 @@ jobs:
             echo "build-artifact-name=$INPUT_BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=$INPUT_WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           else
-            echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
-            echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
-            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "dev-docker-image=$BUILT_DEV_DOCKER_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=$BUILT_BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=$BUILT_WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           fi
 
   tests-to-run:

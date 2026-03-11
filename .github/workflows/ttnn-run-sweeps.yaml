@@ -683,12 +683,20 @@ jobs:
           DISPLAY_LOG_LEVEL: ${{ github.event.inputs['log-level'] || 'INFO' }}
           DISPLAY_USE_DATABASE: ${{ github.event_name == 'schedule' && ((github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.use_database == 'true' && 'true' || 'false') || 'false') }}
           DISPLAY_MESH_SHAPE: ${{ github.event.inputs.mesh_shape || 'none' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule || 'N/A' }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           echo "::group::🔧 Workflow Configuration Options"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    TTNN Run Sweeps Configuration            │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Trigger:              ${{ github.event_name }}"
+          echo "│ Trigger:              $GITHUB_EVENT_NAME"
           echo "│ Sweep Name:           $DISPLAY_SWEEP_NAME"
           echo "│ Suite Name:           $DISPLAY_SUITE_NAME"
           echo "│ Skip on Timeout:      $DISPLAY_SKIP_ON_TIMEOUT"
@@ -701,17 +709,17 @@ jobs:
           echo "│ Log Level:            $DISPLAY_LOG_LEVEL"
           echo "│ Use Database:         $DISPLAY_USE_DATABASE"
           echo "│ Mesh Shape Filter:    $DISPLAY_MESH_SHAPE"
-          echo "│ Cron (if scheduled): ${{ github.event.schedule || 'N/A' }}"
+          echo "│ Cron (if scheduled): $GITHUB_EVENT_SCHEDULE"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
           echo "::group::📊 Workflow Context Information"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Run Attempt: ${{ github.run_attempt }}"
-          echo "Triggered by: ${{ github.actor }}"
-          echo "Repository: ${{ github.repository }}"
-          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
+          echo "Triggered by: $GITHUB_ACTOR"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch/Ref: $GITHUB_REF_NAME"
           echo "::endgroup::"
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -962,10 +970,14 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Show run identifiers
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           pattern: sweeps-vectors-*
@@ -1221,16 +1233,21 @@ jobs:
           DISPLAY_USE_DATABASE: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false' }}
           DISPLAY_MESH_SHAPE: ${{ github.event.inputs.mesh_shape || 'none' }}
           DISPLAY_RUNS_ON: ${{ toJSON(matrix.runs_on) }}
+          DISPLAY_TEST_GROUP_NAME: ${{ matrix.test_group_name }}
+          DISPLAY_BATCH: ${{ matrix.batch_display }}
+          DISPLAY_MODULE_SELECTOR: ${{ matrix.module_selector }}
+          DISPLAY_SUITE_OVERRIDE: ${{ matrix.suite_name || 'none' }}
+          DISPLAY_ARCH: ${{ matrix.arch }}
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│              Parallel Sweeps Configuration                  │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
-          echo "│ Batch:                ${{ matrix.batch_display }}"
-          echo "│ Module Selector:      ${{ matrix.module_selector }}"
-          echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
-          echo "│ Architecture:         ${{ matrix.arch }}"
+          echo "│ Run Mode:             Parallel Execution ($DISPLAY_TEST_GROUP_NAME)"
+          echo "│ Batch:                $DISPLAY_BATCH"
+          echo "│ Module Selector:      $DISPLAY_MODULE_SELECTOR"
+          echo "│ Suite Override:       $DISPLAY_SUITE_OVERRIDE"
+          echo "│ Architecture:         $DISPLAY_ARCH"
           echo "│ Runner:               $DISPLAY_RUNS_ON"
           echo "│ Skip on Timeout:      $DISPLAY_SKIP_ON_TIMEOUT"
           echo "│ Measure Device Perf:  $DISPLAY_MEASURE_DEVICE_PERF"
@@ -1253,13 +1270,14 @@ jobs:
           MEASURE_DEVICE_PERF_INPUT: ${{ github.event.inputs.measure_device_perf }}
           MEASURE_E2E_PERF_INPUT: ${{ github.event.inputs.measure_e2e_perf }}
           MEASURE_MEMORY_INPUT: ${{ github.event.inputs.measure_memory }}
+          MODULE_SELECTOR: ${{ matrix.module_selector }}
+          SUITE_NAME: ${{ matrix.suite_name }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
-          MODULE_SELECTOR="${{ matrix.module_selector }}"
-          SUITE_NAME="${{ matrix.suite_name }}"
 
           # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
           SKIP_ON_TIMEOUT_FLAG=""
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             # For scheduled runs: skip on timeout for both nightly and comprehensive runs
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           elif [[ "$SKIP_ON_TIMEOUT_INPUT" == "true" ]]; then
@@ -1269,7 +1287,7 @@ jobs:
 
           # Enable device performance for scheduled runs and when requested on manual dispatch
           DEVICE_PERF_FLAG=""
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             DEVICE_PERF_FLAG="--device-perf"
           elif [[ "$MEASURE_DEVICE_PERF_INPUT" == "true" ]]; then
             DEVICE_PERF_FLAG="--device-perf"
@@ -1283,7 +1301,7 @@ jobs:
 
           # Enable memory measurement for scheduled runs and when requested on manual dispatch
           MEMORY_FLAG=""
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             MEMORY_FLAG="--measure-memory"
           elif [[ "$MEASURE_MEMORY_INPUT" == "true" ]]; then
             MEMORY_FLAG="--measure-memory"
@@ -1321,10 +1339,11 @@ jobs:
           "${CMD[@]}"
       - name: Compute artifact suffix
         shell: bash
+        env:
+          DISPLAY_LABEL: ${{ matrix.batch_display }}
+          SUITE_LABEL: ${{ matrix.suite_name }}
+          GROUP_LABEL: ${{ matrix.test_group_name }}
         run: |
-          DISPLAY_LABEL="${{ matrix.batch_display }}"
-          SUITE_LABEL="${{ matrix.suite_name }}"
-          GROUP_LABEL="${{ matrix.test_group_name }}"
           FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
           if [[ -n "$SUITE_LABEL" ]]; then
             FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
@@ -1379,14 +1398,15 @@ jobs:
       - name: Homogenize sweep results
         env:
           SWEEP_NAME_INPUT: ${{ github.event.inputs.sweep_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 4 * * 3,6" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "$GITHUB_EVENT_SCHEDULE" == "0 4 * * 3,6" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
-          elif [[ "${{ github.event.schedule }}" == "0 3 * * *" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Model Traced)" ]]; then
+          elif [[ "$GITHUB_EVENT_SCHEDULE" == "0 3 * * *" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Model Traced)" ]]; then
             RUN_TYPE="model_traced"
-          elif [[ "${{ github.event.schedule }}" == "0 2 * * *" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Lead Models)" ]]; then
+          elif [[ "$GITHUB_EVENT_SCHEDULE" == "0 2 * * *" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Lead Models)" ]]; then
             RUN_TYPE="lead_models"
           fi
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV

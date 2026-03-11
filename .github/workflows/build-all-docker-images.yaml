@@ -84,21 +84,23 @@ jobs:
       # Compute Ubuntu 22.04 tags
       - name: Compute Ubuntu 22.04 tags
         id: ubuntu-2204-tags
+        env:
+          REPO_NAME: ${{ github.repository }}
         run: |
           # Extra files not in COPY but affect the image
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           ARCH="amd64"
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Ubuntu 22.04 images exist
         id: ubuntu-2204-check
@@ -116,20 +118,22 @@ jobs:
       # Compute Ubuntu 24.04 tags
       - name: Compute Ubuntu 24.04 tags
         id: ubuntu-2404-tags
+        env:
+          REPO_NAME: ${{ github.repository }}
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           ARCH="amd64"
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Ubuntu 24.04 images exist
         id: ubuntu-2404-check
@@ -147,11 +151,13 @@ jobs:
       # Compute ManyLinux tags
       - name: Compute ManyLinux tags
         id: manylinux-tags
+        env:
+          REPO_NAME: ${{ github.repository }}
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/manylinux-amd64:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          echo "manylinux-tag=ghcr.io/${REPO_NAME}/tt-metalium/manylinux-amd64:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check ManyLinux image exists
         id: manylinux-check

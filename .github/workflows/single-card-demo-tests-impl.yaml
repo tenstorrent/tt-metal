@@ -442,10 +442,13 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Check for invalid performance + civ2-compatible combination
         if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }}
+        env:
+          TEST_GROUP_PERF: ${{ matrix.test-group.performance }}
+          TEST_GROUP_CIV2: ${{ matrix.test-group.civ2-compatible }}
         run: |
           echo "::error::Performance tests are not compatible with civ2-compatible tests"
-          echo "::error::test-group.performance: ${{ matrix.test-group.performance }}"
-          echo "::error::test-group.civ2-compatible: ${{ matrix.test-group.civ2-compatible }}"
+          echo "::error::test-group.performance: $TEST_GROUP_PERF"
+          echo "::error::test-group.civ2-compatible: $TEST_GROUP_CIV2"
           exit 1
       - name: Enable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance

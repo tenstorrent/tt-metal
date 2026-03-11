@@ -116,6 +116,7 @@ jobs:
         id: set-matrix
         env:
           BH_MULTI_CARD_SYSTEM_TYPE: ${{ inputs.bh_multi_card_system_type || 'all' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           all_systems='[
             {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
@@ -126,7 +127,7 @@ jobs:
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="$BH_MULTI_CARD_SYSTEM_TYPE"
-          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
             filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')

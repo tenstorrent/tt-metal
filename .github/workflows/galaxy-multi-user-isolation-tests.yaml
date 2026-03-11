@@ -116,25 +116,35 @@ jobs:
         run: |
           python3 .github/scripts/utils/generate_tray_mapping.py
       - name: Create Docker Compose file
+        env:
+          MATRIX_SCENARIO: ${{ matrix.scenario }}
+          DEV_DOCKER_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CHIPS_PER_CONTAINER: ${{ matrix.chips_per_container }}
+          MESH_DESCRIPTOR: ${{ matrix.mesh_descriptor }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
         run: |
           TRAY_MAPPING_ARG=""
-          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ]; then
+          if [ "$MATRIX_SCENARIO" = "tray" ] || [ "$MATRIX_SCENARIO" = "tp2" ]; then
             TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
           fi
           python3 .github/scripts/utils/multi-user-create-files.py \
-            --image "${{ needs.build-artifact.outputs.dev-docker-image }}" \
-            --num-containers ${{ matrix.num_containers }} \
-            --chips-per-container ${{ matrix.chips_per_container }} \
+            --image "$DEV_DOCKER_IMAGE" \
+            --num-containers "$NUM_CONTAINERS" \
+            --chips-per-container "$CHIPS_PER_CONTAINER" \
             $TRAY_MAPPING_ARG \
-            --mesh-descriptor ${{ matrix.mesh_descriptor }} \
-            --container-prefix ${{ matrix.container_prefix }}
+            --mesh-descriptor "$MESH_DESCRIPTOR" \
+            --container-prefix "$CONTAINER_PREFIX"
       - name: Run Docker Compose
         timeout-minutes: 10
+        env:
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
         run: |
           CONTAINERS_DIR=".multi-user-galaxy-docker-files"
-          REQUIRED_CONTAINERS=${{ matrix.num_containers }}
+          REQUIRED_CONTAINERS="$NUM_CONTAINERS"
           TIMEOUT=300
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
+          CONTAINER_PREFIX="$CONTAINER_PREFIX"
 
           rm -rf "$CONTAINERS_DIR"
           mkdir -p "$CONTAINERS_DIR"
@@ -161,11 +171,13 @@ jobs:
           echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
       - name: Run the tests
         timeout-minutes: 15
+        env:
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
+          TEST_PATH: ${{ matrix.test_path }}
+          TEST_ARGS: ${{ matrix.test_args }}
+          MATRIX_SCENARIO: ${{ matrix.scenario }}
         run: |
-          NUM_CONTAINERS=${{ matrix.num_containers }}
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
-          TEST_PATH="${{ matrix.test_path }}"
-          TEST_ARGS="${{ matrix.test_args }}"
           RESULTS_DIR=".multi-user-test-results"
 
           mkdir -p "$RESULTS_DIR"
@@ -214,12 +226,13 @@ jobs:
 
           TEST_NAME=$(basename "${TEST_PATH}" .py)
           # Output: ">>> Running single/test_fill in chip-0" etc.
-          run_test "${{ matrix.scenario }}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
+          run_test "${MATRIX_SCENARIO}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
       - name: Check test results
+        env:
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
         run: |
           RESULTS_DIR=".multi-user-test-results"
-          NUM_CONTAINERS=${{ matrix.num_containers }}
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
 
           failed=0
           for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do

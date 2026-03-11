@@ -139,6 +139,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
+          TEST_NAME: ${{ matrix.test-group.name }}
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env

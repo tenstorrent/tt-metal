@@ -134,22 +134,30 @@ jobs:
 
       - name: Compute tags
         id: tags
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_BUILD_IMAGE_NAME: ${{ env.CI_BUILD_IMAGE_NAME }}
+          CI_TEST_IMAGE_NAME: ${{ env.CI_TEST_IMAGE_NAME }}
+          DEV_IMAGE_NAME: ${{ env.DEV_IMAGE_NAME }}
+          BASIC_DEV_IMAGE_NAME: ${{ env.BASIC_DEV_IMAGE_NAME }}
+          BASIC_TTNN_RUNTIME_IMAGE_NAME: ${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}
+          MANYLINUX_IMAGE_NAME: ${{ env.MANYLINUX_IMAGE_NAME }}
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_BUILD_IMAGE_NAME}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_TEST_IMAGE_NAME}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${DEV_IMAGE_NAME}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_DEV_IMAGE_NAME}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_TTNN_RUNTIME_IMAGE_NAME}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          echo "manylinux-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${MANYLINUX_IMAGE_NAME}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist

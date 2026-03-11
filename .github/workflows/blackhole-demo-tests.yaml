@@ -104,6 +104,7 @@ jobs:
         id: set-matrix
         env:
           SYSTEM_TYPE: ${{ inputs.system-type || 'all' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           all_systems='[
             {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
@@ -116,7 +117,7 @@ jobs:
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="$SYSTEM_TYPE"
-          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
             filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')

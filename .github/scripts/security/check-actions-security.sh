@@ -63,6 +63,23 @@ echo "GitHub Actions Security Lint Check"
 echo "=========================================="
 echo ""
 
+# Helper: AWK snippet for detecting run block boundaries with proper indentation tracking.
+# This avoids false positives from step names like "- name: ${{ matrix.foo }}" being
+# flagged as run block content. Exits run block when:
+#   1. A new YAML list item is encountered (line starting with "- ")
+#   2. A YAML key at the same or lesser indentation as run: is encountered
+AWK_RUN_BLOCK_DETECT='
+    BEGIN { in_run_block = 0; run_indent = 0 }
+    /^[[:space:]]*run:[[:space:]]*\|/ {
+        match($0, /^[[:space:]]*/); run_indent = RLENGTH; in_run_block = 1; next
+    }
+    in_run_block {
+        if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_run_block = 0; next }
+        match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+        if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_run_block = 0; next }
+    }
+'
+
 # Check 1: Direct input interpolation in run blocks (high risk patterns)
 # Only flags UNSAFE usage: direct interpolation in run: blocks
 # Safe usage (passing via env var) is NOT flagged
@@ -70,10 +87,8 @@ echo "Checking for dangerous direct interpolation patterns..."
 dangerous_patterns='github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)'
 while IFS= read -r -d '' file; do
     if grep -qE "$dangerous_patterns" "$file" 2>/dev/null; then
-        unsafe_usage=$(awk '
-            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
             /^[[:space:]]*run:/ && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print; next }
-            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
             in_run_block && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -213,10 +228,8 @@ done < <(grep -rl 'permissions:.*write-all\|write-all' "$GITHUB_DIR/workflows" 2
 echo "Checking for ref-based injection patterns..."
 while IFS= read -r -d '' file; do
     if grep -qE '\$\{\{.*\.(head|base)\.ref' "$file" 2>/dev/null; then
-        unsafe_usage=$(awk '
-            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
             /^[[:space:]]*run:/ && /\$\{\{.*\.(head|base)\.ref/ { print; next }
-            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
             in_run_block && /\$\{\{.*\.(head|base)\.ref/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -248,27 +261,25 @@ while IFS= read -r file; do
     fi
 done < <(grep -rlE 'curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh' "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" 2>/dev/null || true)
 
-# Check 11: inputs.* and steps.*.outputs.* direct interpolation in run blocks
+# Check 11: inputs.*, steps.*.outputs.*, and needs.*.outputs.* direct interpolation in run blocks
 # Only flags UNSAFE usage: direct interpolation in run: blocks
 # Safe usage (passing via env var) is NOT flagged
-echo "Checking for inputs/steps.outputs interpolation in run blocks..."
+echo "Checking for inputs/outputs interpolation in run blocks..."
 while IFS= read -r -d '' file; do
-    if grep -qE '\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.)' "$file" 2>/dev/null; then
-        unsafe_usage=$(awk '
-            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
-            /^[[:space:]]*run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.)/ { print; next }
-            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
-            in_run_block && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.)/ { print }
+    if grep -qE '\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)' "$file" 2>/dev/null; then
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print; next }
+            in_run_block && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
-            log_issue "HIGH" "$file" "Contains \${{ inputs.* }} or \${{ steps.*.outputs.* }} directly in run: block - use env var instead"
+            log_issue "HIGH" "$file" "Contains \${{ inputs.* }}, \${{ steps.*.outputs.* }}, or \${{ needs.*.outputs.* }} directly in run: block - use env var instead"
             log_fix_example "inputs_outputs" \
-'# BEFORE (unsafe - input is macro-expanded into shell code):
-  run: ./test --platform=${{ inputs.platform }}
+'# BEFORE (unsafe - input/output is macro-expanded into shell code):
+  run: echo "${{ needs.build.outputs.pr-number }}"
 # AFTER (safe - assign to env var, reference as shell variable):
   env:
-    PLATFORM: ${{ inputs.platform }}
-  run: ./test --platform="$PLATFORM"'
+    PR_NUMBER: ${{ needs.build.outputs.pr-number }}
+  run: echo "$PR_NUMBER"'
         fi
     fi
 done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
@@ -313,10 +324,8 @@ done < <(grep -rlE 'ACTIONS_ALLOW_UNSECURE_COMMANDS.*true' "$GITHUB_DIR/workflow
 echo "Checking for toJSON() in run blocks..."
 while IFS= read -r -d '' file; do
     if grep -qE 'toJSON\(' "$file" 2>/dev/null; then
-        unsafe_usage=$(awk '
-            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
             /^[[:space:]]*run:/ && /toJSON\(/ { print; next }
-            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
             in_run_block && /toJSON\(/ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -362,10 +371,8 @@ echo "Checking for additional attacker-controlled event fields in run blocks..."
 additional_event_fields='github\.event\.(discussion\.(title|body)|review\.body|review_comment\.body|head_commit\.(message|author\.(name|email))|commits\[\*\]\.(message|author)|pages\[\*\]\.page_name|workflow_run\.head_branch|workflow_run\.head_sha|label\.name|milestone\.title)'
 while IFS= read -r -d '' file; do
     if grep -qE "$additional_event_fields" "$file" 2>/dev/null; then
-        unsafe_usage=$(awk -v pattern="$additional_event_fields" '
-            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+        unsafe_usage=$(awk -v pattern="$additional_event_fields" "$AWK_RUN_BLOCK_DETECT"'
             /^[[:space:]]*run:/ && $0 ~ pattern { print; next }
-            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
             in_run_block && $0 ~ pattern { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -389,10 +396,17 @@ echo "Checking for github-script with expression interpolation..."
 while IFS= read -r -d '' file; do
     if grep -qE 'actions/github-script' "$file" 2>/dev/null; then
         unsafe_usage=$(awk '
+            BEGIN { in_action = 0; in_script = 0; script_indent = 0 }
             /uses:.*actions\/github-script/ { in_action = 1; next }
-            in_action && /^[[:space:]]*script:[[:space:]]*\|/ { in_script = 1; next }
+            in_action && /^[[:space:]]*script:[[:space:]]*\|/ {
+                match($0, /^[[:space:]]*/); script_indent = RLENGTH; in_script = 1; next
+            }
             in_action && /^[[:space:]]*script:/ && /\$\{\{.*github\.event\./ { print; next }
-            in_script && /^[[:space:]]*[a-z_-]+:/ { in_script = 0; in_action = 0 }
+            in_script {
+                if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_script = 0; in_action = 0; next }
+                match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+                if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_script = 0; in_action = 0; next }
+            }
             in_script && /\$\{\{.*github\.event\./ { print }
         ' "$file" 2>/dev/null)
         if [[ -n "$unsafe_usage" ]]; then
@@ -412,6 +426,75 @@ while IFS= read -r -d '' file; do
     script: |
       const title = process.env.ISSUE_TITLE;
       console.log(title);'
+        fi
+    fi
+done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
+
+# Check 18: secrets.* directly interpolated in run blocks
+# Secrets should always be passed via env: to avoid leaking in error traces
+# or debug output if the shell command fails unexpectedly.
+echo "Checking for secrets interpolation in run blocks..."
+while IFS= read -r -d '' file; do
+    if grep -qE '\$\{\{.*secrets\.' "$file" 2>/dev/null; then
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*run:/ && /\$\{\{.*secrets\./ { print; next }
+            in_run_block && /\$\{\{.*secrets\./ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "Contains \${{ secrets.* }} directly in run: block - pass via env var to avoid exposure in error traces"
+            log_fix_example "secrets_run" \
+'# BEFORE (risky - secret expanded into shell source, may leak in traces):
+  run: git remote set-url origin https://${{ secrets.MY_TOKEN }}@github.com/org/repo.git
+# AFTER (safe - secret stays in env var, not embedded in shell source):
+  env:
+    MY_TOKEN: ${{ secrets.MY_TOKEN }}
+  run: git remote set-url origin "https://${MY_TOKEN}@github.com/org/repo.git"'
+        fi
+    fi
+done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
+
+# Check 19: matrix.* directly interpolated in run blocks
+# Matrix values are typically hardcoded, but should still use env: for
+# consistency and defense-in-depth against future changes.
+echo "Checking for matrix.* interpolation in run blocks..."
+while IFS= read -r -d '' file; do
+    if grep -qE '\$\{\{.*matrix\.' "$file" 2>/dev/null; then
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*run:/ && /\$\{\{.*matrix\./ { print; next }
+            in_run_block && /\$\{\{.*matrix\./ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "MEDIUM" "$file" "Contains \${{ matrix.* }} directly in run: block - use env var instead"
+            log_fix_example "matrix_run" \
+'# BEFORE (matrix value is macro-expanded into shell code):
+  run: echo "Testing on ${{ matrix.os }}"
+# AFTER (safe - assign to env var, reference as shell variable):
+  env:
+    MATRIX_OS: ${{ matrix.os }}
+  run: echo "Testing on $MATRIX_OS"'
+        fi
+    fi
+done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
+
+# Check 20: github.repository and github.event_name directly in run blocks
+# These have restricted character sets and low injection risk, but using env:
+# is still preferred for defense-in-depth and consistency.
+echo "Checking for github.repository/github.event_name interpolation in run blocks..."
+while IFS= read -r -d '' file; do
+    if grep -qE '\$\{\{.*(github\.repository[^_]|github\.event_name)' "$file" 2>/dev/null; then
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*run:/ && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print; next }
+            in_run_block && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "LOW" "$file" "Contains \${{ github.repository }} or \${{ github.event_name }} directly in run: block - prefer env var for defense-in-depth"
+            log_fix_example "github_context_run" \
+'# BEFORE (low risk but inconsistent with defense-in-depth):
+  run: gh pr view 123 --repo "${{ github.repository }}"
+# AFTER (consistent - use workflow-level env or step env):
+  env:
+    REPO: ${{ github.repository }}
+  run: gh pr view 123 --repo "$REPO"'
         fi
     fi
 done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')

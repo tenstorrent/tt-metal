@@ -111,10 +111,11 @@ jobs:
         env:
           ARCHITECTURE: ${{ inputs.architecture }}
           EXTRA_TAG: ${{ inputs.extra-tag }}
+          MODELS_TO_RUN: ${{ needs.define-models.outputs.models-to-run }}
         run: |
           set -euo pipefail
 
-          models_json='${{ needs.define-models.outputs.models-to-run }}'
+          models_json="$MODELS_TO_RUN"
           echo "[info] Models to run: $models_json"
 
           # Parse and validate architecture input
@@ -449,11 +450,13 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
+          MATRIX_NAME: ${{ matrix.test-info.name }}
+          MATRIX_TEST_TYPE: ${{ matrix.test-info.test-type }}
         run: |
-          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          CLEAN_NAME=$(echo "$MATRIX_NAME" | tr ' ' '-')
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${MATRIX_TEST_TYPE}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${MATRIX_TEST_TYPE}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_${MATRIX_TEST_TYPE}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
@@ -488,9 +491,14 @@ jobs:
           test -f "$DEVICE_PERF_REPORT_FILENAME"
 
       - name: Clean test name for artifact
+        env:
+          MATRIX_NAME: ${{ matrix.test-info.name }}
+          MATRIX_TEST_TYPE: ${{ matrix.test-info.test-type }}
+          MATRIX_ARCH: ${{ matrix.test-info.arch }}
+          MATRIX_MACHINE_TYPE: ${{ matrix.test-info.machine-type }}
         run: |
-          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
-          echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+          CLEAN_NAME=$(echo "$MATRIX_NAME" | tr ' ' '-')
+          echo "ARTIFACT_NAME=device-perf-report-csv-${MATRIX_TEST_TYPE}-${MATRIX_ARCH}-${MATRIX_MACHINE_TYPE}-${CLEAN_NAME}" >> "$GITHUB_ENV"
 
       - name: Upload device perf report
         timeout-minutes: 5

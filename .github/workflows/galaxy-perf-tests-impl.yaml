@@ -170,12 +170,14 @@ jobs:
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() }}
+        env:
+          TRACY: ${{ matrix.test-group.tracy }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
           PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
           PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
-          if [ "${{ matrix.test-group.tracy }}" == "true" ]; then
+          if [ "$TRACY" == "true" ]; then
             found_reports=false
             if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
               echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"

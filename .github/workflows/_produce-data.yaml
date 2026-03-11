@@ -108,18 +108,28 @@ jobs:
             infra
           sparse-checkout-cone-mode: true
       - name: Output (safe) pipeline values
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW: ${{ github.workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          JOB_CONTAINER_IMAGE: ${{ job.container.image }}
         run: |
-          echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
+          echo "pipeline_id (id / run #): $RUN_ID/$RUN_ATTEMPT"
           echo "submissions_ts: "
           echo "start_ts: "
           echo "end_ts: "
-          echo "name: ${{ github.workflow }}, but rk recommended name w/out @: ${{ github.workflow_ref }}"
-          echo "trigger: ${{ github.event_name }}"
-          echo "sha: ${{ github.sha }}"
-          echo "(triggering) author/actor: ${{ github.actor }}"
-          echo "author/actor: ${{ github.triggering_actor }}"
+          echo "name: $WORKFLOW, but rk recommended name w/out @: $WORKFLOW_REF"
+          echo "trigger: $EVENT_NAME"
+          echo "sha: $SHA"
+          echo "(triggering) author/actor: $ACTOR"
+          echo "author/actor: $TRIGGERING_ACTOR"
           echo "orchestrator: github (Static)"
-          echo "docker_image: ${{ job.container.image }}"
+          echo "docker_image: $JOB_CONTAINER_IMAGE"
           echo "build duration is post-process"
       - name: Get workflow run_id attempt number to analyze
         id: get-run-id-and-attempt
@@ -127,14 +137,17 @@ jobs:
         env:
           INPUT_TEST_WORKFLOW_RUN_ID: ${{ inputs.test_workflow_run_id }}
           INPUT_TEST_WORKFLOW_RUN_ATTEMPT: ${{ inputs.test_workflow_run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
-          event_name="${{ github.event_name }}"
+          event_name="$EVENT_NAME"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
             run_id="$INPUT_TEST_WORKFLOW_RUN_ID"
             attempt_number="$INPUT_TEST_WORKFLOW_RUN_ATTEMPT"
           elif [[ "$event_name" == "workflow_run" ]]; then
-            run_id="${{ github.event.workflow_run.id }}"
-            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            run_id="$WORKFLOW_RUN_ID"
+            attempt_number="$WORKFLOW_RUN_ATTEMPT"
             [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
             [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
           else

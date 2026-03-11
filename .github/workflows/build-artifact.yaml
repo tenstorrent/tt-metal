@@ -617,10 +617,11 @@ jobs:
       python-version: ${{ steps.set-python-version.outputs.version }}
     steps:
       - id: set-python-version
+        env:
+          DISTRO: ${{ needs.parse-platform.outputs.distro }}
+          VERSION: ${{ needs.parse-platform.outputs.version }}
         run: |
           # Get distro and version from parse-platform outputs (which handles both workflow_dispatch and workflow_call)
-          DISTRO="${{ needs.parse-platform.outputs.distro }}"
-          VERSION="${{ needs.parse-platform.outputs.version }}"
 
           # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
           if [ "$VERSION" = "24.04" ]; then

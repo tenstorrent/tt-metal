@@ -179,6 +179,9 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         uses: ./.github/actions/docker-run
+        env:
+          TEST_CONFIG_MODEL: ${{ matrix.test-config.model }}
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -195,13 +198,12 @@ jobs:
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |
-            PYTEST_CMD="${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}"
-            if [[ "${{ matrix.test-config.model }}" == *"ttt"* ]]; then
-              $PYTEST_CMD tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
-            elif [[ "${{ matrix.test-config.model }}" == *"qwen25_vl"* ]]; then
-              $PYTEST_CMD tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
+            if [[ "$TEST_CONFIG_MODEL" == *"ttt"* ]]; then
+              $PYTEST_CMD tests/nightly/single_card/tt_transformers -k $TEST_CONFIG_MODEL
+            elif [[ "$TEST_CONFIG_MODEL" == *"qwen25_vl"* ]]; then
+              $PYTEST_CMD tests/nightly/single_card/qwen25_vl -k $TEST_CONFIG_MODEL
             else
-              $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+              $PYTEST_CMD tests/nightly/single_card/$TEST_CONFIG_MODEL
             fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
@@ -259,6 +261,8 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: 60
         uses: ./.github/actions/docker-run
+        env:
+          TEST_CONFIG_CMD: ${{ matrix.test-config.cmd }}
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -269,7 +273,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: ${{ matrix.test-config.cmd }}
+          run_args: $TEST_CONFIG_CMD
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -320,11 +324,12 @@ jobs:
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
+          TEST_CONFIG_MODEL: ${{ matrix.test-config.model }}
         run: |
-          if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-            $PYTEST_CMD tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+          if [[ "$TEST_CONFIG_MODEL" == *"gemma-3"* ]]; then
+            $PYTEST_CMD tests/nightly/single_card/gemma3 -k $TEST_CONFIG_MODEL
           else
-            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+            $PYTEST_CMD tests/nightly/single_card/$TEST_CONFIG_MODEL
           fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
