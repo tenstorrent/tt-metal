@@ -1,0 +1,110 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "normalize",
+      "description": "Full normalization pipeline: tilize, reduce_mean, subtract_mean, square, reduce_var, inv_std (add_eps + rsqrt), multiply by inv_std, untilize. No gamma/beta.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_normalize.py",
+      "reference_body": "torch.nn.functional.layer_norm(input_tensor, [input_tensor.shape[-1]], eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.02
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 64)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "gamma",
+      "description": "Add gamma (scale) affine transform. Reader reads gamma RM stick and tilizes into cb_gamma. Compute multiplies normalized result by gamma with ROW broadcast.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_gamma.py",
+      "reference_body": "torch.nn.functional.layer_norm(input_tensor, [input_tensor.shape[-1]], eps=1e-5) * gamma",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.02
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 64)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": ", gamma_tt",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, input_tensor.shape[-1])",
+      "extra_ttnn_setup": "gamma_tt = ttnn.from_torch(gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "affine",
+      "description": "Add beta (shift) affine transform. Reader reads beta RM stick. Compute adds beta with ROW broadcast after gamma multiply. Full layer_norm with weight and bias.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_affine.py",
+      "reference_body": "torch.nn.functional.layer_norm(input_tensor, [input_tensor.shape[-1]], weight=gamma.squeeze(), bias=beta.squeeze(), eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.02
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 64)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": ", gamma_tt, beta_tt",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, input_tensor.shape[-1])\nbeta = torch.randn(1, 1, 1, input_tensor.shape[-1])",
+      "extra_ttnn_setup": "gamma_tt = ttnn.from_torch(gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\nbeta_tt = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
