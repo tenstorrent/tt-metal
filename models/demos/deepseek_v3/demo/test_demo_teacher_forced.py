@@ -35,7 +35,9 @@ REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128, 2048, 8192], ids=["128", "2048", "8192"])
-def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int, is_ci_env: bool):
+def test_demo_teacher_forcing_accuracy(
+    reference_file: Path, max_new_tokens: int, is_ci_env: bool, force_recalculate_weight_config: bool
+):
     """
     Test DeepSeek v3 demo with teacher forcing to verify accuracy.
 
@@ -62,9 +64,9 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     Expected accuracy: ~100% if TT model matches HF model behavior.
     """
 
-    if not REFERENCE_FILE.exists():
+    if not reference_file.exists():
         pytest.fail(
-            f"Reference file not found at {REFERENCE_FILE}. "
+            f"Reference file not found at {reference_file}. "
             "Generate it first by running "
             "`python generate_teacher_forced_file.py`."
         )
@@ -72,7 +74,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     if is_ci_env and max_new_tokens != 128:
         pytest.skip("CI runs only the 128-token teacher forcing test to keep runtime manageable.")
 
-    payload = torch.load(REFERENCE_FILE, weights_only=False)
+    payload = torch.load(reference_file, weights_only=False)
     assert "reference_tokens" in payload, "Reference file missing 'reference_tokens'"
     assert "prompt_tokens" in payload, "Reference file missing 'prompt_tokens'"
     assert "generated_tokens" in payload, "Reference file missing 'generated_tokens'"
@@ -136,16 +138,16 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     if max_new_tokens > saved_max_new_tokens:
         pytest.fail(
             f"Requested max_new_tokens={max_new_tokens} exceeds reference file max_new_tokens={saved_max_new_tokens} "
-            f"({REFERENCE_FILE}). Regenerate the reference with a larger max_new_tokens."
+            f"({reference_file}). Regenerate the reference with a larger max_new_tokens."
         )
     if max_new_tokens > available_gen_tokens:
         pytest.fail(
             f"Requested max_new_tokens={max_new_tokens} exceeds available generated tokens={available_gen_tokens} "
-            f"in {REFERENCE_FILE}. Regenerate the reference with a larger max_new_tokens."
+            f"in {reference_file}. Regenerate the reference with a larger max_new_tokens."
         )
 
     logger.info("=== Phase 2: Run teacher forcing ===")
-    logger.info("Loaded reference from: {}", REFERENCE_FILE)
+    logger.info("Loaded reference from: {}", reference_file)
     logger.info("Total reference tokens: {}, prompt length: {}", total_ref_tokens, tf_prompt_len)
     logger.info("Using max_new_tokens={}", max_new_tokens)
 
@@ -158,9 +160,10 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
         max_new_tokens=max_new_tokens,
         repeat_batches=1,
         token_accuracy=True,
-        reference_file=REFERENCE_FILE,
+        reference_file=reference_file,
         tf_prompt_len=tf_prompt_len,
         enable_trace=True,
+        force_recalculate=force_recalculate_weight_config,
     )
 
     # Check results
