@@ -31,6 +31,7 @@ cleanup_multihost() {
 trap 'cleanup_multihost' EXIT
 
 multihost_setup "${ALLOC_DIR}"
+reset_devices
 
 if [[ "${NO_DOCKER:-0}" == "1" ]]; then
     _alloc="${ALLOC_DIR}"
