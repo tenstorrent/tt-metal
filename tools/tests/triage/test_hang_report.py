@@ -52,6 +52,11 @@ def test_hang_generates_junit_xml():
         timeout=90,
     )
 
+    print("=== STDOUT ===")
+    print(result.stdout.decode(errors="replace"))
+    print("=== STDERR (tt-triage output) ===")
+    print(result.stderr.decode(errors="replace"))
+
     assert result.returncode == 0, f"Hang app failed: stderr={result.stderr.decode()[-500:]}"
 
     # Find newly created hang report XML
