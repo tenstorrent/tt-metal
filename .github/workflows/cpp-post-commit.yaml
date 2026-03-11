@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: false
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 jobs:
   define-cpp-tests:
     runs-on: ubuntu-latest
@@ -98,7 +103,7 @@ jobs:
         test-group: ${{ fromJSON(needs.define-cpp-tests.outputs.cpp-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
-      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO

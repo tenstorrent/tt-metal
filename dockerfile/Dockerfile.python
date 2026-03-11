@@ -1,0 +1,159 @@
+# Python Virtual Environment Images for TT-Metalium
+# These images are built once and pushed to GHCR to avoid installing Python
+# packages repeatedly. Each venv is built as a separate target that outputs
+# to /install/venv, which can then be used as a source for COPY --from.
+#
+# The Ubuntu version is parameterized via the UBUNTU_VERSION build arg,
+# which controls the base image and thus the system Python version:
+#   22.04 -> Python 3.10
+#   24.04 -> Python 3.12
+#
+# Usage:
+#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv \
+#     --build-arg UBUNTU_VERSION=22.04 \
+#     -t ghcr.io/.../python-ci-test-venv:2204-<hash> .
+#
+# The main Dockerfile can then use:
+#   FROM ghcr.io/.../python-ci-test-venv:2204-<hash> AS ci-test-venv-layer
+#   COPY --from=ci-test-venv-layer /install/venv /opt/venv
+
+# Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
+ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=''
+# Fallback UV_IMAGE for standalone `docker build` without Bake.
+# The single source of truth is docker-bake.hcl variable "UV_IMAGE".
+# When upgrading uv, update docker-bake.hcl first, then sync this default.
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+
+#############################################################
+# uv layer - copy from official distroless image
+# Pinned to specific SHA256 for reproducible builds
+# This must match the UV version in the main Dockerfile
+# See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+#############################################################
+
+FROM ${UV_IMAGE} AS uv-layer
+
+#############################################################
+# ci-build-venv-builder
+# Base stage with Python, uv, and virtual environment creation.
+# Packages: uv, build, numpy, setuptools (base packages for building)
+# ci-test-venv-builder extends this stage to add test dependencies.
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
+
+ARG UBUNTU_VERSION
+ARG PYTHON_VERSION
+
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Install common Python dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Determine Python version based on UBUNTU_VERSION or PYTHON_VERSION override
+# Outputs: DETECTED_PYTHON_VERSION environment variable persisted for child stages
+RUN if [ -n "${PYTHON_VERSION}" ]; then \
+    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    elif [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+    echo "DETECTED_PYTHON_VERSION=${DETECTED_PYTHON_VERSION}" > /tmp/python-version.env
+
+# Install Python with uv and create relocatable virtual environment with base packages.
+# umask 000 ensures the venv is world-writable for multi-host NFS access.
+# MAKEFLAGS accelerates builds for packages that compile with make.
+RUN source /tmp/python-version.env && \
+    export MAKEFLAGS="-j$(nproc)" && \
+    umask 000 && \
+    uv python install "${DETECTED_PYTHON_VERSION}" && \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
+    uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
+    source ${PYTHON_ENV_DIR}/bin/activate && \
+    uv pip install --no-cache uv build numpy setuptools==80 && \
+    uv clean --force
+
+# Export as scratch image with only the venv
+# NOTE: Use literal /opt/venv path, not ${PYTHON_ENV_DIR}. FROM scratch doesn't inherit ENV.
+FROM scratch AS ci-build-venv
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="Pre-built Python virtual environment for CI builds"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
+COPY --from=ci-build-venv-builder /opt/venv /install/venv
+
+#############################################################
+# ci-test-venv-builder
+# Extends ci-build-venv-builder with test dependencies.
+# Packages: torch (CPU) + requirements-dev.txt + docs + triage
+#############################################################
+
+FROM ci-build-venv-builder AS ci-test-venv-builder
+
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install additional build dependencies required for test packages
+# Some packages require compilation, so we need build-essential and dev headers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pkg-resources \
+    build-essential \
+    pkg-config \
+    libhdf5-dev \
+    libsndfile1-dev \
+    libgl1 \
+    git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Create directory structure for requirements files
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Copy requirements files maintaining relative path structure for -r includes
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Install test packages into the existing venv inherited from ci-build-venv-builder.
+# - torch from CPU index first
+# - Then requirements files with unsafe-best-match to avoid transitive dep conflicts
+# umask 000 ensures the venv is world-writable for runtime pip installs
+# no-build-isolation to handle pkg_resources/mmcv/setuptools
+# MAKEFLAGS accelerates builds for packages that compile with make
+RUN export MAKEFLAGS="-j$(nproc)" && \
+    umask 000 && \
+    source ${PYTHON_ENV_DIR}/bin/activate && \
+    uv pip install --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
+    uv clean --force
+
+# Export as scratch image with only the venv
+# NOTE: Use literal /opt/venv path, not ${PYTHON_ENV_DIR}. FROM scratch doesn't inherit ENV.
+FROM scratch AS ci-test-venv
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="Pre-built Python virtual environment for CI testing"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
+COPY --from=ci-test-venv-builder /opt/venv /install/venv

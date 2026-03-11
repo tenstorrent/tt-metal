@@ -1,41 +1,96 @@
+# Basic Development Dockerfile
+# Optimized with multi-stage builds for tool caching.
+# Tool layers are injected via docker-bake.hcl contexts.
+#
+# Build:
+#   docker buildx bake -f dockerfile/docker-bake.hcl basic-dev
+#   docker buildx bake -f dockerfile/docker-bake.hcl basic-ttnn-runtime
+
+#############################################################
+# Build arguments
+#############################################################
+
 ARG UBUNTU_VERSION=22.04
 # PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
 ARG PYTHON_VERSION=""
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
-FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+#############################################################
+# Tool layers (resolved by docker-bake.hcl contexts)
+# WARNING: Plain `docker build` is NOT supported — these stubs
+# resolve to empty scratch images. Always use `docker buildx bake`.
+#############################################################
+
+FROM scratch AS cmake-layer
+FROM scratch AS sfpi-layer
+FROM scratch AS openmpi-layer
+FROM scratch AS ccache-layer
+
+#############################################################
+# uv layer - copy from official distroless image
+# Using SHA256 pinning for reproducible builds
+# See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+#############################################################
+
+FROM ${UV_IMAGE} AS uv-layer
+
+#############################################################
+# Base image
+#############################################################
 
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
-# Re-declare ARG make it available in the build stage
+# Re-declare ARG to make it available in the build stage
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+# IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
+# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
+# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
+ARG OMPI_TAG=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
+
+# Copy uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Copy cmake from pre-built tool image
+COPY --from=cmake-layer /install/ /usr/local/
+
+# Copy OpenMPI from pre-built tool image
+COPY --from=openmpi-layer /install/ /opt/
+
+# Copy ccache from pre-built tool image
+COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+
+RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
+    test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; }
+
 # Install basic tools to build
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
-    && apt-get update && apt-get install -y \
-    cmake \
     ninja-build \
     g++-12 \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install mpi-ulfm from the tenstorrent repository
-RUN set -eux; \
-    apt-get update && \
-    apt-get install -y -f \
-    wget ca-certificates && \
-    TMP_DIR="$(mktemp -d)" && \
-    DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb" && \
-    wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL" && \
-    apt-get install -f -y "$TMP_DIR/ompi.deb" && \
-    rm -rf "$TMP_DIR" && \
-    rm -rf /var/lib/apt/lists/*
-
+#############################################################
+# Basic TTNN Runtime image
 #############################################################
 
 FROM base AS basic-ttnn-runtime
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="Minimal TTNN runtime environment"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
@@ -45,9 +100,11 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Auto-detect Python version from Ubuntu version if not explicitly provided
-RUN set -e; \
-    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
     if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
     DETECTED_PYTHON_VERSION="3.12"; \
@@ -57,21 +114,21 @@ RUN set -e; \
     fi; \
     echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
     umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1); \
     echo "${DETECTED_PYTHON_VERSION}" > /tmp/python_version
 
 # Install basic runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     python3-dev \
     python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install the SFPI compiler
-COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
-COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
+RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv

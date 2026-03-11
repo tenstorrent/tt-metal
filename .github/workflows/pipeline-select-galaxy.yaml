@@ -125,6 +125,8 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 run-name: ${{ inputs.description }}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
     runs-on: ubuntu-latest
@@ -191,12 +193,13 @@ jobs:
               ;;
           esac
   build-artifact:
+    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
-    needs: determine-tests
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}

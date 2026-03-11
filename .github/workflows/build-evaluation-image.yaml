@@ -46,6 +46,11 @@ on:
         description: "Whether to push the built image to GitHub Container Registry"
         type: boolean
         default: false
+      ubuntu-version:
+        required: false
+        description: "Ubuntu version for base image (22.04 or 24.04)"
+        type: string
+        default: "24.04"
     outputs:
       evaluation-image-url:
         description: "Docker image URL(s) for the evaluation image"
@@ -92,14 +97,43 @@ on:
         description: "Whether to push the built image to GitHub Container Registry"
         type: boolean
         default: false
+      ubuntu-version:
+        required: false
+        description: "Ubuntu version for base image (22.04 or 24.04)"
+        type: string
+        default: "24.04"
 
 env:
   BUILDKIT_HOST: buildkitd.buildkit.svc.cluster.local
   BUILDKIT_PORT: 1234
 
 jobs:
+  # Compute tool image tags for pre-built dependencies
+  # These are the same tags computed in build-docker-artifact.yaml
+  check-tool-images:
+    runs-on: ubuntu-latest
+    outputs:
+      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
+      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute tool image tags
+        id: tags
+        env:
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+        run: |
+          set -euo pipefail
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
+          echo "ccache-tag=$(echo "$TOOL_TAGS" | jq -r '."ccache-tag"')" >> $GITHUB_OUTPUT
+          echo "sfpi-tag=$(echo "$TOOL_TAGS" | jq -r '."sfpi-tag"')" >> $GITHUB_OUTPUT
+
   build-evaluation-image:
     name: "Build and push"
+    needs: check-tool-images
     runs-on: ${{ inputs.runner-label }}
     timeout-minutes: 30
     outputs:
@@ -186,7 +220,12 @@ jobs:
           file: dockerfile/Dockerfile.evaluation
           tags: ${{ steps.docker-metadata.outputs.tags }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
-          build-args: ${{ inputs.build-args }}
+          build-args: |
+            UBUNTU_VERSION=${{ inputs.ubuntu-version }}
+            ${{ inputs.build-args }}
+          build-contexts: |
+            ccache-layer=docker-image://${{ needs.check-tool-images.outputs.ccache-tag }}
+            sfpi-layer=docker-image://${{ needs.check-tool-images.outputs.sfpi-tag }}
           secrets: |
             CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}
           cache-from: ${{ inputs.cache-from }}

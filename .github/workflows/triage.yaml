@@ -31,12 +31,17 @@ on:
         description: 'Enable LLK asserts'
         default: false
         type: boolean
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   triage-tests:
     name: Triage tests ${{ inputs.runner-label }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work

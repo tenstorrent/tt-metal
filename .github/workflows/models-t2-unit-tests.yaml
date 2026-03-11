@@ -1,5 +1,4 @@
 name: "[Tier 2] Models Unit Tests"
-
 on:
   workflow_dispatch:
     inputs:
@@ -49,12 +48,12 @@ on:
         type: boolean
         default: true
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
-
 permissions:
   packages: write
   contents: write
-
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
@@ -73,11 +72,13 @@ jobs:
             echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
           fi
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}

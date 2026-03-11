@@ -3,7 +3,12 @@ description: "Run commands in docker"
 
 inputs:
   run_args:
-    description: 'Commands to run in docker'
+    description: |
+      Commands to run in docker.
+      TRUST BOUNDARY: run_args is interpolated directly into a shell script.
+      Only pass values from trusted sources (hardcoded workflow YAML, matrix
+      definitions in the repo). Never pass user-controlled input (workflow_dispatch
+      string inputs, PR metadata, issue bodies, etc.) without validation.
     required: true
   docker_os_arch:
     description: 'Docker image architecture'
