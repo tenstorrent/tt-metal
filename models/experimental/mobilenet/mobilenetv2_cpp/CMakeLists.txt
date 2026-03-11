@@ -2,7 +2,6 @@ add_library(ttnn_mobilenetv2 OBJECT ttnn_mobilenetv2.cpp)
 target_link_libraries(
     ttnn_mobilenetv2
     PUBLIC
-        torch::torch
         TTNN::CPP
         TT::Metalium
 )
@@ -20,7 +19,6 @@ target_link_libraries(
     mobilenetv2_cpp
     PRIVATE
         ttnn_mobilenetv2
-        torch::torch
         TTNN::CPP
         TT::Metalium
 )
@@ -39,7 +37,6 @@ target_link_libraries(
     mobilenetv2_e2e
     PRIVATE
         ttnn_mobilenetv2
-        torch::torch
         TTNN::CPP
         TT::Metalium
 )
