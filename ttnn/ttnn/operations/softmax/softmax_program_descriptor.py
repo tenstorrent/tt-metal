@@ -75,7 +75,17 @@ def create_program_descriptor(
     core = ttnn.CoreCoord(0, 0)
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
-    # ========== 3. CIRCULAR BUFFER DESCRIPTORS ==========
+    # ========== 3. WORK DISTRIBUTION ==========
+    # dim=-1: reduce along width, iterate over rows (NC * Ht rows, each Wt tiles wide)
+    # dim=-2: reduce along height, iterate over columns (NC * Wt columns, each Ht tiles tall)
+    if dim == -1:
+        num_rows_or_cols = N * C * Ht  # number of rows to process
+        inner_dim = Wt  # tiles along reduce dimension
+    else:  # dim == -2
+        num_rows_or_cols = N * C * Wt  # number of columns to process
+        inner_dim = Ht  # tiles along reduce dimension
+
+    # ========== 4. CIRCULAR BUFFER DESCRIPTORS ==========
     # c_0: input (2 tiles, double-buffered)
     cb_input_desc = ttnn.CBDescriptor(
         total_size=2 * page_size,
@@ -128,9 +138,9 @@ def create_program_descriptor(
         ],
     )
 
-    # c_4: exp_sum (2 tiles)
+    # c_4: exp_sum (inner_dim tiles for Phase 2, reused at 2 tiles in Phase 3)
     cb_exp_sum_desc = ttnn.CBDescriptor(
-        total_size=2 * page_size,
+        total_size=inner_dim * page_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -167,16 +177,6 @@ def create_program_descriptor(
         ],
     )
 
-    # ========== 4. WORK DISTRIBUTION ==========
-    # dim=-1: reduce along width, iterate over rows (NC * Ht rows, each Wt tiles wide)
-    # dim=-2: reduce along height, iterate over columns (NC * Wt columns, each Ht tiles tall)
-    if dim == -1:
-        num_rows_or_cols = N * C * Ht  # number of rows to process
-        inner_dim = Wt  # tiles along reduce dimension
-    else:  # dim == -2
-        num_rows_or_cols = N * C * Wt  # number of columns to process
-        inner_dim = Ht  # tiles along reduce dimension
-
     # ========== 5. KERNEL DESCRIPTORS ==========
 
     # --- Reader kernel ---
@@ -188,10 +188,18 @@ def create_program_descriptor(
         input_tensor.buffer_address(),
     ]
 
+    # Reader needs DIM_W/DIM_H defines for 3-pass tile ordering
+    reader_defines = []
+    if dim == -1:
+        reader_defines.append(("DIM_W", "1"))
+    else:
+        reader_defines.append(("DIM_H", "1"))
+
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "reader_softmax.cpp"),
         core_ranges=core_grid,
         compile_time_args=reader_ct_args,
+        defines=reader_defines,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )

@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/softmax",
   "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
   "layout": "TILE_LAYOUT",
-  "current_stage_index": 2,
-  "last_passing_commit": "adeea77856a247e568ca1d13ab044b1029126cff",
+  "current_stage_index": 3,
+  "last_passing_commit": "23cb7ce39749b14323db492d0624d7522d4bddc4",
   "stages": [
     {
       "name": "data_pipeline",
@@ -115,12 +115,60 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
-      "attempts": 0,
+      "status": "passed",
+      "commit": "23cb7ce39749b14323db492d0624d7522d4bddc4",
+      "attempts": 3,
       "free_retries": 0,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 0.509765625",
+          "details": {
+            "max_diff": "0.509765625"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "softmax_dim_w",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_cb_deadlock",
+          "summary": "unknown RISC-V stuck at cb_wait_front(inactive)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": "inactive",
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check CB sync: total pushes must equal total pops. Verify the stuck CB is fed by its producer. Do NOT add CB ops around helpers.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "softmax_dim_w",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "unknown",
+          "summary": "Test failed: FAILED\n\n=================================== FAILURES ===================================",
+          "details": {},
+          "suggested_action": "Inspect the full pytest output for unexpected errors.",
+          "attempt": 3,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "softmax_dim_w",
+          "remaining_attempts": 3,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "softmax_dim_h",
@@ -149,7 +197,7 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
