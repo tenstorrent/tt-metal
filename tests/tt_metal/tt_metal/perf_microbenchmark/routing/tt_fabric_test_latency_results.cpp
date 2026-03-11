@@ -146,7 +146,6 @@ void LatencyResultsManager::setup_latency_test_workers(
     const auto& dest = pattern.destination.value();
 
     // Use default core if not specified (latency tests typically use a fixed core)
-    // TODO: Implement core sweep for sequential_neighbor_exchange
     CoreCoord sender_core = sender.core.value_or(CoreCoord{0, 0});
     CoreCoord receiver_core = dest.core.value_or(CoreCoord{0, 0});
     FabricNodeId sender_device_id = sender.device;
@@ -311,8 +310,26 @@ void LatencyResultsManager::report_latency_results(
         responder_coord, {responder_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
     const auto& responder_data = responder_result_data.at(responder_core);
 
-    // Parse elapsed times and compute latencies
-    // Data is stored as uint32_t elapsed times (in cycles)
+    // Get device frequency for conversion to ns
+    uint32_t freq_mhz = fixture_.get_device_frequency_mhz(sender_node_id);
+    double freq_ghz = static_cast<double>(freq_mhz) / 1000.0;
+    double ns_per_cycle = 1.0 / freq_ghz;
+
+    // Extract common metadata for all samples
+    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+    std::string ftype_str = fetch_pattern_ftype(first_pattern);
+    std::string ntype_str = fetch_pattern_ntype(first_pattern);
+    std::string topology_str = std::string(enchantum::to_string(config.fabric_setup.topology));
+    uint32_t num_devices = test_devices.size();
+    uint32_t num_links = config.fabric_setup.num_links;
+
+    log_info(tt::LogTest, "");
+    log_info(tt::LogTest, "=== Latency Test Results for {} ===", config.parametrized_name);
+    log_info(tt::LogTest, "Payload size: {} bytes | Num samples: {}", payload_size, num_samples);
+    log_info(tt::LogTest, "Writing {} individual sample results to detailed CSV", num_samples);
+    log_info(tt::LogTest, "");
+
+    // Vectors to collect all samples for summary statistics
     std::vector<uint64_t> raw_latencies_cycles;
     std::vector<uint64_t> responder_times_cycles;
     std::vector<uint64_t> net_latencies_cycles;
@@ -352,6 +369,55 @@ void LatencyResultsManager::report_latency_results(
         uint64_t net_latency = raw_latency - responder_time;
         uint64_t per_hop_latency = net_latency / num_hops_to_responder;
 
+        // Convert to nanoseconds for this sample
+        double raw_latency_ns = raw_latency * ns_per_cycle;
+        double responder_time_ns = responder_time * ns_per_cycle;
+        double net_latency_ns = net_latency * ns_per_cycle;
+        double per_hop_latency_ns = per_hop_latency * ns_per_cycle;
+
+        // Create a LatencyResult for this individual sample and write to detailed CSV
+        LatencyResult sample_result;
+        sample_result.test_name = config.parametrized_name + "_sample" + std::to_string(i);
+        sample_result.ftype = ftype_str;
+        sample_result.ntype = ntype_str;
+        sample_result.topology = topology_str;
+        sample_result.sender_device_id = sender_location.node_id.chip_id;
+        sample_result.responder_device_id = responder_location.node_id.chip_id;
+        sample_result.sender_core_x = sender_location.core.x;
+        sample_result.sender_core_y = sender_location.core.y;
+        sample_result.responder_core_x = responder_location.core.x;
+        sample_result.responder_core_y = responder_location.core.y;
+        sample_result.num_devices = num_devices;
+        sample_result.num_links = num_links;
+        sample_result.num_samples = 1;  // Each row represents one sample
+        sample_result.payload_size = payload_size;
+
+        // For individual samples, all statistics are the same single value
+        sample_result.net_min_ns = net_latency_ns;
+        sample_result.net_max_ns = net_latency_ns;
+        sample_result.net_avg_ns = net_latency_ns;
+        sample_result.net_p99_ns = net_latency_ns;
+
+        sample_result.responder_min_ns = responder_time_ns;
+        sample_result.responder_max_ns = responder_time_ns;
+        sample_result.responder_avg_ns = responder_time_ns;
+        sample_result.responder_p99_ns = responder_time_ns;
+
+        sample_result.raw_min_ns = raw_latency_ns;
+        sample_result.raw_max_ns = raw_latency_ns;
+        sample_result.raw_avg_ns = raw_latency_ns;
+        sample_result.raw_p99_ns = raw_latency_ns;
+
+        sample_result.per_hop_min_ns = per_hop_latency_ns;
+        sample_result.per_hop_max_ns = per_hop_latency_ns;
+        sample_result.per_hop_avg_ns = per_hop_latency_ns;
+        sample_result.per_hop_p99_ns = per_hop_latency_ns;
+
+        // Add to results vector and write to detailed CSV immediately
+        results_.push_back(sample_result);
+        append_to_csv(config, sample_result);
+
+        // Collect cycle values for summary statistics calculation
         raw_latencies_cycles.push_back(raw_latency);
         responder_times_cycles.push_back(responder_time);
         net_latencies_cycles.push_back(net_latency);
@@ -363,16 +429,13 @@ void LatencyResultsManager::report_latency_results(
         return;
     }
 
-    // Sort for percentile calculation
+    log_info(tt::LogTest, "Wrote {} samples to detailed CSV", num_samples);
+
+    // Sort once for percentile calculation on summary statistics
     std::sort(raw_latencies_cycles.begin(), raw_latencies_cycles.end());
     std::sort(responder_times_cycles.begin(), responder_times_cycles.end());
     std::sort(net_latencies_cycles.begin(), net_latencies_cycles.end());
     std::sort(per_hop_latency_cycles.begin(), per_hop_latency_cycles.end());
-
-    // Get device frequency for conversion to ns
-    uint32_t freq_mhz = fixture_.get_device_frequency_mhz(sender_node_id);
-    double freq_ghz = static_cast<double>(freq_mhz) / 1000.0;
-    double ns_per_cycle = 1.0 / freq_ghz;
 
     // Helper lambda to calculate statistics
     auto calc_stats = [](const std::vector<uint64_t>& data) {
@@ -395,11 +458,7 @@ void LatencyResultsManager::report_latency_results(
     auto net_stats = calc_stats(net_latencies_cycles);
     auto per_hop_latency_stats = calc_stats(per_hop_latency_cycles);
 
-    // Log results in table format
-    log_info(tt::LogTest, "");
-    log_info(tt::LogTest, "=== Latency Test Results for {} ===", config.parametrized_name);
-    log_info(tt::LogTest, "Payload size: {} bytes | Num samples: {}", payload_size, raw_latencies_cycles.size());
-    log_info(tt::LogTest, "");
+    // Log summary statistics
     log_info(
         tt::LogTest, "Metric    Raw Latency (ns)    Responder Time (ns)    Net Latency (ns)    Per-Hop Latency (ns)");
     log_info(tt::LogTest, "------------------------------------------------------------------------");
@@ -441,84 +500,43 @@ void LatencyResultsManager::report_latency_results(
     log_info(tt::LogTest, "========================================================================");
     log_info(tt::LogTest, "");
 
-    // Populate LatencyResult structure for detailed CSV export (uses parametrized name)
-    LatencyResult latency_result;
-    latency_result.test_name = config.parametrized_name;
-
-    // Extract ftype and ntype from first sender's first pattern
-    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-    latency_result.ftype = fetch_pattern_ftype(first_pattern);
-    latency_result.ntype = fetch_pattern_ntype(first_pattern);
-
-    latency_result.topology = enchantum::to_string(config.fabric_setup.topology);
-    latency_result.num_devices = test_devices.size();
-    latency_result.num_links = config.fabric_setup.num_links;
-    latency_result.num_samples = raw_latencies_cycles.size();
-    latency_result.payload_size = payload_size;
-
-    // Net latency statistics (most important)
-    latency_result.net_min_ns = net_stats.min * ns_per_cycle;
-    latency_result.net_max_ns = net_stats.max * ns_per_cycle;
-    latency_result.net_avg_ns = net_stats.avg * ns_per_cycle;
-    latency_result.net_p99_ns = net_stats.p99 * ns_per_cycle;
-
-    // Responder processing time statistics
-    latency_result.responder_min_ns = responder_stats.min * ns_per_cycle;
-    latency_result.responder_max_ns = responder_stats.max * ns_per_cycle;
-    latency_result.responder_avg_ns = responder_stats.avg * ns_per_cycle;
-    latency_result.responder_p99_ns = responder_stats.p99 * ns_per_cycle;
-
-    // Raw latency statistics
-    latency_result.raw_min_ns = raw_stats.min * ns_per_cycle;
-    latency_result.raw_max_ns = raw_stats.max * ns_per_cycle;
-    latency_result.raw_avg_ns = raw_stats.avg * ns_per_cycle;
-    latency_result.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
-
-    // Per-hop latency statistics
-    latency_result.per_hop_min_ns = per_hop_latency_stats.min * ns_per_cycle;
-    latency_result.per_hop_max_ns = per_hop_latency_stats.max * ns_per_cycle;
-    latency_result.per_hop_avg_ns = per_hop_latency_stats.avg * ns_per_cycle;
-    latency_result.per_hop_p99_ns = per_hop_latency_stats.p99 * ns_per_cycle;
-
-    // Add to detailed results_ vector
-    results_.push_back(latency_result);
-
-    // Also append to CSV file immediately (like bandwidth does)
-    append_to_csv(config, latency_result);
-
-    // Populate LatencyResultSummary structure for summary CSV export (uses non-parametrized name for golden compatibility)
+    // Populate LatencyResultSummary with aggregated statistics for summary CSV
     LatencyResultSummary latency_summary;
-    latency_summary.test_name = config.name;
+    latency_summary.test_name = config.name;  // Use non-parametrized name for golden compatibility
+    latency_summary.ftype = ftype_str;
+    latency_summary.ntype = ntype_str;
+    latency_summary.topology = topology_str;
+    latency_summary.sender_device_id = sender_location.node_id.chip_id;
+    latency_summary.sender_core_x = sender_location.core.x;
+    latency_summary.sender_core_y = sender_location.core.y;
+    latency_summary.responder_device_id = responder_location.node_id.chip_id;
+    latency_summary.responder_core_x = responder_location.core.x;
+    latency_summary.responder_core_y = responder_location.core.y;
+    latency_summary.num_devices = num_devices;
+    latency_summary.num_links = num_links;
+    latency_summary.num_samples = num_samples;
+    latency_summary.payload_size = payload_size;
 
-    // Copy from latency_result to avoid duplication
-    latency_summary.ftype = latency_result.ftype;
-    latency_summary.ntype = latency_result.ntype;
-    latency_summary.topology = latency_result.topology;
-    latency_summary.num_devices = latency_result.num_devices;
-    latency_summary.num_links = latency_result.num_links;
-    latency_summary.num_samples = latency_result.num_samples;
-    latency_summary.payload_size = latency_result.payload_size;
+    // Store summary statistics calculated across all samples
+    latency_summary.net_min_ns = net_stats.min * ns_per_cycle;
+    latency_summary.net_max_ns = net_stats.max * ns_per_cycle;
+    latency_summary.net_avg_ns = net_stats.avg * ns_per_cycle;
+    latency_summary.net_p99_ns = net_stats.p99 * ns_per_cycle;
 
-    // Copy statistics from latency_result
-    latency_summary.net_min_ns = latency_result.net_min_ns;
-    latency_summary.net_max_ns = latency_result.net_max_ns;
-    latency_summary.net_avg_ns = latency_result.net_avg_ns;
-    latency_summary.net_p99_ns = latency_result.net_p99_ns;
+    latency_summary.responder_min_ns = responder_stats.min * ns_per_cycle;
+    latency_summary.responder_max_ns = responder_stats.max * ns_per_cycle;
+    latency_summary.responder_avg_ns = responder_stats.avg * ns_per_cycle;
+    latency_summary.responder_p99_ns = responder_stats.p99 * ns_per_cycle;
 
-    latency_summary.responder_min_ns = latency_result.responder_min_ns;
-    latency_summary.responder_max_ns = latency_result.responder_max_ns;
-    latency_summary.responder_avg_ns = latency_result.responder_avg_ns;
-    latency_summary.responder_p99_ns = latency_result.responder_p99_ns;
+    latency_summary.raw_min_ns = raw_stats.min * ns_per_cycle;
+    latency_summary.raw_max_ns = raw_stats.max * ns_per_cycle;
+    latency_summary.raw_avg_ns = raw_stats.avg * ns_per_cycle;
+    latency_summary.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
 
-    latency_summary.raw_min_ns = latency_result.raw_min_ns;
-    latency_summary.raw_max_ns = latency_result.raw_max_ns;
-    latency_summary.raw_avg_ns = latency_result.raw_avg_ns;
-    latency_summary.raw_p99_ns = latency_result.raw_p99_ns;
-
-    latency_summary.per_hop_min_ns = latency_result.per_hop_min_ns;
-    latency_summary.per_hop_max_ns = latency_result.per_hop_max_ns;
-    latency_summary.per_hop_avg_ns = latency_result.per_hop_avg_ns;
-    latency_summary.per_hop_p99_ns = latency_result.per_hop_p99_ns;
+    latency_summary.per_hop_min_ns = per_hop_latency_stats.min * ns_per_cycle;
+    latency_summary.per_hop_max_ns = per_hop_latency_stats.max * ns_per_cycle;
+    latency_summary.per_hop_avg_ns = per_hop_latency_stats.avg * ns_per_cycle;
+    latency_summary.per_hop_p99_ns = per_hop_latency_stats.p99 * ns_per_cycle;
 
     // Add to results_summary_ vector (not results_)
     results_summary_.push_back(latency_summary);
@@ -550,7 +568,8 @@ void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ 
     }
 
     // Write header for detailed results (no tolerance_percent column)
-    csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+    csv_stream << "test_name,ftype,ntype,topology,sender_device,sender_core_x,sender_core_y,"
+                  "responder_device,responder_core_x,responder_core_y,num_devices,num_links,num_samples,payload_size,"
                   "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                   "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
@@ -572,7 +591,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
     if (include_upload_columns) {
         csv_stream << "file_name,machine_type,test_ts,";
     }
-    csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+    csv_stream << "test_name,ftype,ntype,topology,sender_device,sender_core_x,sender_core_y,"
+                  "responder_device,responder_core_x,responder_core_y,num_devices,num_links,num_samples,payload_size,"
                   "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                   "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
@@ -587,6 +607,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
         }
 
         csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
+                   << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
+                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
                    << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                    << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                    << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
@@ -629,6 +651,8 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
     }
 
     csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
+               << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
+               << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
                << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
@@ -638,7 +662,6 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
                << result.per_hop_max_ns << "," << result.per_hop_avg_ns << "," << result.per_hop_p99_ns << "\n";
 
     csv_stream.close();
-    log_info(tt::LogTest, "Latency result appended to CSV file: {}", csv_file_path_.string());
 }
 
 void LatencyResultsManager::load_golden_csv() {
