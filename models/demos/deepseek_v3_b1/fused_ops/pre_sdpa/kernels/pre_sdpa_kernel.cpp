@@ -296,7 +296,7 @@ uint32_t per_core_rta_arg_idx = 0;
         };
     }
 
-    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs<0>;
 
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC

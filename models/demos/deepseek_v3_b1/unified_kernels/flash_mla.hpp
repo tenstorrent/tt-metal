@@ -74,7 +74,10 @@ struct FlashMLADecode {
         static constexpr uint32_t cb_out_o = cb_out_o_;
     };
 
-    struct ReaderCTArgs {};
+    template <uint32_t k_tensor_args_offset_>
+    struct ReaderCTArgs {
+        static constexpr uint32_t k_tensor_args_offset = k_tensor_args_offset_;
+    };
 
     template <
         uint32_t cb_q_in_,
@@ -223,7 +226,7 @@ struct FlashMLADecode {
 #if defined(COMPILE_FOR_NCRISC)
             constexpr uint8_t READ_NOC_INDEX = 0;
             constexpr uint8_t ATOMIC_NOC_INDEX = 1;
-            constexpr auto k_tensor_args = TensorAccessorArgs<0>();
+            constexpr auto k_tensor_args = TensorAccessorArgs<CTArgs::k_tensor_args_offset>();
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
 

@@ -284,7 +284,7 @@ void kernel_main() {
         };
     }
 
-    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs<0>;
 
     // Matmul4 CTArgs
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;

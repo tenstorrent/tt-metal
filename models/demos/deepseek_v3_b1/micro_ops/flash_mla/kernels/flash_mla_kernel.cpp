@@ -39,7 +39,7 @@ void kernel_main() {
         .cb_k_in = get_named_compile_time_arg_val("cb_k_in"),
     };
 
-    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs<0>;
 
 #elif defined(COMPILE_FOR_BRISC)
     constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");

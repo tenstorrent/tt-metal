@@ -1034,12 +1034,13 @@ def test_decoder(
     # ========================================================================
     # Extract decoder MoE output and reduce root info (always needed for golden)
     # ========================================================================
-    decoder_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_coord_tuple = d["reduce_root_coord"]
     root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
-    decoder_moe_output_root = decoder_moe_output[root_device_idx]
+    # Only ROOT1 holds the valid reduced output — read it directly from that device.
+    root_device_tensor = ttnn.get_device_tensors(moe_final_output_tensor)[root_device_idx]
+    decoder_moe_output = ttnn.to_torch(root_device_tensor)
     decoder_moe_output_valid = extract_routed_expert_output(
-        decoder_moe_output_root.unsqueeze(0),
+        decoder_moe_output.unsqueeze(0),
         d["num_gate_proj_cores"],
         RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
         d["per_core_down_proj_N"],
@@ -1278,7 +1279,7 @@ def test_decoder(
 
             nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
-            # assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
 
             rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
@@ -1302,17 +1303,18 @@ def test_decoder(
             pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.996)
             logger.info(f"Pure MLA PCC: {pure_mla_pcc}")
             logger.info(f"Pure MLA output: {pure_mla}")
-        assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"
+        assert passing, f"Device {device_idx} DecoderBlock MLA Output PCC check failed: {pcc}"
 
     # ========================================================================
     # Validate MoE output vs DecoderBlock golden MoE output
     # ========================================================================
     # Golden with moe_num_devices>1 computes per-device golden with TP-sharded shared
     # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
-    passing, pcc = comp_pcc(moe_output.flatten(), decoder_moe_output_valid.flatten(), 0.996)
+    passing, pcc = comp_pcc(moe_output.flatten(), decoder_moe_output_valid.flatten(), 0.98)
     logger.info(f"MoE PCC (decoder vs golden): {pcc}")
     logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MoE output: {decoder_moe_output_valid.flatten()[:8]}")
+    assert passing, f"Device {device_idx} DecoderBlock MoE Output PCC check failed: {pcc}"
 
     if validate_standalone_moe:
         pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.98)
