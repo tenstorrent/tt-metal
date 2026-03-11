@@ -13,7 +13,7 @@ model = model.eval().to(torch.bfloat16)
 
 # prompt = "<image>\nFree OCR. "
 prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-image_file = "models/experimental/tt_symbiote/tests/test.png"
+image_file = "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/test.png"
 output_path = "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/extras"
 
 
