@@ -362,13 +362,18 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const Physica
     return result;
 }
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_proto(
+    const tt::fabric::proto::PhysicalSystemDescriptor& psd_proto) {
+    return std::move(*proto_to_physical_system_descriptor(psd_proto));
+}
+
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data) {
     tt::fabric::proto::PhysicalSystemDescriptor proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return deserialize_physical_system_descriptor_from_proto(proto_desc);
 }
 
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
@@ -385,6 +390,6 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
     }
 
-    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
+    return deserialize_physical_system_descriptor_from_proto(physical_system_descriptor);
 }
 }  // namespace tt::tt_metal

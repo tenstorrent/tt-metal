@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
@@ -28,25 +32,26 @@ void kernel_main() {
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
+    experimental::CircularBuffer cb_id_eps_obj(cb_id_eps);
+
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
     uint32_t start_remaining = start_tile_id % tiles_per_batch;
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
-    union {
-        float f;
-        uint32_t u;
-    } scalar;
-    scalar.u = eps;
-    cb_reserve_back(cb_id_eps, onetile);
+    cb_id_eps_obj.reserve_back(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
-    FILL_WITH_VALUE_FLOAT(cb_id_eps, scalar.f);
+    float eps_f = 0;
+    std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
+    FILL_WITH_VALUE_FLOAT(cb_id_eps, eps_f);
 #endif
 #ifdef FILL_WITH_VALUE
     FILL_WITH_VALUE(cb_id_eps, eps);
 #endif
-    cb_push_back(cb_id_eps, onetile);
+    cb_id_eps_obj.push_back(onetile);
 
     // Input tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_t;
@@ -58,11 +63,10 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
-                cb_reserve_back(cb_id_src, onetile);
-                uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                noc_async_read_tile(tile_offset, src, l1_write_addr_src);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_src, onetile);
+                cb_id_src_obj.reserve_back(onetile);
+                noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb_id_src_obj.push_back(onetile);
             }
             tile_offset += next_channel_shift;
         }

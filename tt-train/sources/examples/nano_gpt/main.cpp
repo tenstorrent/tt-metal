@@ -543,7 +543,7 @@ int main(int argc, char **argv) {
                     const uint32_t BATCH_DIM = 0;
                     const uint32_t SEQUENCE_DIM_DATA = 3;
                     const uint32_t SEQUENCE_DIM_TARGETS = 1;
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         data_placements[pctx.get_ddp_axis().value()] =
@@ -563,7 +563,7 @@ int main(int argc, char **argv) {
                             device,
                             ttnn::Layout::ROW_MAJOR,
                             data_mapper.get()));
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         targets_placements[pctx.get_ddp_axis().value()] =
