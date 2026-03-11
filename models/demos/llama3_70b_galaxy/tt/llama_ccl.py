@@ -64,10 +64,10 @@ class TT_CCL:
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
         self.barrier_semaphore_handles = [[], []]
+        self.reduce_semaphore_handles = [[], []]  # Now needed for decode too (OLMo uses reduce_scatter_minimal_async)
         if mode == "prefill":
             self.from_semaphore_handles = [[], []]
             self.to_semaphore_handles = [[], []]
-            self.reduce_semaphore_handles = [[], []]
 
         for i in range(2):
             for _ in range(self.num_cbs):
@@ -85,20 +85,18 @@ class TT_CCL:
                         ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
                     )
 
-                if mode == "prefill":
-                    if self.use_ring_rs_prefill:
-                        # current ring implementation of reduce scatter expects 3 semaphores
-                        self.reduce_semaphore_handles[i].append(
-                            [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
-                        )
+                # reduce_scatter_minimal_async needs 3 semaphores per double-buffer
+                self.reduce_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
+                )
 
-                    else:
-                        self.from_semaphore_handles[i].append(
-                            ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
-                        )
-                        self.to_semaphore_handles[i].append(
-                            ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
-                        )
+                if mode == "prefill":
+                    self.from_semaphore_handles[i].append(
+                        ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                    )
+                    self.to_semaphore_handles[i].append(
+                        ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                    )
 
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
@@ -1049,26 +1047,49 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
-                self.reduce_scatter_buffer_idx[cluster_axis]
-            ]
-            ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
-                input_tensor_mesh,
-                persistent_interim_buffer,
-                dim,
-                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-                self.worker_sub_device_id,
-                cluster_axis=1,
-                mesh_device=self.mesh_device,
-                num_links=num_links,
-                memory_config=memory_config,
-                topology=self.model_config["CCL_TOPOLOGY"],
-                use_noc1_only=use_noc1_only,
-            )
-            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-            self.reduce_scatter_buffer_idx[cluster_axis] = (
-                self.reduce_scatter_buffer_idx[cluster_axis] + 1
-            ) % self.num_cbs
+            # OLMo decode: Use reduce_scatter_minimal_async (like tt_transformers)
+            # This avoids shard constraints of llama_reduce_scatter
+            if self.is_olmo:
+                ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
+                    input_tensor=input_tensor_mesh,
+                    persistent_output_buffers=None,
+                    dim=dim,
+                    multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][
+                        self.gather_idx[cluster_axis]
+                    ],
+                    barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    num_links=num_links,
+                    cluster_axis=cluster_axis,
+                    memory_config=memory_config,
+                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                    subdevice_id=self.worker_sub_device_id,
+                )
+                self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+            else:
+                persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+                    self.reduce_scatter_buffer_idx[cluster_axis]
+                ]
+                ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
+                    input_tensor_mesh,
+                    persistent_interim_buffer,
+                    dim,
+                    self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+                    self.worker_sub_device_id,
+                    cluster_axis=1,
+                    mesh_device=self.mesh_device,
+                    num_links=num_links,
+                    memory_config=memory_config,
+                    topology=self.model_config["CCL_TOPOLOGY"],
+                    use_noc1_only=use_noc1_only,
+                )
+                self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+                self.reduce_scatter_buffer_idx[cluster_axis] = (
+                    self.reduce_scatter_buffer_idx[cluster_axis] + 1
+                ) % self.num_cbs
 
         return ttnn_tensor_out
 

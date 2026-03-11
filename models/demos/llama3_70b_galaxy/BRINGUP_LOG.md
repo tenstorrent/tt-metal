@@ -1,32 +1,105 @@
 # OLMo-3.1-32B Bring-up Log
 
-## Current Status
-**Phase**: DECODE & PREFILL FUNCTIONAL - **DEVICE-SIDE CCL OPTIMIZATIONS**
-**Performance**: Prefill: 64 layers, 4k seq_len, **5,632 tok/s** (without trace)
+## Current Status (2026-03-11)
 
-### Decode Status: WORKING ✓ (Device-side CCL Enabled)
-- **10 decode iterations pass** with no NaN/Inf
-- **Output values reasonable**: mean=0.0022, std=0.58
-- **Root cause FIXED**: MLP weight dimension mismatch
-- **Performance FIX**: Replaced host-side line_all_gather with device-side CCL
+### Summary
+| Component | Status | Performance |
+|-----------|--------|-------------|
+| **Prefill (64 layers)** | ✅ DONE | 5,632 tok/s @ 4k seq_len |
+| **Decode (64 layers)** | ✅ DONE | 10 iterations pass, hybrid CCL |
+| **Device-side CCL** | 🟡 PARTIAL | 3/5 operations on device |
+| **End-to-End Demo** | 🟡 CREATED | Needs full model testing |
+| **Tracing** | ❌ TODO | Not yet enabled |
 
-### Host-side to Device-side CCL Migration (2026-03-10)
-**Completed Optimizations**:
-1. **BINARY_MUL Buffer**: Added OLMo-specific buffer with 3840 width (padded intermediate_dim_per_tp)
-   - Location: `llama_ccl.py:get_all_gather_buffers()`
-   - OLMo: 3840, Qwen: 3200, Llama: 3584
-2. **MLP line_all_gather**: Changed from host-side to device-side CCL
-   - Location: `llama_mlp.py` line 306-316
-   - Now uses `line_all_gather(..., buffer_key="BINARY_MUL", ...)` instead of `line_all_gather_host(...)`
-3. **Q Head Slicing Analysis**: Verified NOT needed - padded Q heads (5→8) work correctly:
-   - Zero Q heads produce zero SDPA outputs
-   - Padded WO weights handle 8 heads input
-   - Zero × Zero = 0 contribution
+---
 
-**Still Host-side** (future optimization opportunity):
-- `line_all_reduce_host` in MLP W2 output (requires FF2_OUT_RING_MEMCFG fix for 1280 width)
-- `line_all_gather_host` in attention post-SDPA (requires all_gather_concat fix)
-- `line_all_reduce_host` in attention WO output (requires SHARDED_WO_OUT_RING_MEMCFG fix)
+## What's DONE ✅
+
+### Prefill Mode (Complete)
+- [x] 64-layer prefill working at 5,632 tok/s (4k seq_len, without trace)
+- [x] YaRN RoPE integrated (PCC=0.99999)
+- [x] Sliding window attention (4096 window, 3 sliding + 1 full pattern)
+- [x] Ring distributed SDPA with sliding_window_size parameter
+- [x] All memory configs tuned for OLMo dimensions
+
+### Decode Mode (Complete - Hybrid CCL)
+- [x] 10 decode iterations pass with reasonable output (mean=0.0022, std=0.58)
+- [x] Q head padding (5→8) for fused RoPE compatibility
+- [x] K head expansion/slicing for RoPE
+- [x] MLP weight dimension fix (was reading garbage)
+- [x] Sliding window in decode SDPA
+
+### Device-side CCL Operations (3/5 Complete)
+| Operation | Status | Location | Notes |
+|-----------|--------|----------|-------|
+| MLP FF1/FF3 all_gather | ✅ Device | `llama_mlp.py:306` | Uses BINARY_MUL buffer (3840 width) |
+| MLP W2 all_reduce | ✅ Device | `llama_mlp.py:369` | Uses FF2_OUT_RING_MEMCFG_OLMO |
+| Attention WO all_reduce | ✅ Device | `llama_attention.py:828` | Uses SHARDED_WO_OUT_RING_MEMCFG_OLMO |
+| MLP W1/W3 reduce_scatter | ❌ Host | `llama_mlp.py:185` | Kernel shard constraint |
+| Attention post-SDPA all_gather | ❌ Host | `llama_attention.py:736` | all_gather_concat crashes |
+
+### OLMo-specific Memory Configs Added
+```python
+FF2_OUT_RING_MEMCFG_OLMO      # 10 cores × 128 = 1280 (dim_per_tp)
+SHARDED_WO_OUT_RING_MEMCFG_OLMO  # 10 cores × 128 = 1280 (dim_per_tp)
+REDUCE_SCATTER_OUT_MEMCFG_OLMO   # 15 cores × 32 = 480 (for scatter output)
+BINARY_MUL buffer (OLMo)         # 3840 width (padded intermediate)
+```
+
+---
+
+## What's NOT DONE ❌
+
+### Device-side CCL (Blocked by Kernel Constraints)
+| Operation | Blocker | Details |
+|-----------|---------|---------|
+| MLP W1/W3 reduce_scatter | Shard count mismatch | Kernel expects input/output shard counts to match. OLMo: 24 input shards → 15 output shards |
+| Attention all_gather | Kernel crash | `all_gather_concat` crashes with "bad optional access" for OLMo dimensions (batch=32, dim=1280) |
+
+**Root Cause**: OLMo's unique dimensions don't fit existing kernel constraints:
+- 5:1 GQA ratio (vs 8:1 for Llama/Qwen)
+- 3456 intermediate per TP (vs 3584 Llama, 3200 Qwen)
+- 1280 dim per TP (vs 2048 Llama/Qwen)
+
+**Potential Fixes** (require kernel work):
+1. `reduce_scatter_minimal_async` - more flexible but still has shape constraints
+2. Modify `llama_reduce_scatter` to handle different input/output shard counts
+3. Modify `all_gather_concat` to handle OLMo's smaller batch size
+
+### End-to-End Demo
+- [ ] Full model decode test (demo_olmo_decode.py created but not validated)
+- [ ] Performance benchmark (tok/s measurement)
+- [ ] Trace capture for decode
+
+### Code Cleanup
+- [ ] Remove DEBUG print statements from `llama_attention.py` and `llama_mlp.py`
+- [ ] Clean up `_debug_check_*` functions
+- [ ] Update test files to use proper assertions
+
+### Performance Optimization
+- [ ] Enable tracing for prefill
+- [ ] Enable tracing for decode
+- [ ] Measure decode tok/s
+
+---
+
+## Test Commands
+
+```bash
+# Prefill test (64 layers, 4k seq)
+export HF_MODEL=~/models/models--allenai--Olmo-3.1-32B-Think && export LINE_RS=1
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py -v -x -k "64layers and 4k"
+
+# Decode test (10 iterations)
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decode.py::test_olmo_decoder_decode -v -x
+
+# End-to-end demo (single layer, fastest)
+pytest models/demos/llama3_70b_galaxy/demo/demo_olmo_decode.py -v -k "single"
+```
+
+---
+
+## Historical Notes
 
 ### Critical Fix (2026-03-10)
 **Problem**: MLP W1/W3 matmuls produced garbage (10^35x larger than expected)
@@ -745,6 +818,37 @@ OLMo has 40 Q heads → 5 local Q heads per device (40/8=5), but the fused RoPE 
 - [ ] Tracing for decode
 - [ ] Memory optimization
 - [x] Ring SDPA kernel extension for sliding_window - **DONE**
+
+### 2026-03-11 (Device-side CCL Verification)
+**Status**: Hybrid CCL Approach VERIFIED
+**PCC**: N/A (sanity check - no NaN/Inf, reasonable statistics)
+
+**Verified**:
+- [x] 10 decode iterations pass with hybrid approach
+- [x] Output statistics: mean=0.0022, std=0.5804 (reasonable)
+- [x] Test duration: 7.38s
+
+**CCL Operation Status**:
+| Operation | Mode | Notes |
+|-----------|------|-------|
+| MLP W2 all_reduce | Device ✓ | Uses FF2_OUT_RING_MEMCFG_OLMO (10 cores × 128) |
+| Attention WO all_reduce | Device ✓ | Uses SHARDED_WO_OUT_RING_MEMCFG_OLMO (10 cores × 128) |
+| MLP FF1/FF3 all_gather | Device ✓ | Uses BINARY_MUL buffer with 3840 width |
+| MLP W1/W3 reduce_scatter | Host | Kernel expects matching shard counts |
+| Attention post-SDPA all_gather | Host | all_gather_concat crashes for OLMo dims |
+
+**Investigation**: Reviewed tt_transformers CCL implementation
+- tt_transformers uses `reduce_scatter_minimal_async` and `all_gather_async`
+- These APIs are more flexible than `llama_reduce_scatter`
+- Attempted device-side reduce_scatter with `reduce_scatter_minimal_async` but hit shape mismatch (3840 padded vs 3456 expected)
+- Host-side reduce_scatter remains the working solution for now
+
+**Test Command**:
+```bash
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decode.py::test_olmo_decoder_decode -v -x
+```
+
+---
 
 ### 2026-03-10 (End-to-End Demo)
 **Status**: End-to-End Demo Created

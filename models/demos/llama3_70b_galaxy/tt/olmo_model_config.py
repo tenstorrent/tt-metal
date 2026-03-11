@@ -511,6 +511,20 @@ class TtOlmoModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
 
+        # OLMo-specific FF2 output config for decode: dim_per_tp=1280, not padded 1536
+        # 1280 / 10 cores = 128 per shard (tile-aligned)
+        OLMO_OUT_RING_SIZE = 10
+        olmo_out_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, OLMO_OUT_RING_SIZE, self.sub_core_grids, row_wise=True
+        )
+        self.model_config["FF2_OUT_RING_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // OLMO_OUT_RING_SIZE),  # (32, 128)
+            core_grid=olmo_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         # ==== Reduce Scatter Configs ====
         PACKET_WORKER_CRS = ttnn.CoreRangeSet(
             [
@@ -537,6 +551,23 @@ class TtOlmoModelArgs(TtModelArgs):
             ttnn.ShardSpec(
                 FF1_CRS_RS_OUT,
                 [32, 32],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+        # OLMo-specific reduce_scatter output config for decode:
+        # intermediate_dim_per_tp_padded=3840, after reduce_scatter (8 devices): 3840/8=480
+        # 480 / 15 cores = 32 per core (tile-aligned)
+        OLMO_RS_OUT_CORES = 15
+        olmo_rs_out_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), OLMO_RS_OUT_CORES, self.sub_core_grids, row_wise=True
+        )
+        self.model_config["REDUCE_SCATTER_OUT_MEMCFG_OLMO"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                olmo_rs_out_core_range_set,
+                [32, 32],  # 15 cores × 32 = 480 total width
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -782,6 +813,16 @@ class TtOlmoModelArgs(TtModelArgs):
         self.model_config["SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=wo_out_shard_shape_ring,
             core_grid=pf_mm_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # OLMo-specific WO output config for decode: dim_per_tp=1280, not padded 1536
+        # 1280 / 10 cores = 128 per shard (tile-aligned)
+        self.model_config["SHARDED_WO_OUT_RING_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // OLMO_OUT_RING_SIZE),  # (32, 128)
+            core_grid=olmo_out_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,

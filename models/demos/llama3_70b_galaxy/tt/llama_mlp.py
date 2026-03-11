@@ -181,7 +181,7 @@ class TtLlamaMLP(LightweightModule):
                 # Reshard to DRAM for host-side reduce_scatter
                 w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w1_out)
-                # Use host-side reduce_scatter for OLMo (avoids memory config mismatch)
+                # OLMo: Use host-side reduce_scatter (device-side has shape compatibility issues)
                 w1_out_reduced = self.tt_ccl.line_reduce_scatter_host(
                     w1_out_dram,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -209,7 +209,7 @@ class TtLlamaMLP(LightweightModule):
                 # Reshard to DRAM for host-side reduce_scatter
                 w3_out_dram = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w3_out)
-                # Use host-side reduce_scatter for OLMo
+                # OLMo: Use host-side reduce_scatter (device-side has shape compatibility issues)
                 w3_out_reduced = self.tt_ccl.line_reduce_scatter_host(
                     w3_out_dram,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -351,7 +351,6 @@ class TtLlamaMLP(LightweightModule):
             w2_in_sliced = ttnn.slice(w2_in_dram, [0, 0, 0, 0], [1, 1, 32, 3456])
             ttnn.deallocate(w2_in_dram)
             # Use interleaved weight and default config for OLMo
-            # Keep output in DRAM - don't reshard to FF2_OUT_RING_MEMCFG (expects 1536 width, but W2 outputs 1280)
             w2_out = ttnn.linear(
                 w2_in_sliced,
                 self.w2_interleaved,
@@ -361,17 +360,18 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w2_in_sliced)
             self._debug_check_mlp("w2_out", w2_out)
-            # OLMo: Use host-side all_reduce to avoid WIDTH_SHARDED grid mismatch
-            w2_out_dram = self.tt_ccl.line_all_reduce_host(
-                w2_out,
+            # OLMo: Use device-side all_reduce with OLMo-specific sharded config
+            # Reshard to FF2_OUT_RING_MEMCFG_OLMO (10 cores × 128 = 1280)
+            w2_out_sharded = ttnn.to_memory_config(w2_out, self.model_config["FF2_OUT_RING_MEMCFG_OLMO"])
+            ttnn.deallocate(w2_out)
+            w2_out_reduced = self.tt_ccl.line_all_reduce(
+                w2_out_sharded,
                 cluster_axis=0,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                use_optimal_ccl_for_llama=True,
             )
-            ttnn.deallocate(w2_out)
-            # Reshard to DECODE_RESIDUAL_MEMCFG for next layer's RMSNorm
-            w2_out_reduced = ttnn.to_memory_config(w2_out_dram, self.model_config["DECODE_RESIDUAL_MEMCFG"])
-            ttnn.deallocate(w2_out_dram)
+            ttnn.deallocate(w2_out_sharded)
         else:
             w2_out = ttnn.linear(
                 w2_in,

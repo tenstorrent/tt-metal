@@ -819,18 +819,20 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
-            # OLMo: Use host-side all_reduce to avoid WIDTH_SHARDED grid mismatch
-            # The WO output is 1280 wide but SHARDED_WO_OUT_RING_MEMCFG expects 1536 (padded)
-            dense_out_dram = self.tt_ccl.line_all_reduce_host(  # [1, 1, 32, 1280]
-                dense_out_ttnn,
-                cluster_axis=0,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Output to DRAM
+            # OLMo: Use device-side all_reduce with OLMo-specific sharded config
+            # Reshard to SHARDED_WO_OUT_RING_MEMCFG_OLMO (10 cores × 128 = 1280)
+            dense_out_sharded = ttnn.to_memory_config(
+                dense_out_ttnn, self.model_config["SHARDED_WO_OUT_RING_MEMCFG_OLMO"]
             )
             ttnn.deallocate(dense_out_ttnn)
-            # Reshard to DECODE_RESIDUAL_MEMCFG for next layer's RMSNorm
-            dense_out_reduced = ttnn.to_memory_config(dense_out_dram, self.model_config["DECODE_RESIDUAL_MEMCFG"])
-            ttnn.deallocate(dense_out_dram)
+            dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
+                dense_out_sharded,
+                cluster_axis=0,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                use_optimal_ccl_for_llama=True,
+            )
+            ttnn.deallocate(dense_out_sharded)
         else:
             dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
                 attn_output_cat,
