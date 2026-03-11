@@ -686,6 +686,11 @@ def run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
     Validate height-sharded `cos`/`sin` and `trans_mat` support in Prefill mode. Also, validates
     decode (seq_len=1) mode emulated as prefill mode (batch, seq_len exchanged) for Deepseek.
     Input/Output are interleaved, cos/sin and trans_mat may be interleaved or sharded.
+
+    `cos_sin_sharded` and `trans_mat_sharded` accept:
+        0  -> interleaved (not sharded)
+        -1 -> sharded across all device cores (tests globally-allocated CB fast path)
+        N  -> sharded across exactly N cores (tests TensorAccessor reload path with fewer shards)
     """
     torch.manual_seed(42)
     max_seq_len = MAX_SEQ_LEN
@@ -723,7 +728,7 @@ def run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
 
     # Path B: Prefill mode (interleaved input)
     if cos_sin_sharded:
-        cs_num_cores = device_num_cores
+        cs_num_cores = device_num_cores if cos_sin_sharded == -1 else min(cos_sin_sharded, device_num_cores)
         cs_grid = ttnn.num_cores_to_corerangeset(cs_num_cores, compute_grid_size, row_wise=True)
         cs_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, head_dim_padded),
@@ -732,31 +737,18 @@ def run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        num_rows_needed = cs_num_cores * ttnn.TILE_SIZE
-        if seq_len == 1:
-            batch_t = (batch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-            batch_padded = batch_t * ttnn.TILE_SIZE
-            cos_for_repeat = torch.nn.functional.pad(cos_torch, (0, 0, 0, batch_padded - batch))
-            sin_for_repeat = torch.nn.functional.pad(sin_torch, (0, 0, 0, batch_padded - batch))
-            repeat_factor = (num_rows_needed + batch_padded - 1) // batch_padded
-        else:
-            cos_for_repeat = cos_torch
-            sin_for_repeat = sin_torch
-            repeat_factor = (num_rows_needed + num_positions - 1) // num_positions
-        cos_repeated = cos_for_repeat.repeat(1, 1, repeat_factor, 1)[:, :, :num_rows_needed, :]
-        sin_repeated = sin_for_repeat.repeat(1, 1, repeat_factor, 1)[:, :, :num_rows_needed, :]
-        cos_tt = ttnn.from_torch(
-            cos_repeated, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT, memory_config=cs_mem_config
-        )
-        sin_tt = ttnn.from_torch(
-            sin_repeated, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT, memory_config=cs_mem_config
-        )
+        # Mirrors the Deepseek approach: create cos/sin at natural shape as interleaved,
+        # then convert to HEIGHT_SHARDED via to_memory_config (framework handles padding).
+        cos_tt = ttnn.from_torch(cos_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+        sin_tt = ttnn.from_torch(sin_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+        cos_tt = ttnn.to_memory_config(cos_tt, memory_config=cs_mem_config)
+        sin_tt = ttnn.to_memory_config(sin_tt, memory_config=cs_mem_config)
     else:
         cos_tt = ttnn.from_torch(cos_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
         sin_tt = ttnn.from_torch(sin_torch, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
 
     if trans_mat_sharded:
-        tm_num_cores = device_num_cores
+        tm_num_cores = device_num_cores if trans_mat_sharded == -1 else min(trans_mat_sharded, device_num_cores)
         tm_grid = ttnn.num_cores_to_corerangeset(tm_num_cores, compute_grid_size, row_wise=True)
         tm_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
@@ -801,23 +793,27 @@ def run_test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
 @pytest.mark.parametrize(
     "trans_mat_sharded",
     (
-        False,
-        True,
+        0,
+        -1,
+        32,
     ),
     ids=(
-        "trans_mat_interleaved",
-        "trans_mat_sharded",
+        "tm_interleaved",
+        "tm_sharded_all",
+        "tm_sharded_32",
     ),
 )
 @pytest.mark.parametrize(
     "cos_sin_sharded",
     (
-        False,
-        True,
+        0,
+        -1,
+        32,
     ),
     ids=(
         "cs_interleaved",
-        "cs_sharded",
+        "cs_sharded_all",
+        "cs_sharded_32",
     ),
 )
 @pytest.mark.parametrize(
@@ -880,6 +876,7 @@ def test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
 ):
     """
     Validate height-sharded `cos`/`sin` and `trans_mat` support in Prefill mode.
+    Shard count values: 0=interleaved, -1=all device cores, N=exactly N cores (fewer than device).
     """
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
