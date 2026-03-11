@@ -26,14 +26,22 @@ void kernel_main() {
     const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
     const uint32_t Wt = get_arg_val<uint32_t>(3);
     const uint32_t W = get_arg_val<uint32_t>(4);
-    // gamma_addr and beta_addr at indices 5, 6 (used in later stages)
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(5);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(6);
+    const uint32_t eps_packed = get_arg_val<uint32_t>(7);
 
     // ========== Setup TensorAccessor for input ==========
     const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_size);
 
     // ========== Fill scaler CB (c_8) with 1/W for reduce_row ==========
-    const float scaler_value = 1.0f / static_cast<float>(W);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_value);
+    // Scaler = 1/W so reduce_tile accumulates: mean = sum(x_i * (1/W))
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(1.0f / static_cast<float>(W));
+
+    // ========== Fill epsilon CB (c_9) with eps constant ==========
+    // eps_packed is bf16 epsilon doubled into a uint32 (bf16 << 16 | bf16)
+    cb_reserve_back(cb_eps, 1);
+    fill_with_val_bfloat16(cb_eps, eps_packed);
+    cb_push_back(cb_eps, 1);
 
     // ========== Main loop: read 32 RM sticks per block ==========
     uint32_t stick_id = start_stick_id;

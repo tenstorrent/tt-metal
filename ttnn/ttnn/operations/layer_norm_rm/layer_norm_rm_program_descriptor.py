@@ -316,6 +316,7 @@ def create_program_descriptor(
                     W,  # W (width in elements)
                     gamma.buffer_address() if has_gamma else 0,  # gamma_addr
                     beta.buffer_address() if has_beta else 0,  # beta_addr
+                    eps_packed,  # eps_packed (bf16 doubled)
                 ]
                 current_block += blocks_per_core_g1
 
@@ -332,6 +333,7 @@ def create_program_descriptor(
                         W,
                         gamma.buffer_address() if has_gamma else 0,
                         beta.buffer_address() if has_beta else 0,
+                        eps_packed,  # eps_packed (bf16 doubled)
                     ]
                     current_block += blocks_per_core_g2
 
