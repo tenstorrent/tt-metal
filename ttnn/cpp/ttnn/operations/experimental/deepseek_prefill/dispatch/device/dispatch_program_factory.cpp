@@ -353,9 +353,10 @@ DispatchDeviceOperation::DispatchProgramFactory::create_at(
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(reader_compile_time_args);
 
-    std::map<std::string, std::string> reader_defines = {
-        {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},
-    };
+    std::map<std::string, std::string> reader_defines;
+    if (operation_attributes.axis.has_value()) {
+        reader_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/"
