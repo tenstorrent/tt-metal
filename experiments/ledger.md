@@ -192,3 +192,104 @@ PCC pass on-target (new files only)
 
 ### Next Step
 Hardware validation on device, then proceed to optimizations
+
+---
+
+## Experiment 2026-03-11-08
+
+### Phase
+modularize (hardware validation)
+
+### What Changed
+- No code changes. Hardware validation of all prior refactoring experiments (02-07).
+
+### Validation
+- Layer 0 decode PCC test: **PASS** (PCC > 0.999, 87.86s)
+  - `test_tt_decoder_layer0_decode_update_cache_optional.py` — refactored `decoder_layer_tt.py` matches reference `layer0_tt.py` harness
+- MoE layer 1 test: **PASS** (43.5s)
+  - `test_tt_moe_layer1_optional.py` — routed experts match reference
+- Hardware: 4x Wormhole devices, single-device test (device 0)
+
+### Verdict
+PCC pass on-target. All refactoring from experiments 02-07 validated on hardware.
+
+### Revert Status
+kept (all changes validated)
+
+### Next Step
+Profile per-op performance with Tracy to create baseline metrics.
+
+---
+
+## Experiment 2026-03-11-09
+
+### Phase
+profile (post-refactoring)
+
+### What Changed
+- No code changes. Tracy profiler run on layer 0 decode test.
+- Report: `generated/profiler/reports/glm4_layer0_post_refactor/2026_03_11_05_17_21/`
+
+### Validation
+- Layer 0 decode PCC test: **PASS** (93.59s with profiler overhead)
+- Profile results (refactored decode path only, 106 device ops):
+  - Total kernel time: 4533 us (4.5 ms)
+  - Top bottleneck: MatmulDeviceOperation — 19 ops, 2197 us (48.5%)
+  - Reshape+Transpose overhead: 18 ops, 1037 us (22.9%)
+  - TilizeWithValPadding: 2 ops, 401 us (8.8%)
+  - LayerNorm: 10 ops, 302 us (6.7%)
+  - FlashMLA/SDPA: 2 ops, 81 us (1.8%)
+- Most expensive individual ops:
+  - MLP gate/up matmuls (54-core, 2048x10240): ~220 us each
+  - MLP down matmul (32-core, 10240x2048): ~211 us each
+  - Attn output proj (32-core, 5120x2048): ~107 us each
+
+### Verdict
+PCC pass on-target. Per-op baseline recorded in baseline.yaml.
+
+### Revert Status
+kept
+
+### Next Step
+Optimization phase: target Reshape+Transpose overhead (22.9%), explore fused MLP gate+up, evaluate DRAM-sharded matmuls.
+
+---
+
+## Experiment 2026-03-11-10
+
+### Phase
+profile (full model, 4-device)
+
+### What Changed
+- No code changes. Full 47-layer model profiled on 4x Wormhole devices.
+- First attempt (single device): OOM at layer 17 on MoE expert weights (213 MB allocation, 6.6 MB free)
+- Second attempt (4 devices, --mesh-cols 4): Succeeded. MoE weights sharded across 4 devices (16 experts/device).
+- Tracy report generation crashed on multi-device assertion ("Device data missing for device 4"). Raw profiler logs parsed manually.
+
+### Validation
+- Full model greedy decode: **PASS** (4 new tokens generated)
+- Performance:
+  - Decode throughput: **1.98 tok/s**
+  - Decode latency: **504.6 ms/token**
+  - Device kernel time: 44.2 ms/device (8.8% of decode latency)
+  - Total device ops per device: 1,870
+- Top 5 ops by kernel time (device 0):
+  1. MatmulDeviceOperation: 206 ops, 12,754 us (28.8%)
+  2. FillPadDeviceOperation: 75 ops, 4,662 us (10.5%)
+  3. TilizeDeviceOperation: 21 ops, 4,376 us (9.9%)
+  4. BinaryNgDeviceOperation: 242 ops, 2,702 us (6.1%)
+  5. SparseMatmulDeviceOperation: 62 ops, 2,521 us (5.7%)
+
+### Output Files
+- `experiments/glm4_full_model_ops_profile.csv` (7,496 rows, all devices)
+- `experiments/glm4_full_model_ops_summary.csv` (per-op summary by device)
+- `experiments/glm4_full_model_profile_report.md` (detailed analysis)
+
+### Verdict
+Full model runs on 4 devices. 1.98 tok/s baseline established. Host dispatch overhead is 91.2% of latency -- trace mode is the top optimization target.
+
+### Revert Status
+kept (no code changes)
+
+### Next Step
+P0: Enable metal trace capture/replay to eliminate host dispatch overhead (~10x throughput target). P1: Reduce data movement ops (24.5% of kernel time).
