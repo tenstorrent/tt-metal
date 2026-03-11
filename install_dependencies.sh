@@ -24,7 +24,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
+        OS_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME}}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
@@ -212,6 +212,13 @@ init_packages() {
                 "wget"
                 "curl"
                 "xxd"
+                "flatbuffers-compiler"
+                "libyaml-cpp-dev"
+                "libudev-dev"
+                "libusb-1.0-0-dev"
+                "libboost-all-dev"
+                "python3-setuptools"
+                "python3-wheel"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -274,17 +281,20 @@ prep_ubuntu_system() {
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
 
     # Add LLVM repository for Clang 17
-    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
+    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
     # Also v20
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Add Kitware repository for latest CMake
     # If the kitware-archive-keyring package has not been installed previously, manually obtain a copy of our signing key
     test -f /usr/share/doc/kitware-archive-keyring/copyright || wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
 
     # Add the repository to sources list and update
-    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    # Use appropriate kitware repo for ubuntu or debian
+    local kitware_url="https://apt.kitware.com/ubuntu/"
+    if [[ "$OS_ID" == "debian" ]]; then kitware_url="https://apt.kitware.com/debian/"; fi
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] $kitware_url $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
     apt-get update
 
     # If the kitware-archive-keyring package was not installed previously, remove the manually obtained key to make room for the package
