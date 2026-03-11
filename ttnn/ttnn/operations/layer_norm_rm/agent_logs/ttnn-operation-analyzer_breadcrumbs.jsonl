@@ -12,3 +12,4 @@
 {"event":"action","type":"write","details":"Wrote untilize_analysis.md with output-stage focus: CB sizing, writer kernel RM-stick pattern, untilize helper signature, TensorAccessor usage","ts":"2026-03-11T17:13:42+00:00"}
 {"event":"analysis_complete","details":"Wrote tilize_analysis.md covering reader kernel pattern, input CB sizing, stick-to-tile batching, work distribution, TensorAccessor usage, and all argument tables.","ts":"2026-03-11T17:15:05+00:00"}
 {"event":"complete","final_status":"SUCCESS","details":"Committed untilize analysis as c7b575e9ee","ts":"2026-03-11T17:17:08+00:00"}
+{"event":"complete","final_status":"SUCCESS","details":"batch_norm analysis complete with compute_core focus","final_commit":"02adbb3f90","ts":"2026-03-11T17:18:02+00:00"}
