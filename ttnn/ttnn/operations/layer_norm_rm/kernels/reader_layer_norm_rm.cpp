@@ -37,7 +37,7 @@ void kernel_main() {
     // Derive W and Wt from stick_size: stick_size = W * 2 (bf16), Wt = W / 32
     constexpr uint32_t W = stick_size / 2;
     constexpr uint32_t Wt = W / 32;     // tiles per row
-    constexpr uint32_t num_passes = 1;  // Will increase to 2/3 in later stages
+    constexpr uint32_t num_passes = 2;  // 2-pass: pass1=mean, pass2=subtract_mean
 
     // Number of tile-rows (each tile-row = 32 sticks)
     const uint32_t nblocks = num_sticks / 32;

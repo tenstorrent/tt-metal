@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Stage 2: tilize -> reduce_mean -> untilize (row-wise mean output)
+// Stage 3: 2-pass: pass1=tilize+reduce_mean, pass2=tilize+sub(x,mean)->untilize
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -10,11 +10,13 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
+
 // CB indices
 constexpr uint32_t cb_input_rm = 0;       // c_0: RM sticks from reader
 constexpr uint32_t cb_tilized = 1;        // c_1: Tilized tiles
 constexpr uint32_t cb_reduce_scaler = 2;  // c_2: Reduce scaler (1/W)
 constexpr uint32_t cb_mean = 24;          // c_24: Row-reduced mean (1 tile)
+constexpr uint32_t cb_centered = 25;      // c_25: Centered tiles (x - mean)
 constexpr uint32_t cb_output_tiles = 16;  // c_16: Pre-untilize output tiles
 constexpr uint32_t cb_output_rm = 17;     // c_17: Untilized RM output
 
@@ -35,6 +37,8 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_input_rm, cb_reduce_scaler, cb_output_rm);
 
     for (uint32_t block = 0; block < nblocks; block++) {
+        // ==================== PASS 1: Compute mean ====================
+
         // Phase 1: Tilize c_0 -> c_1
         compute_kernel_lib::tilize<
             cb_input_rm,
@@ -43,15 +47,36 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
 
         // Phase 2: Reduce mean - SUM along row with 1/W scaler
-        // Input: c_1 (Wt tiles), Scaler: c_2 (1 tile, 1/W), Output: c_24 (1 tile, col vector)
+        // c_1 consumed per-tile, c_24 gets 1 tile (col vector, persists for pass 2)
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile>(
                 cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-        // Untilize mean (1 tile wide) from c_24 -> c_17
+        // ==================== PASS 2: Subtract mean ====================
+
+        // Phase 3: Tilize (re-read from reader's second pass)
+        compute_kernel_lib::tilize<
+            cb_input_rm,
+            cb_tilized,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock>(Wt, 1);
+
+        // Phase 4: sub(x, mean) with COL broadcast
+        // A=c_1 (tilized, consumed per-tile), B=c_24 (mean, NoWaitNoPop - persists)
+        // Output: c_16 (directly to output tiles for untilize)
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_tilized, cb_mean, cb_output_tiles, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // Pop mean after use (no longer needed for this tile-row)
+        cb_pop_front(cb_mean, 1);
+
+        // Phase 5: Untilize centered output (Wt tiles wide) -> c_17
         compute_kernel_lib::untilize<
-            1,
-            cb_mean,
+            Wt,
+            cb_output_tiles,
             cb_output_rm,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock>(1);

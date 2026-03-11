@@ -56,9 +56,8 @@ def layer_norm_rm(
     # --- Output allocation ---
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
-    # Reduced-shape output for intermediate TDD stages (column vector: last dim = 32)
-    shape_list = [input_tensor.shape[i] for i in range(len(input_tensor.shape))]
-    output_shape = shape_list[:-1] + [32]
+    # Output shape: same as input (full width)
+    output_shape = [input_tensor.shape[i] for i in range(len(input_tensor.shape))]
 
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(output_shape),
