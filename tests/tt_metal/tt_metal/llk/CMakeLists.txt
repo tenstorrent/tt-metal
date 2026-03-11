@@ -19,7 +19,7 @@ set_source_files_properties(
     test_matmul_fidelity_schedule_bh.cpp
     PROPERTIES
         INCLUDE_DIRECTORIES
-            "${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
+            "${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk;${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
         SKIP_UNITY_BUILD_INCLUSION
             ON
 )
@@ -27,7 +27,7 @@ set_source_files_properties(
     test_matmul_fidelity_schedule_wh.cpp
     PROPERTIES
         INCLUDE_DIRECTORIES
-            "${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+            "${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk;${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
         SKIP_UNITY_BUILD_INCLUSION
             ON
 )
