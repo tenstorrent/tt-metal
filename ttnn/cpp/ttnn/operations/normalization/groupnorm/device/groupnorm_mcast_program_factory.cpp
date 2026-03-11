@@ -729,15 +729,21 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     // num_out_blocks_padded calculation to get the exact count.
     uint32_t ex_cb_external_index = tt::CBIndex::c_10;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    {
+    if (!use_welford) {
+        // Legacy mcast sender/compute path: mirror kernel's num_out_blocks_padded calculation.
         uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
         if (block_ht_group_1 % num_out_blocks != 0) {
             uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
             num_out_blocks_padded += (residual / out_block_h_normal + 1);
         }
     }
-    uint32_t cb_ex_external_tiles =
-        (num_out_blocks_padded * num_cores_per_mcast_group * 16 + single_tile_size - 1) / single_tile_size;
+    uint32_t cb_ex_external_tiles = 1;
+    if (!use_welford) {
+        // Only the legacy kernels reference CBIndex::c_10; in Welford mode use a minimal size
+        // to preserve L1 headroom while keeping the CB index valid.
+        cb_ex_external_tiles =
+            (num_out_blocks_padded * num_cores_per_mcast_group * 16 + single_tile_size - 1) / single_tile_size;
+    }
     tt::tt_metal::CircularBufferConfig ex_cb_external_config =
         tt::tt_metal::CircularBufferConfig(
             cb_ex_external_tiles * single_tile_size, {{ex_cb_external_index, cb_data_format}})
