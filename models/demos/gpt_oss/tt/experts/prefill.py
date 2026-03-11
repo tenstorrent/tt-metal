@@ -104,7 +104,8 @@ def _process_prefill_chunk(
     bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
     gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
 
-    # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
+    # # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
+    # Part 1
     gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
     gate_alpha = ttnn.mul(gate, config.alpha)
     gate_sigmoid = ttnn.sigmoid(gate_alpha)
@@ -112,7 +113,6 @@ def _process_prefill_chunk(
     glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
 
     gate_sigmoid.deallocate(True)
-    gate.deallocate(True)
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -138,13 +138,14 @@ def _process_prefill_chunk(
 
     # Apply SwiGLU (consumes gate and up internally)
 
-    # Disabled regular swiglu to save memory by deallocating gate early.
-    # down_input = apply_swiglu(gate, up, config)
-
+    # partial swiglu part 2
+    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
     up = ttnn.add(up, 1, output_tensor=up)
     down_input = ttnn.mul(up, glu, output_tensor=up)
     glu.deallocate(True)
-    up.deallocate(True)
+
+    # Disabled regular swiglu to save memory by deallocating gate early.
+    # down_input = apply_swiglu(gate, up, config)
 
     # Note: reshape returns a view - do not deallocate original
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
