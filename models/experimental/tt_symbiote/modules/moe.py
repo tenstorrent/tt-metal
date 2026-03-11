@@ -1469,16 +1469,6 @@ class TTNNMoE(TTNNModule):
         seq_len = h.shape[-2] if hasattr(h, "shape") and len(h.shape) > 1 else 1
         return seq_len == 1
 
-    def pre_trace_execute(self, x, *args, **kwargs):
-        """Reset trace semaphores to 0 before each replay. Required for correct CCL sync."""
-        if self._num_devices > 1:
-            for sem in self._trace_ag_sem:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            ttnn.reset_global_semaphore_value(self._trace_ag_barrier, 0)
-            for sem in self._trace_rs_sem:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            ttnn.reset_global_semaphore_value(self._trace_rs_barrier, 0)
-
     @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         residual = x
